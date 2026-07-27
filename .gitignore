@@ -1,0 +1,16 @@
+# Not part of the WeaveDoc distribution — local scaffolding & working notes
+.bmad-core/
+.claude/commands/
+.claude/settings.local.json
+notes/
+weavedoc-for-hammoc.md
+dashboard-prototype.html
+
+# Local tool state (session/prompt history — never publish)
+.hammoc/
+.qlaude/
+
+# OS noise
+Thumbs.db
+desktop.ini
+.DS_Store

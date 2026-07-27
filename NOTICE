@@ -1,0 +1,12 @@
+WeaveDoc
+Copyright 2026 Sooho Choi
+
+This product includes software developed by Sooho Choi.
+Licensed under the Apache License, Version 2.0 (see LICENSE).
+
+"WeaveDoc" is a trademark of Sooho Choi. The Apache License (section 6)
+grants no trademark rights; see TRADEMARK.md for what use of the name is
+permitted — in short: the code is yours to use and modify, the name is not
+yours to brand with, and functional/internal use (the `.weavedoc/` directory,
+`weavedoc-*` skill names, config keys, and factual statements of origin or
+compatibility) is expressly allowed.

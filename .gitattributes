@@ -1,0 +1,5 @@
+# Store everything normalized; the runtime must check out LF everywhere —
+# bin/weavedoc is bash (CRLF breaks the shebang) and schema/templates are parsed
+# by grep/awk that treat a stray \r as part of the value.
+* text=auto
+.weavedoc/** text eol=lf
