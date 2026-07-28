@@ -1,0 +1,762 @@
+#!/usr/bin/env bash
+#
+# Copyright 2026 Sooho Choi
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# "WeaveDoc" is a trademark of Sooho Choi — the License grants no trademark
+# rights (§6). See TRADEMARK.md; functional use (this path, the weavedoc-*
+# skill names, the command name) is expressly permitted.
+#
+# weavedoc — deterministic checks for a WeaveDoc project (the floor under the AI fidelity gate).
+#   validate          format + truth coherence (exit non-zero on any problem)
+#   pull <term>       protocol-correct mine lookup for consumers outside the pipeline (see READ.md)
+#   impact <mID>      which truths were extracted from a material + which documents cite it (blast radius)
+#   status            each document's status + the next step
+#   gaps              mine census + declared-marker scan (non-blocking floor for the weavedoc-gaps skill)
+#   census            mine census only (truth files vs index, numbering holes, live/status tallies)
+#   reindex [--check] regenerate truths/index.md + truths/tree.md from truth frontmatter (--check: diff only)
+#   retag <old> <new> rename/merge a tag across truths·required_tags·scope_tags (--dry: report only)
+#   version           the installed runtime bundle version (.weavedoc/VERSION)
+#   lang              the project's reply/artifact language (config.language)
+#   locale            detect the OS language (for init); prints nothing if undetectable
+#
+# No runtime beyond bash + POSIX tools (grep/awk/sed/sort). Ships inside .weavedoc/ — no install.
+# Format SoT: .weavedoc/schema   Paths: .weavedoc/config.yaml
+
+set -u
+SCRIPT_DIR=$(cd "$(dirname "$0")" >/dev/null 2>&1 && pwd)
+
+# ---- find project ROOT: walk up from CWD for a .weavedoc/ dir; fallback to the script's repo ----
+find_root() {
+  local d="$PWD"
+  while [ "$d" != "/" ] && [ -n "$d" ]; do
+    [ -d "$d/.weavedoc" ] && { echo "$d"; return; }
+    d=$(dirname "$d")
+  done
+  ( cd "$SCRIPT_DIR/../.." >/dev/null 2>&1 && pwd )
+}
+ROOT=$(find_root)
+CONFIG="$ROOT/.weavedoc/config.yaml"
+SCHEMA="$ROOT/.weavedoc/schema"
+[ -f "$SCHEMA" ] || SCHEMA="$SCRIPT_DIR/../schema"   # fallback: schema beside the script
+
+# ---- config readers ----
+cfg() { # $1=key $2=default -> a paths: value, resolved relative to ROOT
+  local v
+  v=$(grep -E "^[[:space:]]+$1:[[:space:]]" "$CONFIG" 2>/dev/null | head -1 \
+      | sed -E "s/^[[:space:]]+$1:[[:space:]]*//; s/[[:space:]]*#.*$//; s/[[:space:]]*$//")
+  [ -z "$v" ] && v="$2"
+  case "$v" in /*) echo "$v" ;; *) echo "$ROOT/$v" ;; esac
+}
+cfgval() { # $1=key -> raw value (no path resolution); first indented-or-not match
+  grep -E "^[[:space:]]*$1:[[:space:]]" "$CONFIG" 2>/dev/null | head -1 \
+    | sed -E "s/^[[:space:]]*$1:[[:space:]]*//; s/[[:space:]]*#.*$//; s/[[:space:]]*$//"
+}
+MATERIALS=$(cfg materials "materials"); MATERIALS=${MATERIALS%/}
+TRUTHS=$(cfg truths "truths"); TRUTHS=${TRUTHS%/}
+DOCUMENTS=$(cfg documents "documents"); DOCUMENTS=${DOCUMENTS%/}
+PROJECT="$ROOT/project.md"
+CATALOG="$ROOT/catalog.md"
+
+# ---- schema + generic markdown helpers ----
+sch()   { grep -E "^$1:" "$SCHEMA" 2>/dev/null | head -1 | sed -E "s/^$1:[[:space:]]*//"; }
+pipes() { echo "$1" | tr '|' '\n'; }
+fm() { # $1=file $2=key -> frontmatter value (within leading --- --- block)
+  awk -v k="$2" '
+    NR==1 && /^---[[:space:]]*$/ { infm=1; next }
+    infm && /^---[[:space:]]*$/ { exit }
+    infm && $0 ~ "^"k"[[:space:]]*:" { sub("^"k"[[:space:]]*:[[:space:]]*",""); sub(/[[:space:]]*$/,""); sub(/^"/,""); sub(/"$/,""); print; exit }
+  ' "$1" 2>/dev/null
+}
+listfield() { echo "$1" | tr -d '[]"' | tr ',' '\n' | sed -E 's/^[[:space:]]*//; s/[[:space:]]*$//' | grep -v '^$'; }
+section_body() { # $1=file $2="Header" -> body lines under a "# Header" (h1) until the next "# " header
+  awk -v h="$2" '
+    $0 ~ ("^#[[:space:]]+" h "[[:space:]]*$") { on=1; next }
+    on && /^#[[:space:]]/ { exit }
+    on { print }
+  ' "$1" 2>/dev/null
+}
+is_noise() { # blank / comment / html-comment / {placeholder} template line
+  case "$1" in ""|"#"*|"<!--"*|"-->"*|*"{"*"}"*) return 0 ;; esac
+  [ -z "$(echo "$1" | tr -d '[:space:]')" ] && return 0
+  return 1
+}
+material_ids() { ls -d "$MATERIALS"/*/ 2>/dev/null | while read -r d; do basename "$d"; done; }
+doc_ids()      { ls -d "$DOCUMENTS"/*/ 2>/dev/null | while read -r d; do basename "$d"; done; }
+mstatus()      { [ -f "$MATERIALS/$1/converted.md" ] && fm "$MATERIALS/$1/converted.md" status; }
+mtitle()       { [ -f "$MATERIALS/$1/converted.md" ] && fm "$MATERIALS/$1/converted.md" title; }
+catalog_ids()  { awk -F'|' '/^[[:space:]]*\|/ { gsub(/[[:space:]]/,"",$2); if ($2 ~ /^m[0-9]+$/) print $2 }' "$CATALOG" 2>/dev/null; }
+
+# ===================== validate =====================
+PROBLEMS=0
+prob() { printf '  %s\n' "$*"; PROBLEMS=$((PROBLEMS+1)); }
+
+cmd_validate() {
+  local f id v k a c d p r w mid ref ROLES
+
+  # --- project.md ---
+  if [ -f "$PROJECT" ]; then
+    for k in $(pipes "$(sch project.fm.required)"); do
+      [ -n "$(fm "$PROJECT" "$k")" ] || prob "$PROJECT  frontmatter '$k' missing"
+    done
+    ROLES=$(listfield "$(fm "$PROJECT" roles)")
+    for a in $(listfield "$(fm "$PROJECT" authority)"); do
+      echo "$ROLES" | grep -qx "$a" || prob "$PROJECT  authority '$a' is not a declared role"
+    done
+  else
+    prob "$PROJECT  missing (run 'weavedoc init')"; ROLES=""
+  fi
+
+  # --- each material ---
+  for id in $(material_ids); do
+    f="$MATERIALS/$id/converted.md"
+    [ -f "$f" ] || { prob "$MATERIALS/$id/  no converted.md"; continue; }
+    for k in $(pipes "$(sch material.fm.required)"); do
+      [ -n "$(fm "$f" "$k")" ] || prob "$f  frontmatter '$k' missing"
+    done
+    [ "$(fm "$f" id)" = "$id" ] || prob "$f  id '$(fm "$f" id)' != folder '$id'"
+    v=$(fm "$f" origin); pipes "$(sch material.fm.enum.origin)" | grep -qx "$v" || prob "$f  origin '$v' invalid → use $(sch material.fm.enum.origin)"
+    v=$(fm "$f" status); pipes "$(sch material.fm.enum.status)" | grep -qx "$v" || prob "$f  status '$v' invalid → use $(sch material.fm.enum.status)"
+    v=$(fm "$f" role);   echo "$ROLES" | grep -qx "$v" || prob "$f  role '$v' not in project.md roles"
+    v=$(fm "$f" stage);  [ -z "$v" ] || pipes "$(sch material.fm.enum.stage)" | grep -qx "$v" || prob "$f  stage '$v' invalid → use $(sch material.fm.enum.stage)"
+  done
+
+  # --- catalog <-> materials (orphans both ways) ---
+  if [ -f "$CATALOG" ]; then
+    for id in $(material_ids); do
+      catalog_ids | grep -qx "$id" || prob "$CATALOG  material '$id' has no catalog row"
+    done
+    for id in $(catalog_ids); do
+      [ -d "$MATERIALS/$id" ] || prob "$CATALOG  row '$id' has no material folder"
+    done
+  fi
+
+  # --- truths (single awk pass) ---
+  # One awk over all converted.md (read FIRST to populate body[]) + all truth files.
+  # The old code spawned ~15 processes per truth (fm/awk/grep), which on Windows/MSYS made
+  # validate take minutes for a few hundred truths. Semantics match the old per-file loops:
+  # frontmatter required fields, id==filename, source→material, status enum, conflict_with/
+  # resolution consistency, quote existence (anti-laundering), and required_tags coverage.
+  # Glob is t[0-9]*.md so generated tree.md/index.md are never mistaken for truths.
+  if [ -d "$TRUTHS" ] && ls "$TRUTHS"/t[0-9]*.md >/dev/null 2>&1; then
+    local matlist="" retlist="" reqtags qout qn f d
+    for d in "$MATERIALS"/*/; do [ -d "$d" ] && matlist="$matlist $(basename "$d")"; done
+    for d in "$MATERIALS"/*/; do
+      [ -f "$d/converted.md" ] || continue
+      [ "$(fm "$d/converted.md" status)" = "retracted" ] && retlist="$retlist $(basename "$d")"
+    done
+    reqtags=$(listfield "$(fm "$PROJECT" required_tags)" | tr '\n' ' ')
+
+    local -a qfiles=()
+    for f in "$MATERIALS"/*/converted.md; do [ -f "$f" ] && qfiles+=("$f"); done
+    for f in "$TRUTHS"/t[0-9]*.md; do [ -f "$f" ] && qfiles+=("$f"); done
+
+    qout=$(awk -v matids="$matlist" -v retids="$retlist" -v reqtags="$reqtags" -v mroot="$MATERIALS" -v Q="'" '
+      function val(   s){ s=$0; sub(/^[^:]*:[[:space:]]*/,"",s); sub(/[[:space:]]*$/,"",s); sub(/^"/,"",s); sub(/"$/,"",s); return s }
+      function q(s){ return Q s Q }
+      function prob(m){ print "  " m; probs++ }
+      function tf_done(   v,tg,nn,ii,ta,wv,wm,w2,ty,selfwin){
+        if(tidfield != tid) prob(tfile "  id " q(tidfield) " != filename " q(tid))
+        if(!hasid)     prob(tfile "  frontmatter " q("id") " missing")
+        if(!hasclaim)  prob(tfile "  frontmatter " q("claim") " missing")
+        if(!hassource) prob(tfile "  frontmatter " q("source") " missing")
+        if(!hastags)   prob(tfile "  frontmatter " q("tags") " missing")
+        if(!hasstatus) prob(tfile "  frontmatter " q("status") " missing")
+        if(hassource && tsrc!="" && !(tsrc in mat)) prob(tfile "  source " q(tsrc) " → no material folder")
+        v=tstatus
+        if(v=="resolved")
+          prob(tfile "  status " q("resolved") " is the pre-rename legacy value → winner-self/attribute: " q("ok") ", loser: " q("discarded"))
+        else if(v!="ok" && v!="conflict" && v!="unsupported" && v!="discarded")
+          prob(tfile "  status " q(v) " invalid → use ok|conflict|unsupported|discarded")
+        if(v=="conflict" && tconflict=="") prob(tfile "  status is " q("conflict") " but no conflict_with field")
+        if(v=="discarded" && tresolution=="") prob(tfile "  status is " q("discarded") " but no resolution field (a discard must record its decision)")
+        # status = validity axis, resolution = history. Guard the two mismatches:
+        if(tresolution!=""){
+          w2=""; ty=""
+          if(match(tresolution,/winner:[[:space:]]*(\[[^]]*\]|[^,}]+)/)) w2=substr(tresolution,RSTART,RLENGTH)
+          if(match(tresolution,/type:[[:space:]]*[a-z]+/)){ ty=substr(tresolution,RSTART,RLENGTH); sub(/type:[[:space:]]*/,"",ty) }
+          selfwin = (w2!="" && match(w2, "(^|[^0-9A-Za-z])" tid "([^0-9]|$)"))
+          if(v=="discarded" && selfwin)
+            prob(tfile "  discarded but resolution.winner is itself → it WON its conflict; set status " q("ok"))
+          if(v=="ok" && w2!="" && !selfwin && ty!="attribute")
+            prob(tfile "  ok but its resolution says it lost (winner elsewhere) → set status " q("discarded"))
+        }
+        if(tprov!="" && tprov!="stated" && tprov!="adopted" && tprov!="derived")
+          prob(tfile "  provenance " q(tprov) " invalid → use stated|adopted|derived")
+        if(tprov=="derived" && !hasderivedfrom)
+          prob(tfile "  provenance is " q("derived") " but no derived_from field (derivations must show their chain)")
+        if(hassource && (tsrc in ret) && (v=="ok" || v=="conflict"))
+          prob(tfile "  source " q(tsrc) " is retracted but status is " q(v) " → set unsupported (map retraction propagation)")
+        if(tresolution!="" && match(tresolution,/winner:[[:space:]]*(\[[^]]*\]|[^,}]+)/)){
+          wv=substr(tresolution,RSTART,RLENGTH)
+          while(match(wv,/m[0-9]+/)){
+            wm=substr(wv,RSTART,RLENGTH); wv=substr(wv,RSTART+RLENGTH)
+            if(wm in ret) prob(tfile "  resolution winner references retracted " wm " → basis gone; re-open the conflict (map)")
+          }
+        }
+        tg=ttags; gsub(/[]["]/,"",tg); nn=split(tg,ta,",")
+        for(ii=1;ii<=nn;ii++){ gsub(/^[[:space:]]+|[[:space:]]+$/,"",ta[ii]); if(ta[ii]!="") seentag[ta[ii]]=1 }
+      }
+      BEGIN { nm=split(matids,_a," "); for(i=1;i<=nm;i++) if(_a[i]!="") mat[_a[i]]=1
+              nm=split(retids,_b," "); for(i=1;i<=nm;i++) if(_b[i]!="") ret[_b[i]]=1 }
+      FNR==1 {
+        infm = ($0 ~ /^---[[:space:]]*$/) ? 1 : 0
+        n=split(FILENAME,pp,"/")
+        if (FILENAME ~ /converted\.md$/) { ftype="m"; mid=pp[n-1]; if(!(mid in body)) body[mid]="" }
+        else {
+          ftype="t"; tfile=FILENAME; fn=pp[n]; sub(/\.md$/,"",fn); tid=fn
+          tidfield=""; tsrc=""; ttags=""; tstatus=""; tconflict=""; tresolution=""; tprov=""
+          hasid=0; hasclaim=0; hassource=0; hastags=0; hasstatus=0; gotline=0; hasderivedfrom=0
+        }
+        next
+      }
+      infm && $0 ~ /^---[[:space:]]*$/ { infm=0; if(ftype=="t") tf_done(); next }
+      infm {
+        if(ftype=="t"){
+          if($0 ~ /^id:[[:space:]]/)                 { tidfield=val(); hasid=1 }
+          else if($0 ~ /^claim:[[:space:]]/)         { hasclaim=1 }
+          else if($0 ~ /^source:[[:space:]]/)        { tsrc=val(); hassource=1 }
+          else if($0 ~ /^tags:[[:space:]]/)          { ttags=val(); hastags=1 }
+          else if($0 ~ /^status:[[:space:]]/)        { tstatus=val(); hasstatus=1 }
+          else if($0 ~ /^conflict_with:[[:space:]]/) { tconflict=val() }
+          else if($0 ~ /^resolution:[[:space:]]/)    { tresolution=val() }
+          else if($0 ~ /^provenance:[[:space:]]/)    { tprov=val() }
+          else if($0 ~ /^derived_from:[[:space:]]/)  { hasderivedfrom=1 }
+        }
+        next
+      }
+      ftype=="m" { body[mid]=body[mid] $0 "\n"; next }
+      ftype=="t" && !gotline && $0 ~ /[^[:space:]]/ && length($0)>=10 {
+        gotline=1
+        if(tsrc!="" && (tsrc in body) && index(body[tsrc],$0)==0)
+          prob(tfile "  quote not found in " mroot "/" tsrc "/converted.md (laundering risk)")
+      }
+      END {
+        nr=split(reqtags,rt," ")
+        for(i=1;i<=nr;i++) if(rt[i]!="" && !(rt[i] in seentag)) prob("required_tag " q(rt[i]) " has no truths")
+        print "QFAILS " probs+0
+      }
+    ' "${qfiles[@]}")
+
+    qn=$(printf '%s\n' "$qout" | tail -1); qn=${qn#QFAILS }
+    if [ "${qn:-0}" -gt 0 ]; then
+      printf '%s\n' "$qout" | sed '$d'
+      PROBLEMS=$((PROBLEMS + qn))
+    fi
+
+    # generated index files must exist if truths exist — and index must be in sync (ids both ways)
+    [ -f "$TRUTHS/index.md" ] || prob "truths/index.md missing (run 'weavedoc reindex')"
+    [ -f "$TRUTHS/tree.md" ]  || prob "truths/tree.md missing (run 'weavedoc reindex')"
+    if [ -f "$TRUTHS/index.md" ]; then
+      local fids iids sid
+      fids=$(ls "$TRUTHS"/t[0-9]*.md 2>/dev/null | sed -E 's/.*[\/\\](t[0-9]+)\.md$/\1/' | LC_ALL=C sort)
+      iids=$(grep -oE '^- t[0-9]+' "$TRUTHS/index.md" | sed 's/^- //' | LC_ALL=C sort)
+      for sid in $(comm -23 <(printf '%s\n' "$fids") <(printf '%s\n' "$iids")); do
+        prob "truths/index.md  no entry for $sid (run 'weavedoc reindex')"
+      done
+      for sid in $(comm -13 <(printf '%s\n' "$fids") <(printf '%s\n' "$iids")); do
+        prob "truths/index.md  entry '$sid' has no truth file (run 'weavedoc reindex')"
+      done
+    fi
+
+    # --- coverage manifest (soft: only materials WITH a '## m<id>' section are cross-checked) ---
+    # truths/coverage.md is map-written (element → truth ids, skips with reasons — T2's audit
+    # surface). Mechanical floor: every section resolves to a material, every mentioned truth id
+    # exists, and every truth extracted from a *sectioned* material appears in that section —
+    # adding a truth without updating coverage fails. Materials without a section are legal
+    # (legacy — coverage arrives on their next map); census reports the coverage count.
+    if [ -f "$TRUTHS/coverage.md" ]; then
+      local tsrcpairs cout cn
+      tsrcpairs=$(awk '
+        FNR==1 { n=split(FILENAME,pp,"/"); fn=pp[n]; sub(/\.md$/,"",fn); tid=fn; infm=($0 ~ /^---[[:space:]]*$/); next }
+        infm && /^---[[:space:]]*$/ { infm=0; nextfile }
+        infm && /^source:[[:space:]]/ { s=$0; sub(/^source:[[:space:]]*/,"",s); sub(/[[:space:]]*$/,"",s); printf "%s:%s ", tid, s; nextfile }
+      ' "$TRUTHS"/t[0-9]*.md)
+      cout=$(awk -v matids="$matlist" -v pairs="$tsrcpairs" -v Q="'" '
+        function q(s){ return Q s Q }
+        function prob(m){ print "  " m; probs++ }
+        BEGIN {
+          nm=split(matids,a," "); for(i=1;i<=nm;i++) if(a[i]!="") mat[a[i]]=1
+          np=split(pairs,b," ")
+          for(i=1;i<=np;i++){ if(b[i]=="") continue; split(b[i],c,":"); tsrc[c[1]]=c[2] }
+          sec=""
+        }
+        /^##[[:space:]]+m[0-9]+([[:space:]]|$)/ {
+          sec=$2
+          if(!(sec in mat)) prob("truths/coverage.md  " q("## " sec) " → no material folder")
+          hassec[sec]=1; next
+        }
+        /^##[[:space:]]/ { sec=""; next }
+        {
+          line=$0
+          while(match(line,/t[0-9]+/)){
+            id=substr(line,RSTART,RLENGTH); line=substr(line,RSTART+RLENGTH)
+            if(!(id in tsrc)) prob("truths/coverage.md  mentions " q(id) " — no such truth file")
+            else if(sec!="") mention[sec "," id]=1
+          }
+        }
+        END {
+          for(t in tsrc){ s=tsrc[t]
+            if((s in hassec) && !((s "," t) in mention))
+              prob("truths/coverage.md  " q("## " s) " missing " q(t) " — extracted from " s " but absent from its coverage section (update at map)")
+          }
+          print "CFAILS " probs+0
+        }
+      ' "$TRUTHS/coverage.md")
+      cn=$(printf '%s\n' "$cout" | tail -1); cn=${cn#CFAILS }
+      if [ "${cn:-0}" -gt 0 ]; then
+        printf '%s\n' "$cout" | sed '$d'
+        PROBLEMS=$((PROBLEMS + cn))
+      fi
+    fi
+  fi
+
+  # --- each document ---
+  for d in $(doc_ids); do
+    p="$DOCUMENTS/$d/plan.md"
+    if [ -f "$p" ]; then
+      for k in $(pipes "$(sch plan.fm.required)"); do
+        [ -n "$(fm "$p" "$k")" ] || prob "$p  frontmatter '$k' missing"
+      done
+      v=$(fm "$p" status); pipes "$(sch plan.fm.enum.status)" | grep -qx "$v" || prob "$p  status '$v' invalid"
+      [ "$(fm "$p" doc_id)" = "$d" ] || prob "$p  doc_id '$(fm "$p" doc_id)' != folder '$d'"
+      for c in $(listfield "$(fm "$p" continues)"); do
+        [ -d "$DOCUMENTS/$c" ] || prob "$p  continues '$c' → no such document"
+      done
+    else
+      prob "$DOCUMENTS/$d/  no plan.md"
+    fi
+    # gate-clean invariant: final.md ⟹ review.md '# Fidelity violations' is empty
+    if [ -f "$DOCUMENTS/$d/final.md" ] && [ -f "$DOCUMENTS/$d/review.md" ]; then
+      while IFS= read -r line; do
+        is_noise "$line" && continue
+        prob "$d has final.md but review.md '# Fidelity violations' is non-empty → consecrated through an open gate"
+        break
+      done < <(section_body "$DOCUMENTS/$d/review.md" "Fidelity violations")
+    fi
+  done
+
+  # --- config enums ---
+  v=$(cfgval completeness); [ -z "$v" ] || pipes "$(sch config.enum.completeness)" | grep -qx "$v" || prob "config fidelity.completeness '$v' invalid"
+  v=$(cfgval detection);    [ -z "$v" ] || pipes "$(sch config.enum.detection)"    | grep -qx "$v" || prob "config conflicts.detection '$v' invalid"
+  v=$(cfgval attribution);  [ -z "$v" ] || pipes "$(sch config.enum.attribution)"  | grep -qx "$v" || prob "config conflicts.attribution '$v' invalid"
+
+  if [ "$PROBLEMS" -eq 0 ]; then echo "✓ validate: all checks passed"; return 0
+  else echo "✗ validate: $PROBLEMS problem(s)"; return 1; fi
+}
+
+# ===================== impact =====================
+cmd_impact() {
+  local n="${1:-}" title
+  [ -z "$n" ] && { echo "usage: weavedoc impact <material-id>"; return 2; }
+  [ -d "$MATERIALS/$n" ] || { echo "no such material: $n"; return 2; }
+  title=$(mtitle "$n")
+  echo "impact of material $n ($title):"
+  echo "  -- truths extracted from it --"
+  for f in "$TRUTHS"/t[0-9]*.md; do
+    [ -f "$f" ] || continue
+    [ "$(fm "$f" source)" = "$n" ] && printf '  %s: %s [%s]\n' "$(fm "$f" id)" "$(fm "$f" claim)" "$(fm "$f" status)"
+  done
+  echo "  -- documents citing it (by id) --"
+  grep -rlnE "\b$n\b" "$DOCUMENTS" 2>/dev/null | sed 's/^/  /' || true
+  if [ -n "$title" ]; then
+    echo "  -- documents mentioning its title --"
+    grep -rlnF "$title" "$DOCUMENTS" 2>/dev/null | sed 's/^/  /' || true
+  fi
+}
+
+# ===================== status =====================
+cmd_status() {
+  local d st next nm
+  for d in $(doc_ids); do
+    st=$(fm "$DOCUMENTS/$d/plan.md" status 2>/dev/null); [ -z "$st" ] && st="(no plan)"
+    case "$st" in
+      planned)   next="write" ;;
+      drafting)  next="write (finish) → review" ;;
+      reviewing) next="refine" ;;
+      stale)     next="review (truths changed — re-verify)" ;;
+      done)      next="—" ;;
+      *)         next="plan" ;;
+    esac
+    [ -f "$DOCUMENTS/$d/final.md" ] && [ "$st" != "stale" ] && next="— (final)"
+    printf '%-18s %-11s → %s\n' "$d" "$st" "$next"
+  done
+  nm=$(material_ids | grep -c . || true)
+  echo "materials: $nm"
+}
+
+# ===================== lang / locale =====================
+cmd_lang() {
+  local v
+  v=$(grep -E '^[[:space:]]*language:' "$CONFIG" 2>/dev/null | head -1 \
+      | sed -E 's/^[[:space:]]*language:[[:space:]]*//; s/[[:space:]]*#.*$//; s/[[:space:]]*$//')
+  [ -n "$v" ] && echo "$v" || echo "(no config.language yet — run weavedoc init)"
+}
+cmd_locale() { # short OS language code (ko, en, ja…) or nothing (init then asks)
+  local l="${LC_ALL:-${LC_MESSAGES:-${LANG:-}}}"
+  l="${l%%.*}"; l="${l%%@*}"
+  case "$l" in C|POSIX|"") l="" ;; esac
+  if [ -z "$l" ]; then
+    local reg
+    for reg in /c/Windows/System32/reg.exe /cygdrive/c/Windows/System32/reg.exe "$(command -v reg.exe 2>/dev/null)"; do
+      [ -n "$reg" ] && [ -x "$reg" ] || continue
+      l=$(MSYS_NO_PATHCONV=1 "$reg" query "HKCU\\Control Panel\\International" /v LocaleName 2>/dev/null \
+          | tr -d '\r' | awk '/LocaleName/{print $NF}')
+      [ -n "$l" ] && break
+    done
+  fi
+  [ -z "$l" ] && return 1
+  echo "$l" | sed 's/[-_].*//' | tr 'A-Z' 'a-z'
+}
+
+# ===================== census (mine counts, cross-checked — never hand-count) =====================
+# Prints the authoritative mine statistics: truth files vs index entries, id numbering holes,
+# and the status tally (live = not discarded). Skills MUST use these numbers in reports instead
+# of counting by eye — a real run printed 191/181 when the mine held 188/178 and missed a hole.
+# Only t<digits>.md are truths; index.md/tree.md/verify.md/changelog.md are never counted.
+cmd_census() {
+  local n_files n_index stat_out holes
+  if ! ls "$TRUTHS"/t[0-9]*.md >/dev/null 2>&1; then echo "census: no truths yet"; return 0; fi
+  n_files=$(ls "$TRUTHS"/t[0-9]*.md 2>/dev/null | grep -c .)
+  n_index=$(grep -cE '^- t[0-9]+:' "$TRUTHS/index.md" 2>/dev/null || true); n_index=${n_index:-0}
+  stat_out=$(awk '
+    function val(   s){ s=$0; sub(/^[^:]*:[[:space:]]*/,"",s); sub(/[[:space:]]*$/,"",s); return s }
+    FNR==1 { infm=($0 ~ /^---[[:space:]]*$/); next }
+    infm && /^---[[:space:]]*$/ { infm=0; nextfile }
+    infm && /^status:[[:space:]]/ { st[val()]++ }
+    END { printf "%d %d %d %d\n", st["ok"]+0, st["discarded"]+st["resolved"]+0, st["conflict"]+0, st["unsupported"]+0 }
+  ' "$TRUTHS"/t[0-9]*.md)
+  set -- $stat_out
+  local n_ok=$1 n_res=$2 n_conf=$3 n_unsup=$4 n_live=$(( $1 + $3 + $4 ))
+  holes=$(ls "$TRUTHS"/t[0-9]*.md 2>/dev/null | sed -E 's/.*[\/\\]t0*([0-9]+)\.md$/\1/' | sort -n | awk '
+    NR==1 { p=$1; next } { for(i=p+1;i<$1;i++) printf "t%03d ", i; p=$1 }')
+  local n_cov=0 n_mats=0
+  [ -f "$TRUTHS/coverage.md" ] && { n_cov=$(grep -cE '^##[[:space:]]+m[0-9]+([[:space:]]|$)' "$TRUTHS/coverage.md" 2>/dev/null || true); n_cov=${n_cov:-0}; }
+  # Denominator excludes retracted materials — they are never mapped again, so they can
+  # never gain a coverage section; counting them keeps the ratio short of N/N forever.
+  if ls "$MATERIALS"/*/converted.md >/dev/null 2>&1; then
+    n_mats=$(awk '
+      FNR==1 { infm=($0 ~ /^---[[:space:]]*$/); st=""; next }
+      infm && /^---[[:space:]]*$/ { if(st!="retracted") n++; infm=0; nextfile }
+      infm && /^status:[[:space:]]/ { st=$0; sub(/^status:[[:space:]]*/,"",st); sub(/[[:space:]]*$/,"",st) }
+      END { print n+0 }' "$MATERIALS"/*/converted.md)
+  fi
+  echo "census: truth files $n_files · index entries $n_index · live $n_live (ok $n_ok · conflict $n_conf · unsupported $n_unsup) · discarded $n_res · coverage $n_cov/$n_mats material(s)"
+  [ -n "$holes" ] && echo "  numbering holes (ids never assigned or files lost — confirm which): $holes"
+  [ "$n_files" -ne "$n_index" ] && echo "  ✗ index out of sync with files ($n_files files vs $n_index entries) — run 'weavedoc reindex'"
+  return 0
+}
+
+# ===================== gaps (census + declared-marker scan — non-blocking floor for the weavedoc-gaps skill) =====================
+# Census first (the numbers the skill must reuse), then self-declared incompleteness markers in
+# the mine's source-of-truth files (converted.md + truths/ ONLY — never inbox/ref/source duplicates).
+# ALWAYS exits 0: gaps are fill-or-accept, not hard failures (unlike validate). Reference /
+# enumeration / symmetry gaps are semantic — the weavedoc-gaps skill finds those; this is only
+# the mechanical cat-1 floor. Marker list from config gaps.markers (project language), else a
+# default. Unchecked checkboxes (- [ ]) are scanned as a separate declared class.
+# The skill triages hits: markers inside narrative prose are NOT declarations (table cells,
+# editor's notes, and checkboxes are the real ones) — the CLI reports raw lines, the skill filters.
+cmd_gaps() {
+  local id f ln markers n=0 c=0
+  markers=$(cfgval markers)
+  [ -z "$markers" ] && markers='미정|미완성|미확정|미상|TBD|TODO|추후 보강|추후 작업|추후 결정|정해지지 않|미해결'
+  cmd_census
+  echo "declared-marker scan (converted.md + truths/ only):"
+  for id in $(material_ids); do
+    f="$MATERIALS/$id/converted.md"; [ -f "$f" ] || continue
+    while IFS= read -r ln; do printf '  %s:%s\n' "$id" "$ln"; n=$((n+1)); done < <(grep -nE "$markers" "$f" 2>/dev/null)
+  done
+  for f in "$TRUTHS"/t[0-9]*.md; do
+    [ -f "$f" ] || continue
+    while IFS= read -r ln; do printf '  %s:%s\n' "$(basename "$f")" "$ln"; n=$((n+1)); done < <(grep -nE "$markers" "$f" 2>/dev/null)
+  done
+  echo "unchecked-checkbox scan (converted.md + truths/ only):"
+  for id in $(material_ids); do
+    f="$MATERIALS/$id/converted.md"; [ -f "$f" ] || continue
+    while IFS= read -r ln; do printf '  %s:%s\n' "$id" "$ln"; c=$((c+1)); done < <(grep -nE '^[[:space:]]*- \[ \]' "$f" 2>/dev/null)
+  done
+  for f in "$TRUTHS"/t[0-9]*.md; do
+    [ -f "$f" ] || continue
+    while IFS= read -r ln; do printf '  %s:%s\n' "$(basename "$f")" "$ln"; c=$((c+1)); done < <(grep -nE '^[[:space:]]*- \[ \]' "$f" 2>/dev/null)
+  done
+  echo "— $n marker line(s) + $c unchecked checkbox(es). Non-blocking; run the weavedoc-gaps skill for reference/enumeration/symmetry + fill-or-accept."
+}
+
+# ===================== reindex (regenerate truths/index.md + tree.md from frontmatter) =====================
+# THE only writer of the generated index files. Hand edits drift (a real run spent ~45% of its
+# tool calls hand-patching these and corrupted an entry); regeneration is one deterministic pass.
+#   reindex          write both files
+#   reindex --check  compare regenerated content against the files on disk; write nothing.
+#                    exit 0 = identical, 1 = differs (prints a short diff summary).
+cmd_reindex() {
+  local check="" rec tmpi tmpt rc=0
+  [ "${1:-}" = "--check" ] && check=1
+  if ! ls "$TRUTHS"/t[0-9]*.md >/dev/null 2>&1; then echo "no truths to index"; return 0; fi
+  rec=$(awk '
+    function val(   s){ s=$0; sub(/^[^:]*:[[:space:]]*/,"",s); sub(/[[:space:]]*$/,"",s); sub(/^"/,"",s); sub(/"$/,"",s); return s }
+    FNR==1 { infm=($0 ~ /^---[[:space:]]*$/); id=claim=src=st=tg="" ; next }
+    infm && /^---[[:space:]]*$/ { infm=0; print id "\t" claim "\t" src "\t" st "\t" tg; nextfile }
+    infm && /^id:[[:space:]]/     { id=val() }
+    infm && /^claim:[[:space:]]/  { claim=val() }
+    infm && /^source:[[:space:]]/ { src=val() }
+    infm && /^status:[[:space:]]/ { st=val() }
+    infm && /^tags:[[:space:]]/   { tg=val(); gsub(/[]["]/,"",tg) }
+  ' "$TRUTHS"/t[0-9]*.md)
+  tmpi=$(mktemp); tmpt=$(mktemp)
+  {
+    echo "# truths/index.md — 진실 색인 (generated, 수정 금지)"
+    echo ""
+    printf '%s\n' "$rec" | awk -F'\t' '{
+      line="- " $1 ": " $2 " [" $3 "] — [" $5 "]"
+      if($4!="" && $4!="ok") line=line " [" $4 "]"
+      print line }'
+  } > "$tmpi"
+  {
+    echo "# truths/tree.md — 태그별 진실 (generated, 수정 금지)"
+    echo ""
+    # tag sections in LC_ALL=C sorted order (ASCII tags first, then Korean — the standing convention);
+    # within a section, truths keep id order. One line per (tag, truth) → sort → regroup.
+    printf '%s\n' "$rec" | awk -F'\t' '{
+      n=split($5, a, ",")
+      for(i=1;i<=n;i++){
+        t=a[i]; gsub(/^[[:space:]]+|[[:space:]]+$/,"",t); if(t=="") continue
+        sfx=($4!="" && $4!="ok") ? " [" $4 "]" : ""
+        printf "%s\x01%06d\x01- %s: %s%s\n", t, ++cnt[t], $1, $2, sfx
+      }}' \
+    | LC_ALL=C sort -t $'\x01' -k1,1 -k2,2 \
+    | awk -F'\x01' '{ if($1!=prev){ if(NR>1) print ""; print "## " $1; prev=$1 } print $3 }'
+  } > "$tmpt"
+  if [ -n "$check" ]; then
+    local di dt
+    di=$(mktemp); dt=$(mktemp)
+    tr -d '\r' < "$TRUTHS/index.md" > "$di" 2>/dev/null || true
+    tr -d '\r' < "$TRUTHS/tree.md"  > "$dt" 2>/dev/null || true
+    if diff -q "$tmpi" "$di" >/dev/null 2>&1; then echo "index.md: in sync"
+    else echo "index.md: DIFFERS from regenerated content:"; diff "$di" "$tmpi" | head -20; rc=1; fi
+    if diff -q "$tmpt" "$dt" >/dev/null 2>&1; then echo "tree.md: in sync"
+    else echo "tree.md: DIFFERS from regenerated content:"; diff "$dt" "$tmpt" | head -20; rc=1; fi
+    rm -f "$di" "$dt"
+  else
+    cp "$tmpi" "$TRUTHS/index.md"; cp "$tmpt" "$TRUTHS/tree.md"
+    echo "regenerated truths/index.md + truths/tree.md ($(printf '%s\n' "$rec" | grep -c .) truths)"
+  fi
+  rm -f "$tmpi" "$tmpt"
+  return $rc
+}
+
+# ===================== retag (rename/merge a tag across the mine) =====================
+# Mechanically rewrites a tag everywhere the format GUARANTEES a parseable list:
+#   truths/t*.md 'tags:' · project.md 'required_tags:' · documents/*/plan.md 'scope_tags:'.
+# Merging is the same operation (old → an already-present new dedupes to one). Free-text
+# mentions (gaps.md scope fields, questions.md, truths/verify.md) are NOT rewritten — they
+# are listed for manual/skill review. After a real rewrite of truth tags, indexes are
+# regenerated (reindex). Run validate afterwards.
+#   retag <old> <new> [--dry]     --dry: report what would change, write nothing.
+cmd_retag() {
+  local old="${1:-}" new="${2:-}" flag="${3:-}" dry=0 f d c t total=0 truthhits=0
+  case "$old$new" in *--dry*) echo "usage: weavedoc retag <old> <new> [--dry]"; return 2 ;; esac
+  { [ -n "$old" ] && [ -n "$new" ]; } || { echo "usage: weavedoc retag <old> <new> [--dry]"; return 2; }
+  [ "$old" = "$new" ] && { echo "retag: old and new are identical"; return 2; }
+  [ "$flag" = "--dry" ] && dry=1
+  local prog='
+    function strip(s){ gsub(/^[[:space:]]+|[[:space:]]+$/,"",s); gsub(/^"|"$/,"",s); return s }
+    $0 ~ ("^" key ":[[:space:]]*\\[") {
+      inner=$0; sub(/^[^[]*\[/,"",inner); sub(/\].*$/,"",inner)
+      n=split(inner,el,","); out=""; hit=0; delete seen
+      for(i=1;i<=n;i++){ e=strip(el[i]); if(e=="") continue
+        if(e==old){ e=new; hit=1 }
+        if(!(e in seen)){ seen[e]=1; out=(out=="") ? e : out ", " e } }
+      if(hit){
+        if(mode=="s" && !(FILENAME in pf)){ pf[FILENAME]=1; print FILENAME }
+        if(mode=="c") chg++
+        if(mode=="w") $0=key ": [" out "]"
+      }
+    }
+    mode=="w" { print }
+    END { if(mode=="c") print chg+0 }'
+  rewrite_file() { # $1=file $2=key — in-place via tmp
+    t=$(mktemp)
+    awk -v key="$2" -v old="$old" -v new="$new" -v mode=w "$prog" "$1" > "$t" && cp "$t" "$1"
+    rm -f "$t"
+  }
+  [ "$dry" -eq 1 ] && echo "retag '$old' → '$new' (dry run — nothing written):" || echo "retag '$old' → '$new':"
+  # Truths: ONE awk scan across all files (a per-file spawn costs ~0.1s on MSYS — a real mine
+  # has hundreds of truths, which is minutes; the same trap the validate rewrite fixed),
+  # then rewrite only the files that actually hit.
+  if ls "$TRUTHS"/t[0-9]*.md >/dev/null 2>&1; then
+    local hitlist
+    hitlist=$(awk -v key="tags" -v old="$old" -v new="$new" -v mode=s "$prog" "$TRUTHS"/t[0-9]*.md)
+    while IFS= read -r f; do
+      [ -n "$f" ] || continue
+      printf '  %s (tags)\n' "$f"; total=$((total+1)); truthhits=$((truthhits+1))
+      [ "$dry" -eq 0 ] && rewrite_file "$f" tags
+    done <<< "$hitlist"
+  fi
+  if [ -f "$PROJECT" ]; then
+    c=$(awk -v key="required_tags" -v old="$old" -v new="$new" -v mode=c "$prog" "$PROJECT")
+    if [ "${c:-0}" -gt 0 ]; then
+      printf '  %s (required_tags)\n' "$PROJECT"; total=$((total+1))
+      [ "$dry" -eq 0 ] && rewrite_file "$PROJECT" required_tags
+    fi
+  fi
+  for d in $(doc_ids); do
+    [ -f "$DOCUMENTS/$d/plan.md" ] || continue
+    c=$(awk -v key="scope_tags" -v old="$old" -v new="$new" -v mode=c "$prog" "$DOCUMENTS/$d/plan.md")
+    if [ "${c:-0}" -gt 0 ]; then
+      printf '  %s (scope_tags)\n' "$DOCUMENTS/$d/plan.md"; total=$((total+1))
+      [ "$dry" -eq 0 ] && rewrite_file "$DOCUMENTS/$d/plan.md" scope_tags
+    fi
+  done
+  if [ "$total" -eq 0 ]; then echo "  no list-field occurrences of '$old'"; fi
+  local freetext=""
+  for f in "$ROOT/gaps.md" "$ROOT/questions.md" "$TRUTHS/verify.md"; do
+    [ -f "$f" ] && grep -qF -- "$old" "$f" && freetext="$freetext $f"
+  done
+  [ -n "$freetext" ] && echo "  review manually (free-text mentions of '$old', not rewritten):$freetext"
+  if [ "$dry" -eq 0 ] && [ "$truthhits" -gt 0 ]; then
+    cmd_reindex ""
+    echo "done — $total file(s) rewritten. Run 'weavedoc validate' to seal."
+  elif [ "$dry" -eq 0 ]; then
+    echo "done — $total file(s) rewritten (no truth tags touched; indexes unchanged)."
+  fi
+  return 0
+}
+
+# ===================== pull (protocol-correct mine lookup — the read-side census) =====================
+# Don't eye-filter raw truth files for a lookup: pull searches claims+tags (index.md), falls
+# back to body-text grep, and prints results with the read protocol (.weavedoc/READ.md)
+# applied mechanically — superseded values point to their winner, unresolved conflicts and
+# unsupported truths are flagged unusable, as_of / derived / plan-stage labels attached.
+cmd_pull() {
+  local term="${1:-}"
+  [ -z "$term" ] && { echo "usage: weavedoc pull <tag-or-keyword>"; return 2; }
+  ls "$TRUTHS"/t[0-9]*.md >/dev/null 2>&1 || { echo "pull: no truths yet"; return 0; }
+  [ -f "$TRUTHS/index.md" ] || { echo "pull: truths/index.md missing (run 'weavedoc reindex')"; return 2; }
+  # Case-insensitive search, done in awk (index + tolower): git-bash's GNU grep 3.0
+  # SEGFAULTS on -iF with multibyte input, so grep -i is unusable here. awk tolower()
+  # folds ASCII only and leaves Korean bytes untouched — exactly the fold we want.
+  # The term rides in via ENVIRON (not -v) so backslashes in it aren't escape-processed.
+  local ids id
+  ids=$(WVTERM="$term" awk 'BEGIN{ t=tolower(ENVIRON["WVTERM"]) } index(tolower($0), t){ print }' \
+        "$TRUTHS/index.md" | grep -oE '^- t[0-9]+' | sed 's/^- //')
+  if [ -z "$ids" ]; then
+    ids=$(WVTERM="$term" awk 'BEGIN{ t=tolower(ENVIRON["WVTERM"]) }
+        index(tolower($0), t){ if(!(FILENAME in seen)){ seen[FILENAME]=1; print FILENAME } }' \
+        "$TRUTHS"/t[0-9]*.md 2>/dev/null | sed -E 's/.*[\/\\](t[0-9]+)\.md$/\1/')
+    [ -n "$ids" ] && echo "(no claim/tag match — body-text matches below)"
+  fi
+  [ -z "$ids" ] && { echo "pull '$term': no matches (claims, tags, bodies)"; return 0; }
+  local -a tfiles=()
+  local n=0
+  for id in $ids; do [ -f "$TRUTHS/$id.md" ] && { tfiles+=("$TRUTHS/$id.md"); n=$((n+1)); }; done
+  # index hits without files = stale index. MUST bail: awk with zero file args would read stdin (hang).
+  [ "$n" -eq 0 ] && { echo "pull '$term': index matches have no truth files — stale index, run 'weavedoc reindex'"; return 1; }
+  [ "$n" -gt 60 ] && echo "($n matches — narrow the term if this is noise)"
+  # one awk pass extracts the fields of all hit files (per-file fm spawns are the MSYS trap)
+  local rec
+  rec=$(awk '
+    function val(   s){ s=$0; sub(/^[^:]*:[[:space:]]*/,"",s); sub(/[[:space:]]*$/,"",s); sub(/^"/,"",s); sub(/"$/,"",s); return s }
+    function flush(){ if(tid!="") printf "%s\x01%s\x01%s\x01%s\x01%s\x01%s\x01%s\x01%s\n", tid, st, cl, src, asof, prov, cw, res }
+    FNR==1 { flush(); n=split(FILENAME,pp,"/"); fn=pp[n]; sub(/\.md$/,"",fn); tid=fn
+             st="";cl="";src="";asof="";prov="";cw="";res=""; infm=($0 ~ /^---[[:space:]]*$/); next }
+    infm && /^---[[:space:]]*$/ { infm=0; next }
+    infm && /^status:[[:space:]]/        { st=val() }
+    infm && /^claim:[[:space:]]/         { cl=val() }
+    infm && /^source:[[:space:]]/        { src=val() }
+    infm && /^as_of:[[:space:]]/         { asof=val() }
+    infm && /^provenance:[[:space:]]/    { prov=val() }
+    infm && /^conflict_with:[[:space:]]/ { cw=val() }
+    infm && /^resolution:[[:space:]]/    { res=val() }
+    END { flush() }
+  ' "${tfiles[@]}")
+  # material stage/status looked up once per unique source (few)
+  declare -A mstage mstat
+  local st cl src asof prov cw res lab w sc
+  local n_live=0 n_res=0 n_conf=0 n_unsup=0
+  # \x01 separator, not tab — tab is IFS whitespace, so bash read COLLAPSES consecutive tabs
+  # and empty fields shift (reindex uses \x01 for the same reason).
+  while IFS=$'\x01' read -r id st cl src asof prov cw res; do
+    [ -n "$id" ] || continue
+    if [ -n "$src" ] && [ -z "${mstat[$src]+x}" ]; then
+      if [ -f "$MATERIALS/$src/converted.md" ]; then
+        mstat[$src]=$(fm "$MATERIALS/$src/converted.md" status)
+        mstage[$src]=$(fm "$MATERIALS/$src/converted.md" stage)
+      else mstat[$src]=""; mstage[$src]=""; fi
+    fi
+    lab=""
+    [ -n "$asof" ] && lab="$lab (as_of: $asof)"
+    case "$prov" in
+      derived) lab="$lab [DERIVED — read its assumptions before reuse]";;
+      adopted) lab="$lab [ADOPTED — machine-proposed, user-accepted]";;
+    esac
+    [ "${mstage[$src]:-}" = "plan" ] && lab="$lab [PLAN-STAGE SOURCE — never evidence of use]"
+    [ "${mstat[$src]:-}" = "retracted" ] && lab="$lab [RETRACTED SOURCE]"
+    case "$st" in
+      discarded|resolved)
+        # "resolved" = pre-rename legacy value (validate flags it for migration). Winner-self
+        # is legacy-only too (winners now stay ok) — still rendered usable so a mid-migration
+        # mine reads correctly.
+        w=$(printf '%s' "$res" | grep -oE 'winner:[[:space:]]*(\[[^]]*\]|[^,}]+)' | sed -E 's/winner:[[:space:]]*//')
+        sc=$(printf '%s' "$res" | grep -oE 'scope:[[:space:]]*\[[^]]*\]' | sed -E 's/scope:[[:space:]]*//')
+        if [ -n "$w" ] && printf '%s' "$w" | grep -qE "(^|[^0-9A-Za-z])${id}([^0-9]|$)"; then
+          printf '%s  [WON ITS CONFLICT — usable; legacy stamp, set status: ok] %s [%s]%s\n' "$id" "$cl" "$src" "$lab"
+          n_live=$((n_live+1))
+        else
+          printf '%s  [DISCARDED → %s%s] %s\n' "$id" "${w:-?}" "${sc:+ · scope $sc}" "$cl"
+          n_res=$((n_res+1))
+        fi;;
+      conflict)
+        printf '%s  [!! CONFLICT vs %s — unresolved, use NEITHER side] %s [%s]%s\n' "$id" "${cw:-?}" "$cl" "$src" "$lab"
+        n_conf=$((n_conf+1));;
+      unsupported)
+        printf '%s  [!! UNSUPPORTED — grounding gone, do not use] %s%s\n' "$id" "$cl" "$lab"
+        n_unsup=$((n_unsup+1));;
+      *)
+        if [ -n "$res" ] && printf '%s' "$res" | grep -q 'type:[[:space:]]*attribute'; then
+          lab="$lab [ATTRIBUTED — cite both sides, per resolution]"
+        fi
+        printf '%s  %s [%s]%s\n' "$id" "$cl" "$src" "$lab"
+        n_live=$((n_live+1));;
+    esac
+  done <<< "$rec"
+  echo "— usable $n_live · discarded $n_res (successor in resolution) · conflict $n_conf · unsupported $n_unsup"
+  echo "  bodies: truths/<id>.md · protocol: .weavedoc/READ.md"
+  return 0
+}
+
+# ===================== version =====================
+# Runtime bundle version (.weavedoc/VERSION, date-stamped). The distribution repo and every
+# installed copy carry this file; comparing the two is how divergence gets caught early —
+# the runtime once evolved inside a testbed project for two weeks while the distribution
+# repo went stale. Bump the date whenever skills/.weavedoc change in the distribution.
+cmd_version() {
+  if [ -f "$ROOT/.weavedoc/VERSION" ]; then cat "$ROOT/.weavedoc/VERSION"
+  elif [ -f "$SCRIPT_DIR/../VERSION" ]; then cat "$SCRIPT_DIR/../VERSION"
+  else echo "(no VERSION file)"; return 1; fi
+}
+
+# ===================== dispatch =====================
+case "${1:-}" in
+  validate) cmd_validate ;;
+  impact)   shift; cmd_impact "${1:-}" ;;
+  status)   cmd_status ;;
+  gaps)     cmd_gaps ;;
+  census)   cmd_census ;;
+  reindex)  shift; cmd_reindex "${1:-}" ;;
+  retag)    shift; cmd_retag "${1:-}" "${2:-}" "${3:-}" ;;
+  pull)     shift; cmd_pull "${1:-}" ;;
+  lang)     cmd_lang ;;
+  locale)   cmd_locale ;;
+  version)  cmd_version ;;
+  *) echo "weavedoc — validate | pull <term> | impact <material-id> | status | gaps | census | reindex [--check] | retag <old> <new> [--dry] | version | lang | locale"; exit 2 ;;
+esac

@@ -1,0 +1,29 @@
+# WeaveDoc project config. Created by `weavedoc init`.
+# See .weavedoc/FORMATS.md for the parser contract.
+version: 1
+language: ko              # prose language for this project; set once at init
+paths:
+  inbox: inbox
+  materials: materials
+  truths: truths
+  documents: documents
+fidelity:                # the mandatory gate — weavedoc's warranty; never skipped, never downgraded
+  # contradiction + grounding (every claim traces to a material; nothing contradicts the source) is ALWAYS on.
+  completeness: off      # off | required — a missing *required* element is a violation (contracts, SOWs)
+conflicts:               # source-vs-source conflict handling — detection is review's #1 priority, never off
+  detection: deep        # standard | deep — how hard to hunt conflicts between materials (never skipped)
+  attribution: ask       # ask | allow — 병기(keep both) needs user OK: per-conflict (ask) or standing project (allow)
+verify:                  # per-transformation fidelity check — upstream of the document-level review gate
+  strength: 2            # 1=block on critical · 2=+should-fix · 3=+nice-to-have
+  max_rounds: 3          # exceeded -> escalate to the user, never auto-pass
+  repeat: 1              # clean rounds in a row required to pass
+  scale: standard        # skip | light | standard | full — project default; format risk overrides per material
+review:                  # advisory quality pass — improves the doc but NEVER blocks consecration
+  strength: 1            # 1=block on critical · 2=+should-fix · 3=+nice-to-have
+  max_rounds: 3          # exceeded -> escalate to the user, never auto-pass
+  repeat: 1              # clean rounds in a row required to pass
+  scale: standard        # skip | light | standard | full
+gaps:                    # mine completeness register (weavedoc-gaps skill + `weavedoc gaps` scan)
+  # markers: 미정|미완성|미확정|미상|TBD|TODO|추후 보강|추후 작업|추후 결정|정해지지 않|미해결
+  #   ^ project-language incompleteness markers for the declared scan (grep alternation).
+  #     Commented out = the default above applies; uncomment to override per project.
