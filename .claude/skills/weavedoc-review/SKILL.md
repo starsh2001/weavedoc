@@ -61,7 +61,15 @@ Pass judgment by `config.review.strength` (default 1 for advisory):
 
 Fidelity violations **always block regardless of strength** — they are not advisory.
 
-**Stop safety**: if advisory rounds exceed `config.review.max_rounds` without converging → set `status: escalated`, take open issues to the human. Do **not** auto-pass.
+**Count the clean rounds — one is not convergence.** `config.review.repeat` (read at this run's scale) is how many clean advisory rounds **in a row** end the loop. `refine` step 7 already loops on this number, so this is where the count is produced:
+- Round clean at the `strength` bar → `consecutive_passes` + 1.
+- Round has a blocking advisory finding → back to **0**, never decremented.
+- Record it in `review.md` next to the round number, after **every** round, so a cold session resumes the loop rather than restarting it.
+- Count short of `repeat` → run another **fresh cold** panel (§2, new subagents, same adjudications) even though this round was clean. Reusing the panel measures reviewer fatigue, not the document.
+
+This lane is advisory, so the count never blocks `final.md` — the fidelity gate does that, and it is a separate mechanism. What the count decides is when `refine` may stop looping.
+
+**Stop safety**: if advisory rounds exceed `config.review.max_rounds` without converging, stop and take the open issues to the human. Do **not** auto-pass. Leave `plan.md` at `status: reviewing` — `plan.fm.enum.status` is the document's *stage* axis (`planned|drafting|reviewing|done|stale`), not a verdict axis, and `escalated` is not one of its values; writing it there makes `validate` fail. The escalation itself belongs in `review.md`'s `# Human queue`, which is what the user actually reads.
 
 ## Next
 Still in the **document-writing phase**. **refine** is available next — resolve every fidelity violation (all of them — non-negotiable for the gate) and the advisory findings per the gate, then loop. Offer it as the path forward; the user chooses when to run it.

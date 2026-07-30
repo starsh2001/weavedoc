@@ -1,6 +1,6 @@
 ---
 name: weavedoc-gaps
-description: Surface structural gaps in the data mine — self-declared incompleteness (미정/TBD), dangling references, count mismatches, entity asymmetry — and resolve each by fill-or-accept. Use when the user says "gaps", "빠진 곳", "완성도 점검", "구멍", "뭐 비었어", "광산 점검", "census", "audit the mine", "completeness check", or before plan. Produces gaps.md.
+description: Surface structural gaps in the data mine — self-declared incompleteness (미정/TBD), dangling references, count mismatches, entity asymmetry — and resolve each by fill-or-accept. Use when the user says "gaps", "빠진 곳", "완성도 점검", "구멍", "뭐 비었어", "자료가 충분한가", "census", "completeness check", or before plan. Produces gaps.md.
 ---
 
 # weavedoc-gaps
@@ -35,7 +35,7 @@ Anything fuzzy or qualitative (narrative balance, "this theme is thin", "add sta
 
 ## Two rules that keep precision honest
 
-- **Read-existing-first (resolution-aware).** Before raising a gap, check what the mine already encodes. A song/entity is **covered if it has ANY live (non-`discarded`) truth** — "present via an older or displaced-sibling source" still counts. (Real case: 그때 그 골목's lyric truth comes from an old material but is still current — its re-recorded siblings' old lyrics are `discarded`, its isn't — so it is **not** a gap.) Count and compare over live truths, never over "the newest batch."
+- **Read-existing-first (resolution-aware).** Before raising a gap, check what the mine already encodes. A song/entity is **covered if it has ANY live truth** (neither `discarded` nor `retracted` — a tombstone is an extraction that never had standing, so counting it as coverage hides the very gap you are looking for) — "present via an older or displaced-sibling source" still counts. (Real case: 그때 그 골목's lyric truth comes from an old material but is still current — its re-recorded siblings' old lyrics are `discarded`, its isn't — so it is **not** a gap.) Count and compare over live truths, never over "the newest batch."
 - **Dedup by concept.** The same hole is often declared in several materials (Knock:One 상세 미완성 appears in three). Collapse to **one** gap citing all sources — never one row per mention.
 
 ## Fill or accept — the mandatory disposition, never a forced value

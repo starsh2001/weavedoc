@@ -21,7 +21,8 @@ init (once)
   → gather → map → plan → write → review ⇄ refine → done
   → a finished document becomes a material for the next one
 
-on-demand gates: verify (cold-checks each upstream hop) · gaps (mine completeness audit)
+on-demand lanes: verify (cold-checks each upstream hop) · gaps (is the world covered?)
+                 audit (are the mine's own records true about the mine?)
 ```
 
 - **Materials first.** Everything is built from materials you provide — files, or a conversation you declare as the source. AI handles most of it autonomously; you are asked only for a necessary fact the materials don't contain.
@@ -38,7 +39,7 @@ on-demand gates: verify (cold-checks each upstream hop) · gaps (mine completene
 | `weavedoc-gather` | Collect materials from `inbox/`, classify each (role + topics), convert to readable markdown. → `materials/`, `catalog.md`. |
 | `weavedoc-map` | Extract atomic truths from materials, tag and classify them, hunt contradictions; correct existing truths on demand. → `truths/*.md`, `truths/changelog.md`, indexes via `reindex`. |
 | `weavedoc-verify` | Cold verification of the two upstream hops — material (원본↔converted.md) and truths (converted.md↔truths) — by empty-context subagents; baseline pinned, human confirms the run **delta**. → material `status: verified`, `truths/verify.md`. |
-| `weavedoc-gaps` | Mine completeness audit — declared markers, dangling references, count mismatches, peer asymmetry; every gap consciously **filled or accepted**. → `gaps.md`. |
+| `weavedoc-gaps` | Mine completeness register — declared markers, dangling references, count mismatches, peer asymmetry; every gap consciously **filled or accepted**. → `gaps.md`. |
 | `weavedoc-plan` | Propose a document structure (template) + tone + outline, mapping each section to its materials; ask about structural gaps. → `documents/<id>/plan.md`. |
 | `weavedoc-write` | Write the draft from the plan, grounded in materials and cited; queue genuinely-missing necessary facts and ask them. → `draft.md`. |
 | `weavedoc-review` | **Fidelity gate** (mandatory: contradiction / unsupported / missing-required) + cold advisory multi-persona review. → `review.md`. |
@@ -82,7 +83,7 @@ WeaveDoc is a set of Claude Code skills. To use it in a project:
 
 1. Copy `.claude/skills/weavedoc-*` and `.weavedoc/` into your repo.
 2. Ask Claude: **"weavedoc init"** — it creates the workspace and `.weavedoc/config.yaml`.
-3. Drop materials into `inbox/`, then: **"gather"** → **"map"** (with **"verify"** after each to cold-check the hop, **"gaps"** to audit completeness) → **"plan the report"** → **"write it"** → **"review it"** (→ **"refine"** until clean).
+3. Drop materials into `inbox/`, then: **"gather"** → **"map"** (with **"verify"** after each to cold-check the hop, **"gaps"** to check completeness, **"audit"** to check the records themselves) → **"plan the report"** → **"write it"** → **"review it"** (→ **"refine"** until clean).
 
 **Keeping installs in sync.** `bash .weavedoc/bin/weavedoc version` prints the installed runtime's date (`.weavedoc/VERSION`); compare it against this repo's before trusting an old install. If you evolve the skills/runtime *inside* a project (the testbed pattern), backport here and bump `VERSION` — the runtime once grew two weeks ahead inside a testbed while this repo went stale.
 
@@ -90,14 +91,14 @@ WeaveDoc is a set of Claude Code skills. To use it in a project:
 
 `.weavedoc/bin/weavedoc` ships a dependency-free checker (needs only `bash`, which `git` already provides on every OS) — **the mechanical floor under the AI fidelity gate:**
 
-- `validate` — format + truth coherence: frontmatter/enums/ids, catalog ↔ materials orphans both ways, every truth `source` resolves to a material, `conflict` truths carry `conflict_with`, `discarded` truths carry a `resolution` (and the winner/loser stamps match the record — a winner stamped `discarded` or a loser stamped `ok` fails), `provenance` enum valid and `derived` truths show their `derived_from` chain, **each truth's body appears verbatim in its source** (the anti-laundering seal), every `required_tags` tag has at least one truth, `index.md` ↔ truth files in sync both ways, a `retracted` material grounds nothing (its truths `unsupported`/`discarded`, no resolution winner references it), `truths/coverage.md` cross-checks (sections resolve, ids exist, sectioned materials complete), no `final.md` ships with a non-empty `# Fidelity violations`. Exits non-zero with the list.
-- `census` — the mine's authoritative statistics: truth files vs index entries, id numbering holes, live/status tallies, coverage-manifest count. Skills report these numbers, never eye-counts.
+- `validate` — format + truth coherence: frontmatter/enums/ids, catalog ↔ materials orphans both ways, every truth `source` resolves to a material, `conflict` truths carry `conflict_with`, `discarded` truths carry a `resolution` (and the winner/loser stamps match the record — a winner stamped `discarded` or a loser stamped `ok` fails), `provenance` enum valid and `derived` truths show their `derived_from` chain, **each truth's body appears verbatim in its source** (the anti-laundering seal), every `required_tags` tag has at least one truth, `index.md` ↔ truth files in sync both ways, a `retracted` material grounds nothing (its truths `unsupported`/`discarded`, no resolution winner references it), `truths/coverage.md` cross-checks (sections resolve, ids exist, sectioned materials complete), `origin: research` materials carry `url`+`retrieved_at` and their truths are not `provenance: stated`, `corrects` references resolve, `retracted` truths have a `removed:` line and never strand the other side of an open conflict, every `[open]` Human queue entry carries an ownership tag, no `final.md` ships with a non-empty `# Fidelity violations`. Exits non-zero with the list.
+- `census` — the mine's authoritative statistics: truth files vs index entries, id numbering holes (split into *unexplained* and *explained by a changelog `removed:` line*), live/status tallies with `retracted` counted separately, and the coverage ratio as `N/M of TOTAL (K legacy-exempt)` — the raw total is always shown, because `16/26` and `16/16 (+10 exempt)` describe the same mine and a reader comparing two reports would otherwise see progress that never happened. Skills report these numbers, never eye-counts.
 - `reindex [--check]` — regenerates `truths/index.md` + `tree.md` from truth frontmatter; the **only** writer of those files (`--check` diffs without writing).
 - `retag <old> <new> [--dry]` — renames/merges a tag across truths `tags` / `required_tags` / `scope_tags`, then reindexes; free-text mentions are listed for review, not rewritten.
 - `pull <term>` — protocol-correct mine lookup for consumers *outside* the pipeline (creative sessions, other tools): searches claims+tags (body fallback) and mechanically applies the read protocol — superseded values point to their winner, unresolved conflicts / unsupported truths are flagged unusable, `as_of` / derived / plan-stage labels attached. See `.weavedoc/READ.md`; `init` plants a CLAUDE.md pointer so every session hits the protocol.
 - `gaps` — the mechanical declared-marker scan (미정/TBD/unchecked checkboxes) that floors the `weavedoc-gaps` skill.
 - `impact <material-id>` — which truths were extracted from a material and which documents cite it (the blast radius when a source is superseded or re-opened).
-- `status` — each document's stage and its next step. `version` — the installed runtime's date.
+- `status` — each document's stage and its next step, plus the open Human-queue split (you decide / recommendation ready / machine can just do). `version` — the installed runtime's date.
 
 The AI gate judges *meaning*; `validate` enforces *form and truth coherence* — a miss in one is caught by the other. Format SoT: `.weavedoc/schema`.
 

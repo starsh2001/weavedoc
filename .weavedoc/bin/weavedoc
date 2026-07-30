@@ -75,20 +75,111 @@ fm() { # $1=file $2=key -> frontmatter value (within leading --- --- block)
   awk -v k="$2" '
     NR==1 && /^---[[:space:]]*$/ { infm=1; next }
     infm && /^---[[:space:]]*$/ { exit }
-    infm && $0 ~ "^"k"[[:space:]]*:" { sub("^"k"[[:space:]]*:[[:space:]]*",""); sub(/[[:space:]]*$/,""); sub(/^"/,""); sub(/"$/,""); print; exit }
+    infm && $0 ~ "^"k"[[:space:]]*:" {
+      sub("^"k"[[:space:]]*:[[:space:]]*","")
+      # A trailing YAML comment is a comment, not part of the value. Without this, every shipped
+      # template that annotates its enums inline (`provenance: stated  # stated | adopted | derived`,
+      # `roles: []  # material roles — …`) read as an invalid value, so a project created from the
+      # templates exactly as documented failed its own validate on 17 fields — the first step of the
+      # first run. `cfgval` has always stripped these; frontmatter never did.
+      # Quoted values are left whole: inside quotes a `#` is literal, and the templates quote `claim`
+      # and `location`. A value that is ONLY a comment (`tone:   # optional; …`) is an empty value.
+      if ($0 !~ /^"/) { sub(/[[:space:]]+#.*$/,""); if ($0 ~ /^#/) $0="" }
+      sub(/[[:space:]]*$/,""); sub(/^"/,""); sub(/"$/,""); print; exit }
   ' "$1" 2>/dev/null
 }
 listfield() { echo "$1" | tr -d '[]"' | tr ',' '\n' | sed -E 's/^[[:space:]]*//; s/[[:space:]]*$//' | grep -v '^$'; }
-section_body() { # $1=file $2="Header" -> body lines under a "# Header" (h1) until the next "# " header
+# Both extractors take the FIRST matching section and stop at the next heading of that level.
+# An earlier revision reordered the rules so a repeated heading re-entered the section, on the
+# theory that this stopped a commented-out copy counting as live. That theory was wrong twice
+# over: `nocomment` is what handles comments, and the re-entry made `validate` block a document
+# whose review.md merely keeps an archived `# Fidelity violations` heading further down. Repeats
+# are surfaced by `dup_section` instead of being silently merged.
+section_body() { # $1=file (or - for stdin) $2="Header" -> body under the first "# Header"
   awk -v h="$2" '
     $0 ~ ("^#[[:space:]]+" h "[[:space:]]*$") { on=1; next }
-    on && /^#[[:space:]]/ { exit }
+    on && /^#+[[:space:]]/ { exit }
     on { print }
-  ' "$1" 2>/dev/null
+  ' "${1:--}" 2>/dev/null
 }
-is_noise() { # blank / comment / html-comment / {placeholder} template line
-  case "$1" in ""|"#"*|"<!--"*|"-->"*|*"{"*"}"*) return 0 ;; esac
-  [ -z "$(echo "$1" | tr -d '[:space:]')" ] && return 0
+section_body2() { # $1=file (or - for stdin) $2="Header" -> body under the first "## Header"
+  awk -v h="$2" '
+    $0 ~ ("^##[[:space:]]+" h "[[:space:]]*$") { on=1; next }
+    on && (/^#[[:space:]]/ || /^##[[:space:]]/) { exit }
+    on { print }
+  ' "${1:--}" 2>/dev/null
+}
+dup_section() { # $1=file $2=header $3=level(1|2|0=any) -> count of matching headings
+  local pat
+  case "${3:-2}" in
+    1) pat='^#[[:space:]]+' ;;
+    0) pat='^#{1,6}[[:space:]]+' ;;   # the spec leaves some section levels unfixed; a copy one
+    *) pat='^##[[:space:]]+' ;;       # level down still hides everything under it
+  esac
+  grep -cE "$pat$2[[:space:]]*\$" "$1" 2>/dev/null || true
+}
+comment_balanced() { # $1=file -> 0 if the file does not END inside a comment
+  # Runs `nocomment`'s own state machine rather than counting delimiters. Counting was not a
+  # balance test at all: one orphan `-->` earlier in the file offsets a later unterminated
+  # `<!--`, the totals match, and the check passes on exactly the file whose counts are lies.
+  awk '
+    { line=$0
+      while (1) {
+        if (inc) { i=index(line,"-->"); if (i==0) { line=""; break }; line=substr(line,i+3); inc=0 }
+        i=index(line,"<!--"); if (i==0) break
+        rest=substr(line,i+4); j=index(rest,"-->")
+        if (j==0) { inc=1; break }
+        line=substr(rest,j+3)
+      } }
+    END { exit inc?1:0 }' "$1" 2>/dev/null
+}
+countlines() { grep -vE '^[[:space:]]*- \[(\{[^}]*\}|<[^>]*>)\].*(\{[^}]*\}|<[^>]*>)' 2>/dev/null | grep -cE "$1" 2>/dev/null || true; }
+# stdin -> count (0 when no match; never fails). Drops ONLY untouched template placeholder entries:
+# a freshly-initialised gaps.md would otherwise report an open gap that does not exist.
+# The exclusion carries the SAME two conditions as is_noise, and deliberately so — these two are the
+# machine's only judges of "is this line a real entry", and when they disagreed the mine got a
+# ledger that read 0 while entries sat in it. Anchored to the bullet (a real entry quoting
+# `resolution {winner: [t245], scope: […]}` stays counted) AND requiring a second placeholder after
+# the bracket (a filled `- [<reference>] t001 — 참조가 끊김` stays counted).
+nocomment() { # stdin -> stdin with <!-- ... --> blocks blanked out (spans lines)
+  # Ledger files keep their closed/audit history inside HTML comments. Counting those as live
+  # entries is the same lie the count exists to prevent, in the other direction.
+  awk '
+    { line=$0
+      while (1) {
+        if (inc) { i=index(line,"-->"); if (i==0) { line=""; break }; line=substr(line,i+3); inc=0 }
+        i=index(line,"<!--"); if (i==0) break
+        rest=substr(line,i+4); j=index(rest,"-->")
+        if (j==0) { line=substr(line,1,i-1); inc=1; break }
+        line=substr(line,1,i-1) substr(rest,j+3)
+      }
+      print line
+    }'
+}
+is_noise() { # blank / comment / untouched template entry
+  # This predicate is the SOLE judge of the consecration gate, so both halves of the placeholder
+  # rule are load-bearing and both were learned from a miss:
+  #   ANCHORED — the bullet must START the line. An unanchored `*"- ["["{<"]*` matched anywhere,
+  #     so a real violation that merely QUOTED the template shape (`- [<kind>] <where>`, the form
+  #     FORMATS tells you to copy) was read as an untouched template and shipped through the gate.
+  #   SECOND PLACEHOLDER — one must still survive after the bracket (`{where}` / `<what>`). Anchor
+  #     alone still swallowed a filled `- [<contradiction>] 3장 — t001과 모순`, which is a real
+  #     entry someone wrote by keeping the angle brackets around a real kind name.
+  # Half-filled lines (`- [{kind}] 실제 내용`) fail the second test and count as real entries —
+  # the safe direction for a gate: a false block is visible, a false pass is not.
+  # Both template dialects are covered: gaps.md uses {braces}, review.md uses <angles>.
+  local s
+  case "$1" in ""|"#"*|"<!--"*|"-->"*) return 0 ;; esac
+  s=$(printf '%s' "$1" | sed 's/^[[:space:]]*//')
+  [ -z "$s" ] && return 0
+  # An entry always carries its `[kind]`. A line with no bracket at all is prose, and the commonest
+  # prose here is someone writing "(없음)" under an empty violations section — which then read as an
+  # open violation and blocked the document, with a message that said the section was non-empty.
+  # Anything WITH a bracket still counts, even unbulleted, so a malformed entry cannot hide as prose.
+  case "$s" in *"["*) ;; *) return 0 ;; esac
+  case "$s" in "- ["["{<"]*)
+    case "$s" in *"{"*"}"*"{"*"}"*|*"<"*">"*"<"*">"*) return 0 ;; esac ;;
+  esac
   return 1
 }
 material_ids() { ls -d "$MATERIALS"/*/ 2>/dev/null | while read -r d; do basename "$d"; done; }
@@ -97,12 +188,78 @@ mstatus()      { [ -f "$MATERIALS/$1/converted.md" ] && fm "$MATERIALS/$1/conver
 mtitle()       { [ -f "$MATERIALS/$1/converted.md" ] && fm "$MATERIALS/$1/converted.md" title; }
 catalog_ids()  { awk -F'|' '/^[[:space:]]*\|/ { gsub(/[[:space:]]/,"",$2); if ($2 ~ /^m[0-9]+$/) print $2 }' "$CATALOG" 2>/dev/null; }
 
+check_hq_tags() { # $1=file holding a "## Human queue" section
+  # Enforced only where a [state] tag is already present: an untagged legacy entry is audit A1s
+  # job, not a hard failure — a spec change must not break a mine verified under the old shape.
+  # Only `open` needs ownership: it drives the confirmation split; a `ruled` entry is closed and
+  # nothing reads its ownership, so requiring one there would be enforcement with no consumer.
+  local hqline hqs hqo hqw rel="${1#$ROOT/}"
+  while IFS= read -r hqline; do
+    # Leading whitespace allowed, matching the counters in status/audit — an indented entry that
+    # one side counts and the other skips breaks "open total == sum of the three buckets".
+    case "$hqline" in *"- ["*) ;; *) continue ;; esac
+    printf '%s' "$hqline" | grep -qE '^[[:space:]]*- \[' || continue
+    hqs=$(printf '%s' "$hqline" | sed -nE 's/^[[:space:]]*- \[([^]]*)\].*/\1/p')
+    pipes "$(sch humanqueue.enum.state)" | grep -qx "$hqs" || continue
+    [ "$hqs" = "open" ] || continue
+    hqo=$(printf '%s' "$hqline" | sed -nE 's/^[[:space:]]*- \[[^]]*\][[:space:]]*\[([^]]*)\].*/\1/p')
+    hqw=$(printf '%s' "$hqline" | sed -E 's/^[[:space:]]*- \[[^]]*\][[:space:]]*//; s/[[:space:]]*—.*$//')
+    pipes "$(sch humanqueue.enum.ownership)" | grep -qx "$hqo" \
+      || prob "$rel  Human queue '[$hqs]' entry has no valid ownership tag → add [user-only|recommended|machine]: $hqw"
+  done < <(hq_body "$1")
+}
+hq_body() { # $1=file -> the Human queue body, whichever heading level the file uses
+  # verify.md is `##`-sectioned, review.md is `#`-sectioned. The spec added the section to both
+  # without saying which level, so read either rather than silently finding nothing in one of them.
+  local b
+  b=$(nocomment < "$1" | section_body2 - "Human queue")
+  [ -n "$b" ] || b=$(nocomment < "$1" | section_body - "Human queue")
+  printf '%s\n' "$b"
+}
+fid_body() { # $1=file -> the 'Fidelity violations' body, whichever heading level the file uses
+  # Same reason as hq_body: the section is specified without a level. review.md's template writes it
+  # at `#`, so try that first — but a file that used `##` had its violations read as an empty section
+  # and shipped, which is the one failure the gate exists to make impossible.
+  local b
+  b=$(nocomment < "$1" | section_body - "Fidelity violations")
+  [ -n "$b" ] || b=$(nocomment < "$1" | section_body2 - "Fidelity violations")
+  printf '%s\n' "$b"
+}
+hq_files() { # -> every file carrying a "## Human queue" section, ONE PER LINE
+  # One list with one definition, because two consumers need exactly the same set and they drifted:
+  # `validate` knew about documents/*/review.md and `status` did not, so status answered
+  # "human queue: 0" while decisions sat open in review files it had never opened — the precise
+  # failure the queue count exists to make impossible.
+  # Emitted line by line, never space-joined: the previous space-joined string split a project path
+  # containing a space into fragments that matched no file, silently disabling every ownership
+  # check downstream — a check that reports nothing looks exactly like a check that passed.
+  [ -f "$TRUTHS/verify.md" ] && printf '%s\n' "$TRUTHS/verify.md"
+  doc_ids | while IFS= read -r d; do
+    [ -f "$DOCUMENTS/$d/review.md" ] && printf '%s\n' "$DOCUMENTS/$d/review.md"
+  done
+  return 0
+}
+
 # ===================== validate =====================
+# NOTE on the four `val()` copies below (validate · census · reindex · pull) and `fm()` above:
+# all five strip a trailing YAML comment from an UNQUOTED value, and all five must keep doing it
+# together. Fixing only `fm()` left truth files — read by validate's bulk awk, not by fm() — still
+# reporting `status 'ok   # 확인함' invalid`, which is the same one-sided repair this comment exists
+# to prevent. If you touch one, touch all five, and re-run the template project through validate.
 PROBLEMS=0
 prob() { printf '  %s\n' "$*"; PROBLEMS=$((PROBLEMS+1)); }
 
 cmd_validate() {
   local f id v k a c d p r w mid ref ROLES
+
+  # The checks below now READ the schema instead of paraphrasing it, which is right — but it means an
+  # unreadable schema turns them OFF rather than making them fail. Silence would look exactly like a
+  # pass. So the SoT is checked first: no schema, no verdict.
+  for k in project.fm.required material.fm.required truth.fm.required truth.fm.enum.status; do
+    [ -n "$(sch "$k")" ] && continue
+    prob "$SCHEMA  cannot read '$k' — the format SoT is missing or unreadable, so the checks that read it would silently pass. Restore .weavedoc/schema before trusting any verdict"
+    echo "✗ validate: $PROBLEMS problem(s)"; return 1
+  done
 
   # --- project.md ---
   if [ -f "$PROJECT" ]; then
@@ -118,7 +275,7 @@ cmd_validate() {
   fi
 
   # --- each material ---
-  for id in $(material_ids); do
+  while IFS= read -r id; do
     f="$MATERIALS/$id/converted.md"
     [ -f "$f" ] || { prob "$MATERIALS/$id/  no converted.md"; continue; }
     for k in $(pipes "$(sch material.fm.required)"); do
@@ -129,16 +286,32 @@ cmd_validate() {
     v=$(fm "$f" status); pipes "$(sch material.fm.enum.status)" | grep -qx "$v" || prob "$f  status '$v' invalid → use $(sch material.fm.enum.status)"
     v=$(fm "$f" role);   echo "$ROLES" | grep -qx "$v" || prob "$f  role '$v' not in project.md roles"
     v=$(fm "$f" stage);  [ -z "$v" ] || pipes "$(sch material.fm.enum.stage)" | grep -qx "$v" || prob "$f  stage '$v' invalid → use $(sch material.fm.enum.stage)"
-  done
+    # origin: research — the machine gathered this, so the record must let a cold reviewer
+    # re-reach the source. Without url+retrieved_at an externally-fetched value is indistinguishable
+    # from something the user said (a real run filed searched astronomical data as 'user-answer',
+    # and the whole age table ended up resting on a value verify could never re-check).
+    if [ "$(fm "$f" origin)" = "research" ]; then
+      for k in $(pipes "$(sch material.fm.required_when.research)"); do
+        [ -n "$(fm "$f" "$k")" ] || prob "$f  origin 'research' requires frontmatter '$k' (a fetched value must stay re-checkable)"
+      done
+    fi
+    # corrects: this material displaces named parts of earlier materials
+    for ref in $(listfield "$(fm "$f" corrects)"); do
+      case "$ref" in m[0-9]*) ;; *) continue ;; esac
+      mid=$(printf '%s' "$ref" | sed -E 's/^(m[0-9]+).*/\1/')
+      [ -d "$MATERIALS/$mid" ] || prob "$f  corrects '$ref' → no such material"
+      [ "$mid" = "$id" ] && prob "$f  corrects itself"
+    done
+  done < <(material_ids)
 
   # --- catalog <-> materials (orphans both ways) ---
   if [ -f "$CATALOG" ]; then
-    for id in $(material_ids); do
+    while IFS= read -r id; do
       catalog_ids | grep -qx "$id" || prob "$CATALOG  material '$id' has no catalog row"
-    done
-    for id in $(catalog_ids); do
+    done < <(material_ids)
+    while IFS= read -r id; do
       [ -d "$MATERIALS/$id" ] || prob "$CATALOG  row '$id' has no material folder"
-    done
+    done < <(catalog_ids)
   fi
 
   # --- truths (single awk pass) ---
@@ -149,11 +322,12 @@ cmd_validate() {
   # resolution consistency, quote existence (anti-laundering), and required_tags coverage.
   # Glob is t[0-9]*.md so generated tree.md/index.md are never mistaken for truths.
   if [ -d "$TRUTHS" ] && ls "$TRUTHS"/t[0-9]*.md >/dev/null 2>&1; then
-    local matlist="" retlist="" reqtags qout qn f d
+    local matlist="" retlist="" reslist="" reqtags qout qn f d
     for d in "$MATERIALS"/*/; do [ -d "$d" ] && matlist="$matlist $(basename "$d")"; done
     for d in "$MATERIALS"/*/; do
       [ -f "$d/converted.md" ] || continue
       [ "$(fm "$d/converted.md" status)" = "retracted" ] && retlist="$retlist $(basename "$d")"
+      [ "$(fm "$d/converted.md" origin)" = "research" ] && reslist="$reslist $(basename "$d")"
     done
     reqtags=$(listfield "$(fm "$PROJECT" required_tags)" | tr '\n' ' ')
 
@@ -161,23 +335,72 @@ cmd_validate() {
     for f in "$MATERIALS"/*/converted.md; do [ -f "$f" ] && qfiles+=("$f"); done
     for f in "$TRUTHS"/t[0-9]*.md; do [ -f "$f" ] && qfiles+=("$f"); done
 
-    qout=$(awk -v matids="$matlist" -v retids="$retlist" -v reqtags="$reqtags" -v mroot="$MATERIALS" -v Q="'" '
-      function val(   s){ s=$0; sub(/^[^:]*:[[:space:]]*/,"",s); sub(/[[:space:]]*$/,"",s); sub(/^"/,"",s); sub(/"$/,"",s); return s }
+    local remlist
+    # All ids on the line, zero-padding normalised — same rule census uses. Taking only the first
+    # id made a truth listed second on a shared `removed:` line fail validate for having no record.
+    remlist=$(grep -oE '^[[:space:]]*-[[:space:]]*removed:.*' "$TRUTHS/changelog.md" 2>/dev/null \
+              | grep -oE '(^|[^[:alnum:]])t[0-9]+([^[:alnum:]]|$)' | grep -oE 't[0-9]+' \
+              | sed -E 's/^t0*([0-9]+)$/t\1/' | LC_ALL=C sort -u | tr '\n' ' ')
+    # The schema is the SoT, so it has to be READ, not paraphrased into awk. These four enums and the
+    # required-key list used to be hardcoded here, which made FORMATS.md line 5 ("if the two ever
+    # differ, schema wins — edit it first") false for the one artifact type that matters most: a user
+    # who edited the schema got no change in behaviour and no warning either.
+    qout=$(awk -v matids="$matlist" -v retids="$retlist" -v reqtags="$reqtags" -v mroot="$MATERIALS" -v remids="$remlist" -v resids="$reslist" -v Q="'"       -v treq="$(sch truth.fm.required | tr '|' ' ')"       -v tstenum="$(sch truth.fm.enum.status | tr '|' ' ')"       -v tprenum="$(sch truth.fm.enum.provenance | tr '|' ' ')"       -v rtypes="$(sch truth.fm.resolution.type | tr '|' ' ')"       -v rkinds="$(sch truth.fm.resolution.decision_kind | tr '|' ' ')"       -v rby="$(sch truth.fm.resolution.decided_by | tr '|' ' ')" '
+      function val(   s){ s=$0; sub(/^[^:]*:[[:space:]]*/,"",s); if(s !~ /^"/){ sub(/[[:space:]]+#.*$/,"",s); if(s ~ /^#/) s="" } sub(/[[:space:]]*$/,"",s); sub(/^"/,"",s); sub(/"$/,"",s); return s }
       function q(s){ return Q s Q }
       function prob(m){ print "  " m; probs++ }
       function tf_done(   v,tg,nn,ii,ta,wv,wm,w2,ty,selfwin){
         if(tidfield != tid) prob(tfile "  id " q(tidfield) " != filename " q(tid))
-        if(!hasid)     prob(tfile "  frontmatter " q("id") " missing")
-        if(!hasclaim)  prob(tfile "  frontmatter " q("claim") " missing")
-        if(!hassource) prob(tfile "  frontmatter " q("source") " missing")
-        if(!hastags)   prob(tfile "  frontmatter " q("tags") " missing")
-        if(!hasstatus) prob(tfile "  frontmatter " q("status") " missing")
+        # Driven by truth.fm.required, using the key census this awk already collects. Five hardcoded
+        # checks stood here instead, so editing the schema changed nothing and said nothing — and an
+        # earlier pass of this very change built the reqkey set and then forgot to read it, which is
+        # the same defect one layer up: the claim was made in the changelog before the wire existed.
+        for(rk in reqkey) if(!((tfile SUBSEP rk) in kcount)) prob(tfile "  frontmatter " q(rk) " missing")
         if(hassource && tsrc!="" && !(tsrc in mat)) prob(tfile "  source " q(tsrc) " → no material folder")
         v=tstatus
         if(v=="resolved")
           prob(tfile "  status " q("resolved") " is the pre-rename legacy value → winner-self/attribute: " q("ok") ", loser: " q("discarded"))
-        else if(v!="ok" && v!="conflict" && v!="unsupported" && v!="discarded")
-          prob(tfile "  status " q(v) " invalid → use ok|conflict|unsupported|discarded")
+        else if(!(v in okstatus))
+          prob(tfile "  status " q(v) " invalid → use " tstenum " (truth.fm.enum.status)")
+        # retracted = this was never a valid extraction (the quote was not in the named source, the
+        # element was a machine note, …). The file stays as a tombstone so the id is never reused and
+        # census never has to ask "was t241 deleted or lost?" — deleting it outright is what created
+        # three permanent "confirm which" holes in a real mine.
+        # The resolution enums. Nothing checked these: the only writer that ever did was the CLI
+        # supersede command, and hand-editing frontmatter is explicitly still allowed — so every
+        # hand-written decision record went in unvalidated. `decided_by` was not even in the schema.
+        if(tresolution!=""){
+          rv=tresolution
+          if(match(rv,/type:[[:space:]]*[^,}]+/)){ rt2=substr(rv,RSTART,RLENGTH); sub(/^type:[[:space:]]*/,"",rt2); sub(/[[:space:]]+$/,"",rt2)
+            if(!(rt2 in oktype)) prob(tfile "  resolution type " q(rt2) " invalid → use " rtypes " (truth.fm.resolution.type)") }
+          if(match(rv,/decision_kind:[[:space:]]*[^,}]+/)){ rk2=substr(rv,RSTART,RLENGTH); sub(/^decision_kind:[[:space:]]*/,"",rk2); sub(/[[:space:]]+$/,"",rk2)
+            if(!(rk2 in okkind)) prob(tfile "  resolution decision_kind " q(rk2) " invalid → use " rkinds " (truth.fm.resolution.decision_kind)") }
+          if(match(rv,/decided_by:[[:space:]]*[^,}]+/)){ rb2=substr(rv,RSTART,RLENGTH); sub(/^decided_by:[[:space:]]*/,"",rb2); sub(/[[:space:]]+$/,"",rb2)
+            if(!(rb2 in okby)) prob(tfile "  resolution decided_by " q(rb2) " invalid → use " rby " (truth.fm.resolution.decided_by)") }
+          else prob(tfile "  resolution has no " q("decided_by") " → the provenance of a DECISION is the second membrane; without it the mine cannot say whether a human ruled or the machine picked")
+        }
+        if(v=="retracted" && tresolution!="")
+          prob(tfile "  status " q("retracted") " must not carry a resolution — it lost no conflict; record the withdrawal in truths/changelog.md as " q("removed:"))
+        if(v=="retracted"){
+          retracted[tid]=1; tidz=tid; sub(/^t0*/,"t",tidz); if(tidz!="t") retracted[tidz]=1
+          # Without this, `retracted` is the one unusable status with NO mechanical obligation and
+          # no quote seal — i.e. a way to make an inconvenient truth disappear that costs less than
+          # resolving it. The `removed:` line is what keeps a withdrawal answerable.
+          tidn=tid; sub(/^t0*/,"t",tidn); if(tidn=="t") tidn=tid
+          if(!(tidn in removedlog))
+            prob(tfile "  status " q("retracted") " but truths/changelog.md has no " q("removed: " tid) " line → a withdrawal with no recorded reason is indistinguishable from a quiet deletion")
+        }
+        # Normalise zero-padding the same way the removed:-collector in this awk already does, and
+        # remember the status: without it `conflict_with: [t5]` never matched retracted `t005`,
+        # and an already-resolved truth was told to "re-open or resolve" a conflict it does not have.
+        statusof[tid]=v
+        tidn3=tid; sub(/^t0*/,"t",tidn3); if(tidn3=="t") tidn3=tid
+        existsn[tidn3]=1; existsn[tid]=1
+        tidn2=tid; sub(/^t0*/,"t",tidn2); if(tidn2=="t") tidn2=tid; norm2raw[tidn2]=tid
+        if(tconflict!=""){ nn=split(tconflict,ta,/[][, ]+/)
+          for(ii=1;ii<=nn;ii++){ if(ta[ii]=="") continue
+            cwn=ta[ii]; sub(/^t0*/,"t",cwn); if(cwn=="t") cwn=ta[ii]
+            cwof[tid]=cwof[tid] " " cwn } }
         if(v=="conflict" && tconflict=="") prob(tfile "  status is " q("conflict") " but no conflict_with field")
         if(v=="discarded" && tresolution=="") prob(tfile "  status is " q("discarded") " but no resolution field (a discard must record its decision)")
         # status = validity axis, resolution = history. Guard the two mismatches:
@@ -191,24 +414,58 @@ cmd_validate() {
           if(v=="ok" && w2!="" && !selfwin && ty!="attribute")
             prob(tfile "  ok but its resolution says it lost (winner elsewhere) → set status " q("discarded"))
         }
-        if(tprov!="" && tprov!="stated" && tprov!="adopted" && tprov!="derived")
-          prob(tfile "  provenance " q(tprov) " invalid → use stated|adopted|derived")
+        if(tprov!="" && !(tprov in okprov))
+          prob(tfile "  provenance " q(tprov) " invalid → use " tprenum " (truth.fm.enum.provenance)")
         if(tprov=="derived" && !hasderivedfrom)
           prob(tfile "  provenance is " q("derived") " but no derived_from field (derivations must show their chain)")
+        # `origin: research` stops the laundering at the material; without this it resumes one
+        # level down. `stated` means "the user/source stated it" — nobody stated a value the
+        # machine went and fetched, and `stated` is the default, so silence lands there.
+        if(hassource && (tsrc in research) && (tprov=="" || tprov=="stated"))
+          prob(tfile "  source " q(tsrc) " is " q("origin: research") " (machine-fetched) but provenance is " q("stated") " → nobody stated it; use " q("adopted") " (user accepted the fetched value) or " q("derived") " (computed from it)")
         if(hassource && (tsrc in ret) && (v=="ok" || v=="conflict"))
           prob(tfile "  source " q(tsrc) " is retracted but status is " q(v) " → set unsupported (map retraction propagation)")
         if(tresolution!="" && match(tresolution,/winner:[[:space:]]*(\[[^]]*\]|[^,}]+)/)){
-          wv=substr(tresolution,RSTART,RLENGTH)
+          wv=substr(tresolution,RSTART,RLENGTH); w3=wv
           while(match(wv,/m[0-9]+/)){
             wm=substr(wv,RSTART,RLENGTH); wv=substr(wv,RSTART+RLENGTH)
             if(wm in ret) prob(tfile "  resolution winner references retracted " wm " → basis gone; re-open the conflict (map)")
+          }
+          # A loser pointing at a retracted winner sends every protocol-following consumer from
+          # "follow the successor" straight to a tombstone that says the fact is not in the mine.
+          # Resolving a conflict and then retracting the winner was the second escape route.
+          while(match(w3,/t[0-9]+/)){
+            wm=substr(w3,RSTART,RLENGTH); w3=substr(w3,RSTART+RLENGTH)
+            wmn=wm; sub(/^t0*/,"t",wmn); if(wmn=="t") wmn=wm
+            if(wmn!=tidn3) winnerof[wmn]=winnerof[wmn] " " tid
+          }
+        }
+        # Dangling-reference check for every id-bearing list field, not just the newest one.
+        for(ff=1; ff<=4; ff++){
+          fv = (ff==1)?tconflict : (ff==2)?tsuperseded : (ff==3)?tderivedfrom : tcorrob
+          fn = (ff==1)?"conflict_with" : (ff==2)?"superseded" : (ff==3)?"derived_from" : "corroborated_by"
+          if(fv=="") continue
+          fw=fv
+          while(match(fw,/[tm][0-9]+/)){
+            rid=substr(fw,RSTART,RLENGTH); fw=substr(fw,RSTART+RLENGTH)
+            ridn=rid; sub(/^t0*/,"t",ridn); sub(/^m0*/,"m",ridn)
+            reflist[tid "" fn "" rid]=ridn
           }
         }
         tg=ttags; gsub(/[]["]/,"",tg); nn=split(tg,ta,",")
         for(ii=1;ii<=nn;ii++){ gsub(/^[[:space:]]+|[[:space:]]+$/,"",ta[ii]); if(ta[ii]!="") seentag[ta[ii]]=1 }
       }
-      BEGIN { nm=split(matids,_a," "); for(i=1;i<=nm;i++) if(_a[i]!="") mat[_a[i]]=1
-              nm=split(retids,_b," "); for(i=1;i<=nm;i++) if(_b[i]!="") ret[_b[i]]=1 }
+      BEGIN { nm=split(treq,_r," ");    for(i=1;i<=nm;i++) if(_r[i]!="") reqkey[_r[i]]=1
+              nm=split(tstenum,_s," ");  for(i=1;i<=nm;i++) if(_s[i]!="") okstatus[_s[i]]=1
+              nm=split(tprenum,_p," ");  for(i=1;i<=nm;i++) if(_p[i]!="") okprov[_p[i]]=1
+              nm=split(rtypes,_t," ");   for(i=1;i<=nm;i++) if(_t[i]!="") oktype[_t[i]]=1
+              nm=split(rkinds,_k," ");   for(i=1;i<=nm;i++) if(_k[i]!="") okkind[_k[i]]=1
+              nm=split(rby,_y," ");      for(i=1;i<=nm;i++) if(_y[i]!="") okby[_y[i]]=1
+              nm=split(matids,_a," "); for(i=1;i<=nm;i++) if(_a[i]!=""){ mat[_a[i]]=1; existsn[_a[i]]=1;
+                 _mn=_a[i]; sub(/^m0*/,"m",_mn); if(_mn!="m") existsn[_mn]=1 }
+              nm=split(retids,_b," "); for(i=1;i<=nm;i++) if(_b[i]!="") ret[_b[i]]=1
+              nm=split(remids,_c," "); for(i=1;i<=nm;i++) if(_c[i]!="") removedlog[_c[i]]=1
+              nm=split(resids,_d," "); for(i=1;i<=nm;i++) if(_d[i]!="") research[_d[i]]=1 }
       FNR==1 {
         infm = ($0 ~ /^---[[:space:]]*$/) ? 1 : 0
         n=split(FILENAME,pp,"/")
@@ -217,11 +474,17 @@ cmd_validate() {
           ftype="t"; tfile=FILENAME; fn=pp[n]; sub(/\.md$/,"",fn); tid=fn
           tidfield=""; tsrc=""; ttags=""; tstatus=""; tconflict=""; tresolution=""; tprov=""
           hasid=0; hasclaim=0; hassource=0; hastags=0; hasstatus=0; gotline=0; hasderivedfrom=0
+          tsuperseded=""; tderivedfrom=""; tcorrob=""
         }
         next
       }
       infm && $0 ~ /^---[[:space:]]*$/ { infm=0; if(ftype=="t") tf_done(); next }
       infm {
+        # Count every frontmatter key, for BOTH file kinds. A key written twice is read three
+        # different ways by three commands — fm() takes the FIRST match, this awk and reindex take
+        # the LAST, and census counts BOTH — so the same field yields three different answers and
+        # nothing said a word. census could report a status tally larger than its own file count.
+        if($0 ~ /^[a-z_]+[[:space:]]*:/){ kk=$0; sub(/[[:space:]]*:.*$/,"",kk); kcount[FILENAME,kk]++ }
         if(ftype=="t"){
           if($0 ~ /^id:[[:space:]]/)                 { tidfield=val(); hasid=1 }
           else if($0 ~ /^claim:[[:space:]]/)         { hasclaim=1 }
@@ -231,19 +494,96 @@ cmd_validate() {
           else if($0 ~ /^conflict_with:[[:space:]]/) { tconflict=val() }
           else if($0 ~ /^resolution:[[:space:]]/)    { tresolution=val() }
           else if($0 ~ /^provenance:[[:space:]]/)    { tprov=val() }
-          else if($0 ~ /^derived_from:[[:space:]]/)  { hasderivedfrom=1 }
+          else if($0 ~ /^derived_from:[[:space:]]/)  { hasderivedfrom=1; tderivedfrom=val() }
+          else if($0 ~ /^superseded:[[:space:]]/)    { tsuperseded=val() }
+          else if($0 ~ /^corroborated_by:[[:space:]]/) { tcorrob=val() }
         }
         next
       }
       ftype=="m" { body[mid]=body[mid] $0 "\n"; next }
-      ftype=="t" && !gotline && $0 ~ /[^[:space:]]/ && length($0)>=10 {
-        gotline=1
-        if(tsrc!="" && (tsrc in body) && index(body[tsrc],$0)==0)
-          prob(tfile "  quote not found in " mroot "/" tsrc "/converted.md (laundering risk)")
+      # EVERY body line long enough to be checkable, not just the first. The old rule sealed line 1
+      # and left the rest free — and FORMATS explicitly encourages multi-line full-text artifacts
+      # (lyrics, contract clauses, code), so on exactly the truths whose exact wording IS the fact,
+      # all but the opening line were unsealed.
+      # NO length gate. The gate that used to stand here was worse than it looked: the awk length() builtin
+      # counts CHARACTERS under a UTF-8 locale and BYTES under C, so the "10" meant ~3 Korean
+      # characters on one machine and 10 on another — the same mine got two different verdicts from
+      # what the user believes is the same tool, and any line under the threshold was never checked
+      # at all, which is a hole exactly the size of a short fabricated claim. A substring test on a
+      # short string is cheap and errs toward passing, so skipping it bought nothing.
+      ftype=="t" && $0 ~ /[^[:space:]]/ {
+        if(tsrc!="" && (tsrc in body)){
+          sealsrc[tid]=tsrc; sealfile[tid]=tfile; sealstat[tid]=tstatus
+          if(index(body[tsrc],$0)==0){
+            sealbroken[tid]=1
+            if(tstatus!="retracted" && !(tid in unsealed)){
+              unsealed[tid]=1
+              prob(tfile "  quote not found in " mroot "/" tsrc "/converted.md (laundering risk)")
+            }
+          } else stillthere[tid]=1
+        }
       }
       END {
         nr=split(reqtags,rt," ")
         for(i=1;i<=nr;i++) if(rt[i]!="" && !(rt[i] in seentag)) prob("required_tag " q(rt[i]) " has no truths")
+        for(kx in kcount) if(kcount[kx]>1){
+          split(kx,kk2,SUBSEP)
+          prob(kk2[1] "  frontmatter key " q(kk2[2]) " appears " kcount[kx] " times → fm reads the FIRST, validate and reindex read the LAST, and census counts BOTH, so three commands report three different values for the same field. Keep one")
+        }
+        # The tombstone withdrawal reason, judged only after the WHOLE body has been read. Deciding
+        # on the first line that happened to match made the verdict depend on line ORDER: the very
+        # same tombstone passed or failed according to which of its lines came first. ONE line absent
+        # from the named source is enough to support "never had standing"; the file only fails when
+        # EVERY line of it is still verbatim there.
+        for(t in sealstat)
+          if(sealstat[t]=="retracted" && (t in stillthere) && !(t in sealbroken))
+            prob(sealfile[t] "  status " q("retracted") " but its quote IS still verbatim in " mroot "/" sealsrc[t] "/converted.md → the withdrawal reason (never had standing) is unsupported. If the fact is real and only " q("source") " was wrong, repoint it (map); if it lost a conflict, use " q("discarded") " with a resolution")
+        # Retracting one side of an open conflict would strand the other side: it stays `conflict`,
+        # READ.md tells every consumer "use NEITHER side", and no resolution was ever recorded.
+        # That is a way to remove a truth that bypasses the conflict machinery entirely.
+        for(k in reflist){
+          split(k, kp, "")
+          if(!(reflist[k] in existsn))
+            prob("truths/" kp[1] ".md  " kp[2] " references " q(kp[3]) " — no such truth or material. A dangling id here is silent: the checks that depend on it (retracted counterpart, reciprocity, derivation chain) simply never fire")
+        }
+        for(w4 in winnerof)
+          if((w4 in retracted) || ((w4 in norm2raw) && (norm2raw[w4] in retracted)))
+            prob("truths/" w4 ".md  is retracted but is named the WINNER by" winnerof[w4] " → those losers point their successor at a tombstone, and a consumer following the protocol is told the fact is not in the mine. Re-open the conflict or make the surviving value a live truth")
+        # Compare NORMALISED against NORMALISED, and report the RAW file id. Comparing the raw
+        # `x` (t003) against a normalised neighbour (t4) made the once-per-pair guard fire both
+        # ways for every id below 100, and printing the normalised form named a file that does
+        # not exist. Normalising one operand and not the other is the same half-fix this whole
+        # change set kept producing.
+        # Normalised index of who declares a conflict with whom, so reciprocity can be tested in
+        # both directions. Built first, in its own pass — testing it inside the loop below would read
+        # a half-built table for whichever id came first.
+        for(x in cwof){ xz=x; sub(/^t0*/,"t",xz); if(xz=="t") xz=x; cwofn[xz]=cwof[x]; rawof[xz]=x }
+        for(x in cwof){
+          xn=x; sub(/^t0*/,"t",xn); if(xn=="t") xn=x
+          nr2=split(cwof[x],cw2," ")
+          for(i=1;i<=nr2;i++){
+            if(cw2[i]=="") continue
+            disp = (cw2[i] in norm2raw) ? norm2raw[cw2[i]] : cw2[i]
+            # RECIPROCITY of an open conflict. One-sided `conflict_with` leaves the mine saying A
+            # disputes B while B says nothing — and READ.md rule 2 ("use NEITHER side") then cannot
+            # be applied by any consumer, so `pull` hands the silent side out as usable. the map spec
+            # always said to set it on both files; nothing checked. Skipped when the other side is a
+            # tombstone, which the retracted-counterpart check above already reports.
+            if(statusof[x]=="conflict" && !(cw2[i] in retracted) && (cw2[i] in existsn)){
+              if(!(cw2[i] in cwofn) || index(" " cwofn[cw2[i]] " ", " " xn " ")==0)
+                prob("truths/" x ".md  names " disp " in conflict_with but " disp " does not name " x " back → a one-sided conflict cannot be applied by READ.md rule 2, so pull reports the silent side as usable. Set conflict_with on BOTH files")
+              else if((cw2[i] in rawof) && statusof[rawof[cw2[i]]]!="conflict" && statusof[rawof[cw2[i]]]!="")
+                prob("truths/" disp ".md  is in an open conflict with " x " but its own status is " q(statusof[rawof[cw2[i]]]) " → both parties to an unresolved conflict must be " q("conflict") ", or the conflict must be resolved on both")
+            }
+            if((cw2[i] in retracted) && !(x in retracted) && statusof[x]=="conflict")
+              prob("truths/" x ".md  is still " q("conflict") " against " disp ", which was retracted → the other side was withdrawn without resolving the conflict; re-open or resolve " x)
+            # Retracting BOTH sides was explicitly exempt, and that exemption WAS the loophole:
+            # an open conflict could be made to vanish for the price of two changelog lines,
+            # with no user ruling anywhere — the conflict machinery bypassed entirely.
+            else if((cw2[i] in retracted) && (x in retracted) && xn < cw2[i])
+              prob("truths/" x ".md and " disp " were BOTH retracted while in open conflict → a conflict may not be disposed of by withdrawing both sides; the machine never resolves a conflict on its own. Record the user ruling (resolution / adjudication) or re-open one side")
+          }
+        }
         print "QFAILS " probs+0
       }
     ' "${qfiles[@]}")
@@ -254,6 +594,19 @@ cmd_validate() {
       PROBLEMS=$((PROBLEMS + qn))
     fi
 
+    # A truth file whose line 1 is not '---' is invisible to every check above: the frontmatter
+    # parser never opens, so tf_done never runs and nothing about the file is verified. It also can
+    # never gain an index entry, which produced an unresolvable loop — validate said "run reindex",
+    # reindex reported success, validate said it again, forever, while the actual cause (no
+    # frontmatter) was named only by `reindex --check`. Name it here, and stop blaming the index for it.
+    local tf nofm=""
+    for tf in "$TRUTHS"/t[0-9]*.md; do
+      [ -f "$tf" ] || continue
+      [ "$(head -1 "$tf" 2>/dev/null | tr -d '\r')" = "---" ] && continue
+      nofm="$nofm $(basename "$tf" .md)"
+      prob "$tf  no frontmatter (line 1 must be '---') — this file is not read as a truth at all, so every check on it silently passes and no index entry can ever be generated for it"
+    done
+
     # generated index files must exist if truths exist — and index must be in sync (ids both ways)
     [ -f "$TRUTHS/index.md" ] || prob "truths/index.md missing (run 'weavedoc reindex')"
     [ -f "$TRUTHS/tree.md" ]  || prob "truths/tree.md missing (run 'weavedoc reindex')"
@@ -262,6 +615,9 @@ cmd_validate() {
       fids=$(ls "$TRUTHS"/t[0-9]*.md 2>/dev/null | sed -E 's/.*[\/\\](t[0-9]+)\.md$/\1/' | LC_ALL=C sort)
       iids=$(grep -oE '^- t[0-9]+' "$TRUTHS/index.md" | sed 's/^- //' | LC_ALL=C sort)
       for sid in $(comm -23 <(printf '%s\n' "$fids") <(printf '%s\n' "$iids")); do
+        # Not an index problem when the file has no frontmatter — reindex cannot fix that, and telling
+        # the user to run it again is the loop itself.
+        case " $nofm " in *" $sid "*) continue ;; esac
         prob "truths/index.md  no entry for $sid (run 'weavedoc reindex')"
       done
       for sid in $(comm -13 <(printf '%s\n' "$fids") <(printf '%s\n' "$iids")); do
@@ -296,7 +652,24 @@ cmd_validate() {
           if(!(sec in mat)) prob("truths/coverage.md  " q("## " sec) " → no material folder")
           hassec[sec]=1; next
         }
-        /^##[[:space:]]/ { sec=""; next }
+        /^##[[:space:]]+legacy[[:space:]]*$/ { sec=""; inleg=1; next }
+        /^##[[:space:]]/ { sec=""; inleg=0; next }
+        # `## legacy` holds user rulings in free prose, not element→truth mappings. Truth ids named
+        # inside a ruling are being *talked about* (often ones deliberately withdrawn), so applying
+        # the existence check there would fail validate for explaining a deletion.
+        inleg {
+          if(match($0,/^[[:space:]]*-[[:space:]]*(m[0-9]+)/)){
+            lid=substr($0,RSTART,RLENGTH); sub(/^[[:space:]]*-[[:space:]]*/,"",lid)
+            legseen[lid]=1
+            # An exemption is a USER ruling, and one line of machine-written prose was enough to
+            # shrink the coverage denominator AND trip the T2 legacy escape — one unattributed line
+            # switching off a metric and a cold lens at once. questions.md already demands a
+            # quotable utterance for `answered`; this is the same bar.
+            if($0 !~ /ruled:[[:space:]]*[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]/ || $0 !~ /"/)
+              prob("truths/coverage.md  " q("## legacy") " exempts " q(lid) " without a recorded ruling → add ruled: YYYY-MM-DD plus the quoted user utterance on the same line; the machine does not exempt itself")
+          }
+          next
+        }
         {
           line=$0
           while(match(line,/t[0-9]+/)){
@@ -306,13 +679,19 @@ cmd_validate() {
           }
         }
         END {
+          # Checked here, not inline: `## legacy` may sit above the `## m<id>` sections, and
+          # hassec[] is only complete once the whole file has been read.
+          for(l in legseen){
+            if(!(l in mat)) prob("truths/coverage.md  " q("## legacy") " exempts " q(l) " — no such material")
+            else if(l in hassec) prob("truths/coverage.md  " q("## legacy") " exempts " q(l) " but it has its own " q("## " l) " section — it is covered, not exempt (that drops the denominator while the numerator stays, which can push the ratio above 1)")
+          }
           for(t in tsrc){ s=tsrc[t]
             if((s in hassec) && !((s "," t) in mention))
               prob("truths/coverage.md  " q("## " s) " missing " q(t) " — extracted from " s " but absent from its coverage section (update at map)")
           }
           print "CFAILS " probs+0
         }
-      ' "$TRUTHS/coverage.md")
+      ' <(nocomment < "$TRUTHS/coverage.md"))
       cn=$(printf '%s\n' "$cout" | tail -1); cn=${cn#CFAILS }
       if [ "${cn:-0}" -gt 0 ]; then
         printf '%s\n' "$cout" | sed '$d'
@@ -322,7 +701,7 @@ cmd_validate() {
   fi
 
   # --- each document ---
-  for d in $(doc_ids); do
+  while IFS= read -r d; do
     p="$DOCUMENTS/$d/plan.md"
     if [ -f "$p" ]; then
       for k in $(pipes "$(sch plan.fm.required)"); do
@@ -333,18 +712,74 @@ cmd_validate() {
       for c in $(listfield "$(fm "$p" continues)"); do
         [ -d "$DOCUMENTS/$c" ] || prob "$p  continues '$c' → no such document"
       done
+      # cited_truths is the lookup key for Trigger A propagation: when a truth changes, this list is
+      # what says which documents must go stale. A dangling id there is silent in the worst way —
+      # the document is simply never matched, so it stays green forever while its ground moved.
+      for c in $(listfield "$(fm "$p" cited_truths)"); do
+        case "$c" in t[0-9]*) [ -f "$TRUTHS/$c.md" ] || prob "$p  cited_truths '$c' → no such truth. Trigger A matches documents by this list, so a dangling id exempts this document from staleness detection" ;;
+          *) prob "$p  cited_truths '$c' is not a truth id (expected tNNN)" ;; esac
+      done
     else
       prob "$DOCUMENTS/$d/  no plan.md"
     fi
-    # gate-clean invariant: final.md ⟹ review.md '# Fidelity violations' is empty
-    if [ -f "$DOCUMENTS/$d/final.md" ] && [ -f "$DOCUMENTS/$d/review.md" ]; then
-      while IFS= read -r line; do
-        is_noise "$line" && continue
-        prob "$d has final.md but review.md '# Fidelity violations' is non-empty → consecrated through an open gate"
-        break
-      done < <(section_body "$DOCUMENTS/$d/review.md" "Fidelity violations")
+    # Two ways to BLIND the gate's reader, both checked here because this is the invariant that
+    # decides whether a document may ship.
+    #   1. A second copy of the heading: the gate reads the FIRST section only, so everything under
+    #      the later copies is never looked at.
+    #   2. An unterminated `<!--`: the gate reads through `nocomment`, which blanks a comment that
+    #      never closes all the way to EOF. An archived block someone forgot to close therefore
+    #      deleted every violation below it and the gate reported clean — strictly worse than
+    #      before the comment-aware read existed, which at least failed loudly.
+    if [ -f "$DOCUMENTS/$d/review.md" ]; then
+      # Counted at ANY heading level. The spec never fixed the level for this section, so a copy
+      # one level down is a second copy just the same, and only the first is ever read.
+      [ "$(dup_section "$DOCUMENTS/$d/review.md" "Fidelity violations" 0)" -gt 1 ] &&
+        prob "$d review.md has more than one 'Fidelity violations' heading (at any level) — only the first is read, so violations under the others would ship unseen. Merge them"
+      comment_balanced "$DOCUMENTS/$d/review.md" ||
+        prob "$d review.md ends inside an unterminated '<!--' — everything after it is blanked out before any check reads it, so open violations below would ship unseen. Close the comment"
     fi
-  done
+    # gate-clean invariant: a consecrated output ⟹ review.md's 'Fidelity violations' is empty.
+    # Three ways this was skipped rather than enforced, each of them a way to ship ungated:
+    #   1. `final/` — FORMATS makes the multi-file directory a first-class output form, but the
+    #      gate only ever looked for `final.md`, so multi-file documents were never gated at all.
+    #   2. No review.md — the condition required BOTH files, so deleting the review file (or never
+    #      writing one) turned the invariant off instead of failing it. Absence of the gate's own
+    #      record is the strongest possible signal that the gate did not run.
+    #   3. Heading level — read through fid_body, which takes either level, for the same reason
+    #      hq_body does: the section is documented without a level and both are in use.
+    local consecrated=""
+    [ -f "$DOCUMENTS/$d/final.md" ] && consecrated="final.md"
+    [ -d "$DOCUMENTS/$d/final" ]    && consecrated="final/"
+    if [ -n "$consecrated" ]; then
+      if [ ! -f "$DOCUMENTS/$d/review.md" ]; then
+        prob "$d has $consecrated but no review.md — the fidelity gate has no record of ever running on it. Run review before consecrating"
+      else
+        while IFS= read -r line; do
+          is_noise "$line" && continue
+          prob "$d has $consecrated but review.md 'Fidelity violations' is non-empty → consecrated through an open gate"
+          break
+        done < <(fid_body "$DOCUMENTS/$d/review.md")
+      fi
+    fi
+  done < <(doc_ids)
+
+  # --- truths/verify.md frontmatter ---
+  # The mine's verification state file is the one artifact a whole round of work rests on, so its
+  # frontmatter is checked here rather than left to prose: `status: pass` (not a valid value) reads
+  # as "verified" to a human skimming it while no check ever agreed.
+  if [ -f "$TRUTHS/verify.md" ]; then
+    for k in $(pipes "$(sch verify.fm.required)"); do
+      [ -n "$(fm "$TRUTHS/verify.md" "$k")" ] || prob "truths/verify.md  frontmatter '$k' missing"
+    done
+    v=$(fm "$TRUTHS/verify.md" status)
+    [ -z "$v" ] || pipes "$(sch verify.fm.enum.status)" | grep -qx "$v" || prob "truths/verify.md  status '$v' invalid → use $(sch verify.fm.enum.status)"
+  fi
+
+  # --- Human queue ownership tags (truths/verify.md AND documents/*/review.md) ---
+  # `review.sections` gained `Human queue` this session and reviewers.md routes the advisory
+  # triage there, but only verify.md was checked — so a semantic dismissal parked on the document
+  # side vanished from validate, status and audit alike.
+  while IFS= read -r hqf; do check_hq_tags "$hqf"; done < <(hq_files)
 
   # --- config enums ---
   v=$(cfgval completeness); [ -z "$v" ] || pipes "$(sch config.enum.completeness)" | grep -qx "$v" || prob "config fidelity.completeness '$v' invalid"
@@ -378,7 +813,7 @@ cmd_impact() {
 # ===================== status =====================
 cmd_status() {
   local d st next nm
-  for d in $(doc_ids); do
+  while IFS= read -r d; do
     st=$(fm "$DOCUMENTS/$d/plan.md" status 2>/dev/null); [ -z "$st" ] && st="(no plan)"
     case "$st" in
       planned)   next="write" ;;
@@ -388,11 +823,41 @@ cmd_status() {
       done)      next="—" ;;
       *)         next="plan" ;;
     esac
-    [ -f "$DOCUMENTS/$d/final.md" ] && [ "$st" != "stale" ] && next="— (final)"
+    # Both output forms, exactly as the gate reads them: reporting a multi-file document as still
+    # "→ write" while `final/` sits there sends you back to a step you already finished.
+    { [ -f "$DOCUMENTS/$d/final.md" ] || [ -d "$DOCUMENTS/$d/final" ]; } && [ "$st" != "stale" ] && next="— (final)"
     printf '%-18s %-11s → %s\n' "$d" "$st" "$next"
-  done
+  done < <(doc_ids)
   nm=$(material_ids | grep -c . || true)
   echo "materials: $nm"
+  # Decisions parked on the user. Counted here because a completeness line that reports only
+  # "열린 갭 0 · 열린 질문 0" reads as "nothing is waiting on you" while the queue holds eleven.
+  if [ -n "$(hq_files)" ]; then
+    local hq hq_open
+    # Through hq_body, exactly like validate: verify.md is `##`-sectioned and review.md is `#`-,
+    # so reading only one level found nothing in the other and the count went back to under-reporting
+    # by a different route than the one just closed.
+    hq=$(while IFS= read -r hqf; do hq_body "$hqf"; done < <(hq_files))
+    hq_open=$(printf '%s\n' "$hq" | countlines '^[[:space:]]*- \[open\]')
+    # Every `- ` line in the section is an entry, tagged or not — the most common legacy shape
+    # (`- R3 t217 — …`, no brackets) would otherwise be invisible.
+    local hq_untag
+    hq_untag=$(printf '%s\n' "$hq" | grep -vE '^[[:space:]]*- \[[<{]' 2>/dev/null | grep -E '^[[:space:]]*- ' 2>/dev/null | grep -vcE '^[[:space:]]*- \[(open|ruled)\]' || true)
+    if [ "${hq_open:-0}" -gt 0 ]; then
+      printf 'human queue: open %s — you decide %s · recommendation ready %s · machine can just do %s\n' \
+        "$hq_open" \
+        "$(printf '%s\n' "$hq" | countlines '^[[:space:]]*- \[open\][[:space:]]*\[user-only\]')" \
+        "$(printf '%s\n' "$hq" | countlines '^[[:space:]]*- \[open\][[:space:]]*\[recommended\]')" \
+        "$(printf '%s\n' "$hq" | countlines '^[[:space:]]*- \[open\][[:space:]]*\[machine\]')"
+    elif [ "${hq_untag:-0}" -eq 0 ]; then
+      echo "human queue: 0"
+    fi
+    # Reported UNCONDITIONALLY, not only when the tagged count is zero. Gating it behind `else`
+    # meant one tagged entry hid every untagged one — reproducing, in the command that answers
+    # "what is waiting on you", the very "queue reads 0 while entries sit in it" failure.
+    [ "${hq_untag:-0}" -gt 0 ] && echo "human queue: $hq_untag untagged entry(s) not counted above — retag them '- [open|ruled] [user-only|recommended|machine] …'"
+  fi
+  return 0
 }
 
 # ===================== lang / locale =====================
@@ -421,7 +886,8 @@ cmd_locale() { # short OS language code (ko, en, ja…) or nothing (init then as
 
 # ===================== census (mine counts, cross-checked — never hand-count) =====================
 # Prints the authoritative mine statistics: truth files vs index entries, id numbering holes,
-# and the status tally (live = not discarded). Skills MUST use these numbers in reports instead
+# and the status tally (live = ok+conflict+unsupported; neither discarded NOR retracted).
+# Skills MUST use these numbers in reports instead
 # of counting by eye — a real run printed 191/181 when the mine held 188/178 and missed a hole.
 # Only t<digits>.md are truths; index.md/tree.md/verify.md/changelog.md are never counted.
 cmd_census() {
@@ -430,20 +896,72 @@ cmd_census() {
   n_files=$(ls "$TRUTHS"/t[0-9]*.md 2>/dev/null | grep -c .)
   n_index=$(grep -cE '^- t[0-9]+:' "$TRUTHS/index.md" 2>/dev/null || true); n_index=${n_index:-0}
   stat_out=$(awk '
-    function val(   s){ s=$0; sub(/^[^:]*:[[:space:]]*/,"",s); sub(/[[:space:]]*$/,"",s); return s }
+    function val(   s){ s=$0; sub(/^[^:]*:[[:space:]]*/,"",s); if(s !~ /^"/){ sub(/[[:space:]]+#.*$/,"",s); if(s ~ /^#/) s="" } sub(/[[:space:]]*$/,"",s); return s }
     FNR==1 { infm=($0 ~ /^---[[:space:]]*$/); next }
     infm && /^---[[:space:]]*$/ { infm=0; nextfile }
     infm && /^status:[[:space:]]/ { st[val()]++ }
-    END { printf "%d %d %d %d\n", st["ok"]+0, st["discarded"]+st["resolved"]+0, st["conflict"]+0, st["unsupported"]+0 }
+    END { printf "%d %d %d %d %d\n", st["ok"]+0, st["discarded"]+st["resolved"]+0, st["conflict"]+0, st["unsupported"]+0, st["retracted"]+0 }
   ' "$TRUTHS"/t[0-9]*.md)
   set -- $stat_out
-  local n_ok=$1 n_res=$2 n_conf=$3 n_unsup=$4 n_live=$(( $1 + $3 + $4 ))
+  local n_ok=$1 n_res=$2 n_conf=$3 n_unsup=$4 n_retr=$5 n_live=$(( $1 + $3 + $4 ))
   holes=$(ls "$TRUTHS"/t[0-9]*.md 2>/dev/null | sed -E 's/.*[\/\\]t0*([0-9]+)\.md$/\1/' | sort -n | awk '
-    NR==1 { p=$1; next } { for(i=p+1;i<$1;i++) printf "t%03d ", i; p=$1 }')
-  local n_cov=0 n_mats=0
-  [ -f "$TRUTHS/coverage.md" ] && { n_cov=$(grep -cE '^##[[:space:]]+m[0-9]+([[:space:]]|$)' "$TRUTHS/coverage.md" 2>/dev/null || true); n_cov=${n_cov:-0}; }
-  # Denominator excludes retracted materials — they are never mapped again, so they can
-  # never gain a coverage section; counting them keeps the ratio short of N/N forever.
+    # Holes BELOW the smallest surviving id count too. Ids are allocated from t001 upward, so if the
+    # lowest file on disk is t011 then t001-t010 were assigned and are now gone — exactly the
+    # "deleted or never assigned" question this line exists to answer — yet only the gaps BETWEEN
+    # surviving ids were reported, so losing the front of the range was invisible.
+    NR==1 { for(i=1;i<$1;i++) printf "t%03d ", i; p=$1; next } { for(i=p+1;i<$1;i++) printf "t%03d ", i; p=$1 }')
+  # A hole the changelog explains is settled — stop re-asking. `removed:` lines are the deletion
+  # record; going forward `status: retracted` keeps the file and produces no hole at all. Without
+  # this, three ids a real run had deliberately withdrawn were re-flagged "confirm which" forever,
+  # and a permanent nag teaches readers to skip the line the mine's honesty depends on.
+  # Collect every removed id ONCE, normalising zero-padding (a withdrawal logged as `t3` must
+  # explain hole `t003`) and taking ALL ids on a line (`- removed: t011, t012 — …` explained only
+  # the first). The old shape ran one grep per hole: ~990 holes took over two minutes, and `gaps`
+  # calls census too.
+  local remset="" h hn
+  remset=" $(grep -oE '^[[:space:]]*-[[:space:]]*removed:.*' "$TRUTHS/changelog.md" 2>/dev/null \
+            | grep -oE '(^|[^[:alnum:]])t[0-9]+([^[:alnum:]]|$)' | grep -oE 't[0-9]+' \
+            | sed -E 's/^t0*([0-9]+)$/t\1/' | LC_ALL=C sort -u | tr '\n' ' ')"
+  local unexplained="" explained=""
+  for h in $holes; do
+    hn=$(printf '%s' "$h" | sed -E 's/^t0*([0-9]+)$/t\1/')
+    case "$remset" in *" $hn "*) explained="$explained $h" ;; *) unexplained="$unexplained $h" ;; esac
+  done
+  local n_cov=0 n_mats=0 n_legacy=0
+  if [ -f "$TRUTHS/coverage.md" ]; then
+    # The numerator skips retracted materials for the SAME reason the denominator does. Counting
+    # them here and not there is what produced `coverage 2/1` — a ratio above 1 that validate called
+    # clean, printed every run, whose only escape was deleting the record that the material had been
+    # mapped. The normal order of events puts a material in both sets: it is mapped (gaining its
+    # `## m<id>` section), and only later retracted.
+    local cid
+    n_cov=0
+    for cid in $(nocomment < "$TRUTHS/coverage.md" \
+                 | sed -nE 's/^##[[:space:]]+(m[0-9]+)([[:space:]].*)?$/\1/p' | LC_ALL=C sort -u); do
+      [ "$(mstatus "$cid")" = "retracted" ] && continue
+      n_cov=$((n_cov+1))
+    done
+    # `## legacy` lists materials the user ruled exempt (mapped before coverage existed). Without
+    # an exemption the ratio can never reach N/N, and a metric that is permanently short stops
+    # being read at all — a real mine sat at 16/26 with no path to closing it.
+    # ONLY the id that leads each bullet. Scanning the whole section for `m<id>` also swallowed ids
+    # mentioned inside the ruling prose — and the docs prescribe writing the ruling — so following
+    # the instructions produced a wrong denominator, once even a ratio above 1 (2/1), with validate
+    # still green. The ruling text is free prose by design; the id is the field.
+    # A retracted material is ALREADY out of n_mats, so counting it here subtracts it twice —
+    # which drove the denominator below the numerator (1/0) while validate stayed green, and the
+    # warning then blamed two causes that were both false.
+    local lid
+    n_legacy=0
+    for lid in $(nocomment < "$TRUTHS/coverage.md" | section_body2 - "legacy" \
+                 | sed -nE 's/^[[:space:]]*-[[:space:]]*(m[0-9]+)\b.*/\1/p' | LC_ALL=C sort -u); do
+      [ "$(mstatus "$lid")" = "retracted" ] && continue
+      n_legacy=$((n_legacy+1))
+    done
+  fi
+  # Denominator excludes retracted materials — they are never mapped AGAIN, so counting them keeps
+  # the ratio short of N/N forever. They may well already HAVE a coverage section from before the
+  # retraction, which is why the numerator has to apply the same rule rather than assume they cannot.
   if ls "$MATERIALS"/*/converted.md >/dev/null 2>&1; then
     n_mats=$(awk '
       FNR==1 { infm=($0 ~ /^---[[:space:]]*$/); st=""; next }
@@ -451,9 +969,31 @@ cmd_census() {
       infm && /^status:[[:space:]]/ { st=$0; sub(/^status:[[:space:]]*/,"",st); sub(/[[:space:]]*$/,"",st) }
       END { print n+0 }' "$MATERIALS"/*/converted.md)
   fi
-  echo "census: truth files $n_files · index entries $n_index · live $n_live (ok $n_ok · conflict $n_conf · unsupported $n_unsup) · discarded $n_res · coverage $n_cov/$n_mats material(s)"
-  [ -n "$holes" ] && echo "  numbering holes (ids never assigned or files lost — confirm which): $holes"
+  local n_denom=$(( n_mats - n_legacy )); [ "$n_denom" -lt 0 ] && n_denom=0
+  # Always show the raw total too. `16/26` and `16/16 (+10 legacy-exempt)` describe the SAME mine,
+  # and without the "of N" a reader comparing an old report to a new one reads progress that
+  # never happened.
+  local covline="coverage $n_cov/$n_denom material(s)"
+  [ "$n_legacy" -gt 0 ] && covline="coverage $n_cov/$n_denom of $n_mats material(s) ($n_legacy legacy-exempt)"
+  local retline=""; [ "$n_retr" -gt 0 ] && retline=" · retracted $n_retr"
+  echo "census: truth files $n_files · index entries $n_index · live $n_live (ok $n_ok · conflict $n_conf · unsupported $n_unsup) · discarded $n_res$retline · $covline"
+  [ -n "$unexplained" ] && echo "  numbering holes (ids never assigned or files lost — confirm which):$unexplained"
+  [ -n "$explained" ] && echo "  numbering holes, explained by changelog 'removed:':$explained"
+  [ "$n_cov" -gt "$n_denom" ] && echo "  ✗ coverage numerator exceeds denominator ($n_cov/$n_denom) — a '## m<id>' section names a material that no longer exists under materials/, or a '## legacy' entry names one that also has its own section"
+  # Only complain when the section HAS bullets that failed to parse. An empty `## legacy` is the
+  # normal state of a project with nothing exempt, and the old check made that permanently ✗ with
+  # no way to clear it short of inventing an exemption.
+  if [ -f "$TRUTHS/coverage.md" ] && [ "$n_legacy" -eq 0 ] \
+     && grep -qiE '^##[[:space:]]+legacy' "$TRUTHS/coverage.md" \
+     && [ "$(nocomment < "$TRUTHS/coverage.md" | section_body2 - "legacy" | countlines '^[[:space:]]*- ')" -gt 0 ]; then
+    echo "  ✗ truths/coverage.md '## legacy' has bullets, but none begins with an m-id — no exemption was applied (format: '- m001 — <ruling>')"
+  fi
   [ "$n_files" -ne "$n_index" ] && echo "  ✗ index out of sync with files ($n_files files vs $n_index entries) — run 'weavedoc reindex'"
+  # The status tallies must add up to the file count. They stopped adding up when a truth carried a
+  # duplicate `status:` line — this loop counts every occurrence, so one file was tallied twice and
+  # the census printed `live 3 · retracted 1` over 3 files without a murmur. validate names the
+  # duplicate key; this line makes the arithmetic itself refuse to look clean.
+  [ $(( n_live + n_res + n_retr )) -ne "$n_files" ] && echo "  ✗ status tallies sum to $(( n_live + n_res + n_retr )) but there are $n_files truth file(s) — a file carries a duplicate 'status:' line, or none at all; run 'weavedoc validate'"
   return 0
 }
 
@@ -470,26 +1010,44 @@ cmd_gaps() {
   local id f ln markers n=0 c=0
   markers=$(cfgval markers)
   [ -z "$markers" ] && markers='미정|미완성|미확정|미상|TBD|TODO|추후 보강|추후 작업|추후 결정|정해지지 않|미해결'
+  # Validate the pattern BEFORE scanning with it. A malformed alternation in config made every grep
+  # below exit 2, `2>/dev/null` swallowed the reason, and the scan reported "0 marker line(s)" — the
+  # mechanical floor for declared incompleteness switched off while reading as clean. This is a tool
+  # misconfiguration, not a gap, so unlike every other finding here it exits non-zero.
+  printf '' | grep -qE "$markers" 2>/dev/null
+  if [ $? -gt 1 ]; then
+    echo "config gaps.markers is not a valid 'grep -E' pattern: $markers" >&2
+    echo "  the declared-marker scan cannot run — fix gaps.markers in .weavedoc/config.yaml" >&2
+    return 2
+  fi
   cmd_census
-  echo "declared-marker scan (converted.md + truths/ only):"
-  for id in $(material_ids); do
+  echo "declared-marker scan (converted.md + truths/t*.md only):"
+  while IFS= read -r id; do
     f="$MATERIALS/$id/converted.md"; [ -f "$f" ] || continue
     while IFS= read -r ln; do printf '  %s:%s\n' "$id" "$ln"; n=$((n+1)); done < <(grep -nE "$markers" "$f" 2>/dev/null)
-  done
+  done < <(material_ids)
   for f in "$TRUTHS"/t[0-9]*.md; do
     [ -f "$f" ] || continue
     while IFS= read -r ln; do printf '  %s:%s\n' "$(basename "$f")" "$ln"; n=$((n+1)); done < <(grep -nE "$markers" "$f" 2>/dev/null)
   done
-  echo "unchecked-checkbox scan (converted.md + truths/ only):"
-  for id in $(material_ids); do
+  echo "unchecked-checkbox scan (converted.md + truths/t*.md only):"
+  while IFS= read -r id; do
     f="$MATERIALS/$id/converted.md"; [ -f "$f" ] || continue
     while IFS= read -r ln; do printf '  %s:%s\n' "$id" "$ln"; c=$((c+1)); done < <(grep -nE '^[[:space:]]*- \[ \]' "$f" 2>/dev/null)
-  done
+  done < <(material_ids)
   for f in "$TRUTHS"/t[0-9]*.md; do
     [ -f "$f" ] || continue
     while IFS= read -r ln; do printf '  %s:%s\n' "$(basename "$f")" "$ln"; c=$((c+1)); done < <(grep -nE '^[[:space:]]*- \[ \]' "$f" 2>/dev/null)
   done
-  echo "— $n marker line(s) + $c unchecked checkbox(es). Non-blocking; run the weavedoc-gaps skill for reference/enumeration/symmetry + fill-or-accept."
+  # Name the accepted register alongside the raw count. This scan does NOT read gaps.md, so an already
+  # accepted gap is printed again on every run — and a number that never goes down stops being read,
+  # which is how a real ledger came to hold six while the report said zero. Saying "this is the raw
+  # scan, M are already accepted over there" keeps the count honest without pretending to reconcile
+  # prose locations mechanically; that reconciliation is the weavedoc-gaps skill's job.
+  local nacc=0
+  [ -f "$ROOT/gaps.md" ] && nacc=$(nocomment < "$ROOT/gaps.md" | section_body - "Accepted" | countlines '^[[:space:]]*- ')
+  [ "${nacc:-0}" -eq 0 ] && [ -f "$ROOT/gaps.md" ] && nacc=$(nocomment < "$ROOT/gaps.md" | section_body2 - "Accepted" | countlines '^[[:space:]]*- ')
+  echo "— $n marker line(s) + $c unchecked checkbox(es) — RAW scan, not an open count: gaps.md records ${nacc:-0} already accepted. Non-blocking; run the weavedoc-gaps skill to reconcile these against gaps.md and to cover reference/enumeration/symmetry + fill-or-accept."
 }
 
 # ===================== reindex (regenerate truths/index.md + tree.md from frontmatter) =====================
@@ -500,12 +1058,21 @@ cmd_gaps() {
 #                    exit 0 = identical, 1 = differs (prints a short diff summary).
 cmd_reindex() {
   local check="" rec tmpi tmpt rc=0
+  # A typo used to be silently ignored — `reindex --chek` meant "read-only check" to the user and
+  # "rewrite both index files" to the tool. A write command must not guess.
+  case "${1:-}" in ""|--check) ;; *) echo "usage: weavedoc reindex [--check]" >&2; return 2 ;; esac
+  [ -n "${2:-}" ] && { echo "usage: weavedoc reindex [--check]" >&2; return 2; }
   [ "${1:-}" = "--check" ] && check=1
   if ! ls "$TRUTHS"/t[0-9]*.md >/dev/null 2>&1; then echo "no truths to index"; return 0; fi
   rec=$(awk '
-    function val(   s){ s=$0; sub(/^[^:]*:[[:space:]]*/,"",s); sub(/[[:space:]]*$/,"",s); sub(/^"/,"",s); sub(/"$/,"",s); return s }
+    # Strip \x01 on the way in too: the writer sanitises, but a hand-written file can still hold
+    # one, and "the separator cannot occur in the text" is only true if something removes it.
+    function val(   s){ s=$0; sub(/^[^:]*:[[:space:]]*/,"",s); if(s !~ /^"/){ sub(/[[:space:]]+#.*$/,"",s); if(s ~ /^#/) s="" } sub(/[[:space:]]*$/,"",s); sub(/^"/,"",s); sub(/"$/,"",s); gsub(/\001/," ",s); return s }
     FNR==1 { infm=($0 ~ /^---[[:space:]]*$/); id=claim=src=st=tg="" ; next }
-    infm && /^---[[:space:]]*$/ { infm=0; print id "\t" claim "\t" src "\t" st "\t" tg; nextfile }
+    # \x01, not \t: a TAB inside a hand-written `claim:` used to shift every field right, so
+    # index.md printed the source as a tag and tree.md grew a `## ok` section while the real tag
+    # vanished — and reindex --check called the result "in sync". \x01 cannot occur in the text.
+    infm && /^---[[:space:]]*$/ { infm=0; print id "\x01" claim "\x01" src "\x01" st "\x01" tg; nextfile }
     infm && /^id:[[:space:]]/     { id=val() }
     infm && /^claim:[[:space:]]/  { claim=val() }
     infm && /^source:[[:space:]]/ { src=val() }
@@ -516,7 +1083,7 @@ cmd_reindex() {
   {
     echo "# truths/index.md — 진실 색인 (generated, 수정 금지)"
     echo ""
-    printf '%s\n' "$rec" | awk -F'\t' '{
+    printf '%s\n' "$rec" | awk -F'\x01' '{
       line="- " $1 ": " $2 " [" $3 "] — [" $5 "]"
       if($4!="" && $4!="ok") line=line " [" $4 "]"
       print line }'
@@ -526,7 +1093,7 @@ cmd_reindex() {
     echo ""
     # tag sections in LC_ALL=C sorted order (ASCII tags first, then Korean — the standing convention);
     # within a section, truths keep id order. One line per (tag, truth) → sort → regroup.
-    printf '%s\n' "$rec" | awk -F'\t' '{
+    printf '%s\n' "$rec" | awk -F'\x01' '{
       n=split($5, a, ",")
       for(i=1;i<=n;i++){
         t=a[i]; gsub(/^[[:space:]]+|[[:space:]]+$/,"",t); if(t=="") continue
@@ -537,7 +1104,16 @@ cmd_reindex() {
     | awk -F'\x01' '{ if($1!=prev){ if(NR>1) print ""; print "## " $1; prev=$1 } print $3 }'
   } > "$tmpt"
   if [ -n "$check" ]; then
-    local di dt
+    local di dt nfiles nrec
+    # A truth file with no frontmatter emits no record, so it is missing from BOTH the regenerated
+    # index and the file on disk — and the diff called that "in sync" while census and validate
+    # both reported drift. The check that exists to catch index drift went green on it.
+    nfiles=$(ls "$TRUTHS"/t[0-9]*.md 2>/dev/null | grep -c . || true)
+    nrec=$(printf '%s\n' "$rec" | grep -c . || true)
+    if [ "${nfiles:-0}" -ne "${nrec:-0}" ]; then
+      echo "reindex: $nfiles truth file(s) but only $nrec produced a record — the rest have no readable frontmatter (line 1 must be '---'); index/tree cannot represent them"
+      rc=1
+    fi
     di=$(mktemp); dt=$(mktemp)
     tr -d '\r' < "$TRUTHS/index.md" > "$di" 2>/dev/null || true
     tr -d '\r' < "$TRUTHS/tree.md"  > "$dt" 2>/dev/null || true
@@ -568,8 +1144,14 @@ cmd_retag() {
   { [ -n "$old" ] && [ -n "$new" ]; } || { echo "usage: weavedoc retag <old> <new> [--dry]"; return 2; }
   [ "$old" = "$new" ] && { echo "retag: old and new are identical"; return 2; }
   [ "$flag" = "--dry" ] && dry=1
+  # `old`/`new` ride in via ENVIRON, never `awk -v`: -v runs escape processing on the value, so a
+  # tag holding a backslash (one Windows path is enough) had its escape sequences expanded
+  # into a real newline and TAB. That SPLIT the rewritten `tags:` line in two, every parser then
+  # dropped the orphan half, and validate reported the mangled file as clean. fm_set and pull
+  # already did it this way; this was the last -v holdout, and the only one that writes files.
   local prog='
     function strip(s){ gsub(/^[[:space:]]+|[[:space:]]+$/,"",s); gsub(/^"|"$/,"",s); return s }
+    BEGIN { old=ENVIRON["WD_OLD"]; new=ENVIRON["WD_NEW"] }
     $0 ~ ("^" key ":[[:space:]]*\\[") {
       inner=$0; sub(/^[^[]*\[/,"",inner); sub(/\].*$/,"",inner)
       n=split(inner,el,","); out=""; hit=0; delete seen
@@ -586,7 +1168,16 @@ cmd_retag() {
     END { if(mode=="c") print chg+0 }'
   rewrite_file() { # $1=file $2=key — in-place via tmp
     t=$(mktemp)
-    awk -v key="$2" -v old="$old" -v new="$new" -v mode=w "$prog" "$1" > "$t" && cp "$t" "$1"
+    # Preserve the file's own line endings. awk here writes LF, so renaming ONE tag rewrote every
+    # line of a CRLF file — a whole-file diff for a one-word change, which is exactly the kind of
+    # churn a reviewer scrolls past. Idempotent: trailing CRs are normalised to exactly one.
+    if WD_OLD="$old" WD_NEW="$new" awk -v key="$2" -v mode=w "$prog" "$1" > "$t"; then
+      # Detected with bash read, NOT grep: grep under MSYS strips CR on input, so `grep -q` never
+      # matched and the whole preservation step was dead code that looked correct.
+      IFS= read -r _l0 < "$1"
+      case "$_l0" in *$'\r') sed -i 's/\r*$/\r/' "$t" ;; esac
+      cp "$t" "$1"
+    fi
     rm -f "$t"
   }
   [ "$dry" -eq 1 ] && echo "retag '$old' → '$new' (dry run — nothing written):" || echo "retag '$old' → '$new':"
@@ -595,7 +1186,7 @@ cmd_retag() {
   # then rewrite only the files that actually hit.
   if ls "$TRUTHS"/t[0-9]*.md >/dev/null 2>&1; then
     local hitlist
-    hitlist=$(awk -v key="tags" -v old="$old" -v new="$new" -v mode=s "$prog" "$TRUTHS"/t[0-9]*.md)
+    hitlist=$(WD_OLD="$old" WD_NEW="$new" awk -v key="tags" -v mode=s "$prog" "$TRUTHS"/t[0-9]*.md)
     while IFS= read -r f; do
       [ -n "$f" ] || continue
       printf '  %s (tags)\n' "$f"; total=$((total+1)); truthhits=$((truthhits+1))
@@ -603,20 +1194,20 @@ cmd_retag() {
     done <<< "$hitlist"
   fi
   if [ -f "$PROJECT" ]; then
-    c=$(awk -v key="required_tags" -v old="$old" -v new="$new" -v mode=c "$prog" "$PROJECT")
+    c=$(WD_OLD="$old" WD_NEW="$new" awk -v key="required_tags" -v mode=c "$prog" "$PROJECT")
     if [ "${c:-0}" -gt 0 ]; then
       printf '  %s (required_tags)\n' "$PROJECT"; total=$((total+1))
       [ "$dry" -eq 0 ] && rewrite_file "$PROJECT" required_tags
     fi
   fi
-  for d in $(doc_ids); do
+  while IFS= read -r d; do
     [ -f "$DOCUMENTS/$d/plan.md" ] || continue
-    c=$(awk -v key="scope_tags" -v old="$old" -v new="$new" -v mode=c "$prog" "$DOCUMENTS/$d/plan.md")
+    c=$(WD_OLD="$old" WD_NEW="$new" awk -v key="scope_tags" -v mode=c "$prog" "$DOCUMENTS/$d/plan.md")
     if [ "${c:-0}" -gt 0 ]; then
       printf '  %s (scope_tags)\n' "$DOCUMENTS/$d/plan.md"; total=$((total+1))
       [ "$dry" -eq 0 ] && rewrite_file "$DOCUMENTS/$d/plan.md" scope_tags
     fi
-  done
+  done < <(doc_ids)
   if [ "$total" -eq 0 ]; then echo "  no list-field occurrences of '$old'"; fi
   local freetext=""
   for f in "$ROOT/gaps.md" "$ROOT/questions.md" "$TRUTHS/verify.md"; do
@@ -665,10 +1256,10 @@ cmd_pull() {
   # one awk pass extracts the fields of all hit files (per-file fm spawns are the MSYS trap)
   local rec
   rec=$(awk '
-    function val(   s){ s=$0; sub(/^[^:]*:[[:space:]]*/,"",s); sub(/[[:space:]]*$/,"",s); sub(/^"/,"",s); sub(/"$/,"",s); return s }
-    function flush(){ if(tid!="") printf "%s\x01%s\x01%s\x01%s\x01%s\x01%s\x01%s\x01%s\n", tid, st, cl, src, asof, prov, cw, res }
+    function val(   s){ s=$0; sub(/^[^:]*:[[:space:]]*/,"",s); if(s !~ /^"/){ sub(/[[:space:]]+#.*$/,"",s); if(s ~ /^#/) s="" } sub(/[[:space:]]*$/,"",s); sub(/^"/,"",s); sub(/"$/,"",s); gsub(//," ",s); return s }
+    function flush(){ if(tid!="") printf "%s\x01%s\x01%s\x01%s\x01%s\x01%s\x01%s\x01%s\x01%s\n", tid, st, cl, src, asof, prov, cw, res, asm }
     FNR==1 { flush(); n=split(FILENAME,pp,"/"); fn=pp[n]; sub(/\.md$/,"",fn); tid=fn
-             st="";cl="";src="";asof="";prov="";cw="";res=""; infm=($0 ~ /^---[[:space:]]*$/); next }
+             st="";cl="";src="";asof="";prov="";cw="";res="";asm=""; infm=($0 ~ /^---[[:space:]]*$/); next }
     infm && /^---[[:space:]]*$/ { infm=0; next }
     infm && /^status:[[:space:]]/        { st=val() }
     infm && /^claim:[[:space:]]/         { cl=val() }
@@ -677,15 +1268,16 @@ cmd_pull() {
     infm && /^provenance:[[:space:]]/    { prov=val() }
     infm && /^conflict_with:[[:space:]]/ { cw=val() }
     infm && /^resolution:[[:space:]]/    { res=val() }
+    infm && /^assumptions:[[:space:]]/   { asm=val() }
     END { flush() }
   ' "${tfiles[@]}")
   # material stage/status looked up once per unique source (few)
   declare -A mstage mstat
-  local st cl src asof prov cw res lab w sc
-  local n_live=0 n_res=0 n_conf=0 n_unsup=0
+  local st cl src asof prov cw res asm lab w sc
+  local n_live=0 n_res=0 n_conf=0 n_unsup=0 n_retr=0
   # \x01 separator, not tab — tab is IFS whitespace, so bash read COLLAPSES consecutive tabs
   # and empty fields shift (reindex uses \x01 for the same reason).
-  while IFS=$'\x01' read -r id st cl src asof prov cw res; do
+  while IFS=$'\x01' read -r id st cl src asof prov cw res asm; do
     [ -n "$id" ] || continue
     if [ -n "$src" ] && [ -z "${mstat[$src]+x}" ]; then
       if [ -f "$MATERIALS/$src/converted.md" ]; then
@@ -696,11 +1288,24 @@ cmd_pull() {
     lab=""
     [ -n "$asof" ] && lab="$lab (as_of: $asof)"
     case "$prov" in
-      derived) lab="$lab [DERIVED — read its assumptions before reuse]";;
+      derived)
+        # The label used to say "read its assumptions" — but pull never printed them, so the only
+        # way to follow that instruction was to open the truth file the protocol steers you away
+        # from. An unstated anchor that stays behind is how a derived value gets reused wrongly.
+        # Absent is not the same as `[]`. `assumptions` is optional, and FORMATS gives meaning to
+        # the EMPTY LIST ("uses stated facts only") — rendering a missing field as that positive
+        # declaration tells a consumer no hidden anchor exists when nobody ever checked.
+        if [ -n "$asm" ] && [ "$asm" != "[]" ]; then lab="$lab [DERIVED — assumes $asm]"
+        elif [ "$asm" = "[]" ]; then lab="$lab [DERIVED — declares no unstated assumptions]"
+        else lab="$lab [DERIVED — assumptions NOT DECLARED; open the file before reuse]"; fi ;;
       adopted) lab="$lab [ADOPTED — machine-proposed, user-accepted]";;
     esac
-    [ "${mstage[$src]:-}" = "plan" ] && lab="$lab [PLAN-STAGE SOURCE — never evidence of use]"
-    [ "${mstat[$src]:-}" = "retracted" ] && lab="$lab [RETRACTED SOURCE]"
+    # Guarded: a truth with no `source:` gives an empty subscript, which bash reports as
+    # "bad array subscript" on stderr — noise on an otherwise correct result.
+    if [ -n "$src" ]; then
+      [ "${mstage[$src]:-}" = "plan" ] && lab="$lab [PLAN-STAGE SOURCE — never evidence of use]"
+      [ "${mstat[$src]:-}" = "retracted" ] && lab="$lab [RETRACTED SOURCE]"
+    fi
     case "$st" in
       discarded|resolved)
         # "resolved" = pre-rename legacy value (validate flags it for migration). Winner-self
@@ -721,6 +1326,9 @@ cmd_pull() {
       unsupported)
         printf '%s  [!! UNSUPPORTED — grounding gone, do not use] %s%s\n' "$id" "$cl" "$lab"
         n_unsup=$((n_unsup+1));;
+      retracted)
+        printf '%s  [!! RETRACTED — was never a valid extraction; tombstone only, no successor] %s%s\n' "$id" "$cl" "$lab"
+        n_retr=$((n_retr+1));;
       *)
         if [ -n "$res" ] && printf '%s' "$res" | grep -q 'type:[[:space:]]*attribute'; then
           lab="$lab [ATTRIBUTED — cite both sides, per resolution]"
@@ -729,7 +1337,7 @@ cmd_pull() {
         n_live=$((n_live+1));;
     esac
   done <<< "$rec"
-  echo "— usable $n_live · discarded $n_res (successor in resolution) · conflict $n_conf · unsupported $n_unsup"
+  echo "— usable $n_live · discarded $n_res (successor in resolution) · conflict $n_conf · unsupported $n_unsup · retracted $n_retr (no successor)"
   echo "  bodies: truths/<id>.md · protocol: .weavedoc/READ.md"
   return 0
 }
@@ -740,14 +1348,23 @@ cmd_pull() {
 # the runtime once evolved inside a testbed project for two weeks while the distribution
 # repo went stale. Bump the date whenever skills/.weavedoc change in the distribution.
 cmd_version() {
-  if [ -f "$ROOT/.weavedoc/VERSION" ]; then cat "$ROOT/.weavedoc/VERSION"
-  elif [ -f "$SCRIPT_DIR/../VERSION" ]; then cat "$SCRIPT_DIR/../VERSION"
+  # The date label alone cannot identify a bundle: two installs can share a VERSION string while
+  # their `bin/weavedoc` differ, and then the same mine gets two different verdicts from what the
+  # user believes is the same tool. The fingerprint is content, so comparing installs is real.
+  local vf="" fp
+  if   [ -f "$ROOT/.weavedoc/VERSION" ]; then vf="$ROOT/.weavedoc/VERSION"
+  elif [ -f "$SCRIPT_DIR/../VERSION" ];  then vf="$SCRIPT_DIR/../VERSION"
   else echo "(no VERSION file)"; return 1; fi
+  cat "$vf"
+  fp=$(cat "$SCRIPT_DIR/weavedoc" "$SCRIPT_DIR/../schema" 2>/dev/null \
+       | { command -v sha1sum >/dev/null 2>&1 && sha1sum || cksum; } | awk '{print $1}')
+  [ -n "$fp" ] && echo "fingerprint: ${fp:0:12}  (bin+schema — compare this, not just the date)"
+  return 0
 }
 
 # ===================== dispatch =====================
 case "${1:-}" in
-  validate) cmd_validate ;;
+  validate)   cmd_validate ;;
   impact)   shift; cmd_impact "${1:-}" ;;
   status)   cmd_status ;;
   gaps)     cmd_gaps ;;

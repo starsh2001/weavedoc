@@ -3,23 +3,34 @@
 # Kept flat with |-separated lists so bash/awk parse it with no yq/jq dependency.
 
 material.fm.required: id|title|origin|role|topics|format|source_path|added|status|summary
-material.fm.optional: stage
-material.fm.enum.origin: file|user-answer|prior-doc|conversation
+material.fm.optional: stage|corrects|url|retrieved_at
+material.fm.enum.origin: file|user-answer|prior-doc|conversation|research
 material.fm.enum.status: collected|converted|verified|used|retracted
 material.fm.enum.stage: plan|applied
+material.fm.required_when.research: url|retrieved_at
 truth.fm.required: id|claim|source|tags|status
-truth.fm.optional: location|conflict_with|resolution|provenance|derived_from|assumptions|as_of|corroborated_by
-truth.fm.enum.status: ok|conflict|unsupported|discarded
+truth.fm.optional: location|conflict_with|resolution|superseded|provenance|derived_from|assumptions|as_of|corroborated_by
+truth.fm.enum.status: ok|conflict|unsupported|discarded|retracted
 truth.fm.enum.provenance: stated|adopted|derived
 truth.fm.resolution.type: supersedes|authority|pick|value|attribute
 truth.fm.resolution.decision_kind: supplied|ratified
+truth.fm.resolution.decided_by: machine|user
 questions.enum.status: open|proposed|answered
+verify.fm.required: status|round|verified_at
+verify.fm.optional: consecutive_passes
+verify.fm.enum.status: passed|failed|escalated|stale|in-progress
+verify.sections: Verified units|Human queue|Adjudications
+humanqueue.enum.state: open|ruled
+humanqueue.enum.ownership: user-only|recommended|machine
+coverage.section.optional: legacy
+changelog.line.kinds: added|superseded|edited|removed|confirmed
 project.fm.optional: authority|required_tags|tone
 plan.fm.required: doc_id|doc_type|tone|status
 plan.fm.optional: continues|cited_truths|scope_tags
 plan.fm.enum.status: planned|drafting|reviewing|done|stale
 project.fm.required: version|language|roles
-review.sections: Fidelity violations|Findings|Adjudications
+review.fm.optional: round|consecutive_passes
+review.sections: Fidelity violations|Findings|Adjudications|Human queue
 config.enum.completeness: off|required
 config.enum.detection: standard|deep
 config.enum.attribution: ask|allow

@@ -11,6 +11,7 @@ Why this exists: the mine is safe only for readers who know how to read it. Stat
    - `discarded` → dead: it lost a conflict resolution and is no longer a truth of this mine (the file remains as audit trail). Follow `resolution.winner` to the current value; on a partial supersede, only the `scope:` fields are dead — the rest of the record still holds.
    - `conflict` → unresolved: **neither side is usable**. Resolution happens in `map`, not at the point of use.
    - `unsupported` → grounding gone (source removed/retracted): unusable.
+   - `retracted` → the extraction never had standing (its quote wasn't in the named source, or a machine note was promoted): unusable, and unlike `discarded` there is **no successor to follow** — the fact simply isn't in the mine. The file exists only so the id is never reused.
    - (`resolved` is the pre-2026-07-27 legacy value — `validate` flags it; winners/attributed migrate to `ok`, losers to `discarded`.)
 
 3. **Check the labels that change meaning.** Time-varying facts (나이·학년·소속·상태) carry `as_of` — a claim may not hold at the phase/date you're writing about. `provenance: derived` values rest on `assumptions` (read them before reuse); `adopted` = machine-proposed, user-accepted. A truth whose source material has `stage: plan` records *intent* — it is never evidence something was used or applied.
