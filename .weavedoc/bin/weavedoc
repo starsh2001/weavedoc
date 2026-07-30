@@ -225,6 +225,35 @@ fid_body() { # $1=file -> the 'Fidelity violations' body, whichever heading leve
   [ -n "$b" ] || b=$(nocomment < "$1" | section_body2 - "Fidelity violations")
   printf '%s\n' "$b"
 }
+is_date() { # $1 -> 0 when it is a real YYYY-MM-DD
+  # One judge for every date in the mine. There used to be exactly one place that looked at the SHAPE
+  # of a date (coverage `ruled:`) and none that looked at the VALUE, so 2026-99-99 was accepted while
+  # 2026-7-3 was rejected for "having no date", and `added`/`retrieved_at`/`verified_at` were checked
+  # for presence only — `retrieved_at: (미정)` satisfied the field FORMATS calls the anchor of
+  # re-checkability. Zero-padding is required (the format says so) but the message now says which half
+  # is wrong, shape or value.
+  case "$1" in [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]) ;; *) return 1 ;; esac
+  local mm dd; mm=${1#*-}; mm=${mm%-*}; dd=${1##*-}
+  [ "$mm" -ge 1 ] && [ "$mm" -le 12 ] && [ "$dd" -ge 1 ] && [ "$dd" -le 31 ]
+}
+tfile_for() { # $1 = a truth id in any zero-padding -> the file that id names, if one exists
+  # Half the reference fields normalised zero-padding and half did not, so `t5` resolved in
+  # conflict_with and was reported dangling in cited_truths and corrects. One resolver, used by both.
+  local n
+  [ -f "$TRUTHS/$1.md" ] && { printf '%s' "$TRUTHS/$1.md"; return 0; }
+  n=${1#t}; case "$n" in *[!0-9]*|"") return 1 ;; esac
+  n=$(printf 't%03d' "$((10#$n))")
+  [ -f "$TRUTHS/$n.md" ] && { printf '%s' "$TRUTHS/$n.md"; return 0; }
+  return 1
+}
+mdir_for() { # $1 = a material id in any zero-padding -> the folder that id names, if one exists
+  local n
+  [ -d "$MATERIALS/$1" ] && { printf '%s' "$MATERIALS/$1"; return 0; }
+  n=${1#m}; case "$n" in *[!0-9]*|"") return 1 ;; esac
+  n=$(printf 'm%03d' "$((10#$n))")
+  [ -d "$MATERIALS/$n" ] && { printf '%s' "$MATERIALS/$n"; return 0; }
+  return 1
+}
 hq_files() { # -> every file carrying a "## Human queue" section, ONE PER LINE
   # One list with one definition, because two consumers need exactly the same set and they drifted:
   # `validate` knew about documents/*/review.md and `status` did not, so status answered
@@ -307,7 +336,9 @@ cmd_validate() {
     f="$MATERIALS/$id/converted.md"
     [ -f "$f" ] || { prob "$MATERIALS/$id/  no converted.md"; continue; }
     for k in $(pipes "$(sch material.fm.required)"); do
-      [ -n "$(fm "$f" "$k")" ] || prob "$f  frontmatter '$k' missing"
+      v=$(fm "$f" "$k")
+      [ -n "$v" ] || { prob "$f  frontmatter '$k' missing"; continue; }
+      case "$k" in added) is_date "$v" || prob "$f  added '$v' is not a date (YYYY-MM-DD, zero-padded, real month and day) — a field the format calls a date and nobody reads as one is a field that can say anything" ;; esac
     done
     [ "$(fm "$f" id)" = "$id" ] || prob "$f  id '$(fm "$f" id)' != folder '$id'"
     v=$(fm "$f" origin); pipes "$(sch material.fm.enum.origin)" | grep -qx "$v" || prob "$f  origin '$v' invalid → use $(sch material.fm.enum.origin)"
@@ -320,14 +351,16 @@ cmd_validate() {
     # and the whole age table ended up resting on a value verify could never re-check).
     if [ "$(fm "$f" origin)" = "research" ]; then
       for k in $(pipes "$(sch material.fm.required_when.research)"); do
-        [ -n "$(fm "$f" "$k")" ] || prob "$f  origin 'research' requires frontmatter '$k' (a fetched value must stay re-checkable)"
+        v=$(fm "$f" "$k")
+        [ -n "$v" ] || { prob "$f  origin 'research' requires frontmatter '$k' (a fetched value must stay re-checkable)"; continue; }
+        case "$k" in retrieved_at) is_date "$v" || prob "$f  retrieved_at '$v' is not a date (YYYY-MM-DD, zero-padded, real month and day) — a field the format calls a date and nobody reads as one is a field that can say anything" ;; esac
       done
     fi
     # corrects: this material displaces named parts of earlier materials
     for ref in $(listfield "$(fm "$f" corrects)"); do
       case "$ref" in m[0-9]*) ;; *) continue ;; esac
       mid=$(printf '%s' "$ref" | sed -E 's/^(m[0-9]+).*/\1/')
-      [ -d "$MATERIALS/$mid" ] || prob "$f  corrects '$ref' → no such material"
+      mdir_for "$mid" >/dev/null || prob "$f  corrects '$ref' → no such material"
       [ "$mid" = "$id" ] && prob "$f  corrects itself"
     done
   done < <(material_ids)
@@ -357,7 +390,13 @@ cmd_validate() {
       [ "$(fm "$d/converted.md" status)" = "retracted" ] && retlist="$retlist $(basename "$d")"
       [ "$(fm "$d/converted.md" origin)" = "research" ] && reslist="$reslist $(basename "$d")"
     done
-    reqtags=$(listfield "$(fm "$PROJECT" required_tags)" | tr '\n' ' ')
+    # One tag per line, carried in ENVIRON. Space-joining it and splitting on space is what made a
+    # two-word tag impossible: `required_tags: [계약 범위]` became the two tags 계약 and 범위, both
+    # reported as having no truths, while the real tag was never checked at all — and FORMATS calls a
+    # required_tag with no truths a missing-required fidelity violation, so the mine carried two
+    # unclosable violations and lost the one check it asked for. Truth tags have always been split on
+    # the comma (see seentag below); this now matches. ENVIRON and not -v, for the usual reason.
+    reqtags=$(listfield "$(fm "$PROJECT" required_tags)")
 
     local -a qfiles=()
     for f in "$MATERIALS"/*/converted.md; do [ -f "$f" ] && qfiles+=("$f"); done
@@ -373,7 +412,7 @@ cmd_validate() {
     # required-key list used to be hardcoded here, which made FORMATS.md line 5 ("if the two ever
     # differ, schema wins — edit it first") false for the one artifact type that matters most: a user
     # who edited the schema got no change in behaviour and no warning either.
-    qout=$(awk -v matids="$matlist" -v retids="$retlist" -v reqtags="$reqtags" -v mroot="$MATERIALS" -v remids="$remlist" -v resids="$reslist" -v Q="'"       -v treq="$(sch truth.fm.required | tr '|' ' ')"       -v tstenum="$(sch truth.fm.enum.status | tr '|' ' ')"       -v tprenum="$(sch truth.fm.enum.provenance | tr '|' ' ')"       -v rtypes="$(sch truth.fm.resolution.type | tr '|' ' ')"       -v rkinds="$(sch truth.fm.resolution.decision_kind | tr '|' ' ')"       -v rby="$(sch truth.fm.resolution.decided_by | tr '|' ' ')" '
+    qout=$(WD_REQTAGS="$reqtags" awk -v matids="$matlist" -v retids="$retlist" -v mroot="$MATERIALS" -v remids="$remlist" -v resids="$reslist" -v Q="'"       -v treq="$(sch truth.fm.required | tr '|' ' ')"       -v tstenum="$(sch truth.fm.enum.status | tr '|' ' ')"       -v tprenum="$(sch truth.fm.enum.provenance | tr '|' ' ')"       -v rtypes="$(sch truth.fm.resolution.type | tr '|' ' ')"       -v rkinds="$(sch truth.fm.resolution.decision_kind | tr '|' ' ')"       -v rby="$(sch truth.fm.resolution.decided_by | tr '|' ' ')" '
       function val(   s){ s=$0; sub(/^[^:]*:[[:space:]]*/,"",s); if(s !~ /^"/){ sub(/[[:space:]]+#.*$/,"",s); if(s ~ /^#/) s="" } sub(/[[:space:]]*$/,"",s); sub(/^"/,"",s); sub(/"$/,"",s); return s }
       function q(s){ return Q s Q }
       function prob(m){ print "  " m; probs++ }
@@ -444,7 +483,12 @@ cmd_validate() {
           w2=""; ty=""
           if(match(tresolution,/winner:[[:space:]]*(\[[^]]*\]|[^,}]+)/)) w2=substr(tresolution,RSTART,RLENGTH)
           if(match(tresolution,/type:[[:space:]]*[a-z]+/)){ ty=substr(tresolution,RSTART,RLENGTH); sub(/type:[[:space:]]*/,"",ty) }
-          selfwin = (w2!="" && match(w2, "(^|[^0-9A-Za-z])" tid "([^0-9]|$)"))
+          # Match the padded id AND the unpadded one. This was the only id comparison in tf_done that
+          # did not normalise, so `winner: [t5]` written in t005.md read as "somebody else won" and
+          # validate told the user to set the WINNER to discarded — which, followed, takes the value the
+          # user chose out of the mine (pull then reports usable 0). Its neighbours winnerof and reflist
+          # have normalised all along; tidn3 is already computed above.
+          selfwin = (w2!="" && (match(w2, "(^|[^0-9A-Za-z])" tid "([^0-9]|$)") || match(w2, "(^|[^0-9A-Za-z])" tidn3 "([^0-9]|$)")))
           if(v=="discarded" && selfwin)
             prob(tfile "  discarded but resolution.winner is itself → it WON its conflict; set status " q("ok"))
           if(v=="ok" && w2!="" && !selfwin && ty!="attribute")
@@ -491,7 +535,8 @@ cmd_validate() {
         tg=ttags; gsub(/[]["]/,"",tg); nn=split(tg,ta,",")
         for(ii=1;ii<=nn;ii++){ gsub(/^[[:space:]]+|[[:space:]]+$/,"",ta[ii]); if(ta[ii]!="") seentag[ta[ii]]=1 }
       }
-      BEGIN { nm=split(treq,_r," ");    for(i=1;i<=nm;i++) if(_r[i]!="") reqkey[_r[i]]=1
+      BEGIN { nreq=split(ENVIRON["WD_REQTAGS"], rt, "\n")
+              nm=split(treq,_r," ");    for(i=1;i<=nm;i++) if(_r[i]!="") reqkey[_r[i]]=1
               nm=split(tstenum,_s," ");  for(i=1;i<=nm;i++) if(_s[i]!="") okstatus[_s[i]]=1
               nm=split(tprenum,_p," ");  for(i=1;i<=nm;i++) if(_p[i]!="") okprov[_p[i]]=1
               nm=split(rtypes,_t," ");   for(i=1;i<=nm;i++) if(_t[i]!="") oktype[_t[i]]=1
@@ -561,8 +606,7 @@ cmd_validate() {
         }
       }
       END {
-        nr=split(reqtags,rt," ")
-        for(i=1;i<=nr;i++) if(rt[i]!="" && !(rt[i] in seentag)) prob("required_tag " q(rt[i]) " has no truths")
+        for(i=1;i<=nreq;i++) if(rt[i]!="" && !(rt[i] in seentag)) prob("required_tag " q(rt[i]) " has no truths")
         for(kx in kcount) if(kcount[kx]>1){
           split(kx,kk2,SUBSEP)
           prob(kk2[1] "  frontmatter key " q(kk2[2]) " appears " kcount[kx] " times → fm reads the FIRST, validate and reindex read the LAST, and census counts BOTH, so three commands report three different values for the same field. Keep one")
@@ -728,7 +772,16 @@ cmd_validate() {
             # shrink the coverage denominator AND trip the T2 legacy escape — one unattributed line
             # switching off a metric and a cold lens at once. questions.md already demands a
             # quotable utterance for `answered`; this is the same bar.
-            if($0 !~ /ruled:[[:space:]]*[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]/ || $0 !~ /"/)
+            # Shape AND value, and the same shape is_date() demands elsewhere. This was the only place
+            # in the tool that looked at a date at all, and it looked at the shape only: 2026-99-99
+            # counted as a recorded ruling while 2026-7-3 was reported as having no date.
+            rdok=0
+            if(match($0, /ruled:[[:space:]]*[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]/)){
+              rd=substr($0,RSTART,RLENGTH); sub(/ruled:[[:space:]]*/,"",rd)
+              split(rd,_rp,"-")
+              if(_rp[2]+0>=1 && _rp[2]+0<=12 && _rp[3]+0>=1 && _rp[3]+0<=31) rdok=1
+            }
+            if(!rdok || $0 !~ /"[^"]+"/)
               prob("truths/coverage.md  " q("## legacy") " exempts " q(lid) " without a recorded ruling → add ruled: YYYY-MM-DD plus the quoted user utterance on the same line; the machine does not exempt itself")
           }
           next
@@ -779,7 +832,7 @@ cmd_validate() {
       # what says which documents must go stale. A dangling id there is silent in the worst way —
       # the document is simply never matched, so it stays green forever while its ground moved.
       for c in $(listfield "$(fm "$p" cited_truths)"); do
-        case "$c" in t[0-9]*) [ -f "$TRUTHS/$c.md" ] || prob "$p  cited_truths '$c' → no such truth. Trigger A matches documents by this list, so a dangling id exempts this document from staleness detection" ;;
+        case "$c" in t[0-9]*) tfile_for "$c" >/dev/null || prob "$p  cited_truths '$c' → no such truth. Trigger A matches documents by this list, so a dangling id exempts this document from staleness detection" ;;
           *) prob "$p  cited_truths '$c' is not a truth id (expected tNNN)" ;; esac
       done
     else
@@ -850,7 +903,9 @@ cmd_validate() {
   # the gate already learned that lesson the expensive way.
   if [ -f "$TRUTHS/verify.md" ]; then
     for k in $(pipes "$(sch verify.fm.required)"); do
-      [ -n "$(fm "$TRUTHS/verify.md" "$k")" ] || prob "truths/verify.md  frontmatter '$k' missing"
+      v=$(fm "$TRUTHS/verify.md" "$k")
+      [ -n "$v" ] || { prob "truths/verify.md  frontmatter '$k' missing"; continue; }
+      case "$k" in verified_at) is_date "$v" || prob "truths/verify.md  verified_at '$v' is not a date (YYYY-MM-DD, zero-padded, real month and day) — a field the format calls a date and nobody reads as one is a field that can say anything" ;; esac
     done
     v=$(fm "$TRUTHS/verify.md" status)
     [ -z "$v" ] || pipes "$(sch verify.fm.enum.status)" | grep -qx "$v" || prob "truths/verify.md  status '$v' invalid → use $(sch verify.fm.enum.status)"
