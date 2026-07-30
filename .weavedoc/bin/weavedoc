@@ -269,7 +269,21 @@ cmd_validate() {
     [ "$v" = "$ROOT/$k" ] || { [ -d "$ROOT/$k" ] && prob "config paths.$k points at '$v' but '$ROOT/$k' also exists on disk — whatever is in it is NOT being checked"; }
   done
 
-  for k in project.fm.required material.fm.required truth.fm.required truth.fm.enum.status; do
+  # The roster is DERIVED from this file, not remembered. Four keys used to stand here while
+  # twenty-two were being read, so a schema missing any of the other eighteen switched those checks
+  # off and still printed a tick — `material.fm.required_when.research` alone let a fetched value in
+  # with no url and no retrieved_at. A hand-kept list drifts, and its drift is invisible in exactly
+  # the way this guard exists to prevent.
+  local schkeys nschk
+  schkeys=$(grep -oE 'sch [a-z][a-z_.]+' "$SCRIPT_DIR/weavedoc" 2>/dev/null | awk '{print $2}' | LC_ALL=C sort -u)
+  nschk=$(echo "$schkeys" | grep -c . || true)
+  # If the derivation itself comes up short, say so instead of checking a handful quietly. Falling
+  # back without a word would be the same silent zero one level up.
+  if [ "${nschk:-0}" -lt 10 ]; then
+    prob "$SCHEMA  could not read the key roster out of $SCRIPT_DIR/weavedoc (got ${nschk:-0}) — falling back to four keys, so a schema missing any other key will NOT be reported"
+    schkeys="project.fm.required material.fm.required truth.fm.required truth.fm.enum.status"
+  fi
+  for k in $schkeys; do
     [ -n "$(sch "$k")" ] && continue
     prob "$SCHEMA  cannot read '$k' — the format SoT is missing or unreadable, so the checks that read it would silently pass. Restore .weavedoc/schema before trusting any verdict"
     echo "✗ validate: $PROBLEMS problem(s)"; return 1
@@ -685,7 +699,7 @@ cmd_validate() {
       tsrcpairs=$(awk '
         FNR==1 { n=split(FILENAME,pp,"/"); fn=pp[n]; sub(/\.md$/,"",fn); tid=fn; infm=($0 ~ /^---[[:space:]]*$/); next }
         infm && /^---[[:space:]]*$/ { infm=0; nextfile }
-        infm && /^source:[[:space:]]/ { s=$0; sub(/^source:[[:space:]]*/,"",s); sub(/[[:space:]]*$/,"",s); printf "%s:%s ", tid, s; nextfile }
+        infm && /^source:[[:space:]]/ { s=$0; sub(/^source:[[:space:]]*/,"",s); if(s !~ /^"/) sub(/[[:space:]]+#.*$/,"",s); sub(/[[:space:]]*$/,"",s); sub(/^"/,"",s); sub(/"$/,"",s);  printf "%s:%s ", tid, s; nextfile }
       ' "$TRUTHS"/t[0-9]*.md)
       cout=$(awk -v matids="$matlist" -v pairs="$tsrcpairs" -v Q="'" '
         function q(s){ return Q s Q }
@@ -972,7 +986,7 @@ cmd_census() {
   n_files=$(ls "$TRUTHS"/t[0-9]*.md 2>/dev/null | grep -c .)
   n_index=$(grep -cE '^- t[0-9]+:' "$TRUTHS/index.md" 2>/dev/null || true); n_index=${n_index:-0}
   stat_out=$(awk '
-    function val(   s){ s=$0; sub(/^[^:]*:[[:space:]]*/,"",s); if(s !~ /^"/){ sub(/[[:space:]]+#.*$/,"",s); if(s ~ /^#/) s="" } sub(/[[:space:]]*$/,"",s); return s }
+    function val(   s){ s=$0; sub(/^[^:]*:[[:space:]]*/,"",s); if(s !~ /^"/){ sub(/[[:space:]]+#.*$/,"",s); if(s ~ /^#/) s="" } sub(/[[:space:]]*$/,"",s); sub(/^"/,"",s); sub(/"$/,"",s); return s }
     FNR==1 { infm=($0 ~ /^---[[:space:]]*$/); next }
     infm && /^---[[:space:]]*$/ { infm=0; nextfile }
     infm && /^status:[[:space:]]/ { st[val()]++ }
@@ -1042,7 +1056,7 @@ cmd_census() {
     n_mats=$(awk '
       FNR==1 { infm=($0 ~ /^---[[:space:]]*$/); st=""; next }
       infm && /^---[[:space:]]*$/ { if(st!="retracted") n++; infm=0; nextfile }
-      infm && /^status:[[:space:]]/ { st=$0; sub(/^status:[[:space:]]*/,"",st); sub(/[[:space:]]*$/,"",st) }
+      infm && /^status:[[:space:]]/ { st=$0; sub(/^status:[[:space:]]*/,"",st); if(st !~ /^"/) sub(/[[:space:]]+#.*$/,"",st); sub(/[[:space:]]*$/,"",st); sub(/^"/,"",st); sub(/"$/,"",st) }
       END { print n+0 }' "$MATERIALS"/*/converted.md)
   fi
   local n_denom=$(( n_mats - n_legacy )); [ "$n_denom" -lt 0 ] && n_denom=0
@@ -1332,7 +1346,7 @@ cmd_pull() {
   # one awk pass extracts the fields of all hit files (per-file fm spawns are the MSYS trap)
   local rec
   rec=$(awk '
-    function val(   s){ s=$0; sub(/^[^:]*:[[:space:]]*/,"",s); if(s !~ /^"/){ sub(/[[:space:]]+#.*$/,"",s); if(s ~ /^#/) s="" } sub(/[[:space:]]*$/,"",s); sub(/^"/,"",s); sub(/"$/,"",s); gsub(//," ",s); return s }
+    function val(   s){ s=$0; sub(/^[^:]*:[[:space:]]*/,"",s); if(s !~ /^"/){ sub(/[[:space:]]+#.*$/,"",s); if(s ~ /^#/) s="" } sub(/[[:space:]]*$/,"",s); sub(/^"/,"",s); sub(/"$/,"",s); gsub(/\001/," ",s); return s }
     function flush(){ if(tid!="") printf "%s\x01%s\x01%s\x01%s\x01%s\x01%s\x01%s\x01%s\x01%s\n", tid, st, cl, src, asof, prov, cw, res, asm }
     FNR==1 { flush(); n=split(FILENAME,pp,"/"); fn=pp[n]; sub(/\.md$/,"",fn); tid=fn
              st="";cl="";src="";asof="";prov="";cw="";res="";asm=""; infm=($0 ~ /^---[[:space:]]*$/); next }
