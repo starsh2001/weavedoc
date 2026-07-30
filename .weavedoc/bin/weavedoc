@@ -364,12 +364,20 @@ cmd_validate() {
       function q(s){ return Q s Q }
       function prob(m){ print "  " m; probs++ }
       function tf_done(   v,tg,nn,ii,ta,wv,wm,w2,ty,selfwin){
+        allfile[tid]=tfile; allstat[tid]=tstatus
         if(tidfield != tid) prob(tfile "  id " q(tidfield) " != filename " q(tid))
         # Driven by truth.fm.required, using the key census this awk already collects. Five hardcoded
         # checks stood here instead, so editing the schema changed nothing and said nothing — and an
         # earlier pass of this very change built the reqkey set and then forgot to read it, which is
         # the same defect one layer up: the claim was made in the changelog before the wire existed.
-        for(rk in reqkey) if(!((tfile SUBSEP rk) in kcount)) prob(tfile "  frontmatter " q(rk) " missing")
+        # Present AND non-empty. Checking only that the KEY exists is how `source:` with nothing after
+        # it passed: the seal is guarded by `tsrc!=""`, so an empty source made it run zero times and a
+        # fabricated body went in as `status: ok`. The other four artifacts have always checked the
+        # value (`[ -n "$(fm ...)" ]`); truth — the one artifact carrying the seal — did not.
+        for(rk in reqkey){
+          if(!((tfile SUBSEP rk) in kcount)) prob(tfile "  frontmatter " q(rk) " missing")
+          else if(kval[tfile,rk]=="") prob(tfile "  frontmatter " q(rk) " is empty — a key with no value is not a value, and for " q("source") " it silently switches the quote seal off")
+        }
         if(hassource && tsrc!="" && !(tsrc in mat)) prob(tfile "  source " q(tsrc) " → no material folder")
         v=tstatus
         if(v=="resolved")
@@ -498,7 +506,7 @@ cmd_validate() {
         # different ways by three commands — fm() takes the FIRST match, this awk and reindex take
         # the LAST, and census counts BOTH — so the same field yields three different answers and
         # nothing said a word. census could report a status tally larger than its own file count.
-        if($0 ~ /^[a-z_]+[[:space:]]*:/){ kk=$0; sub(/[[:space:]]*:.*$/,"",kk); kcount[FILENAME,kk]++ }
+        if($0 ~ /^[a-z_]+[[:space:]]*:/){ kk=$0; sub(/[[:space:]]*:.*$/,"",kk); kcount[FILENAME,kk]++; kval[FILENAME,kk]=val() }
         if(ftype=="t"){
           if($0 ~ /^id:[[:space:]]/)                 { tidfield=val(); hasid=1 }
           else if($0 ~ /^claim:[[:space:]]/)         { hasclaim=1 }
@@ -526,6 +534,7 @@ cmd_validate() {
       # at all, which is a hole exactly the size of a short fabricated claim. A substring test on a
       # short string is cheap and errs toward passing, so skipping it bought nothing.
       ftype=="t" && $0 ~ /[^[:space:]]/ {
+        nbody[tid]++
         if(tsrc!="" && (tsrc in body)){
           sealsrc[tid]=tsrc; sealfile[tid]=tfile; sealstat[tid]=tstatus
           if(index(body[tsrc],$0)==0){
@@ -602,6 +611,12 @@ cmd_validate() {
         # the seal skipped a truth whose `source:` was empty, whose body had no checkable line, or
         # whose frontmatter never closed — and the only output was a tick. Reporting sealed-vs-present
         # makes that difference visible without knowing in advance which way the next one will leak.
+        # A body with no non-blank line gives the seal nothing to check, and the seal is line-based, so
+        # zero lines meant zero checks and a tick. FORMATS makes the verbatim body mandatory; nothing
+        # verified it was there. Tombstones are exempt: a retracted truth may legitimately be a stub.
+        for(_bt in allstat)
+          if(allstat[_bt]!="retracted" && nbody[_bt]+0==0)
+            prob(allfile[_bt] "  body is empty — the verbatim quote is what the seal checks, so a truth with no body line is unchecked rather than checked-and-clean")
         nsealed=0; for(_st in sealsrc) nsealed++
         print "QCOUNTS " ntruthfile+0 " " nsealed " " nmatfile+0
         print "QFAILS " probs+0
@@ -621,10 +636,22 @@ cmd_validate() {
     # never gain an index entry, which produced an unresolvable loop — validate said "run reindex",
     # reindex reported success, validate said it again, forever, while the actual cause (no
     # frontmatter) was named only by `reindex --check`. Name it here, and stop blaming the index for it.
+    # An UNCLOSED frontmatter is the same leak by a different door, and the check below missed it by
+    # only ever looking at line 1: tf_done() fires on the CLOSING '---', so without one the parser
+    # swallows the whole file as frontmatter and id-vs-filename, source existence, the status enum,
+    # the resolution enums and the quote seal all run zero times. The examined: line reports it as
+    # NOT sealed; this names it.
     local tf nofm=""
     for tf in "$TRUTHS"/t[0-9]*.md; do
       [ -f "$tf" ] || continue
-      [ "$(head -1 "$tf" 2>/dev/null | tr -d '\r')" = "---" ] && continue
+      if [ "$(head -1 "$tf" 2>/dev/null | tr -d '\r')" = "---" ]; then
+        awk 'NR==1 { if($0 ~ /^---[[:space:]]*$/) infm=1; next }
+             infm && /^---[[:space:]]*$/ { closed=1; exit }
+             END { exit closed?0:1 }' "$tf" && continue
+        nofm="$nofm $(basename "$tf" .md)"
+        prob "$tf  frontmatter is never closed (a second '---' is missing) — the parser stays inside it to EOF, so every check on this file runs zero times and its body is never sealed"
+        continue
+      fi
       nofm="$nofm $(basename "$tf" .md)"
       prob "$tf  no frontmatter (line 1 must be '---') — this file is not read as a truth at all, so every check on it silently passes and no index entry can ever be generated for it"
     done
