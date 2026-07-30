@@ -22,7 +22,6 @@ init (once)
   → a finished document becomes a material for the next one
 
 on-demand lanes: verify (cold-checks each upstream hop) · gaps (is the world covered?)
-                 audit (are the mine's own records true about the mine?)
 ```
 
 - **Materials first.** Everything is built from materials you provide — files, or a conversation you declare as the source. AI handles most of it autonomously; you are asked only for a necessary fact the materials don't contain.
@@ -83,7 +82,7 @@ WeaveDoc is a set of Claude Code skills. To use it in a project:
 
 1. Copy `.claude/skills/weavedoc-*` and `.weavedoc/` into your repo.
 2. Ask Claude: **"weavedoc init"** — it creates the workspace and `.weavedoc/config.yaml`.
-3. Drop materials into `inbox/`, then: **"gather"** → **"map"** (with **"verify"** after each to cold-check the hop, **"gaps"** to check completeness, **"audit"** to check the records themselves) → **"plan the report"** → **"write it"** → **"review it"** (→ **"refine"** until clean).
+3. Drop materials into `inbox/`, then: **"gather"** → **"map"** (with **"verify"** after each to cold-check the hop, and **"gaps"** to check completeness) → **"plan the report"** → **"write it"** → **"review it"** (→ **"refine"** until clean).
 
 **Keeping installs in sync.** `bash .weavedoc/bin/weavedoc version` prints the installed runtime's date (`.weavedoc/VERSION`); compare it against this repo's before trusting an old install. If you evolve the skills/runtime *inside* a project (the testbed pattern), backport here and bump `VERSION` — the runtime once grew two weeks ahead inside a testbed while this repo went stale.
 
@@ -99,6 +98,20 @@ WeaveDoc is a set of Claude Code skills. To use it in a project:
 - `gaps` — the mechanical declared-marker scan (미정/TBD/unchecked checkboxes) that floors the `weavedoc-gaps` skill.
 - `impact <material-id>` — which truths were extracted from a material and which documents cite it (the blast radius when a source is superseded or re-opened).
 - `status` — each document's stage and its next step, plus the open Human-queue split (you decide / recommendation ready / machine can just do). `version` — the installed runtime's date.
+
+**The `examined:` line.** Every `validate` run prints, before its verdict, what it actually looked at:
+
+```
+  examined: materials 27 · truths 255 (255 sealed) · documents 1 (1 consecrated, 1 gate-checked)
+```
+
+It decides nothing — it exists so that *"I did not look"* stops looking like *"I looked and found nothing"*, which is what a redirected `paths`, an unreadable schema, an empty `source:` and an unclosed frontmatter all used to produce, each of them next to a tick. Read it as:
+
+- **`N sealed`** — truths whose body was found verbatim in its source. This is the only N/N the tool produces, and it is the number the confirmation step is told to quote.
+- **`N seal FAILED`** — checked and NOT found. Never folded into `sealed`.
+- **`N tombstone`** — `retracted` truths, exempt: a withdrawn truth's quote is *meant* to be missing from its source (that absence is the withdrawal reason).
+- **`← N NOT checked`** — the seal never ran on them. This marker means only that, and any count above zero is worth chasing: it is the shape every silent-zero leak takes.
+- **`N gate-checked`** / **`← N NOT gate-checked`** — consecrated documents whose fidelity gate the reader could actually open, versus ones where it could not.
 
 The AI gate judges *meaning*; `validate` enforces *form and truth coherence* — a miss in one is caught by the other. Format SoT: `.weavedoc/schema`.
 

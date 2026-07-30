@@ -65,7 +65,7 @@ Pull a document from the data mine — decide its structure, tone, and which tru
 
 5. **Semantic check.** Before presenting to the user, self-review the proposed structure: does every item sit in the right category? (e.g. a CEO doesn't go in "members"; a production tool reference doesn't go in a creative wiki.) Fix before showing.
 
-6. **Tone.** Inherit the project tone unless the user wants a per-document override.
+6. **Tone.** Inherit the project tone unless the user wants a per-document override — and **write the resolved value into `plan.md`, never leave the field blank to mean "inherited".** `tone` is a required plan field (`plan.fm.required`): an empty one fails `validate`, and a cold reader of the plan cannot resolve an inheritance that was never written down. If the project has no standing tone, the tone elicited for this document goes here.
 
 7. **Series.** If this continues prior documents, set `continues` and make sure those prior-doc materials exist (register them via gather if needed).
 

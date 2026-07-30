@@ -25,9 +25,9 @@ Each step is its own skill, invoked by natural language. State lives on disk (`s
 
 ---
 
-## 2. The ten skills
+## 2. The nine skills
 
-One per step of the flow, plus three on-demand lanes (verify · gaps · audit) that guard the mine between steps.
+One per step of the flow, plus two on-demand lanes (verify · gaps) that guard the mine between steps.
 
 | Skill | Step | What it does | Out |
 |---|---|---|---|

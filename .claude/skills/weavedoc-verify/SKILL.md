@@ -153,7 +153,7 @@ Non-zero validate exit = blocking finding regardless of the cold pass.
 
    | what the fixes touched | re-check |
    |---|---|
-   | frontmatter fields only (tags, `as_of`, `provenance`, `resolution`) — no claim, no body | `validate` + `audit`; no cold round |
+   | frontmatter fields only (tags, `as_of`, `provenance`, `resolution`) — no claim, no body | `validate`; no cold round |
    | ≤3 truths' claims, or one material's `> [note]`/`> [machine-note]` lines | **diff-only mini-round** — one cold reviewer, only the edited hunks |
    | >3 truths, any body/quote, any converted.md prose, or a new truth | **full fresh round** at the current level |
    | anything a reviewer called `critical`, however small the edit | **full fresh round** — a critical means the lens that found it was right and the neighbourhood is suspect |

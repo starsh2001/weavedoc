@@ -37,7 +37,7 @@ Write the answers to `.weavedoc/config.yaml`. On a **reconfigure**, update confi
 - **Folders.** Create `inbox/`, `materials/`, `truths/`, `documents/` per the config paths.
 - **project.md.** Create from `.weavedoc/templates/project.md` with minimal defaults:
   - `roles` — leave empty `[]`; the first `gather` proposes roles from the actual materials.
-  - `tone` — leave empty; each `plan` sets tone per document.
+  - `tone` — leave empty; it is optional HERE (a standing project tone, if one exists). Each `plan` then writes a concrete tone into its own `plan.md`, where the field is required — "inherited" is resolved at plan time, not left blank.
   - `required_tags` — leave empty unless completeness is `required`.
   - Body — a one-line placeholder: the mine's character reveals itself as materials are gathered.
 - **CLAUDE.md pointer (read-protocol tripwire).** *Unlike the rest of §3, this bullet runs on **reconfigure** too (§2 points here).* Ensure the project's `CLAUDE.md` contains this fixed block between the markers (create the file if absent; if the markers exist, replace the block's content; otherwise append — **idempotent, never duplicated**). This is what makes any future session — including creative ones that never invoke a weavedoc skill — hit the read protocol before touching the mine:
