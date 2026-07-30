@@ -763,16 +763,26 @@ cmd_validate() {
     fi
   done < <(doc_ids)
 
-  # --- truths/verify.md frontmatter ---
+  # --- truths/verify.md frontmatter + sections ---
   # The mine's verification state file is the one artifact a whole round of work rests on, so its
   # frontmatter is checked here rather than left to prose: `status: pass` (not a valid value) reads
   # as "verified" to a human skimming it while no check ever agreed.
+  # The SECTIONS are checked here too, and that is a repair: `verify.sections` used to be read by the
+  # audit lane and by nothing else, so removing that lane left the key declared in the schema,
+  # described in FORMATS, and enforced nowhere — a spec that looks wired and is not. `## Verified
+  # units` in particular is what carries per-unit honesty; without it a global `passed` silently
+  # covers units born after it. Either heading level is accepted: the spec never fixed the level, and
+  # the gate already learned that lesson the expensive way.
   if [ -f "$TRUTHS/verify.md" ]; then
     for k in $(pipes "$(sch verify.fm.required)"); do
       [ -n "$(fm "$TRUTHS/verify.md" "$k")" ] || prob "truths/verify.md  frontmatter '$k' missing"
     done
     v=$(fm "$TRUTHS/verify.md" status)
     [ -z "$v" ] || pipes "$(sch verify.fm.enum.status)" | grep -qx "$v" || prob "truths/verify.md  status '$v' invalid → use $(sch verify.fm.enum.status)"
+    while IFS= read -r k; do
+      grep -qE "^#{1,2}[[:space:]]+$k[[:space:]]*\$" "$TRUTHS/verify.md" ||
+        prob "truths/verify.md  required section '$k' missing (verify.sections)"
+    done < <(pipes "$(sch verify.sections)")
   fi
 
   # --- Human queue ownership tags (truths/verify.md AND documents/*/review.md) ---

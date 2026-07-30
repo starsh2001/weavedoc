@@ -1,6 +1,10 @@
 # WeaveDoc format schema — the single source of truth for artifact formats.
 # Both bin/weavedoc (the checker) and FORMATS.md (human prose) defer to THIS file.
 # Kept flat with |-separated lists so bash/awk parse it with no yq/jq dependency.
+# `*.fm.optional` lists are DESCRIPTIVE: validate does not reject unknown frontmatter keys, so they
+# document what a writer may add rather than gating anything. Every other key here is read by
+# bin/weavedoc via `sch <key>`. If you add a key, wire it or say here that it is descriptive —
+# a declared-but-unread key looks exactly like an enforced one, and `repeat` sat unwired that way.
 
 material.fm.required: id|title|origin|role|topics|format|source_path|added|status|summary
 material.fm.optional: stage|corrects|url|retrieved_at
@@ -30,6 +34,12 @@ plan.fm.optional: continues|cited_truths|scope_tags
 plan.fm.enum.status: planned|drafting|reviewing|done|stale
 project.fm.required: version|language|roles
 review.fm.optional: round|consecutive_passes
+# review.sections is DESCRIPTIVE for now and deliberately so: it has never been enforced, and making
+# it blocking is a format tightening that would fail any review.md written before the template grew
+# its fourth section. The gate reads `Fidelity violations` and check_hq_tags reads `Human queue` when
+# present, both at either heading level. Enforcing existence is a decision with a migration cost —
+# it belongs to the user, not to a cleanup pass. (verify.sections IS enforced: it was, by the audit
+# lane, and removing that lane orphaned it — restoring the check is a repair, not a new rule.)
 review.sections: Fidelity violations|Findings|Adjudications|Human queue
 config.enum.completeness: off|required
 config.enum.detection: standard|deep
