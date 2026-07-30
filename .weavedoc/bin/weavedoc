@@ -133,7 +133,16 @@ comment_balanced() { # $1=file -> 0 if the file does not END inside a comment
       } }
     END { exit inc?1:0 }' "$1" 2>/dev/null
 }
-countlines() { grep -vE '^[[:space:]]*- \[(\{[^}]*\}|<[^>]*>)\].*(\{[^}]*\}|<[^>]*>)' 2>/dev/null | grep -cE "$1" 2>/dev/null || true; }
+countlines() {
+  # Drops a bullet whose bracket still opens a placeholder, and nothing else. is_noise makes the same
+  # base judgement and then adds a kind-enum override that this cannot: it is called with a
+  # caller-supplied pattern across ledgers whose entry shapes differ (coverage `## legacy` entries
+  # carry no bracket at all; gaps and the Human queue use different enums), so it has no section to
+  # read an enum for. Consequence, stated rather than hidden: a real gaps entry written with the
+  # brackets kept around a real kind (`- [<reference>] t001 — …`) is undercounted here. Closing that
+  # needs the caller to pass its own enum in; until then it is a known limit, not a shared rule.
+  grep -vE '^[[:space:]]*- [[][{<]' 2>/dev/null | grep -cE "$1" 2>/dev/null || true
+}
 # stdin -> count (0 when no match; never fails). Drops ONLY untouched template placeholder entries:
 # a freshly-initialised gaps.md would otherwise report an open gap that does not exist.
 # The exclusion carries the SAME two conditions as is_noise, and deliberately so — these two are the
@@ -157,18 +166,10 @@ nocomment() { # stdin -> stdin with <!-- ... --> blocks blanked out (spans lines
     }'
 }
 is_noise() { # blank / comment / untouched template entry
-  # This predicate is the SOLE judge of the consecration gate, so both halves of the placeholder
-  # rule are load-bearing and both were learned from a miss:
-  #   ANCHORED — the bullet must START the line. An unanchored `*"- ["["{<"]*` matched anywhere,
-  #     so a real violation that merely QUOTED the template shape (`- [<kind>] <where>`, the form
-  #     FORMATS tells you to copy) was read as an untouched template and shipped through the gate.
-  #   SECOND PLACEHOLDER — one must still survive after the bracket (`{where}` / `<what>`). Anchor
-  #     alone still swallowed a filled `- [<contradiction>] 3장 — t001과 모순`, which is a real
-  #     entry someone wrote by keeping the angle brackets around a real kind name.
-  # Half-filled lines (`- [{kind}] 실제 내용`) fail the second test and count as real entries —
-  # the safe direction for a gate: a false block is visible, a false pass is not.
-  # Both template dialects are covered: gaps.md uses {braces}, review.md uses <angles>.
-  local s
+  # This predicate is the SOLE judge of the consecration gate. Three rules, in order, and each of
+  # the first two exists because the earlier version of the third was wrong.
+  # Both template dialects are covered throughout: gaps.md uses {braces}, review.md uses <angles>.
+  local s bk
   case "$1" in ""|"#"*|"<!--"*|"-->"*) return 0 ;; esac
   s=$(printf '%s' "$1" | sed 's/^[[:space:]]*//')
   [ -z "$s" ] && return 0
@@ -177,9 +178,17 @@ is_noise() { # blank / comment / untouched template entry
   # open violation and blocked the document, with a message that said the section was non-empty.
   # Anything WITH a bracket still counts, even unbulleted, so a malformed entry cannot hide as prose.
   case "$s" in *"["*) ;; *) return 0 ;; esac
-  case "$s" in "- ["["{<"]*)
-    case "$s" in *"{"*"}"*"{"*"}"*|*"<"*">"*"<"*">"*) return 0 ;; esac ;;
-  esac
+  # An untouched template is one whose KIND slot still holds the placeholder NAME. That is the only
+  # thing that separates the two shapes, and two earlier rules got it wrong from both sides: matching
+  # `- [{`/`- [<` alone deleted a real entry someone wrote with the brackets kept around a real kind,
+  # and requiring the remainder to be empty after stripping placeholders deleted nothing but broke the
+  # other way — the shipped gaps.md template carries literal labels (`scope:`, `recheck:`) between its
+  # placeholders, so its own Accepted line stopped counting as a template. The kind is also what the
+  # gate acts on, so a line without a real one is not an entry it could act on.
+  for bk in $(pipes "$(sch review.enum.kind)"); do
+    case "$s" in "- [$bk]"*|"- [<$bk>]"*|"- [{$bk}]"*) return 1 ;; esac
+  done
+  case "$s" in "- ["["{<"]*) return 0 ;; esac
   return 1
 }
 material_ids() { ls -d "$MATERIALS"/*/ 2>/dev/null | while read -r d; do basename "$d"; done; }

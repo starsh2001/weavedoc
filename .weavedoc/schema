@@ -34,6 +34,7 @@ plan.fm.optional: continues|cited_truths|scope_tags
 plan.fm.enum.status: planned|drafting|reviewing|done|stale
 project.fm.required: version|language|roles
 review.fm.optional: round|consecutive_passes
+review.enum.kind: contradiction|unsupported|missing-required
 # review.sections is READ but its EXISTENCE is not enforced, and the split is deliberate. fid_body
 # reads the list to know which headings END the violations section: a heading that names a sibling
 # section closes it at any level, anything else is a sub-heading and stays inside. Without that list
