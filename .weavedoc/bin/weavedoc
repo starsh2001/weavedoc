@@ -297,7 +297,7 @@ cmd_validate() {
   # whole class of leak: a redirected `paths`, an unreadable schema, an empty `source:`, an unclosed
   # frontmatter and a heading the reader could not find all produced ZERO checks and a tick. The
   # counts do not decide anything — they make "did not look" stop resembling "looked and found nothing".
-  local N_TRUTH=0 N_SEALED=0 N_MAT=0 N_DOC=0 N_GATED=0 N_CONSEC=0
+  local N_TRUTH=0 N_SEALED=0 N_MAT=0 N_DOC=0 N_GATED=0 N_CONSEC=0 N_SEALFAIL=0 N_TOMB=0
 
   # The checks below now READ the schema instead of paraphrasing it, which is right — but it means an
   # unreadable schema turns them OFF rather than making them fail. Silence would look exactly like a
@@ -348,6 +348,12 @@ cmd_validate() {
   while IFS= read -r id; do
     f="$MATERIALS/$id/converted.md"
     [ -f "$f" ] || { prob "$MATERIALS/$id/  no converted.md"; continue; }
+    # Counted HERE, in the loop that checks them. It used to come from the truths awk as a by-product,
+    # and that awk is skipped entirely when the mine has no t*.md yet — so every project reported
+    # "materials 0" for the whole window between gather and map while the materials were in fact being
+    # fully checked. That is this line telling the user "I did not look" about work it did do, which is
+    # precisely the confusion the accounting exists to end, pointed the other way.
+    N_MAT=$((N_MAT+1))
     for k in $(pipes "$(sch material.fm.required)"); do
       v=$(fm "$f" "$k")
       [ -n "$v" ] || { prob "$f  frontmatter '$k' missing"; continue; }
@@ -563,7 +569,7 @@ cmd_validate() {
       FNR==1 {
         infm = ($0 ~ /^---[[:space:]]*$/) ? 1 : 0
         n=split(FILENAME,pp,"/")
-        if (FILENAME ~ /converted\.md$/) { ftype="m"; nmatfile++; mid=pp[n-1]; if(!(mid in body)) body[mid]="" }
+        if (FILENAME ~ /converted\.md$/) { ftype="m"; mid=pp[n-1]; if(!(mid in body)) body[mid]="" }
         else {
           ftype="t"; ntruthfile++; tfile=FILENAME; fn=pp[n]; sub(/\.md$/,"",fn); tid=fn
           tidfield=""; tsrc=""; ttags=""; tstatus=""; tconflict=""; tresolution=""; tprov=""
@@ -688,15 +694,28 @@ cmd_validate() {
         for(_bt in allstat)
           if(allstat[_bt]!="retracted" && nbody[_bt]+0==0)
             prob(allfile[_bt] "  body is empty — the verbatim quote is what the seal checks, so a truth with no body line is unchecked rather than checked-and-clean")
-        nsealed=0; for(_st in sealsrc) nsealed++
-        print "QCOUNTS " ntruthfile+0 " " nsealed " " nmatfile+0
+        # `sealed` has to mean the seal PASSED, not that it ran. sealsrc is set before index() decides,
+        # so a truth whose quote was confirmed ABSENT was counted as sealed — and WORKFLOW and the
+        # verify skill both instruct the confirmation screen to write "축자 인용 존재는 validate가 N/N
+        # 확인" from this very number, so the accounting was manufacturing the false record it exists to
+        # prevent. Four outcomes, not one: passed · FAILED · tombstone · never checked.
+        # Tombstones are exempt rather than counted either way: the quote of a retracted truth is MEANT
+        # to be absent from its source — that absence IS the withdrawal reason — so it is neither a
+        # pass nor a failure, and it must stop triggering the "not checked" marker.
+        nsealed=0; nsealfail=0; ntomb=0
+        for(_tb in allstat) if(allstat[_tb]=="retracted") ntomb++
+        for(_st in sealsrc){
+          if(allstat[_st]=="retracted") continue
+          if(_st in sealbroken) nsealfail++; else nsealed++
+        }
+        print "QCOUNTS " ntruthfile+0 " " nsealed " " nsealfail+0 " " ntomb+0
         print "QFAILS " probs+0
       }
     ' "${qfiles[@]}")
 
     qn=$(printf '%s\n' "$qout" | tail -1); qn=${qn#QFAILS }
     local qc; qc=$(printf '%s\n' "$qout" | grep '^QCOUNTS ' | tail -1)
-    if [ -n "$qc" ]; then set -- $qc; N_TRUTH=${2:-0}; N_SEALED=${3:-0}; N_MAT=${4:-0}; fi
+    if [ -n "$qc" ]; then set -- $qc; N_TRUTH=${2:-0}; N_SEALED=${3:-0}; N_SEALFAIL=${4:-0}; N_TOMB=${5:-0}; fi
     if [ "${qn:-0}" -gt 0 ]; then
       printf '%s\n' "$qout" | grep -v '^QCOUNTS ' | sed '$d'
       PROBLEMS=$((PROBLEMS + qn))
@@ -940,10 +959,17 @@ cmd_validate() {
   v=$(cfgval attribution);  [ -z "$v" ] || pipes "$(sch config.enum.attribution)"  | grep -qx "$v" || prob "config conflicts.attribution '$v' invalid"
 
   # Printed on both outcomes and before the verdict, so the verdict is never read without it.
-  local sealnote="" gatenote=""
-  [ "$N_SEALED" -lt "$N_TRUTH" ] && sealnote=" ← $((N_TRUTH - N_SEALED)) NOT sealed"
+  local sealpart gatenote="" N_UNCHK
+  # The marker fires on NEVER CHECKED only. It used to fire on anything short of the file count, so a
+  # legitimate tombstone stub raised it on a clean mine — and the only documented meaning of the
+  # marker was "a defect; drive it to zero", which for a tombstone means deleting the file map forbids.
+  N_UNCHK=$(( N_TRUTH - N_TOMB - N_SEALED - N_SEALFAIL )); [ "$N_UNCHK" -lt 0 ] && N_UNCHK=0
+  sealpart="$N_SEALED sealed"
+  [ "$N_SEALFAIL" -gt 0 ] && sealpart="$sealpart · $N_SEALFAIL seal FAILED"
+  [ "$N_TOMB" -gt 0 ]     && sealpart="$sealpart · $N_TOMB tombstone"
+  [ "$N_UNCHK" -gt 0 ]    && sealpart="$sealpart ← $N_UNCHK NOT checked"
   [ "$N_GATED" -lt "$N_CONSEC" ] && gatenote=" ← $((N_CONSEC - N_GATED)) NOT gate-checked"
-  echo "  examined: materials $N_MAT · truths $N_TRUTH ($N_SEALED sealed$sealnote) · documents $N_DOC ($N_CONSEC consecrated, $N_GATED gate-checked$gatenote)"
+  echo "  examined: materials $N_MAT · truths $N_TRUTH ($sealpart) · documents $N_DOC ($N_CONSEC consecrated, $N_GATED gate-checked$gatenote)"
   if [ "$PROBLEMS" -eq 0 ]; then echo "✓ validate: all checks passed"; return 0
   else echo "✗ validate: $PROBLEMS problem(s)"; return 1; fi
 }
