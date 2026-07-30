@@ -216,14 +216,27 @@ hq_body() { # $1=file -> the Human queue body, whichever heading level the file 
   [ -n "$b" ] || b=$(nocomment < "$1" | section_body - "Human queue")
   printf '%s\n' "$b"
 }
-fid_body() { # $1=file -> the 'Fidelity violations' body, whichever heading level the file uses
-  # Same reason as hq_body: the section is specified without a level. review.md's template writes it
-  # at `#`, so try that first — but a file that used `##` had its violations read as an empty section
-  # and shipped, which is the one failure the gate exists to make impossible.
-  local b
-  b=$(nocomment < "$1" | section_body - "Fidelity violations")
-  [ -n "$b" ] || b=$(nocomment < "$1" | section_body2 - "Fidelity violations")
-  printf '%s\n' "$b"
+fid_body() { # $1=file -> the 'Fidelity violations' body, ended by a SIBLING section, not by a sub-heading
+  # Both obvious terminators are wrong, in opposite directions, and this file has shipped each of them:
+  #   stop at the same level only  -> a file that writes its OTHER sections at `##` runs the violations
+  #     section to EOF, so advisory findings counted as violations and a clean document was blocked.
+  #   stop at any heading          -> a sub-heading INSIDE the section ends it early, so violations
+  #     grouped under `## unsupported` fell outside it and the gate read an empty section and passed.
+  # Neither can be decided from the level alone because the spec never fixed the level. What separates
+  # the two cases is whether the heading is one of review.md's OTHER sections, and `review.sections`
+  # already lists them — so read it. Ends at a heading of the same level or higher, or at any heading
+  # whose text is a sibling section, whatever level it is written at. Anything else is a sub-heading and
+  # stays inside.
+  local sib; sib=$(pipes "$(sch review.sections)" | grep -vx 'Fidelity violations' | tr '\n' '|' | sed 's/|$//')
+  nocomment < "$1" | awk -v sib="$sib" '
+    !on && $0 ~ /^#{1,6}[[:space:]]+Fidelity violations[[:space:]]*$/ { on=1; lvl=length($1); next }
+    on && /^#{1,6}[[:space:]]/ {
+      hl=length($1); ht=$0; sub(/^#+[[:space:]]+/,"",ht); sub(/[[:space:]]+$/,"",ht)
+      if (hl<=lvl) exit
+      if (sib!="" && ht ~ ("^(" sib ")$")) exit
+      next
+    }
+    on { print }'
 }
 is_date() { # $1 -> 0 when it is a real YYYY-MM-DD
   # One judge for every date in the mine. There used to be exactly one place that looked at the SHAPE
