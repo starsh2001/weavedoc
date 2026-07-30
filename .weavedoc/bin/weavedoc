@@ -251,10 +251,24 @@ prob() { printf '  %s\n' "$*"; PROBLEMS=$((PROBLEMS+1)); }
 
 cmd_validate() {
   local f id v k a c d p r w mid ref ROLES
+  # What was actually examined, reported at the end next to what exists. This is the answer to a
+  # whole class of leak: a redirected `paths`, an unreadable schema, an empty `source:`, an unclosed
+  # frontmatter and a heading the reader could not find all produced ZERO checks and a tick. The
+  # counts do not decide anything — they make "did not look" stop resembling "looked and found nothing".
+  local N_TRUTH=0 N_SEALED=0 N_MAT=0 N_DOC=0 N_GATED=0 N_CONSEC=0
 
   # The checks below now READ the schema instead of paraphrasing it, which is right — but it means an
   # unreadable schema turns them OFF rather than making them fail. Silence would look exactly like a
   # pass. So the SoT is checked first: no schema, no verdict.
+  # A configured path that is not there, or mine content sitting outside it, is the same leak as an
+  # unreadable schema: the loops run zero times and the tick looks earned. FORMATS explicitly allows
+  # moving these, so a typo while moving folders silently switches both membranes off.
+  for k in materials truths documents; do
+    eval "v=\$$(echo "$k" | tr a-z A-Z)"
+    [ -d "$v" ] || prob "config paths.$k → '$v' does not exist. Every check that walks it runs zero times, which is indistinguishable from passing"
+    [ "$v" = "$ROOT/$k" ] || { [ -d "$ROOT/$k" ] && prob "config paths.$k points at '$v' but '$ROOT/$k' also exists on disk — whatever is in it is NOT being checked"; }
+  done
+
   for k in project.fm.required material.fm.required truth.fm.required truth.fm.enum.status; do
     [ -n "$(sch "$k")" ] && continue
     prob "$SCHEMA  cannot read '$k' — the format SoT is missing or unreadable, so the checks that read it would silently pass. Restore .weavedoc/schema before trusting any verdict"
@@ -469,9 +483,9 @@ cmd_validate() {
       FNR==1 {
         infm = ($0 ~ /^---[[:space:]]*$/) ? 1 : 0
         n=split(FILENAME,pp,"/")
-        if (FILENAME ~ /converted\.md$/) { ftype="m"; mid=pp[n-1]; if(!(mid in body)) body[mid]="" }
+        if (FILENAME ~ /converted\.md$/) { ftype="m"; nmatfile++; mid=pp[n-1]; if(!(mid in body)) body[mid]="" }
         else {
-          ftype="t"; tfile=FILENAME; fn=pp[n]; sub(/\.md$/,"",fn); tid=fn
+          ftype="t"; ntruthfile++; tfile=FILENAME; fn=pp[n]; sub(/\.md$/,"",fn); tid=fn
           tidfield=""; tsrc=""; ttags=""; tstatus=""; tconflict=""; tresolution=""; tprov=""
           hasid=0; hasclaim=0; hassource=0; hastags=0; hasstatus=0; gotline=0; hasderivedfrom=0
           tsuperseded=""; tderivedfrom=""; tcorrob=""
@@ -584,13 +598,21 @@ cmd_validate() {
               prob("truths/" x ".md and " disp " were BOTH retracted while in open conflict → a conflict may not be disposed of by withdrawing both sides; the machine never resolves a conflict on its own. Record the user ruling (resolution / adjudication) or re-open one side")
           }
         }
+        # Accounting, not a check. Every leak in the "silent zero" class looked identical to a pass:
+        # the seal skipped a truth whose `source:` was empty, whose body had no checkable line, or
+        # whose frontmatter never closed — and the only output was a tick. Reporting sealed-vs-present
+        # makes that difference visible without knowing in advance which way the next one will leak.
+        nsealed=0; for(_st in sealsrc) nsealed++
+        print "QCOUNTS " ntruthfile+0 " " nsealed " " nmatfile+0
         print "QFAILS " probs+0
       }
     ' "${qfiles[@]}")
 
     qn=$(printf '%s\n' "$qout" | tail -1); qn=${qn#QFAILS }
+    local qc; qc=$(printf '%s\n' "$qout" | grep '^QCOUNTS ' | tail -1)
+    if [ -n "$qc" ]; then set -- $qc; N_TRUTH=${2:-0}; N_SEALED=${3:-0}; N_MAT=${4:-0}; fi
     if [ "${qn:-0}" -gt 0 ]; then
-      printf '%s\n' "$qout" | sed '$d'
+      printf '%s\n' "$qout" | grep -v '^QCOUNTS ' | sed '$d'
       PROBLEMS=$((PROBLEMS + qn))
     fi
 
@@ -747,13 +769,25 @@ cmd_validate() {
     #      record is the strongest possible signal that the gate did not run.
     #   3. Heading level — read through fid_body, which takes either level, for the same reason
     #      hq_body does: the section is documented without a level and both are in use.
+    N_DOC=$((N_DOC+1))
     local consecrated=""
     [ -f "$DOCUMENTS/$d/final.md" ] && consecrated="final.md"
     [ -d "$DOCUMENTS/$d/final" ]    && consecrated="final/"
     if [ -n "$consecrated" ]; then
+      N_CONSEC=$((N_CONSEC+1))
       if [ ! -f "$DOCUMENTS/$d/review.md" ]; then
         prob "$d has $consecrated but no review.md — the fidelity gate has no record of ever running on it. Run review before consecrating"
+      elif [ "$(dup_section "$DOCUMENTS/$d/review.md" "Fidelity violations" 0)" -eq 0 ]; then
+        #   4. A heading the reader cannot find. `fid_body` returns nothing both when the section is
+        #      EMPTY (the good case) and when the title does not match what it looks for — and the
+        #      gate read the second as the first. Seven shapes did it: a `(2건)` suffix, a trailing
+        #      colon, a `1.` prefix (the shipped review.md template numbers the four sections in its
+        #      own comment), different capitalisation, a bilingual title, a NBSP at the end, an
+        #      indented heading. Absence of a readable heading is now the same failure as absence of
+        #      the file, for the same reason: it is the gate saying nothing, not the gate passing.
+        prob "$d has $consecrated but no 'Fidelity violations' heading the gate can read in review.md — the section title must match exactly (any heading level, no suffix, no numbering, no trailing space). A title the reader cannot find is silence, not a pass"
       else
+        N_GATED=$((N_GATED+1))
         while IFS= read -r line; do
           is_noise "$line" && continue
           prob "$d has $consecrated but review.md 'Fidelity violations' is non-empty → consecrated through an open gate"
@@ -796,6 +830,11 @@ cmd_validate() {
   v=$(cfgval detection);    [ -z "$v" ] || pipes "$(sch config.enum.detection)"    | grep -qx "$v" || prob "config conflicts.detection '$v' invalid"
   v=$(cfgval attribution);  [ -z "$v" ] || pipes "$(sch config.enum.attribution)"  | grep -qx "$v" || prob "config conflicts.attribution '$v' invalid"
 
+  # Printed on both outcomes and before the verdict, so the verdict is never read without it.
+  local sealnote="" gatenote=""
+  [ "$N_SEALED" -lt "$N_TRUTH" ] && sealnote=" ← $((N_TRUTH - N_SEALED)) NOT sealed"
+  [ "$N_GATED" -lt "$N_CONSEC" ] && gatenote=" ← $((N_CONSEC - N_GATED)) NOT gate-checked"
+  echo "  examined: materials $N_MAT · truths $N_TRUTH ($N_SEALED sealed$sealnote) · documents $N_DOC ($N_CONSEC consecrated, $N_GATED gate-checked$gatenote)"
   if [ "$PROBLEMS" -eq 0 ]; then echo "✓ validate: all checks passed"; return 0
   else echo "✗ validate: $PROBLEMS problem(s)"; return 1; fi
 }
