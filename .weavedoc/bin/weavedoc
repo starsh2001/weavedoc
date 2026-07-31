@@ -77,6 +77,25 @@ CATALOG="$ROOT/catalog.md"
 # ---- schema + generic markdown helpers ----
 sch()   { grep -E "^$1:" "$SCHEMA" 2>/dev/null | head -1 | sed -E "s/^$1:[[:space:]]*//"; }
 pipes() { echo "$1" | tr '|' '\n'; }
+is_placeholder() { # $1=value -> 0 when it is an untouched template placeholder
+  # Ruled 2026-07-31: an unfilled placeholder is not a value. `validate` used to accept
+  # `tone: {the project tone, copied here, unless this document overrides it — required, never
+  # blank}` as present-and-non-empty, and `write` then read that instruction sentence AS the
+  # document's tone. review.md entries have had an untouched-template rule from the start
+  # (`is_noise`); frontmatter fields had none. Pattern lives in the schema so there is one spelling.
+  [ -n "$1" ] || return 1
+  printf '%s\n' "$1" | grep -qE "$(sch fm.placeholder)"
+}
+req_value() { # $1=file $2=key $3=label-for-message -> 0 when the field holds a real value
+  local rv; rv=$(fm "$1" "$2")
+  if [ -z "$rv" ]; then
+    prob "$1  frontmatter '$2' missing"; return 1
+  elif is_placeholder "$rv"; then
+    prob "$1  frontmatter '$2' still holds the template placeholder $rv — that is an instruction, not a value, and every consumer reads it as one (write took a placeholder tone as the document's tone). Replace it with the real value; if the value genuinely belongs in braces, put any character outside them"
+    return 1
+  fi
+  return 0
+}
 has_fm() { # $1=file -> 0 when line 1 opens a frontmatter block
   # One spelling of the opening fence, in one place. Every reader that looks INSIDE frontmatter
   # (fm, the truths awk, coverage, retag, reindex, census) matches `^---[[:space:]]*$`; the two
@@ -450,7 +469,7 @@ cmd_validate() {
   # --- project.md ---
   if [ -f "$PROJECT" ]; then
     for k in $(pipes "$(sch project.fm.required)"); do
-      [ -n "$(fm "$PROJECT" "$k")" ] || prob "$PROJECT  frontmatter '$k' missing"
+      req_value "$PROJECT" "$k" || true
     done
     ROLES=$(listfield "$(fm "$PROJECT" roles)")
     for a in $(listfield "$(fm "$PROJECT" authority)"); do
@@ -471,8 +490,8 @@ cmd_validate() {
     # precisely the confusion the accounting exists to end, pointed the other way.
     N_MAT=$((N_MAT+1))
     for k in $(pipes "$(sch material.fm.required)"); do
+      req_value "$f" "$k" || continue
       v=$(fm "$f" "$k")
-      [ -n "$v" ] || { prob "$f  frontmatter '$k' missing"; continue; }
       case "$k" in added) is_date "$v" || prob "$f  added '$v' is not a date (YYYY-MM-DD, zero-padded, real month and day) — a field the format calls a date and nobody reads as one is a field that can say anything" ;; esac
     done
     # The same leak the truth side has a dedicated check for, one door over — and silent here in a
@@ -566,7 +585,7 @@ cmd_validate() {
     # required-key list used to be hardcoded here, which made FORMATS.md line 5 ("if the two ever
     # differ, schema wins — edit it first") false for the one artifact type that matters most: a user
     # who edited the schema got no change in behaviour and no warning either.
-    qout=$(WD_REQTAGS="$reqtags" awk -v matids="$matlist" -v retids="$retlist" -v mroot="$MATERIALS" -v remids="$remlist" -v resids="$reslist" -v Q="'"       -v treq="$(sch truth.fm.required | tr '|' ' ')"       -v tstenum="$(sch truth.fm.enum.status | tr '|' ' ')"       -v tprenum="$(sch truth.fm.enum.provenance | tr '|' ' ')"       -v rtypes="$(sch truth.fm.resolution.type | tr '|' ' ')"       -v rkinds="$(sch truth.fm.resolution.decision_kind | tr '|' ' ')"       -v rby="$(sch truth.fm.resolution.decided_by | tr '|' ' ')" '
+    qout=$(WD_REQTAGS="$reqtags" awk -v matids="$matlist" -v retids="$retlist" -v mroot="$MATERIALS" -v remids="$remlist" -v resids="$reslist" -v Q="'"       -v treq="$(sch truth.fm.required | tr '|' ' ')"       -v tstenum="$(sch truth.fm.enum.status | tr '|' ' ')"       -v tprenum="$(sch truth.fm.enum.provenance | tr '|' ' ')"       -v rtypes="$(sch truth.fm.resolution.type | tr '|' ' ')"       -v rkinds="$(sch truth.fm.resolution.decision_kind | tr '|' ' ')"       -v rby="$(sch truth.fm.resolution.decided_by | tr '|' ' ')"       -v ph="$(sch fm.placeholder)" '
       function val(   s){ s=$0; sub(/^[^:]*:[[:space:]]*/,"",s); if(s !~ /^"/){ sub(/[[:space:]]+#.*$/,"",s); if(s ~ /^#/) s="" } sub(/[[:space:]]*$/,"",s); sub(/^"/,"",s); sub(/"$/,"",s); return s }
       function q(s){ return Q s Q }
       # Whitespace-collapsed, because the block seal must not fail on spacing. [[:space:]] covers the
@@ -589,6 +608,9 @@ cmd_validate() {
         for(rk in reqkey){
           if(!((tfile SUBSEP rk) in kcount)) prob(tfile "  frontmatter " q(rk) " missing")
           else if(kval[tfile,rk]=="") prob(tfile "  frontmatter " q(rk) " is empty — a key with no value is not a value, and for " q("source") " it silently switches the quote seal off")
+          # Same rule as the shell-side req_value, same pattern — read from the schema, not
+          # rewritten here. An unfilled placeholder is an instruction, not a value.
+          else if(ph!="" && kval[tfile,rk] ~ ph) prob(tfile "  frontmatter " q(rk) " still holds the template placeholder " kval[tfile,rk] " — that is an instruction, not a value. Replace it with the real value; if the value genuinely belongs in braces, put any character outside them")
         }
         if(hassource && tsrc!="" && !(tsrc in mat)) prob(tfile "  source " q(tsrc) " → no material folder")
         v=tstatus
@@ -1083,7 +1105,7 @@ cmd_validate() {
     p="$DOCUMENTS/$d/plan.md"
     if [ -f "$p" ]; then
       for k in $(pipes "$(sch plan.fm.required)"); do
-        [ -n "$(fm "$p" "$k")" ] || prob "$p  frontmatter '$k' missing"
+        req_value "$p" "$k" || true
       done
       v=$(fm "$p" status); pipes "$(sch plan.fm.enum.status)" | grep -qx "$v" || prob "$p  status '$v' invalid"
       [ "$(fm "$p" doc_id)" = "$d" ] || prob "$p  doc_id '$(fm "$p" doc_id)' != folder '$d'"
@@ -1207,6 +1229,14 @@ cmd_validate() {
         # near-miss guidance calls "someone trying to write a violation" (`#1 [contradiction]`,
         # `[Contradiction ]`) are exactly as gone when swallowed as a well-formed entry is, and a
         # tripwire that counted only the well-formed ones stayed silent about them.
+        #
+        # JURISDICTION, ruled 2026-07-31: this tripwire covers swallowed content that BEARS A KIND,
+        # not every mid-line closer. A comment that swallows only prose and is closed mid-line stays
+        # silent, deliberately — the gate's warranty is over fidelity violations, and a lost memo
+        # breaks no warranty. Widening it to every mid-line closer would make each `-->` inside an
+        # archived note an error, and that noise would dilute the one signal this check exists for.
+        # "Comment interiors are invisible by design" therefore still holds everywhere except here,
+        # and here it is bounded by kind-bearing content rather than by the closer's shape alone.
         vcnt=0
         while IFS= read -r vline; do
           vtag=${vline%%$'\t'*}; vrest=${vline#*$'\t'}
@@ -1560,8 +1590,14 @@ cmd_census() {
   # Always show the raw total too. `16/26` and `16/16 (+10 legacy-exempt)` describe the SAME mine,
   # and without the "of N" a reader comparing an old report to a new one reads progress that
   # never happened.
-  local covline="coverage $n_cov/$n_denom material(s)"
-  [ "$n_legacy" -gt 0 ] && covline="coverage $n_cov/$n_denom of $n_mats material(s) ($n_legacy legacy-exempt)"
+  # Ruled 2026-07-31: this number is a LEDGER COUNT, not a completeness warranty. It says how many
+  # materials hold at least one line in truths/coverage.md (map's audit record) — one recorded
+  # element out of fifty still counts the material. Whether extraction is COMPLETE is a different
+  # axis, owned by the gaps skill (enumeration/symmetry) and the truths verify lane; duplicating
+  # that judgement here would put two judges on one question, which is the shape both cold rounds
+  # kept catching. The label says `records` so the ratio cannot be read as the warranty.
+  local covline="coverage records $n_cov/$n_denom material(s)"
+  [ "$n_legacy" -gt 0 ] && covline="coverage records $n_cov/$n_denom of $n_mats material(s) ($n_legacy legacy-exempt)"
   local retline=""; [ "$n_retr" -gt 0 ] && retline=" · retracted $n_retr"
   echo "census: truth files $n_files · index entries $n_index · live $n_live (ok $n_ok · conflict $n_conf · unsupported $n_unsup) · discarded $n_res$retline · $covline"
   [ -n "$unexplained" ] && echo "  numbering holes (ids never assigned or files lost — confirm which):$unexplained"

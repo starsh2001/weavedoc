@@ -6,6 +6,13 @@
 # bin/weavedoc via `sch <key>`. If you add a key, wire it or say here that it is descriptive —
 # a declared-but-unread key looks exactly like an enforced one, and `repeat` sat unwired that way.
 
+# An UNTOUCHED template placeholder: a required value that is nothing but one brace group, the
+# shape every shipped template writes (`tone: {the project tone, copied here, …}`). Read by the
+# required-field checks for project/material/truth/plan so the rule has ONE spelling. Deliberately
+# narrow: only a value that is entirely `{…}`. A value that merely CONTAINS braces is real content
+# (a claim quoting a config fragment), and a list of placeholders (`tags: [{tag1}, {tag2}]`) opens
+# with `[`, so neither is touched. Escape: put any character outside the braces.
+fm.placeholder: ^[{][^{}]*[}]$
 material.fm.required: id|title|origin|role|topics|format|source_path|added|status|summary
 material.fm.optional: stage|corrects|url|retrieved_at
 material.fm.enum.origin: file|user-answer|prior-doc|conversation|research

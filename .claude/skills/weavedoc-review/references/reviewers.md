@@ -40,6 +40,16 @@ One finding per line:
 
 A finding with no named consequence ("this seems unclear", "what about edge X?") is a **non-finding** — drop it. If a lens finds nothing, it returns `none` with a one-line note on what it checked.
 
+### The verdict line is the contract (ruled 2026-07-31)
+
+When a check that was supposed to run **did not run**, and the tool still prints its clean verdict (`✓`, exit 0), that is **`critical`** — regardless of how honest the accounting beside it was. Two cold rounds graded the same shape differently (one `high` because the accounting line said `← N NOT checked`, one `critical` because a purpose-built alarm had been switched off), so the rule is fixed here rather than re-argued each round:
+
+- **What a consumer acts on is the verdict line and the exit code.** Scripts read the exit code; a tired human reads the tick. An accounting line is *information*, not a warranty — it does not downgrade a green verdict over a membrane that never ran.
+- A silently-skipped **membrane** (the quote seal, the fidelity gate) is the strict case: green verdict + membrane not run = `critical`, full stop.
+- The honest accounting still matters — it is what makes the defect *findable*. It just doesn't change the grade.
+
+This cuts both ways: a check that ran and reported accurately is not critical merely because its message was unclear (that is `should-fix`).
+
 ### Examples
 
 #### verify (material)
