@@ -259,25 +259,50 @@ gate_entry() { # $1=line $2=kind-list(space-separated) -> 0 when this is a viola
   # vanished outside it — the bundle contradicting itself, which is what a file-wide census exists
   # to prevent. So the test is now: everything before the bracket must be list/quote scaffolding.
   #
+  # Scaffolding also covers the INLINE MARKUP a writer puts around the kind: `- **[contradiction]**`
+  # and `` - `[contradiction]` `` render as an ordinary entry with the kind emphasised, and a
+  # markdown TASK CHECKBOX (`- [ ] [contradiction] …`) renders as a checklist of violations. All
+  # three were is_noise entries that the census could not see, so the gate contradicted itself on
+  # them exactly as it did on the four shapes above.
+  #
   # LIMIT, stated: words before the bracket still do not count, and that is not a shape we can
   # decide. `- 3장 [contradiction] …` (an entry someone labelled) and `- fixed: [contradiction] …`
   # (a record of one already closed) are the same string shape; counting the first would false-fail
-  # the second, which is a document a competent user writes. Inside the violations section the gate
-  # still treats both as open violations — the ambiguity is a property of being OUTSIDE it.
-  local s k pre rest nbsp
+  # the second, which is a document a competent user writes. **A label in BRACKETS is the same
+  # case** — `- [3장] [contradiction] …` is that limit's bracketed twin, and judging the two
+  # differently would make the limit contradict itself. Inside the violations section the gate
+  # still treats all of them as open violations — the ambiguity is a property of being OUTSIDE it.
+  local s k pre rest rest2 nbsp
   is_noise "$1" && return 1
   pre=$(printf '%s' "$1" | sed 's/\[.*$//')
   nbsp=$(printf '\302\240'); pre=${pre//$nbsp/ }
   # `%s\n`, not `%s`: a bulletless entry leaves an EMPTY prefix, and printf without the newline
   # hands grep zero lines, which never matches — the shape is_noise most wants counted would be
   # the one shape dropped.
-  printf '%s\n' "$pre" | grep -qE '^[[:space:]>]*([-*+]|[0-9]{1,3}[.)])?[[:space:]]*$' || return 1
+  # The `[*_`]*` run is emphasis/inline-code markup only. It must NOT be widened to "any
+  # non-word run": loosening this test flips `- 3장 [contradiction]` and `- fixed: [contradiction]`
+  # to counted, and those two are the stated limit above.
+  printf '%s\n' "$pre" | grep -qE '^[[:space:]>]*([-*+]|[0-9]{1,3}[.)])?[[:space:]]*[*_`]*[[:space:]]*$' || return 1
   # The slot ends at `]` — or, when that was never typed, at the first space. A kind is one token
   # (`contradiction`, `unsupported`, `missing-required`), so an unclosed bracket still has a
   # readable slot; taking the rest of the LINE instead would let any bracketed prose that happens
   # to say "contradiction" somewhere count.
   rest=$(printf '%s' "$1" | sed -E 's/^[^[]*\[//')
   case "$rest" in *']'*) s=${rest%%]*} ;; *) s=${rest%%[[:space:]]*} ;; esac
+  # A task checkbox is not a slot — advance exactly ONE bracket past it. Only the checkbox
+  # vocabulary (empty, spaces, x, X) advances: reading the LAST bracket instead, or advancing on
+  # any non-kind slot, annexes the other two ledgers this function's kind filter exists to keep
+  # out — `- [critical] … [contradiction] …` (Findings) and `- [open] [recommended] … contradiction`
+  # (Human queue) would both count as parked violations and block the gate on a review file that
+  # is doing exactly what it is supposed to.
+  case "$(printf '%s' "$s" | tr -d '[:space:]')" in
+    ""|x|X)
+      rest2=$(printf '%s' "$rest" | sed -E 's/^[^[]*\[//')
+      if [ "$rest2" != "$rest" ]; then
+        rest=$rest2
+        case "$rest" in *']'*) s=${rest%%]*} ;; *) s=${rest%%[[:space:]]*} ;; esac
+      fi ;;
+  esac
   s=$(printf '%s' "$s" | sed -E 's/^[<{]//; s/[>}]$//; s/^[[:space:]]+//; s/[[:space:]]+$//' | tr '[:upper:]' '[:lower:]')
   [ -n "$s" ] || return 1
   for k in $2; do case "$s" in *"$k"*) return 0 ;; esac; done
@@ -555,22 +580,26 @@ cmd_validate() {
   # frontmatter required fields, id==filename, source→material, status enum, conflict_with/
   # resolution consistency, quote existence (anti-laundering), and required_tags coverage.
   # Glob is t[0-9]*.md so generated tree.md/index.md are never mistaken for truths.
+  # Computed OUTSIDE the truth-file guard below. The material lists and the required-tag roster
+  # describe the mine, not the truths, and the checks that need them must still run when the
+  # truths are gone — that state (files 0, index and coverage still naming them) is precisely what
+  # those checks exist to catch, and it used to switch them all off under a clean tick.
+  local matlist="" retlist="" reslist="" reqtags qout qn f d
+  for d in "$MATERIALS"/*/; do [ -d "$d" ] && matlist="$matlist $(basename "$d")"; done
+  for d in "$MATERIALS"/*/; do
+    [ -f "$d/converted.md" ] || continue
+    [ "$(fm "$d/converted.md" status)" = "retracted" ] && retlist="$retlist $(basename "$d")"
+    [ "$(fm "$d/converted.md" origin)" = "research" ] && reslist="$reslist $(basename "$d")"
+  done
+  reqtags=$(listfield "$(fm "$PROJECT" required_tags)")
   if [ -d "$TRUTHS" ] && ls "$TRUTHS"/t[0-9]*.md >/dev/null 2>&1; then
-    local matlist="" retlist="" reslist="" reqtags qout qn f d
-    for d in "$MATERIALS"/*/; do [ -d "$d" ] && matlist="$matlist $(basename "$d")"; done
-    for d in "$MATERIALS"/*/; do
-      [ -f "$d/converted.md" ] || continue
-      [ "$(fm "$d/converted.md" status)" = "retracted" ] && retlist="$retlist $(basename "$d")"
-      [ "$(fm "$d/converted.md" origin)" = "research" ] && reslist="$reslist $(basename "$d")"
-    done
-    # One tag per line, carried in ENVIRON. Space-joining it and splitting on space is what made a
-    # two-word tag impossible: `required_tags: [계약 범위]` became the two tags 계약 and 범위, both
-    # reported as having no truths, while the real tag was never checked at all — and FORMATS calls a
-    # required_tag with no truths a missing-required fidelity violation, so the mine carried two
-    # unclosable violations and lost the one check it asked for. Truth tags have always been split on
-    # the comma (see seentag below); this now matches. ENVIRON and not -v, for the usual reason.
-    reqtags=$(listfield "$(fm "$PROJECT" required_tags)")
-
+    # `reqtags` is set above, outside this guard. One tag per line, carried in ENVIRON.
+    # Space-joining it and splitting on space is what made a two-word tag impossible:
+    # `required_tags: [계약 범위]` became the two tags 계약 and 범위, both reported as having no
+    # truths, while the real tag was never checked at all — and FORMATS calls a required_tag with
+    # no truths a missing-required fidelity violation, so the mine carried two unclosable
+    # violations and lost the one check it asked for. Truth tags have always been split on the
+    # comma (see seentag below); this now matches. ENVIRON and not -v, for the usual reason.
     local -a qfiles=()
     for f in "$MATERIALS"/*/converted.md; do [ -f "$f" ] && qfiles+=("$f"); done
     for f in "$TRUTHS"/t[0-9]*.md; do [ -f "$f" ] && qfiles+=("$f"); done
@@ -764,6 +793,13 @@ cmd_validate() {
         # different ways by three commands — fm() takes the FIRST match, this awk and reindex take
         # the LAST, and census counts BOTH — so the same field yields three different answers and
         # nothing said a word. census could report a status tally larger than its own file count.
+        # A list-shaped value whose bracket never closes. Every reader takes the value up to `]`,
+        # so an unclosed one silently reads as empty or as the rest of the line depending on which
+        # reader looks — and `retag`, the only writer, cannot rewrite it at all. Named here so the
+        # user has a repair path instead of a file that quietly means different things to
+        # different checks.
+        if($0 ~ /^[a-z_]+[[:space:]]*:[[:space:]]*\[/ && $0 !~ /\]/)
+          prob(FILENAME "  frontmatter " q(substr($0,1,index($0,":")-1)) " opens a list with '[' that never closes on this line — readers disagree about where the value ends, and 'retag' cannot rewrite it. Close the bracket")
         if($0 ~ /^[a-z_]+[[:space:]]*:/){ kk=$0; sub(/[[:space:]]*:.*$/,"",kk); kcount[FILENAME,kk]++; kval[FILENAME,kk]=val() }
         # Every field pattern below is `^key[[:space:]]*:` — the SAME shape the key census one line
         # up uses, and the same shape fm() uses. They used to read `^key:[[:space:]]`, which demands
@@ -992,7 +1028,24 @@ cmd_validate() {
       nofm="$nofm $(basename "$tf" .md)"
       prob "$tf  no frontmatter (line 1 must be '---') — this file is not read as a truth at all, so every check on it silently passes and no index entry can ever be generated for it"
     done
+  fi
 
+  # --- ledgers ABOUT the truths, checked whether or not any truth file exists ---
+  # These three were inside the guard above, so deleting the last truth file switched all of them
+  # off and validate printed a clean tick while index.md and coverage.md still named the deleted
+  # truth and a declared required_tag had nothing to cover it. "No truths" is not "nothing to
+  # check" — it is the strongest thing these checks have to say. The big awk stays guarded (with
+  # no truth files there is genuinely nothing to seal); only the ledger cross-checks moved out.
+  if [ -d "$TRUTHS" ]; then
+    # With zero truth files a declared required_tag is unmet by definition. The awk's own version
+    # of this check lives in its END block and cannot run when the awk does not.
+    if ! ls "$TRUTHS"/t[0-9]*.md >/dev/null 2>&1; then
+      while IFS= read -r rq; do
+        [ -n "$rq" ] && prob "required_tag '$rq' has no live truths — the mine holds no truth files at all; extract it from a material, or remove the tag from project.md required_tags"
+      done <<EOF
+$reqtags
+EOF
+    fi
     # generated index files must exist if truths exist — and index must be in sync (ids both ways)
     [ -f "$TRUTHS/index.md" ] || prob "truths/index.md missing (run 'weavedoc reindex')"
     [ -f "$TRUTHS/tree.md" ]  || prob "truths/tree.md missing (run 'weavedoc reindex')"
@@ -1018,12 +1071,18 @@ cmd_validate() {
     # adding a truth without updating coverage fails. Materials without a section are legal
     # (legacy — coverage arrives on their next map); census reports the coverage count.
     if [ -f "$TRUTHS/coverage.md" ]; then
-      local tsrcpairs cout cn
+      local tsrcpairs="" cout cn
+      # The glob is only handed to awk when it matches something. With zero truth files the
+      # unexpanded pattern reached awk as a literal filename and it died with a fatal error mid-run
+      # — which is exactly the state this cross-check now has to survive, because "coverage.md
+      # names truths that no longer exist" is the finding.
+      if ls "$TRUTHS"/t[0-9]*.md >/dev/null 2>&1; then
       tsrcpairs=$(awk '
         FNR==1 { n=split(FILENAME,pp,"/"); fn=pp[n]; sub(/\.md$/,"",fn); tid=fn; infm=($0 ~ /^---[[:space:]]*$/); next }
         infm && /^---[[:space:]]*$/ { infm=0; nextfile }
         infm && /^source[[:space:]]*:/ { s=$0; sub(/^source[[:space:]]*:[[:space:]]*/,"",s); if(s !~ /^"/) sub(/[[:space:]]+#.*$/,"",s); sub(/[[:space:]]*$/,"",s); sub(/^"/,"",s); sub(/"$/,"",s);  printf "%s:%s ", tid, s; nextfile }
       ' "$TRUTHS"/t[0-9]*.md)
+      fi
       cout=$(awk -v matids="$matlist" -v pairs="$tsrcpairs" -v Q="'" '
         function q(s){ return Q s Q }
         function prob(m){ print "  " m; probs++ }
@@ -1486,7 +1545,20 @@ cmd_locale() { # short OS language code (ko, en, ja…) or nothing (init then as
 # Only t<digits>.md are truths; index.md/tree.md/verify.md/changelog.md are never counted.
 cmd_census() {
   local n_files n_index stat_out holes
-  if ! ls "$TRUTHS"/t[0-9]*.md >/dev/null 2>&1; then echo "census: no truths yet"; return 0; fi
+  # "No truth files" is not "nothing to report". The set cross-check below has an arm written for
+  # exactly this state (files 0, index entries N) that this early return made unreachable, so a
+  # mine whose truths were deleted while index.md still listed them read as a fresh empty mine.
+  if ! ls "$TRUTHS"/t[0-9]*.md >/dev/null 2>&1; then
+    local nidx0
+    nidx0=$(grep -cE '^- t[0-9]+:' "$TRUTHS/index.md" 2>/dev/null || true); nidx0=${nidx0:-0}
+    if [ "$nidx0" -gt 0 ]; then
+      echo "census: truth files 0 · index entries $nidx0"
+      echo "  ✗ index entries with no truth file: $(grep -oE '^- t[0-9]+:' "$TRUTHS/index.md" 2>/dev/null | sed -E 's/^- (t[0-9]+):/\1/' | LC_ALL=C sort -u | tr '\n' ' ' | sed 's/ $//') — the truth files are gone while the index still lists them; run 'weavedoc validate' for the full picture"
+    else
+      echo "census: no truths yet"
+    fi
+    return 0
+  fi
   n_files=$(ls "$TRUTHS"/t[0-9]*.md 2>/dev/null | grep -c .)
   n_index=$(grep -cE '^- t[0-9]+:' "$TRUTHS/index.md" 2>/dev/null || true); n_index=${n_index:-0}
   stat_out=$(awk '
@@ -1521,7 +1593,7 @@ cmd_census() {
     hn=$(printf '%s' "$h" | sed -E 's/^t0*([0-9]+)$/t\1/')
     case "$remset" in *" $hn "*) explained="$explained $h" ;; *) unexplained="$unexplained $h" ;; esac
   done
-  local n_cov=0 n_mats=0 n_legacy=0
+  local n_cov=0 n_mats=0 n_legacy=0 n_legparsed=0
   if [ -f "$TRUTHS/coverage.md" ]; then
     # The numerator skips retracted materials for the SAME reason the denominator does. Counting
     # them here and not there is what produced `coverage 2/1` — a ratio above 1 that validate called
@@ -1535,6 +1607,13 @@ cmd_census() {
     # reasons), and a heading with no body is not a record of anything.
     # Section ids are references, so `## m5` and `## m005` are ONE material — canon first, then
     # dedup, or a lenient spelling double-counts.
+    # ONE POPULATION on both sides of the ratio. The numerator used to count any section that held
+    # a record, including sections naming a material with no `converted.md` on disk — an id the
+    # denominator does not and cannot count. The two sides then measured different sets, so the
+    # ledger read N/N while a live material held no record at all, and pushed the other way it
+    # produced a ratio above 1 whose stated causes were both false. A section for a material that
+    # is not in the denominator is a coverage.md error, and validate is loudly red about it;
+    # census's job is only to stop counting it as coverage.
     local cid cidc covseen=""
     n_cov=0
     for cid in $(nocomment < "$TRUTHS/coverage.md" | awk '
@@ -1545,6 +1624,7 @@ cmd_census() {
       cidc=$(canon_id "$cid") || cidc=$cid
       case " $covseen " in *" $cidc "*) continue ;; esac
       covseen="$covseen $cidc"
+      [ -f "$MATERIALS/$cidc/converted.md" ] || continue
       [ "$(mstatus "$cidc")" = "retracted" ] && continue
       n_cov=$((n_cov+1))
     done
@@ -1558,11 +1638,21 @@ cmd_census() {
     # A retracted material is ALREADY out of n_mats, so counting it here subtracts it twice —
     # which drove the denominator below the numerator (1/0) while validate stayed green, and the
     # warning then blamed two causes that were both false.
-    local lid
-    n_legacy=0
+    # `n_legparsed` counts bullets that PARSED; `n_legacy` counts the ones that still subtract.
+    # One number could not carry both meanings: a bullet skipped for naming a retracted material
+    # produces the same 0 as a section whose bullets are all malformed, and the guard below then
+    # told a user that a line written in the prescribed format was malformed — an ✗ they could
+    # only clear by writing what they had already written.
+    # The id is a REFERENCE, so it is canonicalised before `mstatus` looks for it. Without that,
+    # `- m3` for folder `m003` looked up a folder that cannot exist, the retracted-skip could
+    # never fire, and the denominator was subtracted twice for a material that was never in it.
+    local lid lidc
+    n_legacy=0; n_legparsed=0
     for lid in $(nocomment < "$TRUTHS/coverage.md" | section_body2 - "legacy" \
                  | sed -nE 's/^[[:space:]]*-[[:space:]]*(m[0-9]+)\b.*/\1/p' | LC_ALL=C sort -u); do
-      [ "$(mstatus "$lid")" = "retracted" ] && continue
+      n_legparsed=$((n_legparsed+1))
+      lidc=$(canon_id "$lid") || lidc=$lid
+      [ "$(mstatus "$lidc")" = "retracted" ] && continue
       n_legacy=$((n_legacy+1))
     done
   fi
@@ -1602,11 +1692,17 @@ cmd_census() {
   echo "census: truth files $n_files · index entries $n_index · live $n_live (ok $n_ok · conflict $n_conf · unsupported $n_unsup) · discarded $n_res$retline · $covline"
   [ -n "$unexplained" ] && echo "  numbering holes (ids never assigned or files lost — confirm which):$unexplained"
   [ -n "$explained" ] && echo "  numbering holes, explained by changelog 'removed:':$explained"
-  [ "$n_cov" -gt "$n_denom" ] && echo "  ✗ coverage numerator exceeds denominator ($n_cov/$n_denom) — a '## m<id>' section names a material that no longer exists under materials/, or a '## legacy' entry names one that also has its own section"
-  # Only complain when the section HAS bullets that failed to parse. An empty `## legacy` is the
-  # normal state of a project with nothing exempt, and the old check made that permanently ✗ with
-  # no way to clear it short of inventing an exemption.
-  if [ -f "$TRUTHS/coverage.md" ] && [ "$n_legacy" -eq 0 ] \
+  # Both sides now count the same population, so the only way left to exceed the denominator is a
+  # `## legacy` entry that also has its own `## m<id>` section — the old message's second cause.
+  # Its first cause (a section naming a material that no longer exists) can no longer produce this
+  # state: such a section is not counted at all. Naming a cause that cannot be true is what sent
+  # two readers hunting for a nonexistent problem.
+  [ "$n_cov" -gt "$n_denom" ] && echo "  ✗ coverage numerator exceeds denominator ($n_cov/$n_denom) — a '## legacy' entry names a material that also has its own '## m<id>' section, so it is subtracted from the denominator while still counted in the numerator; drop the legacy exemption (it is covered, not exempt)"
+  # Complain only when bullets were present and NONE of them parsed. `n_legacy` cannot answer that
+  # — it is also 0 when every bullet parsed and then named a retracted material, and reporting
+  # that state told the user a correctly formatted line was malformed, with the only prescription
+  # being to write it the way it already was. `n_legparsed` is the count that means "parsed".
+  if [ -f "$TRUTHS/coverage.md" ] && [ "$n_legparsed" -eq 0 ] \
      && grep -qiE '^##[[:space:]]+legacy' "$TRUTHS/coverage.md" \
      && [ "$(nocomment < "$TRUTHS/coverage.md" | section_body2 - "legacy" | countlines '^[[:space:]]*- ')" -gt 0 ]; then
     echo "  ✗ truths/coverage.md '## legacy' has bullets, but none begins with an m-id — no exemption was applied (format: '- m001 — <ruling>')"
@@ -1803,15 +1899,23 @@ cmd_retag() {
       # Everything after the closing bracket rides along unchanged — a trailing YAML comment is a
       # comment, not part of the value, and the rewrite used to silently delete it (the user
       # annotation `tags: [위약]  # 3월 회의에서 정한 분류` lost its note on a one-word retag).
-      tail=$0; sub(/^[^]]*\]/,"",tail)
-      n=split(inner,el,","); out=""; hit=0; delete seen
-      for(i=1;i<=n;i++){ e=strip(el[i]); if(e=="") continue
-        if(e==old){ e=new; hit=1 }
-        if(!(e in seen)){ seen[e]=1; out=(out=="") ? e : out ", " e } }
-      if(hit){
-        if(mode=="s" && !(FILENAME in pf)){ pf[FILENAME]=1; print FILENAME }
-        if(mode=="c") chg++
-        if(mode=="w") $0=key ": [" out "]" tail
+      # The RETURN VALUE of that sub matters: with no closing `]` it strips nothing, `tail` stays
+      # the whole original line, and appending it produced `tags: [벌칙]tags: [위약` — the only
+      # writer in this tool corrupting a file while reporting success. An unclosed list is not
+      # something to guess at, so the line is left EXACTLY as it was (falling through to the
+      # print rule below — skipping it here would delete the line, which is worse). `validate`
+      # names the unclosed bracket; that is the repair path.
+      tail=$0; closed=sub(/^[^]]*\]/,"",tail)
+      if(closed){
+        n=split(inner,el,","); out=""; hit=0; delete seen
+        for(i=1;i<=n;i++){ e=strip(el[i]); if(e=="") continue
+          if(e==old){ e=new; hit=1 }
+          if(!(e in seen)){ seen[e]=1; out=(out=="") ? e : out ", " e } }
+        if(hit){
+          if(mode=="s" && !(FILENAME in pf)){ pf[FILENAME]=1; print FILENAME }
+          if(mode=="c") chg++
+          if(mode=="w") $0=key ": [" out "]" tail
+        }
       }
     }
     mode=="w" { print }
@@ -1970,7 +2074,11 @@ cmd_pull() {
         # is legacy-only too (winners now stay ok) — still rendered usable so a mid-migration
         # mine reads correctly.
         w=$(printf '%s' "$res" | grep -oE 'winner[[:space:]]*:[[:space:]]*(\[[^]]*\]|[^,}]+)' | sed -E 's/winner[[:space:]]*:[[:space:]]*//')
-        sc=$(printf '%s' "$res" | grep -oE 'scope:[[:space:]]*\[[^]]*\]' | sed -E 's/scope:[[:space:]]*//')
+        # The EIGHTH site of the same key-spelling rule. `.7` unified the frontmatter readers and
+        # `.9` the other seven keys inside this flow object; `scope` was the one left behind, and
+        # with `scope : [금액]` it silently vanished — so a reader following READ.md was told a
+        # PARTIAL supersede was a total one, which is the opposite fact.
+        sc=$(printf '%s' "$res" | grep -oE 'scope[[:space:]]*:[[:space:]]*\[[^]]*\]' | sed -E 's/scope[[:space:]]*:[[:space:]]*//')
         if [ -n "$w" ] && printf '%s' "$w" | grep -qE "(^|[^0-9A-Za-z])${id}([^0-9]|$)"; then
           printf '%s  [WON ITS CONFLICT — usable; legacy stamp, set status: ok] %s [%s]%s\n' "$id" "$cl" "$src" "$lab"
           [ -n "$bd1" ] && printf '      ↳ sealed: %s\n' "$bd1"
