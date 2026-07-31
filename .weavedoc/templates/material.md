@@ -1,5 +1,5 @@
 ---
-id: {m<N>}
+id: {m<NNN>}   # zero-padded to at least 3 digits: m001, m042, m1000
 title: {human-readable name}
 origin: {file|user-answer|prior-doc|conversation|research}
 role: {one of project.md roles}

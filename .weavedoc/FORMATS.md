@@ -22,7 +22,7 @@ Body: free description of the project's character and intent (project language).
 
 ## materials/&lt;id&gt;/converted.md
 Frontmatter:
-- `id` — `m<N>`, stable, equals the folder name. Never encodes role/topic.
+- `id` — `m<NNN>`, stable, equals the folder name. Never encodes role/topic. **Zero-padded to at least three digits** (`m001`, `m042`, `m1000`): one number has exactly one spelling, because `m5` and `m005` resolve to the same id and a mine holding both makes every reference to it ambiguous. `validate` rejects any other spelling.
 - `title` — human-readable name (project language); shown in citations.
 - `origin` — enum: `file` | `user-answer` | `prior-doc` | `conversation` | `research`. Mechanical provenance — **where the material came from**, the acquisition-level counterpart to a truth's `provenance` (who authored the value).
   - `research` — **the machine went and got it** (web search, a fetched table, an external dataset). No human stood between the world and the record, so the material must stay re-reachable: `url` and `retrieved_at` are **required** (`validate` enforces), `source.md` holds the fetched values *as fetched* — raw units and timezone, before any conversion — and every derived figure in the body traces to one of them. A real run filed searched astronomical data as `user-answer` because no other origin fit; the whole age table then rested on values a cold reviewer could only re-check by searching again. Verified at `full`, always.
@@ -49,7 +49,7 @@ A table indexing all materials, columns: `id`, `title`, `role`, `origin`, `statu
 Each truth is an atomic, citable fact extracted from a material. One file per truth, flat in `truths/`. The `map` skill creates these; the AI re-derives inter-truth relationships (supports, contradicts, supersedes) on the fly by reading relevant truths — no persistent edge store.
 
 Frontmatter:
-- `id` — `t<N>`, stable, auto-incremented. Equals the filename (without `.md`).
+- `id` — `t<NNN>`, stable, auto-incremented. Equals the filename (without `.md`). **Zero-padded to at least three digits** (`t001`, `t042`, `t1000`) — one number, one spelling. Two spellings of one number (`t5.md` and `t005.md`) collapse into a single entry in the reciprocity, winner and retracted tables, so a check reads one file while reporting the other; `validate` rejects a non-canonical filename. References *to* an id stay lenient — `conflict_with: [t5]` resolves to `t005.md` — precisely because the filename rule leaves only one file it can mean.
 - `claim` — one-sentence statement of the fact (project language).
 - `source` — material id this truth was extracted from (e.g. `m001`).
 - `location` — where in the source (e.g. `§4, 1문단`). Project language.

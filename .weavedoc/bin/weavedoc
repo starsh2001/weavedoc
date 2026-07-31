@@ -206,6 +206,27 @@ is_noise() { # blank / comment / untouched template entry
   case "$s" in "- ["["{<"]*) return 0 ;; esac
   return 1
 }
+gate_entry() { # $1=line $2=kind-list(space-separated) -> 0 when this is a violation entry the census counts
+  # The census's countable unit, built ON TOP of is_noise rather than beside it. The census used to
+  # carry its own regex (`- \[` exactly), and the two judges disagreed: is_noise counts a bracketed
+  # line as an entry whatever the bullet looks like, so `* [contradiction]`, a two-space bullet, a
+  # tab, or no bullet at all rendered exactly like the real thing and slipped a floor whose comment
+  # claimed to be shape-independent. Now is_noise IS the judge, plus the two scope filters a
+  # file-wide count needs so it cannot annex the other ledgers:
+  #   kind-bearing — the first bracket slot must carry a real kind, else Findings (`- [critical]`)
+  #     and Human-queue (`- [open]`) entries would count as parked violations;
+  #   entry position — the bracket must open the line (an optional bullet before it), else an
+  #     adjudication record (`- fixed: [contradiction] …`) or prose that merely MENTIONS a kind
+  #     mid-sentence would count. A kind named mid-line is talk about a violation, not one.
+  local s k
+  is_noise "$1" && return 1
+  printf '%s' "$1" | grep -qE '^[[:space:]]*([-*+][[:space:]]*)?\[' || return 1
+  s=$(printf '%s' "$1" | sed -nE 's/^[^][]*\[([^]]*)\].*$/\1/p' | head -1)
+  s=$(printf '%s' "$s" | sed -E 's/^[<{]//; s/[>}]$//; s/^[[:space:]]+//; s/[[:space:]]+$//' | tr '[:upper:]' '[:lower:]')
+  [ -n "$s" ] || return 1
+  for k in $2; do case "$s" in *"$k"*) return 0 ;; esac; done
+  return 1
+}
 material_ids() { ls -d "$MATERIALS"/*/ 2>/dev/null | while read -r d; do basename "$d"; done; }
 doc_ids()      { ls -d "$DOCUMENTS"/*/ 2>/dev/null | while read -r d; do basename "$d"; done; }
 mstatus()      { [ -f "$MATERIALS/$1/converted.md" ] && fm "$MATERIALS/$1/converted.md" status; }
@@ -296,21 +317,32 @@ is_date() { # $1 -> 0 when it is a real YYYY-MM-DD
   local mm dd; mm=${1#*-}; mm=${mm%-*}; dd=${1##*-}
   [ "$mm" -ge 1 ] && [ "$mm" -le 12 ] && [ "$dd" -ge 1 ] && [ "$dd" -le 31 ]
 }
+canon_id() { # $1 = an id in any zero-padding -> its ONE canonical spelling; empty when not a numeric id
+  # The single definition of "how a number is spelled as an id". The resolvers below use it to find
+  # a file, and validate uses it to reject a file that spells its number any other way — one rule,
+  # two consumers, so the naming convention and the lookup can never drift apart.
+  local p n
+  case "$1" in t*) p=t ;; m*) p=m ;; *) return 1 ;; esac
+  n=${1#?}; case "$n" in *[!0-9]*|"") return 1 ;; esac
+  printf '%s%03d' "$p" "$((10#$n))"
+}
 tfile_for() { # $1 = a truth id in any zero-padding -> the file that id names, if one exists
   # Half the reference fields normalised zero-padding and half did not, so `t5` resolved in
   # conflict_with and was reported dangling in cited_truths and corrects. One resolver, used by both.
+  # Leniency HERE is safe only because filenames are canonical (see canon_id enforcement in
+  # validate): with one spelling per number on disk, `t5` can mean exactly one file.
   local n
   [ -f "$TRUTHS/$1.md" ] && { printf '%s' "$TRUTHS/$1.md"; return 0; }
-  n=${1#t}; case "$n" in *[!0-9]*|"") return 1 ;; esac
-  n=$(printf 't%03d' "$((10#$n))")
+  case "$1" in t*) ;; *) return 1 ;; esac
+  n=$(canon_id "$1") || return 1
   [ -f "$TRUTHS/$n.md" ] && { printf '%s' "$TRUTHS/$n.md"; return 0; }
   return 1
 }
 mdir_for() { # $1 = a material id in any zero-padding -> the folder that id names, if one exists
   local n
   [ -d "$MATERIALS/$1" ] && { printf '%s' "$MATERIALS/$1"; return 0; }
-  n=${1#m}; case "$n" in *[!0-9]*|"") return 1 ;; esac
-  n=$(printf 'm%03d' "$((10#$n))")
+  case "$1" in m*) ;; *) return 1 ;; esac
+  n=$(canon_id "$1") || return 1
   [ -d "$MATERIALS/$n" ] && { printf '%s' "$MATERIALS/$n"; return 0; }
   return 1
 }
@@ -339,7 +371,7 @@ PROBLEMS=0
 prob() { printf '  %s\n' "$*"; PROBLEMS=$((PROBLEMS+1)); }
 
 cmd_validate() {
-  local f id v k a c d p r w mid ref ROLES
+  local f id v k a c d p r w mid ref ROLES idc
   # What was actually examined, reported at the end next to what exists. This is the answer to a
   # whole class of leak: a redirected `paths`, an unreadable schema, an empty `source:`, an unclosed
   # frontmatter and a heading the reader could not find all produced ZERO checks and a tick. The
@@ -419,6 +451,12 @@ cmd_validate() {
            END { exit closed?0:1 }' "$f" ||
         prob "$f  frontmatter is never closed (a second '---' is missing) — the parser stays inside it to EOF, so this material has no body at all and every truth sourced from it is reported as a quote missing from its source"
     fi
+    # One number, one spelling. `m5` and `m005` normalise to the same id, so a mine holding both
+    # makes every reference to it ambiguous — and the resolvers, which are deliberately lenient about
+    # padding, would answer with whichever they happened to find first.
+    idc=$(canon_id "$id" || true)
+    [ -n "$idc" ] && [ "$id" != "$idc" ] &&
+      prob "$MATERIALS/$id/  folder name is not the canonical id spelling — rename it to '$idc' (ids are zero-padded to at least three digits). Two spellings of one number resolve to the same id, so any reference to it becomes ambiguous"
     [ "$(fm "$f" id)" = "$id" ] || prob "$f  id '$(fm "$f" id)' != folder '$id'"
     v=$(fm "$f" origin); pipes "$(sch material.fm.enum.origin)" | grep -qx "$v" || prob "$f  origin '$v' invalid → use $(sch material.fm.enum.origin)"
     v=$(fm "$f" status); pipes "$(sch material.fm.enum.status)" | grep -qx "$v" || prob "$f  status '$v' invalid → use $(sch material.fm.enum.status)"
@@ -834,9 +872,16 @@ cmd_validate() {
     # swallows the whole file as frontmatter and id-vs-filename, source existence, the status enum,
     # the resolution enums and the quote seal all run zero times. The examined: line reports it as
     # NOT sealed; this names it.
-    local tf nofm=""
+    local tf nofm="" tb tc
     for tf in "$TRUTHS"/t[0-9]*.md; do
       [ -f "$tf" ] || continue
+      # Canonical filename, same rule as the material folders above. Without it `t5.md` and
+      # `t005.md` can sit side by side, and every id-keyed table in the awk above (reciprocity,
+      # winner, retracted) collapses them into one entry — so a check reads one file while
+      # reporting the other, and `pull` hands out the side that never spoke.
+      tb=$(basename "$tf" .md); tc=$(canon_id "$tb" || true)
+      [ -n "$tc" ] && [ "$tb" != "$tc" ] &&
+        prob "$tf  filename is not the canonical id spelling — rename it to '$tc.md' and set 'id: $tc' (ids are zero-padded to at least three digits). Two spellings of one number resolve to the same id, so the reciprocity, winner and retracted tables would collapse both files into one entry"
       if [ "$(head -1 "$tf" 2>/dev/null | tr -d '\r')" = "---" ]; then
         awk 'NR==1 { if($0 ~ /^---[[:space:]]*$/) infm=1; next }
              infm && /^---[[:space:]]*$/ { closed=1; exit }
@@ -1008,16 +1053,95 @@ cmd_validate() {
       # decides the one case no level rule can: a file whose siblings sit at `##` and which plants a
       # `## Findings` inside a `#` violations section is textually identical to a legitimate one, so
       # fid_body must guess — but the entry count does not care which guess was right.
-      # Only a REAL kind counts, so the advisory `- [critical]` rows and the untouched `- [{kind}]`
-      # template line are not entries, exactly as is_noise judges them.
-      local vkinds vpat vall vin
+      # Counted with gate_entry — is_noise (the gate's own judge, bullet-shape-independent) plus the
+      # two census scope filters. The count and the gate can no longer disagree about what an entry
+      # is, which is exactly how `* [contradiction]` used to slip a floor that claimed to be
+      # shape-independent while quietly requiring `- ` with one space.
+      local vkinds vklist vall vin vline vslot vfold vhit vk vcnt vtag vrest
       vkinds=$(pipes "$(sch review.enum.kind)" | tr '\n' '|' | sed 's/|$//')
+      vklist=$(pipes "$(sch review.enum.kind)" | tr '\n' ' ')
       if [ -n "$vkinds" ]; then
-        vpat="^[[:space:]]*- \[[<{]?($vkinds)[>}]?\]"
-        vall=$(nocomment < "$DOCUMENTS/$d/review.md" | grep -cE "$vpat" || true)
-        vin=$(fid_body "$DOCUMENTS/$d/review.md" | grep -cE "$vpat" || true)
-        [ "${vall:-0}" -gt "${vin:-0}" ] &&
-          prob "$d review.md holds ${vall:-0} fidelity violation entr(ies) but the gate's section reader can see only ${vin:-0} — an entry outside the section it reads ships unseen whatever the headings look like. Move them under the 'Fidelity violations' heading; archived history belongs inside an HTML comment, where it is not counted here either"
+        vall=0
+        while IFS= read -r vline; do gate_entry "$vline" "$vklist" && vall=$((vall+1)); done \
+          < <(nocomment < "$DOCUMENTS/$d/review.md" | grep -F '[' || true)
+        vin=0
+        while IFS= read -r vline; do gate_entry "$vline" "$vklist" && vin=$((vin+1)); done \
+          < <(fid_body "$DOCUMENTS/$d/review.md" | grep -F '[' || true)
+        [ "$vall" -gt "$vin" ] &&
+          prob "$d review.md holds $vall fidelity violation entr(ies) but the gate's section reader can see only $vin — an entry outside the section it reads ships unseen whatever the headings look like. Move them under the 'Fidelity violations' heading; archived history belongs inside an HTML comment, where it is not counted here either"
+        # A line that TRIED to be a violation entry and failed to become one is told to fix itself,
+        # instead of being binned as prose or as an untouched template. `is_noise` is still the sole
+        # judge of what an entry IS — this loop only looks at the lines it calls noise, and asks a
+        # narrower question: does the bracket slot hold a real kind? If it does, someone was writing
+        # a violation, and the two ways that writing silently fails both get named:
+        #   1. `#`-prefixed (`#1 [contradiction] …`). is_noise drops every line opening with `#`,
+        #      a rule meant for HEADINGS — but fid_body already discards real headings before
+        #      is_noise sees anything, so what the rule actually eats is numbered entries, which
+        #      markdown renders as ordinary body text. The reader sees a numbered violation list;
+        #      the gate reads an empty section.
+        #   2. a NEAR-MISS kind (`- [<Contradiction>]`, `- [<missing-required >]`,
+        #      `- [<contradiction / unsupported>]`). The kind loop matches EXACT enum values only,
+        #      so one capital, one stray space, or two kinds in one slot drops the line into the
+        #      untouched-template rule. FORMATS prints the angle-bracket shape itself, so keeping
+        #      the brackets is the documented habit — which is what makes this reachable.
+        # Ruled 2026-07-31: do not guess what was meant and do not count it as an open violation —
+        # name it and say what to write. Scanned file-wide through nocomment, so the same line
+        # parked outside the readable section fares no better than inside it, and archived history
+        # inside a comment stays silent. Known limit, stated: a slot with no kind substring at all
+        # (`- [<contradicton>]`) still reads as a template — this asks for evidence that a kind was
+        # attempted, and a typo that destroys the word leaves none.
+        while IFS= read -r vline; do
+          is_noise "$vline" || continue   # a real entry is the gate's jurisdiction, not this check's
+          vslot=$(printf '%s' "$vline" | sed -E 's/^[^[]*\[([^]]*)\].*$/\1/; s/^[<{]//; s/[>}]$//; s/^[[:space:]]+//; s/[[:space:]]+$//')
+          [ -n "$vslot" ] || continue
+          vfold=$(printf '%s' "$vslot" | tr '[:upper:]' '[:lower:]')
+          vhit=""
+          for vk in $vklist; do case "$vfold" in *"$vk"*) vhit=1 ;; esac; done
+          [ -n "$vhit" ] || continue
+          case "$vline" in
+            "#"*) prob "$d review.md: '$vline' starts with '#', so the gate reads it as a heading and drops it — a numbered entry is invisible to the check even though markdown renders it as body text. Start the entry with '- ' instead" ;;
+            *) prob "$d review.md: '[$vslot]' is not an exact violation kind — the gate acts only on an exact one of $vkinds (lowercase, no extra spaces, ONE kind per entry). Written like this the line reads as an untouched template and is silently ignored; fix the kind" ;;
+          esac
+        done < <(nocomment < "$DOCUMENTS/$d/review.md" | grep -F '[' || true)
+        # A comment that swallows live-shaped entries and is closed by a MID-LINE arrow is named.
+        # The accident this catches: someone opens `<!--` for an archive note, forgets to close it,
+        # and a prose arrow further down (`정정 흐름: 초안 --> 검토`) closes it by accident — the
+        # declared-section survival check above stays silent because no HEADING was swallowed, and
+        # comment_balanced stays silent because the file does not END inside a comment. Perfectly
+        # regular entries vanish with no special formatting anywhere.
+        # What separates the accident from a deliberate archive is the CLOSER's shape, because the
+        # interiors are textually identical (an archive IS raw-has/stripped-hasn't): a deliberate
+        # archive ends with `-->` closing its line; an accidental closer is prose, so text follows
+        # the arrow on the same line. That makes the legal form explicit — an archive holding entry
+        # lines must put its closing `-->` at end of line — and it is the message's second half.
+        # Known limit, stated: a prose line that happens to END with `-->` is indistinguishable
+        # from an archive closer and still swallows silently. Comment interiors stay invisible by
+        # design everywhere else; this is a tripwire on the one shape that was actually breached.
+        vcnt=0
+        while IFS= read -r vline; do
+          vtag=${vline%%$'\t'*}; vrest=${vline#*$'\t'}
+          case "$vtag" in
+            I) gate_entry "$vrest" "$vklist" && vcnt=$((vcnt+1)) ;;
+            C) [ -n "$vrest" ] && [ "$vcnt" -gt 0 ] &&
+                 prob "$d review.md: a comment swallows $vcnt violation-shaped entr(ies) and its closing '-->' is followed by '$vrest' on the same line — if that arrow is prose that accidentally closed a forgotten '<!--', close the comment where it was meant to end; if the archive is deliberate, put the closing '-->' on its own line"
+               vcnt=0 ;;
+          esac
+        done < <(awk '
+          { line=$0
+            while (1) {
+              if (inc) {
+                i=index(line,"-->")
+                if (i==0) { print "I\t" line; line=""; break }
+                sfx=substr(line,i+3); gsub(/^[[:space:]]+|[[:space:]]+$/,"",sfx)
+                print "C\t" sfx
+                inc=0; line=substr(line,i+3); continue
+              }
+              i=index(line,"<!--"); if (i==0) break
+              rest=substr(line,i+4); j=index(rest,"-->")
+              if (j==0) { print "I\t" rest; inc=1; break }
+              line=substr(line,1,i-1) substr(rest,j+3)
+            }
+          }' "$DOCUMENTS/$d/review.md")
       fi
     fi
     # gate-clean invariant: a consecrated output ⟹ review.md's 'Fidelity violations' is empty.

@@ -48,9 +48,12 @@ on-demand lanes: verify (cold-checks each upstream hop) · gaps (is the world co
 
 ```
 project.md              the project: character · roles · tone
-inbox/                  drop raw materials here
+inbox/                  drop raw materials here — a queue: gather MOVES each file
+                        into its material folder on intake, so an empty inbox = nothing pending
 materials/<id>/
-  source.<ext>          the original, copied in
+  source.<ext>          the original, moved in — the AUDIT layer. A root `.ignore` shields it
+                        (and inbox/) from content searches, so a casual grep can never hand you
+                        raw, superseded text; open it deliberately by path when auditing
   converted.md          readable markdown + metadata (role · topics · summary)
 catalog.md              index of all materials (generated)
 truths/
@@ -88,7 +91,7 @@ WeaveDoc is a set of Claude Code skills. To use it in a project:
 
 ## Deterministic checks
 
-`.weavedoc/bin/weavedoc` ships a dependency-free checker (needs only `bash`, which `git` already provides on every OS) — **the mechanical floor under the AI fidelity gate:**
+`.weavedoc/bin/weavedoc` ships a dependency-free checker (needs **Bash 4+ and GNU awk/sed** — what Git for Windows and Linux provide out of the box; macOS ships Bash 3.2, so install a newer bash there — `pull` uses associative arrays) — **the mechanical floor under the AI fidelity gate:**
 
 - `validate` — format + truth coherence: frontmatter/enums/ids, catalog ↔ materials orphans both ways, every truth `source` resolves to a material, `conflict` truths carry `conflict_with`, `discarded` truths carry a `resolution` (and the winner/loser stamps match the record — a winner stamped `discarded` or a loser stamped `ok` fails), `provenance` enum valid and `derived` truths show their `derived_from` chain, **each truth's body appears verbatim in its source** (the anti-laundering seal), every `required_tags` tag has at least one truth, `index.md` ↔ truth files in sync both ways, a `retracted` material grounds nothing (its truths `unsupported`/`discarded`, no resolution winner references it), `truths/coverage.md` cross-checks (sections resolve, ids exist, sectioned materials complete), `origin: research` materials carry `url`+`retrieved_at` and their truths are not `provenance: stated`, `corrects` references resolve, `retracted` truths have a `removed:` line and never strand the other side of an open conflict, every `[open]` Human queue entry carries an ownership tag, no `final.md` ships with a non-empty `# Fidelity violations`. Exits non-zero with the list.
 - `census` — the mine's authoritative statistics: truth files vs index entries, id numbering holes (split into *unexplained* and *explained by a changelog `removed:` line*), live/status tallies with `retracted` counted separately, and the coverage ratio as `N/M of TOTAL (K legacy-exempt)` — the raw total is always shown, because `16/26` and `16/16 (+10 exempt)` describe the same mine and a reader comparing two reports would otherwise see progress that never happened. Skills report these numbers, never eye-counts.
