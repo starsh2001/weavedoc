@@ -686,25 +686,34 @@ cmd_validate() {
         }
         next
       }
-      infm && $0 ~ /^---[[:space:]]*$/ { infm=0; if(ftype=="t") tf_done(); next }
+      infm && $0 ~ /^---[[:space:]]*$/ { infm=0; if(ftype=="t") tf_done(); else mfmok[mid]=1; next }
       infm {
         # Count every frontmatter key, for BOTH file kinds. A key written twice is read three
         # different ways by three commands — fm() takes the FIRST match, this awk and reindex take
         # the LAST, and census counts BOTH — so the same field yields three different answers and
         # nothing said a word. census could report a status tally larger than its own file count.
         if($0 ~ /^[a-z_]+[[:space:]]*:/){ kk=$0; sub(/[[:space:]]*:.*$/,"",kk); kcount[FILENAME,kk]++; kval[FILENAME,kk]=val() }
+        # Every field pattern below is `^key[[:space:]]*:` — the SAME shape the key census one line
+        # up uses, and the same shape fm() uses. They used to read `^key:[[:space:]]`, which demands
+        # no space BEFORE the colon and one AFTER it, so two spellings YAML calls legal (`source :
+        # m001`, `source:m001`) matched the census and fm() while missing every reader here. On
+        # `source` that was silent and total: the seal is guarded by `tsrc!=""`, so it ran zero
+        # times, a fabricated body went in as `status: ok`, and the verdict was a tick — while
+        # `fm`/`impact` read the same file as `m001` and reindex wrote `[]` into index.md. The other
+        # keys failed loudly (an unread `status` reads as an invalid empty enum), which is why only
+        # this one hid. One spelling rule for one concept, in all five readers of this file.
         if(ftype=="t"){
-          if($0 ~ /^id:[[:space:]]/)                 { tidfield=val(); hasid=1 }
-          else if($0 ~ /^claim:[[:space:]]/)         { hasclaim=1 }
-          else if($0 ~ /^source:[[:space:]]/)        { tsrc=val(); hassource=1 }
-          else if($0 ~ /^tags:[[:space:]]/)          { ttags=val(); hastags=1 }
-          else if($0 ~ /^status:[[:space:]]/)        { tstatus=val(); hasstatus=1 }
-          else if($0 ~ /^conflict_with:[[:space:]]/) { tconflict=val() }
-          else if($0 ~ /^resolution:[[:space:]]/)    { tresolution=val() }
-          else if($0 ~ /^provenance:[[:space:]]/)    { tprov=val() }
-          else if($0 ~ /^derived_from:[[:space:]]/)  { hasderivedfrom=1; tderivedfrom=val() }
-          else if($0 ~ /^superseded:[[:space:]]/)    { tsuperseded=val() }
-          else if($0 ~ /^corroborated_by:[[:space:]]/) { tcorrob=val() }
+          if($0 ~ /^id[[:space:]]*:/)                 { tidfield=val(); hasid=1 }
+          else if($0 ~ /^claim[[:space:]]*:/)         { hasclaim=1 }
+          else if($0 ~ /^source[[:space:]]*:/)        { tsrc=val(); hassource=1 }
+          else if($0 ~ /^tags[[:space:]]*:/)          { ttags=val(); hastags=1 }
+          else if($0 ~ /^status[[:space:]]*:/)        { tstatus=val(); hasstatus=1 }
+          else if($0 ~ /^conflict_with[[:space:]]*:/) { tconflict=val() }
+          else if($0 ~ /^resolution[[:space:]]*:/)    { tresolution=val() }
+          else if($0 ~ /^provenance[[:space:]]*:/)    { tprov=val() }
+          else if($0 ~ /^derived_from[[:space:]]*:/)  { hasderivedfrom=1; tderivedfrom=val() }
+          else if($0 ~ /^superseded[[:space:]]*:/)    { tsuperseded=val() }
+          else if($0 ~ /^corroborated_by[[:space:]]*:/) { tcorrob=val() }
         }
         next
       }
@@ -734,7 +743,12 @@ cmd_validate() {
         _bl=$0; gsub(/^[[:space:]]+|[[:space:]]+$/,"",_bl)
         ntok[tid]+=split(_bl,_bw,/[[:space:]]+/)
         if(!(tid in bfirst)) bfirst[tid]=_bl
-        if(tsrc!="" && (tsrc in body)){
+        # `tsrc in mfmok` — the source material actually PARSED. Without it, a converted.md whose
+        # frontmatter never closes yields an empty body[], and then every truth extracted from it was
+        # reported as a quote missing from its source ("laundering risk") and counted as seal FAILED.
+        # The extraction was fine; the material was unread. Its own prob names that (see the material
+        # loop), and these truths now fall to NOT checked — which is what "the seal never ran" means.
+        if(tsrc!="" && (tsrc in body) && (tsrc in mfmok)){
           sealsrc[tid]=tsrc; sealfile[tid]=tfile; sealstat[tid]=tstatus
           if(index(body[tsrc],$0)==0){
             sealbroken[tid]=1
@@ -857,6 +871,13 @@ cmd_validate() {
     qn=$(printf '%s\n' "$qout" | tail -1); qn=${qn#QFAILS }
     local qc; qc=$(printf '%s\n' "$qout" | grep '^QCOUNTS ' | tail -1)
     if [ -n "$qc" ]; then set -- $qc; N_TRUTH=${2:-0}; N_SEALED=${3:-0}; N_SEALFAIL=${4:-0}; N_TOMB=${5:-0}; fi
+    # The FILE count comes from the disk, not from the awk. awk skips a zero-byte file entirely — no
+    # record, so `ntruthfile` never saw it — and the file then vanished from the denominator instead
+    # of showing up as unchecked: `truths 1 (1 sealed)` on a mine holding two, while census said
+    # `truth files 2`. A file with content but no frontmatter WAS counted and marked NOT checked, so
+    # the same defect class was being counted two different ways. Same expression census uses, so the
+    # two commands can no longer disagree about how many truth files exist.
+    N_TRUTH=$(ls "$TRUTHS"/t[0-9]*.md 2>/dev/null | grep -c . || true); N_TRUTH=${N_TRUTH:-0}
     if [ "${qn:-0}" -gt 0 ]; then
       printf '%s\n' "$qout" | grep -v '^QCOUNTS ' | sed '$d'
       PROBLEMS=$((PROBLEMS + qn))
@@ -923,7 +944,7 @@ cmd_validate() {
       tsrcpairs=$(awk '
         FNR==1 { n=split(FILENAME,pp,"/"); fn=pp[n]; sub(/\.md$/,"",fn); tid=fn; infm=($0 ~ /^---[[:space:]]*$/); next }
         infm && /^---[[:space:]]*$/ { infm=0; nextfile }
-        infm && /^source:[[:space:]]/ { s=$0; sub(/^source:[[:space:]]*/,"",s); if(s !~ /^"/) sub(/[[:space:]]+#.*$/,"",s); sub(/[[:space:]]*$/,"",s); sub(/^"/,"",s); sub(/"$/,"",s);  printf "%s:%s ", tid, s; nextfile }
+        infm && /^source[[:space:]]*:/ { s=$0; sub(/^source[[:space:]]*:[[:space:]]*/,"",s); if(s !~ /^"/) sub(/[[:space:]]+#.*$/,"",s); sub(/[[:space:]]*$/,"",s); sub(/^"/,"",s); sub(/"$/,"",s);  printf "%s:%s ", tid, s; nextfile }
       ' "$TRUTHS"/t[0-9]*.md)
       cout=$(awk -v matids="$matlist" -v pairs="$tsrcpairs" -v Q="'" '
         function q(s){ return Q s Q }
@@ -1344,7 +1365,7 @@ cmd_census() {
     function val(   s){ s=$0; sub(/^[^:]*:[[:space:]]*/,"",s); if(s !~ /^"/){ sub(/[[:space:]]+#.*$/,"",s); if(s ~ /^#/) s="" } sub(/[[:space:]]*$/,"",s); sub(/^"/,"",s); sub(/"$/,"",s); return s }
     FNR==1 { infm=($0 ~ /^---[[:space:]]*$/); next }
     infm && /^---[[:space:]]*$/ { infm=0; nextfile }
-    infm && /^status:[[:space:]]/ { st[val()]++ }
+    infm && /^status[[:space:]]*:/ { st[val()]++ }
     END { printf "%d %d %d %d %d\n", st["ok"]+0, st["discarded"]+st["resolved"]+0, st["conflict"]+0, st["unsupported"]+0, st["retracted"]+0 }
   ' "$TRUTHS"/t[0-9]*.md)
   set -- $stat_out
@@ -1411,7 +1432,7 @@ cmd_census() {
     n_mats=$(awk '
       FNR==1 { infm=($0 ~ /^---[[:space:]]*$/); st=""; next }
       infm && /^---[[:space:]]*$/ { if(st!="retracted") n++; infm=0; nextfile }
-      infm && /^status:[[:space:]]/ { st=$0; sub(/^status:[[:space:]]*/,"",st); if(st !~ /^"/) sub(/[[:space:]]+#.*$/,"",st); sub(/[[:space:]]*$/,"",st); sub(/^"/,"",st); sub(/"$/,"",st) }
+      infm && /^status[[:space:]]*:/ { st=$0; sub(/^status[[:space:]]*:[[:space:]]*/,"",st); if(st !~ /^"/) sub(/[[:space:]]+#.*$/,"",st); sub(/[[:space:]]*$/,"",st); sub(/^"/,"",st); sub(/"$/,"",st) }
       END { print n+0 }' "$MATERIALS"/*/converted.md)
   fi
   local n_denom=$(( n_mats - n_legacy )); [ "$n_denom" -lt 0 ] && n_denom=0
@@ -1518,11 +1539,11 @@ cmd_reindex() {
     # index.md printed the source as a tag and tree.md grew a `## ok` section while the real tag
     # vanished — and reindex --check called the result "in sync". \x01 cannot occur in the text.
     infm && /^---[[:space:]]*$/ { infm=0; print id "\x01" claim "\x01" src "\x01" st "\x01" tg; nextfile }
-    infm && /^id:[[:space:]]/     { id=val() }
-    infm && /^claim:[[:space:]]/  { claim=val() }
-    infm && /^source:[[:space:]]/ { src=val() }
-    infm && /^status:[[:space:]]/ { st=val() }
-    infm && /^tags:[[:space:]]/   { tg=val(); gsub(/[]["]/,"",tg) }
+    infm && /^id[[:space:]]*:/     { id=val() }
+    infm && /^claim[[:space:]]*:/  { claim=val() }
+    infm && /^source[[:space:]]*:/ { src=val() }
+    infm && /^status[[:space:]]*:/ { st=val() }
+    infm && /^tags[[:space:]]*:/   { tg=val(); gsub(/[]["]/,"",tg) }
   ' "$TRUTHS"/t[0-9]*.md)
   tmpi=$(mktemp); tmpt=$(mktemp)
   {
@@ -1594,10 +1615,18 @@ cmd_retag() {
   # into a real newline and TAB. That SPLIT the rewritten `tags:` line in two, every parser then
   # dropped the orphan half, and validate reported the mangled file as clean. fm_set and pull
   # already did it this way; this was the last -v holdout, and the only one that writes files.
+  # Frontmatter ONLY. The match used to run over the whole file, and a truth whose BODY quotes a
+  # line shaped like a list field — `tags: [위약, 대금]`, which FORMATS explicitly encourages when
+  # the exact wording is the fact (code, config, YAML fragments) — had that quote silently
+  # rewritten. The seal then failed on the tool own edit and told the user their quote was a
+  # laundering risk. The body is sealed data; the only writer in this tool must not touch it.
+  # Key spelling is the lenient one used everywhere else (see the frontmatter readers in validate).
   local prog='
     function strip(s){ gsub(/^[[:space:]]+|[[:space:]]+$/,"",s); gsub(/^"|"$/,"",s); return s }
     BEGIN { old=ENVIRON["WD_OLD"]; new=ENVIRON["WD_NEW"] }
-    $0 ~ ("^" key ":[[:space:]]*\\[") {
+    FNR==1 { infm = ($0 ~ /^---[[:space:]]*$/); if(mode=="w") print; next }
+    infm && /^---[[:space:]]*$/ { infm=0; if(mode=="w") print; next }
+    infm && $0 ~ ("^" key "[[:space:]]*:[[:space:]]*\\[") {
       inner=$0; sub(/^[^[]*\[/,"",inner); sub(/\].*$/,"",inner)
       n=split(inner,el,","); out=""; hit=0; delete seen
       for(i=1;i<=n;i++){ e=strip(el[i]); if(e=="") continue
@@ -1714,14 +1743,14 @@ cmd_pull() {
     # claim checkable — nothing can, it is a paraphrase by design — but it puts what the machine
     # warranted next to what it did not.
     !infm && bd1=="" && $0 ~ /[^[:space:]]/ { bd1=$0; sub(/^[[:space:]]+/,"",bd1); gsub(/\001/," ",bd1) }
-    infm && /^status:[[:space:]]/        { st=val() }
-    infm && /^claim:[[:space:]]/         { cl=val() }
-    infm && /^source:[[:space:]]/        { src=val() }
-    infm && /^as_of:[[:space:]]/         { asof=val() }
-    infm && /^provenance:[[:space:]]/    { prov=val() }
-    infm && /^conflict_with:[[:space:]]/ { cw=val() }
-    infm && /^resolution:[[:space:]]/    { res=val() }
-    infm && /^assumptions:[[:space:]]/   { asm=val() }
+    infm && /^status[[:space:]]*:/        { st=val() }
+    infm && /^claim[[:space:]]*:/         { cl=val() }
+    infm && /^source[[:space:]]*:/        { src=val() }
+    infm && /^as_of[[:space:]]*:/         { asof=val() }
+    infm && /^provenance[[:space:]]*:/    { prov=val() }
+    infm && /^conflict_with[[:space:]]*:/ { cw=val() }
+    infm && /^resolution[[:space:]]*:/    { res=val() }
+    infm && /^assumptions[[:space:]]*:/   { asm=val() }
     END { flush() }
   ' "${tfiles[@]}")
   # material stage/status looked up once per unique source (few)
