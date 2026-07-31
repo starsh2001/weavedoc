@@ -238,76 +238,6 @@ is_noise() { # blank / comment / untouched template entry
   case "$s" in "- ["["{<"]*) return 0 ;; esac
   return 1
 }
-gate_entry() { # $1=line $2=kind-list(space-separated) -> 0 when this is a violation entry the census counts
-  # The census's countable unit, built ON TOP of is_noise rather than beside it. The census used to
-  # carry its own regex (`- \[` exactly), and the two judges disagreed: is_noise counts a bracketed
-  # line as an entry whatever the bullet looks like, so `* [contradiction]`, a two-space bullet, a
-  # tab, or no bullet at all rendered exactly like the real thing and slipped a floor whose comment
-  # claimed to be shape-independent. Now is_noise IS the judge, plus the two scope filters a
-  # file-wide count needs so it cannot annex the other ledgers:
-  #   kind-bearing — the first bracket slot must carry a real kind, else Findings (`- [critical]`)
-  #     and Human-queue (`- [open]`) entries would count as parked violations;
-  #   entry position — the bracket must OPEN the line, else an adjudication record
-  #     (`- fixed: [contradiction] …`) or prose that merely MENTIONS a kind mid-sentence would
-  #     count. A kind named mid-line is talk about a violation, not one.
-  #
-  # "Opens the line" is about words, not about one bullet character. Reading it as `- ` alone let
-  # four shapes render exactly like an entry and count as nothing: a markdown ORDERED list
-  # (`1. [contradiction] …`), a blockquote (`> - [contradiction] …`), a non-breaking space after
-  # the bullet (what a paste from a word processor leaves), and an entry whose closing `]` was
-  # never typed. All four are is_noise ENTRIES, so the same line blocked inside the section and
-  # vanished outside it — the bundle contradicting itself, which is what a file-wide census exists
-  # to prevent. So the test is now: everything before the bracket must be list/quote scaffolding.
-  #
-  # Scaffolding also covers the INLINE MARKUP a writer puts around the kind: `- **[contradiction]**`
-  # and `` - `[contradiction]` `` render as an ordinary entry with the kind emphasised, and a
-  # markdown TASK CHECKBOX (`- [ ] [contradiction] …`) renders as a checklist of violations. All
-  # three were is_noise entries that the census could not see, so the gate contradicted itself on
-  # them exactly as it did on the four shapes above.
-  #
-  # LIMIT, stated: words before the bracket still do not count, and that is not a shape we can
-  # decide. `- 3장 [contradiction] …` (an entry someone labelled) and `- fixed: [contradiction] …`
-  # (a record of one already closed) are the same string shape; counting the first would false-fail
-  # the second, which is a document a competent user writes. **A label in BRACKETS is the same
-  # case** — `- [3장] [contradiction] …` is that limit's bracketed twin, and judging the two
-  # differently would make the limit contradict itself. Inside the violations section the gate
-  # still treats all of them as open violations — the ambiguity is a property of being OUTSIDE it.
-  local s k pre rest rest2 nbsp
-  is_noise "$1" && return 1
-  pre=$(printf '%s' "$1" | sed 's/\[.*$//')
-  nbsp=$(printf '\302\240'); pre=${pre//$nbsp/ }
-  # `%s\n`, not `%s`: a bulletless entry leaves an EMPTY prefix, and printf without the newline
-  # hands grep zero lines, which never matches — the shape is_noise most wants counted would be
-  # the one shape dropped.
-  # The `[*_`]*` run is emphasis/inline-code markup only. It must NOT be widened to "any
-  # non-word run": loosening this test flips `- 3장 [contradiction]` and `- fixed: [contradiction]`
-  # to counted, and those two are the stated limit above.
-  printf '%s\n' "$pre" | grep -qE '^[[:space:]>]*([-*+]|[0-9]{1,3}[.)])?[[:space:]]*[*_`]*[[:space:]]*$' || return 1
-  # The slot ends at `]` — or, when that was never typed, at the first space. A kind is one token
-  # (`contradiction`, `unsupported`, `missing-required`), so an unclosed bracket still has a
-  # readable slot; taking the rest of the LINE instead would let any bracketed prose that happens
-  # to say "contradiction" somewhere count.
-  rest=$(printf '%s' "$1" | sed -E 's/^[^[]*\[//')
-  case "$rest" in *']'*) s=${rest%%]*} ;; *) s=${rest%%[[:space:]]*} ;; esac
-  # A task checkbox is not a slot — advance exactly ONE bracket past it. Only the checkbox
-  # vocabulary (empty, spaces, x, X) advances: reading the LAST bracket instead, or advancing on
-  # any non-kind slot, annexes the other two ledgers this function's kind filter exists to keep
-  # out — `- [critical] … [contradiction] …` (Findings) and `- [open] [recommended] … contradiction`
-  # (Human queue) would both count as parked violations and block the gate on a review file that
-  # is doing exactly what it is supposed to.
-  case "$(printf '%s' "$s" | tr -d '[:space:]')" in
-    ""|x|X)
-      rest2=$(printf '%s' "$rest" | sed -E 's/^[^[]*\[//')
-      if [ "$rest2" != "$rest" ]; then
-        rest=$rest2
-        case "$rest" in *']'*) s=${rest%%]*} ;; *) s=${rest%%[[:space:]]*} ;; esac
-      fi ;;
-  esac
-  s=$(printf '%s' "$s" | sed -E 's/^[<{]//; s/[>}]$//; s/^[[:space:]]+//; s/[[:space:]]+$//' | tr '[:upper:]' '[:lower:]')
-  [ -n "$s" ] || return 1
-  for k in $2; do case "$s" in *"$k"*) return 0 ;; esac; done
-  return 1
-}
 material_ids() { ls -d "$MATERIALS"/*/ 2>/dev/null | while read -r d; do basename "$d"; done; }
 doc_ids()      { ls -d "$DOCUMENTS"/*/ 2>/dev/null | while read -r d; do basename "$d"; done; }
 mstatus()      { [ -f "$MATERIALS/$1/converted.md" ] && fm "$MATERIALS/$1/converted.md" status; }
@@ -361,6 +291,17 @@ fid_body() { # $1=file -> the 'Fidelity violations' body, ended by a SIBLING sec
   # What no level rule can decide is a file whose siblings are at `##` and which ALSO plants a
   # `## Findings` inside a `#` violations section — the two are textually identical. That one is for
   # the file-wide entry census in validate, which reads no sections at all.
+  # I lines minus headings — byte-identical to the pre-refactor output (sub-headings inside the
+  # section were never part of the BODY; they are still I in fid_mark because they are in the
+  # section's jurisdiction, which is a different question).
+  fid_mark "$1" | sed -n 's/^I	//p' | grep -vE '^#{1,6}[[:space:]]' || true
+}
+fid_mark() { # $1=file -> EVERY nocomment line, prefixed I<TAB> (inside the violations section) or O<TAB>
+  # The ONE boundary judge. fid_body is a thin wrapper (the I lines minus headings), and the
+  # outside-zone check reads the O lines — both sides of the membrane come from this single walk,
+  # so "inside" and "outside" cannot drift apart into a third state the way two readers would.
+  # Headings inside the section are marked I (they are in its jurisdiction — the near-miss guidance
+  # speaks to them); the heading that ENDS the section and everything after it is O.
   local sib; sib=$(pipes "$(sch review.sections)" | grep -vx 'Fidelity violations' | tr '\n' '|' | sed 's/|$//')
   nocomment < "$1" | awk -v sib="$sib" '
     function hlev(s){ if(match(s,/^#+/)) return RLENGTH; return 0 }
@@ -375,15 +316,16 @@ fid_body() { # $1=file -> the 'Fidelity violations' body, ended by a SIBLING sec
       }
       for(i=1;i<=NR;i++){
         if(!on){
-          if(L[i] ~ /^#{1,6}[[:space:]]+Fidelity violations[[:space:]]*$/){ on=1; lvl=hlev(L[i]) }
+          if(L[i] ~ /^#{1,6}[[:space:]]+Fidelity violations[[:space:]]*$/ && !done){ on=1; lvl=hlev(L[i]) }
+          print "O\t" L[i]
           continue
         }
         if(L[i] ~ /^#{1,6}[[:space:]]/){
-          if(hlev(L[i])<=lvl) break
-          if(sib!="" && htext(L[i]) ~ ("^(" sib ")$") && hlev(L[i])<=tier) break
-          continue
+          if(hlev(L[i])<=lvl){ on=0; done=1; print "O\t" L[i]; continue }
+          if(sib!="" && htext(L[i]) ~ ("^(" sib ")$") && hlev(L[i])<=tier){ on=0; done=1; print "O\t" L[i]; continue }
+          print "I\t" L[i]; continue
         }
-        print L[i]
+        print "I\t" L[i]
       }
     }'
 }
@@ -1209,29 +1151,36 @@ EOF
         [ "$(dup_section "$DOCUMENTS/$d/review.md" "$r" 0)" -eq 0 ] &&
           prob "$d review.md has a '$r' heading that is gone once comments are stripped — a '-->' in ordinary prose closes an earlier '<!--', and everything between them (headings and open violations alike) is blanked before any check reads it. Close the comment where it was meant to end"
       done < <(pipes "$(sch review.sections)")
-      # Count the entries WITHOUT reading sections at all, and compare with what the section reader
-      # found. Every heading-shaped bypass ends the same way — an entry that exists in the file and
-      # is not in what the gate reads — and each was closed one shape at a time while the next shape
-      # was a keystroke away. This is the shape-independent floor under all of them, and it is what
-      # decides the one case no level rule can: a file whose siblings sit at `##` and which plants a
-      # `## Findings` inside a `#` violations section is textually identical to a legitimate one, so
-      # fid_body must guess — but the entry count does not care which guess was right.
-      # Counted with gate_entry — is_noise (the gate's own judge, bullet-shape-independent) plus the
-      # two census scope filters. The count and the gate can no longer disagree about what an entry
-      # is, which is exactly how `* [contradiction]` used to slip a floor that claimed to be
-      # shape-independent while quietly requiring `- ` with one space.
-      local vkinds vklist vall vin vline vslot vfold vhit vk vcnt vtag vrest
+      # THE ZONE RULE (ruled 2026-08-01, replacing the shape census). A violation kind in brackets
+      # may live in exactly one place: inside the 'Fidelity violations' section. Anywhere else in
+      # the file — other sections, prose, undeclared headings, tables, whatever the line looks
+      # like — it is named and blocked.
+      #
+      # Why the census died: it tried to RECOGNISE "lines shaped like entries" outside the section,
+      # and markdown's surface forms are unbounded — bullets, ordered lists, blockquotes, NBSP,
+      # emphasis, inline code, task checkboxes each slipped it in turn, three cold rounds in a row,
+      # because a whitelist of shapes chases an infinite set. This rule inverts the burden: the
+      # DETECTION TARGET is the three kind tokens (schema-owned, finite, complete by construction),
+      # and the shape around them stops mattering entirely. What used to be the stated limit
+      # (`- 3장 [contradiction]` and `- fixed: [contradiction]` are the same string shape, so
+      # neither was counted) is retired the loud way: BOTH now block, and the message tells a
+      # record-writer the legal spelling — the kind WITHOUT brackets (`fixed: contradiction — …`).
+      # A bracketed kind is the signature of a gate-actionable entry; outside the gate's zone that
+      # signature is either a parked violation or a mislabelled record, and both deserve a stop.
+      #
+      # The zone boundary comes from fid_mark — the SAME walk fid_body reads — so inside and
+      # outside are complements of one judge and no third state exists. The only remaining
+      # invisible place is a comment interior (nocomment strips it first): archives stay legal by
+      # ruling, and the mid-line-closer tripwire below covers the one breached comment shape.
+      local vkinds vklist vkre vline vslot vfold vhit vk vcnt vtag vrest
       vkinds=$(pipes "$(sch review.enum.kind)" | tr '\n' '|' | sed 's/|$//')
       vklist=$(pipes "$(sch review.enum.kind)" | tr '\n' ' ')
-      if [ -n "$vkinds" ]; then
-        vall=0
-        while IFS= read -r vline; do gate_entry "$vline" "$vklist" && vall=$((vall+1)); done \
-          < <(nocomment < "$DOCUMENTS/$d/review.md" | grep -F '[' || true)
-        vin=0
-        while IFS= read -r vline; do gate_entry "$vline" "$vklist" && vin=$((vin+1)); done \
-          < <(fid_body "$DOCUMENTS/$d/review.md" | grep -F '[' || true)
-        [ "$vall" -gt "$vin" ] &&
-          prob "$d review.md holds $vall fidelity violation entr(ies) but the gate's section reader can see only $vin — an entry outside the section it reads ships unseen whatever the headings look like. Move them under the 'Fidelity violations' heading; archived history belongs inside an HTML comment, where it is not counted here either"
+      vkre=$vkinds
+      if [ -n "$vkre" ]; then
+        while IFS= read -r vline; do
+          vline=${vline#O$'\t'}
+          prob "$d review.md: a violation kind in brackets sits outside the 'Fidelity violations' section: '$vline' — the gate acts only inside that section, so however this line renders, the gate cannot act on it. An open violation belongs under the 'Fidelity violations' heading; a record or mention ABOUT a violation writes its kind without brackets (e.g. 'fixed: contradiction — …'); archived history belongs in an HTML comment with its closing '-->' on its own line"
+        done < <(fid_mark "$DOCUMENTS/$d/review.md" | grep -E '^O' | grep -iE "\[[^]]*($vkre)" || true)
         # A line that TRIED to be a violation entry and failed to become one is told to fix itself,
         # instead of being binned as prose or as an untouched template. `is_noise` is still the sole
         # judge of what an entry IS — this loop only looks at the lines it calls noise, and asks a
@@ -1248,11 +1197,12 @@ EOF
         #      untouched-template rule. FORMATS prints the angle-bracket shape itself, so keeping
         #      the brackets is the documented habit — which is what makes this reachable.
         # Ruled 2026-07-31: do not guess what was meant and do not count it as an open violation —
-        # name it and say what to write. Scanned file-wide through nocomment, so the same line
-        # parked outside the readable section fares no better than inside it, and archived history
-        # inside a comment stays silent. Known limit, stated: a slot with no kind substring at all
-        # (`- [<contradicton>]`) still reads as a template — this asks for evidence that a kind was
-        # attempted, and a typo that destroys the word leaves none.
+        # name it and say what to write. Scoped to INSIDE the zone (fid_mark I lines): outside it
+        # the zone rule above already names every bracketed kind with a stronger message, and
+        # double-reporting one line helps nobody. Archived history inside a comment stays silent.
+        # Known limit, stated: a slot with no kind substring at all (`- [<contradicton>]`) still
+        # reads as a template — this asks for evidence that a kind was attempted, and a typo that
+        # destroys the word leaves none.
         while IFS= read -r vline; do
           is_noise "$vline" || continue   # a real entry is the gate's jurisdiction, not this check's
           vslot=$(printf '%s' "$vline" | sed -E 's/^[^[]*\[([^]]*)\].*$/\1/; s/^[<{]//; s/[>}]$//; s/^[[:space:]]+//; s/[[:space:]]+$//')
@@ -1269,7 +1219,7 @@ EOF
             "-->"*) prob "$d review.md: '$vline' starts with '-->', so the gate reads it as a comment closer and drops the whole line — the entry after the arrow is invisible however correct its kind is. Remove the stray arrow, or if it closes a real comment above, put it on its own line and start the entry on the next" ;;
             *) prob "$d review.md: '[$vslot]' is not an exact violation kind — the gate acts only on an exact one of $vkinds (lowercase, no extra spaces, ONE kind per entry). Written like this the line reads as an untouched template and is silently ignored; fix the kind" ;;
           esac
-        done < <(nocomment < "$DOCUMENTS/$d/review.md" | grep -F '[' || true)
+        done < <(fid_mark "$DOCUMENTS/$d/review.md" | sed -n 's/^I	//p' | grep -F '[' || true)
         # A comment that swallows live-shaped entries and is closed by a MID-LINE arrow is named.
         # The accident this catches: someone opens `<!--` for an archive note, forgets to close it,
         # and a prose arrow further down (`정정 흐름: 초안 --> 검토`) closes it by accident — the
@@ -1284,10 +1234,9 @@ EOF
         # Known limit, stated: a prose line that happens to END with `-->` is indistinguishable
         # from an archive closer and still swallows silently. Comment interiors stay invisible by
         # design everywhere else; this is a tripwire on the one shape that was actually breached.
-        # Counted: every kind-bearing shape, not only the census's exact unit. The lines the
-        # near-miss guidance calls "someone trying to write a violation" (`#1 [contradiction]`,
-        # `[Contradiction ]`) are exactly as gone when swallowed as a well-formed entry is, and a
-        # tripwire that counted only the well-formed ones stayed silent about them.
+        # Counted: the same signature the zone rule detects — a kind in brackets, any shape
+        # (ruled jurisdiction: kind-bearing content). One regex on both sides of the comment
+        # boundary, so what the tripwire counts and what the zone rule blocks cannot drift apart.
         #
         # JURISDICTION, ruled 2026-07-31: this tripwire covers swallowed content that BEARS A KIND,
         # not every mid-line closer. A comment that swallows only prose and is closed mid-line stays
@@ -1300,14 +1249,9 @@ EOF
         while IFS= read -r vline; do
           vtag=${vline%%$'\t'*}; vrest=${vline#*$'\t'}
           case "$vtag" in
-            I) if gate_entry "$vrest" "$vklist"; then vcnt=$((vcnt+1))
-               else
-                 vf=$(printf '%s' "$vrest" | sed -nE 's/^[^][]*\[([^]]*)\].*$/\1/p' | head -1 \
-                      | sed -E 's/^[<{]//; s/[>}]$//; s/^[[:space:]]+//; s/[[:space:]]+$//' | tr '[:upper:]' '[:lower:]')
-                 if [ -n "$vf" ]; then
-                   for vk in $vklist; do case "$vf" in *"$vk"*) vcnt=$((vcnt+1)); break ;; esac; done
-                 fi
-               fi ;;
+            I) case "$vrest" in *"["*)
+                 printf '%s\n' "$vrest" | grep -qiE "\[[^]]*($vkre)" && vcnt=$((vcnt+1)) ;;
+               esac ;;
             C) [ -n "$vrest" ] && [ "$vcnt" -gt 0 ] &&
                  prob "$d review.md: a comment swallows $vcnt violation-shaped entr(ies) and its closing '-->' is followed by '$vrest' on the same line — if that arrow is prose that accidentally closed a forgotten '<!--', close the comment where it was meant to end; if the archive is deliberate, put the closing '-->' on its own line"
                vcnt=0 ;;

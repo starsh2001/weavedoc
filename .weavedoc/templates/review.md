@@ -18,6 +18,9 @@ consecutive_passes: 0
   4. Human queue — advisory findings the machine wanted to dismiss on SEMANTIC grounds. Same entry
      format and ownership rules as truths/verify.md's; `validate` requires an ownership tag on every
      [open] entry. A dismissal the machine isn't allowed to make needs a legal place to sit.
+  ZONE RULE: a kind in brackets ([contradiction] etc.) may appear ONLY inside section 1. In every
+  other section, name kinds WITHOUT brackets (`- fixed: contradiction — …`) — validate blocks a
+  bracketed kind anywhere outside the gate's own section, whatever the line's shape.
   See .weavedoc/FORMATS.md.
 -->
 
