@@ -77,6 +77,19 @@ CATALOG="$ROOT/catalog.md"
 # ---- schema + generic markdown helpers ----
 sch()   { grep -E "^$1:" "$SCHEMA" 2>/dev/null | head -1 | sed -E "s/^$1:[[:space:]]*//"; }
 pipes() { echo "$1" | tr '|' '\n'; }
+has_fm() { # $1=file -> 0 when line 1 opens a frontmatter block
+  # One spelling of the opening fence, in one place. Every reader that looks INSIDE frontmatter
+  # (fm, the truths awk, coverage, retag, reindex, census) matches `^---[[:space:]]*$`; the two
+  # callers that ask whether frontmatter EXISTS at all used to compare the line to the literal
+  # "---". One trailing space split the two judgements apart, and the consequences ran opposite
+  # ways: on a material it silently switched OFF the "frontmatter is never closed" alarm, so the
+  # seal ran zero times and a fabricated body passed with `✓ all checks passed`; on a truth it
+  # blocked a file that parses perfectly with a message stating three things that are false of it.
+  # A fence spelled `--- ` is legal input everywhere else in the tool, so neither reading was a
+  # judgement about the file — only about which of two rules got there first.
+  [ -f "$1" ] || return 1
+  head -1 "$1" 2>/dev/null | tr -d '\r' | grep -qE '^---[[:space:]]*$'
+}
 fm() { # $1=file $2=key -> frontmatter value (within leading --- --- block)
   awk -v k="$2" '
     NR==1 && /^---[[:space:]]*$/ { infm=1; next }
@@ -215,13 +228,37 @@ gate_entry() { # $1=line $2=kind-list(space-separated) -> 0 when this is a viola
   # file-wide count needs so it cannot annex the other ledgers:
   #   kind-bearing — the first bracket slot must carry a real kind, else Findings (`- [critical]`)
   #     and Human-queue (`- [open]`) entries would count as parked violations;
-  #   entry position — the bracket must open the line (an optional bullet before it), else an
-  #     adjudication record (`- fixed: [contradiction] …`) or prose that merely MENTIONS a kind
-  #     mid-sentence would count. A kind named mid-line is talk about a violation, not one.
-  local s k
+  #   entry position — the bracket must OPEN the line, else an adjudication record
+  #     (`- fixed: [contradiction] …`) or prose that merely MENTIONS a kind mid-sentence would
+  #     count. A kind named mid-line is talk about a violation, not one.
+  #
+  # "Opens the line" is about words, not about one bullet character. Reading it as `- ` alone let
+  # four shapes render exactly like an entry and count as nothing: a markdown ORDERED list
+  # (`1. [contradiction] …`), a blockquote (`> - [contradiction] …`), a non-breaking space after
+  # the bullet (what a paste from a word processor leaves), and an entry whose closing `]` was
+  # never typed. All four are is_noise ENTRIES, so the same line blocked inside the section and
+  # vanished outside it — the bundle contradicting itself, which is what a file-wide census exists
+  # to prevent. So the test is now: everything before the bracket must be list/quote scaffolding.
+  #
+  # LIMIT, stated: words before the bracket still do not count, and that is not a shape we can
+  # decide. `- 3장 [contradiction] …` (an entry someone labelled) and `- fixed: [contradiction] …`
+  # (a record of one already closed) are the same string shape; counting the first would false-fail
+  # the second, which is a document a competent user writes. Inside the violations section the gate
+  # still treats both as open violations — the ambiguity is a property of being OUTSIDE it.
+  local s k pre rest nbsp
   is_noise "$1" && return 1
-  printf '%s' "$1" | grep -qE '^[[:space:]]*([-*+][[:space:]]*)?\[' || return 1
-  s=$(printf '%s' "$1" | sed -nE 's/^[^][]*\[([^]]*)\].*$/\1/p' | head -1)
+  pre=$(printf '%s' "$1" | sed 's/\[.*$//')
+  nbsp=$(printf '\302\240'); pre=${pre//$nbsp/ }
+  # `%s\n`, not `%s`: a bulletless entry leaves an EMPTY prefix, and printf without the newline
+  # hands grep zero lines, which never matches — the shape is_noise most wants counted would be
+  # the one shape dropped.
+  printf '%s\n' "$pre" | grep -qE '^[[:space:]>]*([-*+]|[0-9]{1,3}[.)])?[[:space:]]*$' || return 1
+  # The slot ends at `]` — or, when that was never typed, at the first space. A kind is one token
+  # (`contradiction`, `unsupported`, `missing-required`), so an unclosed bracket still has a
+  # readable slot; taking the rest of the LINE instead would let any bracketed prose that happens
+  # to say "contradiction" somewhere count.
+  rest=$(printf '%s' "$1" | sed -E 's/^[^[]*\[//')
+  case "$rest" in *']'*) s=${rest%%]*} ;; *) s=${rest%%[[:space:]]*} ;; esac
   s=$(printf '%s' "$s" | sed -E 's/^[<{]//; s/[>}]$//; s/^[[:space:]]+//; s/[[:space:]]+$//' | tr '[:upper:]' '[:lower:]')
   [ -n "$s" ] || return 1
   for k in $2; do case "$s" in *"$k"*) return 0 ;; esac; done
@@ -445,7 +482,7 @@ cmd_validate() {
     # The reader is told the extractions are fabricated when the material is simply unparsed.
     # Only the unclosed case: with no frontmatter at all, the required-key checks below already say so
     # ten times over, whereas an unclosed one satisfies every one of them (fm reads to EOF).
-    if [ "$(head -1 "$f" 2>/dev/null | tr -d '\r')" = "---" ]; then
+    if has_fm "$f"; then
       awk 'NR==1 { if($0 ~ /^---[[:space:]]*$/) infm=1; next }
            infm && /^---[[:space:]]*$/ { closed=1; exit }
            END { exit closed?0:1 }' "$f" ||
@@ -568,11 +605,18 @@ cmd_validate() {
         # hand-written decision record went in unvalidated. `decided_by` was not even in the schema.
         if(tresolution!=""){
           rv=tresolution
-          if(match(rv,/type:[[:space:]]*[^,}]+/)){ rt2=substr(rv,RSTART,RLENGTH); sub(/^type:[[:space:]]*/,"",rt2); sub(/[[:space:]]+$/,"",rt2)
+          # Space BEFORE the colon is legal YAML, and every frontmatter reader was taught that in
+          # the .7 bundle — but the keys INSIDE this flow object were left out of that unification,
+          # so `{type : pick, …}` blinded all four readers at once. The visible half was a false
+          # message ("resolution has no 'decided_by'" about a resolution that has one); the silent
+          # half was worse — with only `decided_by:` canonical, an out-of-enum type, an out-of-enum
+          # decision_kind AND a winner naming a truth that does not exist all passed with
+          # `✓ all checks passed`, which is precisely the accident the winner check was added for.
+          if(match(rv,/type[[:space:]]*:[[:space:]]*[^,}]+/)){ rt2=substr(rv,RSTART,RLENGTH); sub(/^type[[:space:]]*:[[:space:]]*/,"",rt2); sub(/[[:space:]]+$/,"",rt2)
             if(!(rt2 in oktype)) prob(tfile "  resolution type " q(rt2) " invalid → use " rtypes " (truth.fm.resolution.type)") }
-          if(match(rv,/decision_kind:[[:space:]]*[^,}]+/)){ rk2=substr(rv,RSTART,RLENGTH); sub(/^decision_kind:[[:space:]]*/,"",rk2); sub(/[[:space:]]+$/,"",rk2)
+          if(match(rv,/decision_kind[[:space:]]*:[[:space:]]*[^,}]+/)){ rk2=substr(rv,RSTART,RLENGTH); sub(/^decision_kind[[:space:]]*:[[:space:]]*/,"",rk2); sub(/[[:space:]]+$/,"",rk2)
             if(!(rk2 in okkind)) prob(tfile "  resolution decision_kind " q(rk2) " invalid → use " rkinds " (truth.fm.resolution.decision_kind)") }
-          if(match(rv,/decided_by:[[:space:]]*[^,}]+/)){ rb2=substr(rv,RSTART,RLENGTH); sub(/^decided_by:[[:space:]]*/,"",rb2); sub(/[[:space:]]+$/,"",rb2)
+          if(match(rv,/decided_by[[:space:]]*:[[:space:]]*[^,}]+/)){ rb2=substr(rv,RSTART,RLENGTH); sub(/^decided_by[[:space:]]*:[[:space:]]*/,"",rb2); sub(/[[:space:]]+$/,"",rb2)
             if(!(rb2 in okby)) prob(tfile "  resolution decided_by " q(rb2) " invalid → use " rby " (truth.fm.resolution.decided_by)") }
           else prob(tfile "  resolution has no " q("decided_by") " → the provenance of a DECISION is the second membrane; without it the mine cannot say whether a human ruled or the machine picked")
         }
@@ -603,8 +647,8 @@ cmd_validate() {
         # status = validity axis, resolution = history. Guard the two mismatches:
         if(tresolution!=""){
           w2=""; ty=""
-          if(match(tresolution,/winner:[[:space:]]*(\[[^]]*\]|[^,}]+)/)) w2=substr(tresolution,RSTART,RLENGTH)
-          if(match(tresolution,/type:[[:space:]]*[a-z]+/)){ ty=substr(tresolution,RSTART,RLENGTH); sub(/type:[[:space:]]*/,"",ty) }
+          if(match(tresolution,/winner[[:space:]]*:[[:space:]]*(\[[^]]*\]|[^,}]+)/)) w2=substr(tresolution,RSTART,RLENGTH)
+          if(match(tresolution,/type[[:space:]]*:[[:space:]]*[a-z]+/)){ ty=substr(tresolution,RSTART,RLENGTH); sub(/type[[:space:]]*:[[:space:]]*/,"",ty) }
           # Match the padded id AND the unpadded one. This was the only id comparison in tf_done that
           # did not normalise, so `winner: [t5]` written in t005.md read as "somebody else won" and
           # validate told the user to set the WINNER to discarded — which, followed, takes the value the
@@ -627,7 +671,7 @@ cmd_validate() {
           prob(tfile "  source " q(tsrc) " is " q("origin: research") " (machine-fetched) but provenance is " q("stated") " → nobody stated it; use " q("adopted") " (user accepted the fetched value) or " q("derived") " (computed from it)")
         if(hassource && (tsrc in ret) && (v=="ok" || v=="conflict"))
           prob(tfile "  source " q(tsrc) " is retracted but status is " q(v) " → set unsupported (map retraction propagation)")
-        if(tresolution!="" && match(tresolution,/winner:[[:space:]]*(\[[^]]*\]|[^,}]+)/)){
+        if(tresolution!="" && match(tresolution,/winner[[:space:]]*:[[:space:]]*(\[[^]]*\]|[^,}]+)/)){
           wv=substr(tresolution,RSTART,RLENGTH); w3=wv
           while(match(wv,/m[0-9]+/)){
             wm=substr(wv,RSTART,RLENGTH); wv=substr(wv,RSTART+RLENGTH)
@@ -903,7 +947,7 @@ cmd_validate() {
       tb=$(basename "$tf" .md); tc=$(canon_id "$tb" || true)
       [ -n "$tc" ] && [ "$tb" != "$tc" ] &&
         prob "$tf  filename is not the canonical id spelling — rename it to '$tc.md' and set 'id: $tc' (ids are zero-padded to at least three digits). Two spellings of one number resolve to the same id, so the reciprocity, winner and retracted tables would collapse both files into one entry"
-      if [ "$(head -1 "$tf" 2>/dev/null | tr -d '\r')" = "---" ]; then
+      if has_fm "$tf"; then
         awk 'NR==1 { if($0 ~ /^---[[:space:]]*$/) infm=1; next }
              infm && /^---[[:space:]]*$/ { closed=1; exit }
              END { exit closed?0:1 }' "$tf" && continue
@@ -1793,7 +1837,7 @@ cmd_pull() {
         # "resolved" = pre-rename legacy value (validate flags it for migration). Winner-self
         # is legacy-only too (winners now stay ok) — still rendered usable so a mid-migration
         # mine reads correctly.
-        w=$(printf '%s' "$res" | grep -oE 'winner:[[:space:]]*(\[[^]]*\]|[^,}]+)' | sed -E 's/winner:[[:space:]]*//')
+        w=$(printf '%s' "$res" | grep -oE 'winner[[:space:]]*:[[:space:]]*(\[[^]]*\]|[^,}]+)' | sed -E 's/winner[[:space:]]*:[[:space:]]*//')
         sc=$(printf '%s' "$res" | grep -oE 'scope:[[:space:]]*\[[^]]*\]' | sed -E 's/scope:[[:space:]]*//')
         if [ -n "$w" ] && printf '%s' "$w" | grep -qE "(^|[^0-9A-Za-z])${id}([^0-9]|$)"; then
           printf '%s  [WON ITS CONFLICT — usable; legacy stamp, set status: ok] %s [%s]%s\n' "$id" "$cl" "$src" "$lab"
@@ -1813,7 +1857,7 @@ cmd_pull() {
         printf '%s  [!! RETRACTED — was never a valid extraction; tombstone only, no successor] %s%s\n' "$id" "$cl" "$lab"
         n_retr=$((n_retr+1));;
       *)
-        if [ -n "$res" ] && printf '%s' "$res" | grep -q 'type:[[:space:]]*attribute'; then
+        if [ -n "$res" ] && printf '%s' "$res" | grep -q 'type[[:space:]]*:[[:space:]]*attribute'; then
           lab="$lab [ATTRIBUTED — cite both sides, per resolution]"
         fi
         printf '%s  %s [%s]%s\n' "$id" "$cl" "$src" "$lab"
