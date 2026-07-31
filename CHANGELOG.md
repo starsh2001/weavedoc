@@ -4,6 +4,35 @@
 
 ---
 
+## 2026-07-31.11
+
+**nice급 잔여 12건 전부 — 콜드 라운드 3·4의 확인 목록이 이것으로 비었습니다.** 남은 것은 Human queue의 정책 결정 4건(사용자 몫)뿐입니다.
+
+### 숫자의 정직 (R3-N1·N2, R4-N3·N4·N5)
+
+- `status`의 materials가 **폴더 수**, validate가 **converted.md 수**를 세서 같은 광산에서 2 vs 1 → 한 정의(디스크의 converted.md)로 통일하고, 폴더 수가 다르면 그 차이를 **보여줍니다**("N folder(s) without converted.md — validate names them").
+- 소유권 태그 없는 `- [open]`이 총계엔 들고 3버킷·untagged 어디에도 없어 `open 5 — 2·1·1`처럼 합이 조용히 어긋남 → 나머지를 "N missing an ownership tag (validate rejects these)"로 표시.
+- census의 index 교차검사가 **개수만** 비교해 매달린 항목과 미색인 파일이 상쇄 → **집합 비교**로: 양쪽을 각각 id로 지목합니다.
+- 같은 자리의 처방이 해소 불가 루프였던 것(frontmatter 없는 파일은 reindex가 영원히 못 봄)도 함께: "돌아오면 validate가 거부하는 파일이다 — validate를 돌려라"로 안내가 이어집니다.
+- 합계 가드 메시지에 가장 흔한 셋째 원인(enum 밖 status) 병기.
+
+### 도구의 손버릇 (R4-N2, R3-N3·N6)
+
+- `retag`가 재작성 줄의 **행미 YAML 주석을 말없이 지움** → 닫는 대괄호 뒤는 그대로 태웁니다.
+- 봉헌 멤브레인 실패 메시지에만 복구 처방이 없던 것 → kind별 수리(refine)→재review, 또는 final 제거; "review.md에서 위반을 지워서 닫지 않는다"까지 명시.
+- 편측 충돌 처방이 계단식(따르면 다음 오류가 한 단계 더) → 두 요건(상호 conflict_with + 양쪽 status conflict)을 한 메시지에.
+
+### 문서가 비운 자리 (R3-N4·N5·N8, R4-N6)
+
+- plan status `done`에 도달하는 지시가 어디에도 없던 것 → refine 9단계가 유일한 작성자로 명시.
+- refine의 "fixed" 기록 vs adjudications enum `{dropped|accepted}` → enum을 `{fixed|dropped|accepted}`로(fixed는 역사, 나머지는 억제).
+- final의 prior-doc 재진입 **주체·시점** 불명 → refine은 봉헌만; 등록은 **그것을 잇는 다음 문서의 plan**(continues 단계)이 gather로 라우팅. 아무도 안 잇는 final은 등록되지 않는 것이 정상.
+- `corroborated_by` 합의를 인용할 손잡이가 없던 것 → 손잡이는 **truth id 자신**임을 명문화: 문서는 truth를 인용하고 가시 인용에 합의 자료들을 병기, 게이트는 그 주장이 인용된 truth의 claim이므로 통과. "m003도 동의한다"를 **별도 무인용 문장**으로 쓰는 것이 게이트가 정당하게 잡는 형태.
+
+부수: 회귀 하네스의 무동작 tone 치환(R4-N1)도 고쳐 `pass_shipped_templates`가 tone 항목을 실제로 덮습니다(치환 발화를 grep으로 강제).
+
+**회귀**: 신규 4케이스, 전체 **130/130** 클린 와이프. 실광산 ✓ `255 sealed`·census 255/255·status `materials: 27`(validate와 동일 정의) 전부 불변.
+
 ## 2026-07-31.10
 
 **Round 4의 should-fix 13건 전부.** 코드 6건(S1~S6) + 문서·스킬 7건(S7~S13). 이로써 R4 확인 22건 중 남은 것은 nice 6건뿐입니다.

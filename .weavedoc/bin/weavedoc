@@ -862,7 +862,7 @@ cmd_validate() {
             # tombstone, which the retracted-counterpart check above already reports.
             if(statusof[x]=="conflict" && !(cw2[i] in retracted) && (cw2[i] in existsn)){
               if(!(cw2[i] in cwofn) || index(" " cwofn[cw2[i]] " ", " " xn " ")==0)
-                prob("truths/" x ".md  names " disp " in conflict_with but " disp " does not name " x " back → a one-sided conflict cannot be applied by READ.md rule 2, so pull reports the silent side as usable. Set conflict_with on BOTH files")
+                prob("truths/" x ".md  names " disp " in conflict_with but " disp " does not name " x " back → a one-sided conflict cannot be applied by READ.md rule 2, so pull reports the silent side as usable. Fix BOTH files in one edit: set conflict_with on each naming the other, AND set both status " q("conflict") " — doing only the first produces the next error one step later")
               else if((cw2[i] in rawof) && statusof[rawof[cw2[i]]]!="conflict" && statusof[rawof[cw2[i]]]!="")
                 prob("truths/" disp ".md  is in an open conflict with " x " but its own status is " q(statusof[rawof[cw2[i]]]) " → both parties to an unresolved conflict must be " q("conflict") ", or the conflict must be resolved on both")
             }
@@ -1275,7 +1275,7 @@ cmd_validate() {
         N_GATED=$((N_GATED+1))
         while IFS= read -r line; do
           is_noise "$line" && continue
-          prob "$d has $consecrated but review.md 'Fidelity violations' is non-empty → consecrated through an open gate"
+          prob "$d has $consecrated but review.md 'Fidelity violations' is non-empty → consecrated through an open gate. Repair each violation by its kind (refine), re-run review until the section is empty — or remove $consecrated until the gate is clean; a violation is never edited away in review.md itself"
           break
         done < <(fid_body "$DOCUMENTS/$d/review.md")
       fi
@@ -1374,8 +1374,18 @@ cmd_status() {
     { [ -f "$DOCUMENTS/$d/final.md" ] || [ -d "$DOCUMENTS/$d/final" ]; } && [ "$st" != "stale" ] && next="— (final)"
     printf '%-18s %-11s → %s\n' "$d" "$st" "$next"
   done < <(doc_ids)
-  nm=$(material_ids | grep -c . || true)
-  echo "materials: $nm"
+  # The same population validate's `examined:` line counts — converted.md files, from disk.
+  # This used to count FOLDERS, so the two commands answered "how many materials" differently
+  # (2 vs 1) on a mine holding a folder with no converted.md. One definition per number; when
+  # the folder count still differs, the difference is SHOWN, not silently absorbed.
+  local nfold
+  nm=$(ls "$MATERIALS"/*/converted.md 2>/dev/null | grep -c . || true); nm=${nm:-0}
+  nfold=$(material_ids | grep -c . || true); nfold=${nfold:-0}
+  if [ "$nfold" -ne "$nm" ]; then
+    echo "materials: $nm ($((nfold-nm)) folder(s) without converted.md — validate names them)"
+  else
+    echo "materials: $nm"
+  fi
   # Decisions parked on the user. Counted here because a completeness line that reports only
   # "열린 갭 0 · 열린 질문 0" reads as "nothing is waiting on you" while the queue holds eleven.
   if [ -n "$(hq_files)" ]; then
@@ -1390,11 +1400,19 @@ cmd_status() {
     local hq_untag
     hq_untag=$(printf '%s\n' "$hq" | grep -vE '^[[:space:]]*- \[[<{]' 2>/dev/null | grep -E '^[[:space:]]*- ' 2>/dev/null | grep -vcE '^[[:space:]]*- \[(open|ruled)\]' || true)
     if [ "${hq_open:-0}" -gt 0 ]; then
-      printf 'human queue: open %s — you decide %s · recommendation ready %s · machine can just do %s\n' \
-        "$hq_open" \
-        "$(printf '%s\n' "$hq" | countlines '^[[:space:]]*- \[open\][[:space:]]*\[user-only\]')" \
-        "$(printf '%s\n' "$hq" | countlines '^[[:space:]]*- \[open\][[:space:]]*\[recommended\]')" \
-        "$(printf '%s\n' "$hq" | countlines '^[[:space:]]*- \[open\][[:space:]]*\[machine\]')"
+      # The three buckets must SUM to the total. A `- [open]` with no ownership tag lands in the
+      # total but in no bucket (and not in untagged either — that filter excludes `- [open]`
+      # starts), so the line read `open 5 — 2 · 1 · 1` with the missing one nowhere. validate
+      # rejects the entry; this line only has to stop hiding the arithmetic gap until it is fixed.
+      local hq_u hq_r hq_m hq_rest
+      hq_u=$(printf '%s\n' "$hq" | countlines '^[[:space:]]*- \[open\][[:space:]]*\[user-only\]')
+      hq_r=$(printf '%s\n' "$hq" | countlines '^[[:space:]]*- \[open\][[:space:]]*\[recommended\]')
+      hq_m=$(printf '%s\n' "$hq" | countlines '^[[:space:]]*- \[open\][[:space:]]*\[machine\]')
+      hq_rest=$(( hq_open - hq_u - hq_r - hq_m )); [ "$hq_rest" -lt 0 ] && hq_rest=0
+      printf 'human queue: open %s — you decide %s · recommendation ready %s · machine can just do %s' \
+        "$hq_open" "$hq_u" "$hq_r" "$hq_m"
+      [ "$hq_rest" -gt 0 ] && printf ' · %s missing an ownership tag (validate rejects these)' "$hq_rest"
+      printf '\n'
     elif [ "${hq_untag:-0}" -eq 0 ]; then
       echo "human queue: 0"
     fi
@@ -1557,12 +1575,27 @@ cmd_census() {
      && [ "$(nocomment < "$TRUTHS/coverage.md" | section_body2 - "legacy" | countlines '^[[:space:]]*- ')" -gt 0 ]; then
     echo "  ✗ truths/coverage.md '## legacy' has bullets, but none begins with an m-id — no exemption was applied (format: '- m001 — <ruling>')"
   fi
-  [ "$n_files" -ne "$n_index" ] && echo "  ✗ index out of sync with files ($n_files files vs $n_index entries) — run 'weavedoc reindex'"
+  # Sets, not counts. Count-only comparison let an entry pointing at a missing truth and a truth
+  # with no entry CANCEL OUT — a swapped id read as in-sync while zero entries matched zero files.
+  # And the old prescription was a loop: files validate rejects (no frontmatter) are never indexed,
+  # so `reindex` regenerated the same mismatch forever with both numbers true. Name the two sides
+  # separately, and send the unindexable case to the command that can actually explain it.
+  if [ "$n_files" -gt 0 ] || [ "$n_index" -gt 0 ]; then
+    local idx_only file_only
+    idx_only=$(LC_ALL=C comm -23 \
+      <(grep -oE '^- t[0-9]+:' "$TRUTHS/index.md" 2>/dev/null | sed -E 's/^- (t[0-9]+):/\1/' | LC_ALL=C sort -u) \
+      <(ls "$TRUTHS"/t[0-9]*.md 2>/dev/null | while read -r _f; do basename "$_f" .md; done | LC_ALL=C sort -u) | tr '\n' ' ')
+    file_only=$(LC_ALL=C comm -13 \
+      <(grep -oE '^- t[0-9]+:' "$TRUTHS/index.md" 2>/dev/null | sed -E 's/^- (t[0-9]+):/\1/' | LC_ALL=C sort -u) \
+      <(ls "$TRUTHS"/t[0-9]*.md 2>/dev/null | while read -r _f; do basename "$_f" .md; done | LC_ALL=C sort -u) | tr '\n' ' ')
+    [ -n "${idx_only// /}" ] && echo "  ✗ index entries with no truth file: ${idx_only% } — run 'weavedoc reindex'"
+    [ -n "${file_only// /}" ] && echo "  ✗ truth files with no index entry: ${file_only% } — run 'weavedoc reindex'; if it comes back, the file is one validate rejects (e.g. no frontmatter) and reindex cannot see it — run 'weavedoc validate' for the cause"
+  fi
   # The status tallies must add up to the file count. They stopped adding up when a truth carried a
   # duplicate `status:` line — this loop counts every occurrence, so one file was tallied twice and
   # the census printed `live 3 · retracted 1` over 3 files without a murmur. validate names the
   # duplicate key; this line makes the arithmetic itself refuse to look clean.
-  [ $(( n_live + n_res + n_retr )) -ne "$n_files" ] && echo "  ✗ status tallies sum to $(( n_live + n_res + n_retr )) but there are $n_files truth file(s) — a file carries a duplicate 'status:' line, or none at all; run 'weavedoc validate'"
+  [ $(( n_live + n_res + n_retr )) -ne "$n_files" ] && echo "  ✗ status tallies sum to $(( n_live + n_res + n_retr )) but there are $n_files truth file(s) — a file carries a status outside the enum (the commonest cause: none of these buckets counts it), a duplicate 'status:' line, or none at all; run 'weavedoc validate'"
   return 0
 }
 
@@ -1731,6 +1764,10 @@ cmd_retag() {
     infm && /^---[[:space:]]*$/ { infm=0; if(mode=="w") print; next }
     infm && $0 ~ ("^" key "[[:space:]]*:[[:space:]]*\\[") {
       inner=$0; sub(/^[^[]*\[/,"",inner); sub(/\].*$/,"",inner)
+      # Everything after the closing bracket rides along unchanged — a trailing YAML comment is a
+      # comment, not part of the value, and the rewrite used to silently delete it (the user
+      # annotation `tags: [위약]  # 3월 회의에서 정한 분류` lost its note on a one-word retag).
+      tail=$0; sub(/^[^]]*\]/,"",tail)
       n=split(inner,el,","); out=""; hit=0; delete seen
       for(i=1;i<=n;i++){ e=strip(el[i]); if(e=="") continue
         if(e==old){ e=new; hit=1 }
@@ -1738,7 +1775,7 @@ cmd_retag() {
       if(hit){
         if(mode=="s" && !(FILENAME in pf)){ pf[FILENAME]=1; print FILENAME }
         if(mode=="c") chg++
-        if(mode=="w") $0=key ": [" out "]"
+        if(mode=="w") $0=key ": [" out "]" tail
       }
     }
     mode=="w" { print }

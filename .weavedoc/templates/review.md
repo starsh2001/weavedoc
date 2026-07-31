@@ -31,7 +31,7 @@ consecutive_passes: 0
 
 # Adjudications
 
-- {dropped|accepted}: {finding} — {reason}
+- {fixed|dropped|accepted}: {finding} — {reason}
 
 # Human queue
 
