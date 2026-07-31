@@ -17,4 +17,4 @@ scope_tags: []   # tags this document covers — set by plan from elicitation; n
 
 # {Section title}
 
-<!-- purpose: {what this section does} | materials: {role · topics} | {required|optional} -->
+<!-- purpose: {what this section does} | tags: {truth tags this section draws on} | {required|optional} -->

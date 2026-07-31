@@ -24,7 +24,7 @@ summary: {2-3 line summary}
   Optional frontmatter:
     stage: {plan|applied}   — the source is clearly a plan/proposal vs an applied
       record (truths from plan-stage materials carry an "실행 확인 안 됨" caveat).
-    corrects: [{m<N> §<sec>}] — this material displaces named parts of earlier ones.
+    corrects: [{m<NNN> §<sec>}] — this material displaces named parts of earlier ones.
       map reads it for the resolution `scope`, and it is what tells a reader of the
       body alone that this is a correction and not a new setting.
     url: / retrieved_at:   — REQUIRED when origin is `research` (validate blocks

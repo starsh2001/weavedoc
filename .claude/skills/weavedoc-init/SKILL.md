@@ -31,14 +31,14 @@ Ask **exactly** these questions, in order. Don't improvise, skip, or silently de
 - **Review strength** — *"문서 리뷰 강도: 1 / 2 / 3"* (추천: 1)
 - **Scale** — *"검증/리뷰 규모: skip / light / standard / full"* (추천: standard)
 
-Write the answers to `.weavedoc/config.yaml`. On a **reconfigure**, update config, **re-ensure the CLAUDE.md pointer block** (see §3 — idempotent), and **stop here**.
+Write the answers to `.weavedoc/config.yaml`. On a **reconfigure**, update config, then re-ensure the **two** idempotent guards from §3 — the **search shield (`.ignore`)** and the **CLAUDE.md pointer block** — and **stop here**. (Both bullets are marked *runs on reconfigure too*; a reconfigured mine that skips the shield leaves its raw layer searchable until the next gather.)
 
 ### 3. Create the mine infrastructure (first-time only)
 - **Folders.** Create `inbox/`, `materials/`, `truths/`, `documents/` per the config paths.
 - **project.md.** Create from `.weavedoc/templates/project.md` with minimal defaults:
   - `roles` — leave empty `[]`; the first `gather` proposes roles from the actual materials.
   - `tone` — leave empty; it is optional HERE (a standing project tone, if one exists). Each `plan` then writes a concrete tone into its own `plan.md`, where the field is required — "inherited" is resolved at plan time, not left blank.
-  - `required_tags` — leave empty unless completeness is `required`.
+  - `required_tags` — leave empty unless completeness is `required`. When it IS `required`: ask the user which topics are mandatory **only if they can name them now** (a contract project usually can — 조항 categories are known before materials arrive); otherwise **defer explicitly**: leave `[]`, tell the user the completeness setting has no mechanical teeth until this list is filled (validate's required-tag check over an empty list checks nothing), and note that the first `gather`/`map` proposes candidates from the actual materials and the first `plan` (structural-gap step) cross-checks them. Deferring is legal; deferring *silently* is what leaves the setting inert.
   - Body — a one-line placeholder: the mine's character reveals itself as materials are gathered.
 - **Search shield (`.ignore`).** *Runs on **reconfigure** too.* Ensure the project root has an `.ignore` file shielding the raw layer from content searches (create if absent; if present, ensure the two entries exist). Use the **configured** `paths` values, not the literals:
 

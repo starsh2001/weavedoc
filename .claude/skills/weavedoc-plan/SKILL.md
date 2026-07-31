@@ -61,7 +61,7 @@ Pull a document from the data mine — decide its structure, tone, and which tru
 
 3. **Propose structure.** Now that all decisions are resolved: create `documents/<doc-id>/` and `plan.md` (from `.weavedoc/templates/plan.md`). Offer a section skeleton fit to `doc_type` + project + available materials + all elicitation answers. For multi-file plans, the skeleton is a page list with per-page structure rules and link conventions.
 
-4. **Section notes.** For each section (or page, if multi-file), set the note: purpose / truths by `tags` / `required|optional`. Map sections to truths by grepping tags in `truths/index.md` or `truths/*.md` frontmatter.
+4. **Section notes.** For each section (or page, if multi-file), set the note: `<!-- purpose: … | tags: … | required|optional -->`. The `tags` field carries **truth tags** (the vocabulary of `truths/*.md` `tags:`, not material role·topics) — step 9 harvests `scope_tags` from exactly these fields, and map's staleness trigger compares that against new truths' tags, so any other vocabulary here silently disables staleness. Map sections to truths by grepping tags in `truths/index.md` or `truths/*.md` frontmatter.
 
 5. **Semantic check.** Before presenting to the user, self-review the proposed structure: does every item sit in the right category? (e.g. a CEO doesn't go in "members"; a production tool reference doesn't go in a creative wiki.) Fix before showing.
 

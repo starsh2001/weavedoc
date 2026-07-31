@@ -106,7 +106,7 @@ Write findings in {config.language}.
 
 ## Aggregate
 
-Merge findings from all reviewers; dedupe by (where + what). On a severity clash, take the higher.
+Merge findings from all reviewers; dedupe by (where + what). On a severity clash, take the higher. On a **kind** clash (two lenses judged the same defect e.g. `contradiction` vs `unsupported`), keep the kind whose diagnosis carries **more evidence** — `contradiction` (names the conflicting truth) over `unsupported` (names only absence) over `missing-required` — and note the displaced kind in the entry's prose; `refine` routes the repair by kind, so the merged entry must say which repair path won and that the other reading existed.
 
 ## Over-strictness triage (`full`; optional `standard`)
 
@@ -118,7 +118,7 @@ One more cold reviewer (the *defender*) rules each finding KEEP / DOWNGRADE / DR
 - **`machine` is the defender's to give, never the producer's.** If no defender ran, the producer writes `[open] [user-only]` — **not** a bare `[open]` (`validate` demands an ownership tag on every `[open]` entry) and **not** an untagged line (it disappears from every count). Only a user ruling moves an entry down.
 - **Retagging an existing untagged legacy entry also defaults to `user-only`.** That is the direction that surfaces rather than buries.
 
-A drop whose reason is semantic — "원문에서 직접 함의됨", "파생이라 무해", "다른 파일에 기록돼 있음" — is not a drop: it goes to the state file's `## Human queue`, and only the user's ruling converts it to a do-not-raise.
+A drop **or downgrade** whose reason is semantic — "원문에서 직접 함의됨", "파생이라 무해", "다른 파일에 기록돼 있음" — is not the defender's to finalize: it goes to the state file's `## Human queue`, and only the user's ruling converts it to a do-not-raise. The verdict set is KEEP / DOWNGRADE / DROP, and at `strength: 1` a `critical`→`should-fix` downgrade removes the finding from the run as surely as a drop — routing only drops to the queue let the same semantic judgement escape through the other verdict.
 - Returns the confirmed list + new do-not-raise additions + the human-queue entries.
 
 **Never touch fidelity violations** (contradiction/unsupported/missing-required) — those are facts, not opinions. Triage applies only to verify findings and advisory findings.

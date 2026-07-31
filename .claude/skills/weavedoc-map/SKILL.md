@@ -28,7 +28,7 @@ The data mine's core engine — extract atomic truths from materials, tag them f
 
 2. **Duplicate check.** Before creating a new truth, search existing truths by tags (see AI lookup pattern below). If a truth with the same claim already exists from a different source, don't create a duplicate — record `corroborated_by: [mNNN]` on the existing truth's frontmatter (chat-only corroboration notes are lost when the session ends), or flag a conflict if the details differ.
 
-3. **Extract truths.** For each material, extract atomic, citable facts as individual `truths/t<N>.md` files (format per `.weavedoc/FORMATS.md`). Assign topic `tags` (N:N — a truth can have multiple tags). Inherit relevant tags from the material's `topics` and add finer ones where needed.
+3. **Extract truths.** For each material, extract atomic, citable facts as individual `truths/t<NNN>.md` files — ids zero-padded to at least three digits (`t001`, `t042`, `t1000`), format per `.weavedoc/FORMATS.md`. Assign topic `tags` (N:N — a truth can have multiple tags). Inherit relevant tags from the material's `topics` and add finer ones where needed.
 
    **Copy the body out of the source file, never type it.** Read the exact line from `converted.md`
    and paste it in — that is what makes "copy-paste, never compose" mechanical instead of a promise.

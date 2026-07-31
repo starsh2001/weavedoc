@@ -703,8 +703,14 @@ cmd_validate() {
             reflist[tid "" fn "" rid]=ridn
           }
         }
-        tg=ttags; gsub(/[]["]/,"",tg); nn=split(tg,ta,",")
-        for(ii=1;ii<=nn;ii++){ gsub(/^[[:space:]]+|[[:space:]]+$/,"",ta[ii]); if(ta[ii]!="") seentag[ta[ii]]=1 }
+        # Only LIVE truths cover a required tag — the gaps doctrine verbatim: a tombstone is an
+        # extraction that never had standing, and the value of a discarded loser lives on in its
+        # winner, not in itself. A retracted truth used to satisfy required_tags, so retracting the
+        # last real extraction of a mandatory topic kept the mine green about it.
+        if(v!="retracted" && v!="discarded"){
+          tg=ttags; gsub(/[]["]/,"",tg); nn=split(tg,ta,",")
+          for(ii=1;ii<=nn;ii++){ gsub(/^[[:space:]]+|[[:space:]]+$/,"",ta[ii]); if(ta[ii]!="") seentag[ta[ii]]=1 }
+        }
       }
       BEGIN { nreq=split(ENVIRON["WD_REQTAGS"], rt, "\n")
               nm=split(treq,_r," ");    for(i=1;i<=nm;i++) if(_r[i]!="") reqkey[_r[i]]=1
@@ -714,7 +720,7 @@ cmd_validate() {
               nm=split(rkinds,_k," ");   for(i=1;i<=nm;i++) if(_k[i]!="") okkind[_k[i]]=1
               nm=split(rby,_y," ");      for(i=1;i<=nm;i++) if(_y[i]!="") okby[_y[i]]=1
               nm=split(matids,_a," "); for(i=1;i<=nm;i++) if(_a[i]!=""){ mat[_a[i]]=1; existsn[_a[i]]=1;
-                 _mn=_a[i]; sub(/^m0*/,"m",_mn); if(_mn!="m") existsn[_mn]=1 }
+                 _mn=_a[i]; sub(/^m0*/,"m",_mn); if(_mn!="m"){ existsn[_mn]=1; matn[_mn]=_a[i] } }
               nm=split(retids,_b," "); for(i=1;i<=nm;i++) if(_b[i]!="") ret[_b[i]]=1
               nm=split(remids,_c," "); for(i=1;i<=nm;i++) if(_c[i]!="") removedlog[_c[i]]=1
               nm=split(resids,_d," "); for(i=1;i<=nm;i++) if(_d[i]!="") research[_d[i]]=1 }
@@ -749,7 +755,13 @@ cmd_validate() {
         if(ftype=="t"){
           if($0 ~ /^id[[:space:]]*:/)                 { tidfield=val(); hasid=1 }
           else if($0 ~ /^claim[[:space:]]*:/)         { hasclaim=1 }
-          else if($0 ~ /^source[[:space:]]*:/)        { tsrc=val(); hassource=1 }
+          # A source spelled leniently (`m5` for folder `m005`) resolves to the folder it names.
+          # FORMATS pins the FOLDER spelling and promises references stay lenient; this was the one
+          # reference judged by raw string against folder names, so the documented migration
+          # (canonicalise the folders, leave references alone) failed every truth in the mine —
+          # and while it failed, the seal did not run.
+          else if($0 ~ /^source[[:space:]]*:/)        { tsrc=val(); hassource=1
+            if(tsrc!="" && !(tsrc in mat)){ _sn=tsrc; sub(/^m0*/,"m",_sn); if(_sn in matn) tsrc=matn[_sn] } }
           else if($0 ~ /^tags[[:space:]]*:/)          { ttags=val(); hastags=1 }
           else if($0 ~ /^status[[:space:]]*:/)        { tstatus=val(); hasstatus=1 }
           else if($0 ~ /^conflict_with[[:space:]]*:/) { tconflict=val() }
@@ -804,7 +816,7 @@ cmd_validate() {
         }
       }
       END {
-        for(i=1;i<=nreq;i++) if(rt[i]!="" && !(rt[i] in seentag)) prob("required_tag " q(rt[i]) " has no truths")
+        for(i=1;i<=nreq;i++) if(rt[i]!="" && !(rt[i] in seentag)) prob("required_tag " q(rt[i]) " has no live truths — retracted and discarded truths do not cover a topic (a tombstone is an extraction that never had standing); extract it from a material, or remove the tag from project.md required_tags")
         for(kx in kcount) if(kcount[kx]>1){
           split(kx,kk2,SUBSEP)
           prob(kk2[1] "  frontmatter key " q(kk2[2]) " appears " kcount[kx] " times → fm reads the FIRST, validate and reindex read the LAST, and census counts BOTH, so three commands report three different values for the same field. Keep one")
@@ -993,16 +1005,21 @@ cmd_validate() {
       cout=$(awk -v matids="$matlist" -v pairs="$tsrcpairs" -v Q="'" '
         function q(s){ return Q s Q }
         function prob(m){ print "  " m; probs++ }
+        # References stay lenient (FORMATS pins the FOLDER spelling only), so every id used as a
+        # KEY here is normalised first: `source: m5`, a `## m005` heading and a `t1` mention must
+        # all land on the same entry as their canonical spellings, or a mine migrated exactly as
+        # documented pairs nothing with anything.
+        function norm(s){ sub(/^m0*/,"m",s); sub(/^t0*/,"t",s); return (s=="m"||s=="t") ? "" : s }
         BEGIN {
-          nm=split(matids,a," "); for(i=1;i<=nm;i++) if(a[i]!="") mat[a[i]]=1
+          nm=split(matids,a," "); for(i=1;i<=nm;i++) if(a[i]!=""){ mat[a[i]]=1; if(norm(a[i])!="") mat[norm(a[i])]=1 }
           np=split(pairs,b," ")
-          for(i=1;i<=np;i++){ if(b[i]=="") continue; split(b[i],c,":"); tsrc[c[1]]=c[2] }
+          for(i=1;i<=np;i++){ if(b[i]=="") continue; split(b[i],c,":"); tsrc[c[1]]=c[2]; if(norm(c[1])!="") tid2file[norm(c[1])]=c[1] }
           sec=""
         }
         /^##[[:space:]]+m[0-9]+([[:space:]]|$)/ {
           sec=$2
           if(!(sec in mat)) prob("truths/coverage.md  " q("## " sec) " → no material folder")
-          hassec[sec]=1; next
+          hassec[norm(sec)]=sec; next
         }
         /^##[[:space:]]+legacy[[:space:]]*$/ { sec=""; inleg=1; next }
         /^##[[:space:]]/ { sec=""; inleg=0; next }
@@ -1035,8 +1052,8 @@ cmd_validate() {
           line=$0
           while(match(line,/t[0-9]+/)){
             id=substr(line,RSTART,RLENGTH); line=substr(line,RSTART+RLENGTH)
-            if(!(id in tsrc)) prob("truths/coverage.md  mentions " q(id) " — no such truth file")
-            else if(sec!="") mention[sec "," id]=1
+            if(!(id in tsrc) && !(norm(id) in tid2file)) prob("truths/coverage.md  mentions " q(id) " — no such truth file")
+            else if(sec!="") mention[norm(sec) "," (norm(id)!="" ? norm(id) : id)]=1
           }
         }
         END {
@@ -1044,11 +1061,11 @@ cmd_validate() {
           # hassec[] is only complete once the whole file has been read.
           for(l in legseen){
             if(!(l in mat)) prob("truths/coverage.md  " q("## legacy") " exempts " q(l) " — no such material")
-            else if(l in hassec) prob("truths/coverage.md  " q("## legacy") " exempts " q(l) " but it has its own " q("## " l) " section — it is covered, not exempt (that drops the denominator while the numerator stays, which can push the ratio above 1)")
+            else if(norm(l) in hassec) prob("truths/coverage.md  " q("## legacy") " exempts " q(l) " but it has its own " q("## " hassec[norm(l)]) " section — it is covered, not exempt (that drops the denominator while the numerator stays, which can push the ratio above 1)")
           }
-          for(t in tsrc){ s=tsrc[t]
-            if((s in hassec) && !((s "," t) in mention))
-              prob("truths/coverage.md  " q("## " s) " missing " q(t) " — extracted from " s " but absent from its coverage section (update at map)")
+          for(t in tsrc){ s=norm(tsrc[t])
+            if((s in hassec) && !((s "," norm(t)) in mention))
+              prob("truths/coverage.md  " q("## " hassec[s]) " missing " q(t) " — extracted from " tsrc[t] " but absent from its coverage section (update at map)")
           }
           print "CFAILS " probs+0
         }
@@ -1165,6 +1182,10 @@ cmd_validate() {
           [ -n "$vhit" ] || continue
           case "$vline" in
             "#"*) prob "$d review.md: '$vline' starts with '#', so the gate reads it as a heading and drops it — a numbered entry is invisible to the check even though markdown renders it as body text. Start the entry with '- ' instead" ;;
+            # A `-->`-opened line lands here with its kind EXACT — the problem is the arrow, not
+            # the kind, and "fix the kind" was a prescription with nothing to fix. Name the real
+            # cause: the gate reads the line as a comment closer, so the entry after it is invisible.
+            "-->"*) prob "$d review.md: '$vline' starts with '-->', so the gate reads it as a comment closer and drops the whole line — the entry after the arrow is invisible however correct its kind is. Remove the stray arrow, or if it closes a real comment above, put it on its own line and start the entry on the next" ;;
             *) prob "$d review.md: '[$vslot]' is not an exact violation kind — the gate acts only on an exact one of $vkinds (lowercase, no extra spaces, ONE kind per entry). Written like this the line reads as an untouched template and is silently ignored; fix the kind" ;;
           esac
         done < <(nocomment < "$DOCUMENTS/$d/review.md" | grep -F '[' || true)
@@ -1182,11 +1203,22 @@ cmd_validate() {
         # Known limit, stated: a prose line that happens to END with `-->` is indistinguishable
         # from an archive closer and still swallows silently. Comment interiors stay invisible by
         # design everywhere else; this is a tripwire on the one shape that was actually breached.
+        # Counted: every kind-bearing shape, not only the census's exact unit. The lines the
+        # near-miss guidance calls "someone trying to write a violation" (`#1 [contradiction]`,
+        # `[Contradiction ]`) are exactly as gone when swallowed as a well-formed entry is, and a
+        # tripwire that counted only the well-formed ones stayed silent about them.
         vcnt=0
         while IFS= read -r vline; do
           vtag=${vline%%$'\t'*}; vrest=${vline#*$'\t'}
           case "$vtag" in
-            I) gate_entry "$vrest" "$vklist" && vcnt=$((vcnt+1)) ;;
+            I) if gate_entry "$vrest" "$vklist"; then vcnt=$((vcnt+1))
+               else
+                 vf=$(printf '%s' "$vrest" | sed -nE 's/^[^][]*\[([^]]*)\].*$/\1/p' | head -1 \
+                      | sed -E 's/^[<{]//; s/[>}]$//; s/^[[:space:]]+//; s/[[:space:]]+$//' | tr '[:upper:]' '[:lower:]')
+                 if [ -n "$vf" ]; then
+                   for vk in $vklist; do case "$vf" in *"$vk"*) vcnt=$((vcnt+1)); break ;; esac; done
+                 fi
+               fi ;;
             C) [ -n "$vrest" ] && [ "$vcnt" -gt 0 ] &&
                  prob "$d review.md: a comment swallows $vcnt violation-shaped entr(ies) and its closing '-->' is followed by '$vrest' on the same line — if that arrow is prose that accidentally closed a forgotten '<!--', close the comment where it was meant to end; if the archive is deliberate, put the closing '-->' on its own line"
                vcnt=0 ;;
@@ -1197,6 +1229,10 @@ cmd_validate() {
               if (inc) {
                 i=index(line,"-->")
                 if (i==0) { print "I\t" line; line=""; break }
+                # the closing line is interior UP TO its arrow. Without this, an entry that sits
+                # on the closer line itself (`- [contradiction] … --> 그리고 산문`) was swallowed
+                # with vcnt still 0, so the tripwire met its C event with nothing counted.
+                if (i>1) print "I\t" substr(line,1,i-1)
                 sfx=substr(line,i+3); gsub(/^[[:space:]]+|[[:space:]]+$/,"",sfx)
                 print "C\t" sfx
                 inc=0; line=substr(line,i+3); continue
@@ -1444,11 +1480,24 @@ cmd_census() {
     # clean, printed every run, whose only escape was deleting the record that the material had been
     # mapped. The normal order of events puts a material in both sets: it is mapped (gaining its
     # `## m<id>` section), and only later retracted.
-    local cid
+    # A section counts only when it HOLDS a record — at least one body line. A bare `## m002`
+    # heading used to +1 the numerator with zero truths sourced from the material and nothing
+    # guarding it, while `## legacy`, the other way to close this ratio, demands a ruled date and
+    # a quoted utterance per entry. "Covered" is map's audit record (mappings, or skips with
+    # reasons), and a heading with no body is not a record of anything.
+    # Section ids are references, so `## m5` and `## m005` are ONE material — canon first, then
+    # dedup, or a lenient spelling double-counts.
+    local cid cidc covseen=""
     n_cov=0
-    for cid in $(nocomment < "$TRUTHS/coverage.md" \
-                 | sed -nE 's/^##[[:space:]]+(m[0-9]+)([[:space:]].*)?$/\1/p' | LC_ALL=C sort -u); do
-      [ "$(mstatus "$cid")" = "retracted" ] && continue
+    for cid in $(nocomment < "$TRUTHS/coverage.md" | awk '
+                   /^##[[:space:]]+m[0-9]+([[:space:]]|$)/ { if(sec!="" && has) print sec; sec=$2; has=0; next }
+                   /^##[[:space:]]/ { if(sec!="" && has) print sec; sec=""; next }
+                   sec!="" && NF>0 { has=1 }
+                   END { if(sec!="" && has) print sec }'); do
+      cidc=$(canon_id "$cid") || cidc=$cid
+      case " $covseen " in *" $cidc "*) continue ;; esac
+      covseen="$covseen $cidc"
+      [ "$(mstatus "$cidc")" = "retracted" ] && continue
       n_cov=$((n_cov+1))
     done
     # `## legacy` lists materials the user ruled exempt (mapped before coverage existed). Without
@@ -1472,12 +1521,22 @@ cmd_census() {
   # Denominator excludes retracted materials — they are never mapped AGAIN, so counting them keeps
   # the ratio short of N/N forever. They may well already HAVE a coverage section from before the
   # retraction, which is why the numerator has to apply the same rule rather than assume they cannot.
+  # Counted from DISK, minus the retracted — not "from parsed frontmatter". The old expression
+  # incremented only when a frontmatter CLOSED, so an unclosed / missing / zero-byte frontmatter
+  # silently removed its material from the denominator: `coverage 1/1` on a mine `ls` counts 2 of,
+  # and pushed the other way a ratio above 1 whose warning named two causes that were both false.
+  # A file that cannot even parse cannot declare itself retracted, so it stays a material — the
+  # same rule N_TRUTH and census's truth-file count already follow, and validate is loudly red
+  # about the parse problem itself.
   if ls "$MATERIALS"/*/converted.md >/dev/null 2>&1; then
-    n_mats=$(awk '
+    local n_conv n_retrm
+    n_conv=$(ls "$MATERIALS"/*/converted.md 2>/dev/null | grep -c . || true); n_conv=${n_conv:-0}
+    n_retrm=$(awk '
       FNR==1 { infm=($0 ~ /^---[[:space:]]*$/); st=""; next }
-      infm && /^---[[:space:]]*$/ { if(st!="retracted") n++; infm=0; nextfile }
+      infm && /^---[[:space:]]*$/ { if(st=="retracted") n++; infm=0; nextfile }
       infm && /^status[[:space:]]*:/ { st=$0; sub(/^status[[:space:]]*:[[:space:]]*/,"",st); if(st !~ /^"/) sub(/[[:space:]]+#.*$/,"",st); sub(/[[:space:]]*$/,"",st); sub(/^"/,"",st); sub(/"$/,"",st) }
       END { print n+0 }' "$MATERIALS"/*/converted.md)
+    n_mats=$(( n_conv - n_retrm ))
   fi
   local n_denom=$(( n_mats - n_legacy )); [ "$n_denom" -lt 0 ] && n_denom=0
   # Always show the raw total too. `16/26` and `16/16 (+10 legacy-exempt)` describe the SAME mine,
