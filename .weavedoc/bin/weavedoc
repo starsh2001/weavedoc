@@ -156,11 +156,16 @@ section_all() { # $1=file (or -) $2="Header" $3=level(1|2) -> body of EVERY matc
   # contrast, is an append-per-round log: a real mine already carries three `## Adjudications`
   # sections, and reading only the first made every later round's entries invisible to the counter
   # AND to the ownership check at once.
-  awk -v h="$2" -v lv="$3" '
-    { if (lv==1) { hit = ($0 ~ ("^#[[:space:]]+" h "[[:space:]]*$"));  brk = /^#+[[:space:]]/ }
-      else       { hit = ($0 ~ ("^##[[:space:]]+" h "[[:space:]]*$")); brk = (/^#[[:space:]]/ || /^##[[:space:]]/) }
-      if (hit)      { on=1; next }
-      if (on && brk) { on=0; next }
+  # LEVEL-AGNOSTIC, and a section ends only at a heading of the SAME OR SHALLOWER level. Taking a
+  # level argument was the whole defect: the level-1 reader ended at ANY deeper heading, so one
+  # `## round 2` grouping under `# Human queue` returned an empty body — the ownership check then
+  # ran zero times under `✓ all checks passed` — while `### Human queue` was read by neither level.
+  # A ledger groups its rounds with sub-headings; that is the shape, not an edge case (the
+  # production mine's own verify.md does it). Sub-headings stay INSIDE; siblings end it.
+  awk -v h="$2" '
+    function lev(s){ if (match(s, /^#+/)) return RLENGTH; return 0 }
+    { if ($0 ~ ("^#+[[:space:]]+" h "[[:space:]]*$")) { on=1; lv=lev($0); next }
+      if (on && $0 ~ /^#+[[:space:]]/ && lev($0) <= lv) { on=0 }
       if (on) print }
   ' "${1:--}" 2>/dev/null
 }
@@ -321,8 +326,7 @@ hq_body() { # $1=file -> the Human queue body, whichever heading level the file 
   # the other" step is unnecessary. Reading only the first hid every later round's entries from
   # the status counter and from check_hq_tags simultaneously — `human queue: 0` and `✓ all checks
   # passed` over a queue holding open, untagged entries.
-  nocomment < "$1" | section_all - "Human queue" 2
-  nocomment < "$1" | section_all - "Human queue" 1
+  nocomment < "$1" | section_all - "Human queue"
 }
 fid_body() { # $1=file -> the 'Fidelity violations' body, ended by a SIBLING section, not by a sub-heading
   # Both obvious terminators are wrong, in opposite directions, and this file has shipped each of them:
@@ -1468,9 +1472,14 @@ cmd_impact() {
   title=$(mtitle "$n")
   echo "impact of material $n ($title):"
   echo "  -- truths extracted from it --"
+  # `source` and every id here are REFERENCES, so they resolve leniently (`m1` names folder m001)
+  # — the format promises that, validate accepts it, and judging by raw string made `impact` report
+  # an empty blast radius at the one point the docs tell a user to confirm before a retraction.
+  local ncanon; ncanon=$(canon_id "$n") || ncanon=$n
   for f in "$TRUTHS"/t[0-9]*.md; do
     [ -f "$f" ] || continue
-    [ "$(fm "$f" source)" = "$n" ] && printf '  %s: %s [%s]\n' "$(fm "$f" id)" "$(fm "$f" claim)" "$(fm "$f" status)"
+    local fsrc; fsrc=$(canon_id "$(fm "$f" source)") || fsrc=$(fm "$f" source)
+    [ "$fsrc" = "$ncanon" ] && printf '  %s: %s [%s]\n' "$(fm "$f" id)" "$(fm "$f" claim)" "$(fm "$f" status)"
   done
   echo "  -- documents citing it (by id) --"
   grep -rlnE "\b$n\b" "$DOCUMENTS" 2>/dev/null | sed 's/^/  /' || true
@@ -1483,15 +1492,22 @@ cmd_impact() {
   # gather's retraction flow tells the user to confirm the blast radius — a false "no documents".
   # The id→truth→document chain always exists: plan.md's cited_truths is the propagation key.
   echo "  -- documents citing its truths (via plan.md cited_truths) --"
-  local tid df hitdocs=""
+  local tid df hitdocs="" fsrc2 cid
   for f in "$TRUTHS"/t[0-9]*.md; do
     [ -f "$f" ] || continue
-    [ "$(fm "$f" source)" = "$n" ] || continue
-    tid=$(basename "$f" .md)
+    fsrc2=$(canon_id "$(fm "$f" source)") || fsrc2=$(fm "$f" source)
+    [ "$fsrc2" = "$ncanon" ] || continue
+    tid=$(canon_id "$(basename "$f" .md)") || tid=$(basename "$f" .md)
     for df in "$DOCUMENTS"/*/plan.md; do
       [ -f "$df" ] || continue
-      printf '%s' "$(fm "$df" cited_truths)" | grep -qE "(^|[^0-9a-z])$tid([^0-9]|$)" || continue
-      case " $hitdocs " in *" $df "*) ;; *) hitdocs="$hitdocs $df"; printf '  %s\n' "$df" ;; esac
+      case " $hitdocs " in *" $df "*) continue ;; esac
+      # cited_truths is lenient too — canonicalise each listed id before comparing, so `t1` in a
+      # plan still matches t001.md instead of silently dropping the document from the radius.
+      for cid in $(listfield "$(fm "$df" cited_truths)"); do
+        cid=$(canon_id "$cid") || continue
+        [ "$cid" = "$tid" ] || continue
+        hitdocs="$hitdocs $df"; printf '  %s\n' "$df"; break
+      done
     done
   done
   [ -n "$hitdocs" ] || echo "  (none)"
@@ -1730,7 +1746,7 @@ cmd_census() {
     # subtract anyway, driving the ratio to 1/0 under a ✗ whose stated cause was false.
     local lid lidc
     n_legacy=0; n_legparsed=0
-    for lid in $(nocomment < "$TRUTHS/coverage.md" | section_body2 - "legacy" \
+    for lid in $(nocomment < "$TRUTHS/coverage.md" | section_all - "legacy" \
                  | sed -nE 's/^[[:space:]]*-[[:space:]]*(m[0-9]+)\b.*/\1/p' | LC_ALL=C sort -u); do
       n_legparsed=$((n_legparsed+1))
       lidc=$(canon_id "$lid") || lidc=$lid
@@ -1791,7 +1807,7 @@ cmd_census() {
   # being to write it the way it already was. `n_legparsed` is the count that means "parsed".
   if [ -f "$TRUTHS/coverage.md" ] && [ "$n_legparsed" -eq 0 ] \
      && grep -qiE '^##[[:space:]]+legacy' "$TRUTHS/coverage.md" \
-     && [ "$(nocomment < "$TRUTHS/coverage.md" | section_body2 - "legacy" | countlines '^[[:space:]]*- ')" -gt 0 ]; then
+     && [ "$(nocomment < "$TRUTHS/coverage.md" | section_all - "legacy" | countlines '^[[:space:]]*- ')" -gt 0 ]; then
     echo "  ✗ truths/coverage.md '## legacy' has bullets, but none begins with an m-id — no exemption was applied (format: '- m001 — <ruling>')"
   fi
   # Sets, not counts. Count-only comparison let an entry pointing at a missing truth and a truth
