@@ -216,7 +216,7 @@ is_noise() { # blank / comment / untouched template entry
   # This predicate is the SOLE judge of the consecration gate. Three rules, in order, and each of
   # the first two exists because the earlier version of the third was wrong.
   # Both template dialects are covered throughout: gaps.md uses {braces}, review.md uses <angles>.
-  local s bk
+  local s bk rest slot
   case "$1" in ""|"#"*|"<!--"*|"-->"*) return 0 ;; esac
   s=$(printf '%s' "$1" | sed 's/^[[:space:]]*//')
   [ -z "$s" ] && return 0
@@ -235,7 +235,39 @@ is_noise() { # blank / comment / untouched template entry
   for bk in $(pipes "$(sch review.enum.kind)"); do
     case "$s" in "- [$bk]"*|"- [<$bk>]"*|"- [{$bk}]"*) return 1 ;; esac
   done
-  case "$s" in "- ["["{<"]*) return 0 ;; esac
+  # A placeholder in the KIND slot is not enough to call the line untouched — the REST decides.
+  # Ruled 2026-08-01: a line whose kind slot still says `{kind}` but whose remainder holds real
+  # content is someone who filled the entry in and missed the one slot, and it was being dropped in
+  # silence — a written violation, inside the section, shipping under a clean tick. That is the
+  # same concept the .12 bundle ruled on for frontmatter ("an unfilled placeholder is an
+  # instruction, not a value"), and the gate was the one place still deciding it the other way.
+  # An untouched template's remainder is itself placeholders (`- [{kind}] {where} — {what}`, and
+  # gaps.md's Accepted line with its literal `scope:`/`recheck:` labels between them), so that is
+  # the test — not "does the line look like the template", which broke from both sides before.
+  # Nothing written after the slot at all is still an untouched stub.
+  # Known limit, stated: prose that itself contains an angle-bracketed token (`값이 <10%>다`) reads
+  # as a placeholder and falls back to the old behaviour — it errs toward the pre-ruling reading,
+  # never toward a new false block.
+  # NARROW: only a slot that is a genuine placeholder — no trace of a kind in it. A slot that
+  # names a kind imperfectly (`<Contradiction>`, `<contradiction / unsupported>`) belongs to the
+  # near-miss guidance, which gives a better message than the gate can ("fix the kind"), and
+  # taking those here would swallow that check's whole jurisdiction.
+  case "$s" in "- ["["{<"]*)
+      slot=$(printf '%s' "$s" | sed -nE 's/^[^][]*\[([^]]*)\].*$/\1/p' | head -1 | tr '[:upper:]' '[:lower:]')
+      for bk in $(pipes "$(sch review.enum.kind)"); do
+        case "$slot" in *"$bk"*) return 0 ;; esac
+      done
+      rest=${s#*]}
+      # No `]` at all: the slot was never closed, so cutting at `]` leaves the slot itself in the
+      # remainder and its own `}`/`>` reads as "still a template". Cut at the placeholder's own
+      # closer instead.
+      if [ "$rest" = "$s" ]; then
+        case "$s" in *"}"*) rest=${s#*\}} ;; *">"*) rest=${s#*>} ;; *) rest="" ;; esac
+      fi
+      case "$rest" in *[![:space:]]*) ;; *) return 0 ;; esac
+      case "$rest" in *"{"*"}"*|*"<"*">"*) return 0 ;; esac
+      return 1 ;;
+  esac
   return 1
 }
 material_ids() { ls -d "$MATERIALS"/*/ 2>/dev/null | while read -r d; do basename "$d"; done; }
@@ -461,6 +493,10 @@ cmd_validate() {
       v=$(fm "$f" "$k")
       case "$k" in added) is_date "$v" || prob "$f  added '$v' is not a date (YYYY-MM-DD, zero-padded, real month and day) — a field the format calls a date and nobody reads as one is a field that can say anything" ;; esac
     done
+    # `dated` is optional, but when present it is the ONE field a supersedes resolution orders
+    # materials by — an unparseable value there decides a conflict the wrong way round, silently.
+    v=$(fm "$f" dated)
+    [ -n "$v" ] && { is_date "$v" || prob "$f  dated '$v' is not a date (YYYY-MM-DD, zero-padded, real month and day) — this is the field a 'supersedes' resolution orders materials by, so a value nobody can read as a date decides conflicts by accident"; }
     # The same leak the truth side has a dedicated check for, one door over — and silent here in a
     # nastier way. The truths awk collects a material body only AFTER its frontmatter closes, so a
     # converted.md whose second `---` is missing has an EMPTY body, and then every truth sourced from
@@ -506,6 +542,13 @@ cmd_validate() {
   done < <(material_ids)
 
   # --- catalog <-> materials (orphans both ways) ---
+  # Absence is reported, not treated as "nothing to check": deleting catalog.md used to switch the
+  # orphan check off in both directions under a clean tick, the same silence index.md/tree.md have
+  # always been loud about. Only once materials exist — a mine with no materials has no catalog to
+  # miss, and gather writes it.
+  if [ ! -f "$CATALOG" ] && [ -n "$(material_ids)" ]; then
+    prob "$CATALOG  missing — materials exist but the catalog does not, so the orphan cross-check (material with no row, row with no folder) runs zero times in both directions. Run gather, which writes it"
+  fi
   if [ -f "$CATALOG" ]; then
     while IFS= read -r id; do
       catalog_ids | grep -qx "$id" || prob "$CATALOG  material '$id' has no catalog row"
@@ -1328,6 +1371,11 @@ EOF
   # dup_section now is: a section that exists only inside a comment satisfied the raw grep while being
   # unreadable to anything that consumes it, so commenting the section out was a way to keep the
   # requirement satisfied and the content gone.
+  # NOT given catalog.md's absence check, deliberately. `verify` is an on-demand lane, not a step
+  # in the main chain, so a mine that has truths and has never been verified legitimately has no
+  # verify.md — blocking on it would fail a project built exactly as documented. Whether absence
+  # should nevertheless be reported is a format decision, open in the Human queue (R5-N1); until
+  # it is ruled, the checks below simply do not apply to a file that does not exist yet.
   if [ -f "$TRUTHS/verify.md" ]; then
     for k in $(pipes "$(sch verify.fm.required)"); do
       v=$(fm "$TRUTHS/verify.md" "$k")
@@ -1431,7 +1479,12 @@ cmd_status() {
     # Every `- ` line in the section is an entry, tagged or not — the most common legacy shape
     # (`- R3 t217 — …`, no brackets) would otherwise be invisible.
     local hq_untag
-    hq_untag=$(printf '%s\n' "$hq" | grep -vE '^[[:space:]]*- \[[<{]' 2>/dev/null | grep -E '^[[:space:]]*- ' 2>/dev/null | grep -vcE '^[[:space:]]*- \[(open|ruled)\]' || true)
+    # An ENTRY starts at column 0; an indented `- ` is a sub-bullet OF an entry. Counting every
+    # `- ` line in the section reported a correctly tagged entry's own sub-bullets as untagged
+    # entries, with a prescription ("retag them") that cannot be followed without destroying the
+    # entry's structure — and validate said nothing, because check_hq_tags reads `- [` lines only.
+    # Same root as the `- (없음)` shape: one predicate, both closed.
+    hq_untag=$(printf '%s\n' "$hq" | grep -vE '^- \[[<{]' 2>/dev/null | grep -E '^- ' 2>/dev/null | grep -vcE '^- \[(open|ruled)\]' || true)
     if [ "${hq_open:-0}" -gt 0 ]; then
       # The three buckets must SUM to the total. A `- [open]` with no ownership tag lands in the
       # total but in no bucket (and not in untagged either — that filter excludes `- [open]`
@@ -1504,7 +1557,12 @@ cmd_census() {
     return 0
   fi
   n_files=$(ls "$TRUTHS"/t[0-9]*.md 2>/dev/null | grep -c .)
-  n_index=$(grep -cE '^- t[0-9]+:' "$TRUTHS/index.md" 2>/dev/null || true); n_index=${n_index:-0}
+  # Distinct ids, matching what the set cross-check below compares. Counting LINES while comparing
+  # `sort -u` sets meant a duplicated index line printed `truth files 1 · index entries 2` with no
+  # ✗ beside it — the printed numbers disagreed and nothing on screen explained why.
+  local n_index_lines
+  n_index_lines=$(grep -cE '^- t[0-9]+:' "$TRUTHS/index.md" 2>/dev/null || true); n_index_lines=${n_index_lines:-0}
+  n_index=$(grep -oE '^- t[0-9]+:' "$TRUTHS/index.md" 2>/dev/null | LC_ALL=C sort -u | grep -c . || true); n_index=${n_index:-0}
   stat_out=$(awk '
     function val(   s){ s=$0; sub(/^[^:]*:[[:space:]]*/,"",s); if(s !~ /^"/){ sub(/[[:space:]]+#.*$/,"",s); if(s ~ /^#/) s="" } sub(/[[:space:]]*$/,"",s); sub(/^"/,"",s); sub(/"$/,"",s); return s }
     FNR==1 { infm=($0 ~ /^---[[:space:]]*$/); next }
@@ -1664,6 +1722,7 @@ cmd_census() {
     file_only=$(LC_ALL=C comm -13 \
       <(grep -oE '^- t[0-9]+:' "$TRUTHS/index.md" 2>/dev/null | sed -E 's/^- (t[0-9]+):/\1/' | LC_ALL=C sort -u) \
       <(ls "$TRUTHS"/t[0-9]*.md 2>/dev/null | while read -r _f; do basename "$_f" .md; done | LC_ALL=C sort -u) | tr '\n' ' ')
+    [ "$n_index_lines" -gt "$n_index" ] && echo "  ✗ truths/index.md holds $n_index_lines entry line(s) for $n_index distinct id(s) — one id is listed more than once. reindex writes one line per truth file, so two files carry the same 'id:'; run 'weavedoc validate', which names the file whose id does not match its filename"
     [ -n "${idx_only// /}" ] && echo "  ✗ index entries with no truth file: ${idx_only% } — run 'weavedoc reindex'"
     [ -n "${file_only// /}" ] && echo "  ✗ truth files with no index entry: ${file_only% } — run 'weavedoc reindex'; if it comes back, the file is one validate rejects (e.g. no frontmatter) and reindex cannot see it — run 'weavedoc validate' for the cause"
   fi

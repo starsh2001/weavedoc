@@ -14,7 +14,7 @@
 # with `[`, so neither is touched. Escape: put any character outside the braces.
 fm.placeholder: ^[{][^{}]*[}]$
 material.fm.required: id|title|origin|role|topics|format|source_path|added|status|summary
-material.fm.optional: stage|corrects|url|retrieved_at
+material.fm.optional: stage|corrects|url|retrieved_at|dated
 material.fm.enum.origin: file|user-answer|prior-doc|conversation|research
 material.fm.enum.status: collected|converted|verified|used|retracted
 material.fm.enum.stage: plan|applied

@@ -16,7 +16,7 @@ The gate is the product; the panel is polish. Keep them separate.
 
 > **Thin context.** Don't read all truths for the whole document at once. For the fidelity gate, check each section against only its cited truths (grep by truth id from the draft's citations). For the advisory panel, reviewers receive only the draft + plan — not the full truth set.
 
-> **Write-scope.** This skill writes only to `documents/<doc-id>/review.md`. It does **not** modify `draft.md`, `truths/`, or `materials/` (except setting `status: conflict` on truths when a new conflict is discovered).
+> **Write-scope.** This skill writes only to `documents/<doc-id>/review.md` (except two stage stamps: `status: reviewing` on this document's `plan.md` — step 5, and leaving it there on escalation — and `status: conflict` on truths when a new conflict is discovered). It does **not** otherwise modify `draft.md`, `truths/`, or `materials/`.
 
 > **Where it runs (the invocation contract).** Run weavedoc-review in your **main Claude Code session** — it spawns the cold reviewers as **subagents**. **Never run a weavedoc skill *as* a subagent** — then it can't spawn reviewers and silently degrades to a non-cold self-check, defeating the point.
 

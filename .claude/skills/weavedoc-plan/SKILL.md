@@ -34,7 +34,7 @@ Pull a document from the data mine — decide its structure, tone, and which tru
    | **Scope** — which truths/tags belong in this document, which don't | Truths often span creative content + production tools + meta. The document rarely needs all of them. Show the tag list, propose in/out, confirm. |
    | **Format convention** — is there an existing format to follow? (e.g. namuwiki style, RFC, legal template) | If yes, research it (web search) before proposing structure. If the user names a reference, learn it first. |
    | **Root unit** — what is the top-level organizing entity? | A wiki about a project ≠ a wiki about a single character. |
-   | **Audience** — who reads this? | Tone, depth, jargon level all depend on this. |
+   | **Audience** — who reads this? Internal or external? | Tone, depth, jargon level all depend on this. **If external**, also settle the citation labels: material `title`s are internal names ("Support Runbook (excerpt)", literally "user answer"), and the visible half of a citation would otherwise ship them. Record a publication label per cited material in `plan.md` so `write`/`refine` use it — see FORMATS, citation markers. The `<!-- t:<id> -->` marker never changes; only what the reader sees does. |
 
    **Multi-file specific (when output shape = multi-file):**
 

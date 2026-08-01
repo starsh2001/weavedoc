@@ -13,7 +13,7 @@ The mine's completeness gate — the incompleteness counterpart to conflict dete
 
 > **Thin context.** Don't read the whole mine. Use `truths/index.md` and `catalog.md` as indexes; `grep` by tag; load individual files only when a check needs them. Re-read from disk.
 
-> **Write-scope.** This skill writes only to `gaps.md` and `questions.md`. Fills flow through the normal pipeline (`gather`/`map` create the `user-answer` material and the truth) — this skill does **not** create truths or edit materials, and **never invents a value** (proposing candidates when the user asks is fine — but a proposal stays a proposal until adopted, and enters the mine tagged `provenance: adopted`, never as if the user said it).
+> **Write-scope.** This skill writes only to `gaps.md` and `questions.md` (except one policy field: on the FIRST run it persists the 설정 밀도 answer to `project.md` — step 6, asked once and never re-guessed). Fills flow through the normal pipeline (`gather`/`map` create the `user-answer` material and the truth) — this skill does **not** create truths or edit materials, and **never invents a value** (proposing candidates when the user asks is fine — but a proposal stays a proposal until adopted, and enters the mine tagged `provenance: adopted`, never as if the user said it).
 
 > **Grounding discipline.** (1) When the user questions where a claim came from ("어디에 있어?"), **re-read the file before answering** — never answer from conversation memory — and show `source`/`location` + the verbatim line. (2) Never attach modifiers the material doesn't support (구버전·실제 적용…). (3) A guess with no material basis is presented as a guess, never "가능성이 높다".
 

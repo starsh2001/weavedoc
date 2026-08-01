@@ -73,7 +73,7 @@ Handled across map (detect + resolve), write (guard at citation), review (re-hun
 
 1. **Detect** (`map`): extract truths from materials and tag them. For each tag cluster, compare truths — AI reads related truths by grepping tags and judges conflicts on the fly. Each conflict → set `status: conflict` + `conflict_with` on both truth files.
 2. **Resolve** (`map`): mechanically if a rule applies —
-   - the conflicting truths' source materials have a `supersedes` relation (newer date) → newer wins;
+   - the conflicting truths' source materials have a `supersedes` relation — both carry `dated` (the source's own date, not `added`) and one is newer → newer wins. Missing `dated` on either side means the rule does not apply, and the machine asks instead of guessing;
    - `project.md` `authority` ranks the roles → higher wins;
    - otherwise **stop and ask** the user: A / B / real value / keep both. Record the choice in **both** truths' `resolution` fields — the loser → `status: discarded` (out of the mine, kept as audit trail), the winner **stays `ok`** carrying the resolution as history; "keep both" (attribute) → both stay `ok` — only if the user chooses it (or `conflicts.attribution: allow`). Never auto-pick, never auto-attribute.
 3. **Guard** (`write`): before citing, check the truth's `status` — cite `ok` only (an attribute-resolved truth is written both-sides); a `discarded` truth points to its successor via `resolution.winner`; never cite `conflict`.

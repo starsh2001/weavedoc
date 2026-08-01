@@ -10,8 +10,11 @@ scope_tags: []   # tags this document covers — set by plan from elicitation; n
 <!--
   The writing plan: the document's section outline.
   One heading per section. Under each heading, an HTML-comment note carrying:
-  purpose / materials by role and topics / required or optional.
-  A required section with no supporting materials is a structural gap to ask about.
+  purpose / tags (TRUTH tags this section draws on) / required or optional.
+  The `tags` field uses the vocabulary of truths/*.md `tags:` — NOT material role·topics.
+  `scope_tags` is harvested from these notes and staleness compares it against new truths' tags,
+  so a note written in the material vocabulary silently switches staleness off.
+  A required section with no supporting truths is a structural gap to ask about.
   See .weavedoc/FORMATS.md.
 -->
 

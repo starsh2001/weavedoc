@@ -22,6 +22,11 @@ summary: {2-3 line summary}
   material (an anchor, a normalization) is marked  > [machine-note] ...  and is
   never promoted into a truth claim.
   Optional frontmatter:
+    dated: {YYYY-MM-DD}     — the SOURCE's own date (signing date, meeting date,
+      revision date), read from the source itself. `added` is intake order and a
+      batch makes them all equal, so `dated` is the only field a `supersedes`
+      resolution may order materials by. Omit it when the source states none —
+      map then asks instead of guessing which is newer.
     stage: {plan|applied}   — the source is clearly a plan/proposal vs an applied
       record (truths from plan-stage materials carry an "실행 확인 안 됨" caveat).
     corrects: [{m<NNN> §<sec>}] — this material displaces named parts of earlier ones.
