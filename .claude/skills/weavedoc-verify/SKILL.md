@@ -52,6 +52,13 @@ A discrepancy is a finding only if it would cause a writer to **cite something w
 
 ## Level scaling
 
+**The reviewer count is exact — floor and ceiling at once.** Spawn the level's count, plus the §4 defender when one is required, and nothing else.
+
+- **Not fewer.** A model that under-delegates otherwise folds two lenses into one reviewer, and the verdict table then carries rows nobody separately ran — a PARTIAL arriving disguised as a PASS.
+- **Not more, and never per unit.** The count is per *round*, not per truth or per material: one reviewer holds the whole scope for its lens. Fanning out per unit multiplies cost by the scope size and buys nothing, since a lens's judgement is about the set.
+
+Both directions are live: one model tier under-reaches for subagents and the next over-reaches, so the number is stated here rather than left to be inferred from "how thorough should I be".
+
 ### Material — by format risk
 
 | format | level | reviewers | lenses run |
@@ -104,7 +111,7 @@ Lenses (fixed order, first *N* per level):
 
 ## Truths verify — T1–T5
 
-Target: all truths (`truths/*.md`) vs their source materials (`materials/*/converted.md`).
+Target: **the truths `weavedoc scope` names unverified** (see §Scope), vs their source materials (`materials/*/converted.md`) — not the whole mine. Two lenses read past that set by their own nature, and that is not a scope violation: **T2** audits each in-scope material's entire `## m<id>` coverage section (completeness is a property of the material, not of the new truths), and **T5** reads the mine exactly as a consumer does — a consumer has no idea which truths are new. The other three examine the scope.
 
 - **T1 Quote integrity** — the truth's `claim` accurately represents its verbatim quote (body). String existence of the quote in the source material → mechanical, routed to `weavedoc validate` (the anti-laundering seal). This lens judges *semantic*: does the claim faithfully render the quote's meaning? Claim drifts from its own quote = FAIL.
 - **T2 Extraction completeness** — every load-bearing fact in each material's `converted.md` became a truth. Load-bearing includes **full-text artifacts** (가사 전문, 계약 조항, 코드/사양) whose exact wording matters — metadata-only extraction of such an artifact (the song's BPM but not its lyrics) is an omission. **Audit the ledger, don't free-recall:** check the material's `## m<id>` section in `truths/coverage.md` against converted.md — is every fact-bearing element present as extracted-or-skipped, is each `skipped:` reason legitimate, does each element's truth-id mapping hold? (`validate` already guarantees the ids exist and that every extracted truth appears in its section — the reviewer judges *meaning*.) A material with **no coverage section is PARTIAL, never PASS** — route to map to generate it; free-listing key facts from converted.md is the fallback only for that case. **Legacy escape (no deadlock):** for materials mapped before coverage existed, the user may rule the missing section accepted instead of forcing an immediate backfill — but the ruling is the user's, never the machine's. **Record it in `truths/coverage.md`'s `## legacy` section, not only in adjudications**: that is the one place `census` subtracts from the coverage denominator, so a ruling kept anywhere else leaves the ratio permanently short while T2 treats the material as exempt — the two escapes disagreeing about the same material. Important omission or an illegitimate skip = FAIL.
@@ -127,7 +134,19 @@ Before cold reviewers, run `weavedoc validate`. Beyond existing checks, validate
 
 Non-zero validate exit = blocking finding regardless of the cold pass.
 
-**Record floor.** `validate` proves the format; it does not prove the mine's records are true *about the mine*. Run `bash .weavedoc/bin/weavedoc validate`, `census` and `status` **before** spawning cold reviewers, and quote their counts rather than asserting your own: a ledger that reports zero while holding six, or a `passed` that never covered the units it claims, will otherwise burn reviewer budget on bookkeeping instead of meaning.
+**Record floor.** `validate` proves the format; it does not prove the mine's records are true *about the mine*. Run `bash .weavedoc/bin/weavedoc validate`, `scope`, `census` and `status` **before** spawning cold reviewers, and quote their counts rather than asserting your own: a ledger that reports zero while holding six, or a `passed` that never covered the units it claims, will otherwise burn reviewer budget on bookkeeping instead of meaning.
+
+## Scope — read it from the tool, never decide it
+
+Run `bash .weavedoc/bin/weavedoc scope` **first**, before the baseline pin, and verify what it names. It prints the unverified set from two mechanical ledgers — each material's own `status` frontmatter, and `## Verified units` in `truths/verify.md` — so "what does this round owe?" is a number on screen instead of a judgement. That section's layout is free (table or bullets); what makes an entry count is that it **ends with the verdict word `verified`**. An entry ending in anything else — a failed unit, an unrun axis, a legacy note — covers nothing, and `scope` names it rather than letting a missing word look like a ledger that hadn't got there yet.
+
+- **Units it lists verified are not re-verified.** Re-covering one needs a reason written into `verify.md` *first*: a superseding material, a raised `repeat`, a lens the earlier level never ran. "확실하게 하려고" is not a reason.
+- **Quote its numbers.** Don't restate them from memory or recount by eye — the same rule the record floor already applies to `validate`/`census`/`status`.
+- **An empty scope does not run a round.** Say so and stop.
+
+The level (below) is still read from the **mine's** truth volume, not the scope's — otherwise a mine that grows past 80 truths one small batch at a time would never once run T5, the only lens that reads it from outside. Scope decides *which units*; volume decides *how many lenses*.
+
+This section is a command and not advice because scope was a judgement call and the judgement failed three rounds running: asked which truths a round owed, a real run answered "all of them" and put five cold reviewers across 264 truths, three times over, when `scope` would have said 40. Step 8's re-check grade table said the same thing in prose and was never opened — which is why the rule now lives somewhere the round has to execute.
 
 ## One round
 

@@ -31,6 +31,11 @@ verify.fm.required: status|round|verified_at
 verify.fm.optional: consecutive_passes
 verify.fm.enum.status: passed|failed|escalated|stale|in-progress
 verify.sections: Verified units|Human queue|Adjudications
+# The verdict word an entry in `## Verified units` must END with to mean "this unit is covered".
+# Read by `weavedoc scope`, which counts the mine's unverified set from it. One spelling, because
+# the section's LAYOUT is deliberately free (table or bullets) and the verdict is the only thing a
+# machine can read across both; an entry ending in anything else covers nothing and `scope` names it.
+verify.units.verified: verified
 humanqueue.enum.state: open|ruled
 humanqueue.enum.ownership: user-only|recommended|machine
 coverage.section.optional: legacy

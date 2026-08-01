@@ -110,6 +110,7 @@ Write findings in {config.language}.
 ## Spawning
 
 - Spawn reviewers as **parallel subagents** (Claude Code's Agent tool), one per lens — count from `config.yaml` (`verify.scale` / `review.scale`). Each starts from an **empty context** (that's what makes them cold). One batch, concurrent.
+- **The count is exact — floor and ceiling at once.** That many reviewers, plus the defender when triage requires one, and nothing else. **Not fewer:** folding two lenses into one reviewer produces a verdict table with rows nobody separately ran, which is a PARTIAL wearing a PASS. **Not more, and never one per unit:** the count is per *round*; a single reviewer holds its lens's whole scope, because the judgement is about the set. Current model tiers err in both directions — one under-reaches for subagents, the next over-reaches — so the number is obeyed, not interpreted.
 - For `skip`: spawn none; the caller self-checks.
 - Each reviewer's prompt = **common preamble** + its **role lens** + the **findings format**. Never give them how the target was produced, or a prior round's discussion.
 - **Model**: each reviewer inherits the session model by default. If `config` specifies per-lens models, use those.
