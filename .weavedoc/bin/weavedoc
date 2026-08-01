@@ -1467,6 +1467,14 @@ cmd_status() {
   else
     echo "materials: $nm"
   fi
+  # Ruled 2026-08-01: verify.md's ABSENCE is legal — `verify` is an on-demand lane, so a mine that
+  # has never been verified correctly has no record, and blocking would fail every project before
+  # its first run. But absence is not nothing: without the file, the cold-verification state and
+  # the mine-side Human-queue ownership rule are simply not checked. So it is said here, in the
+  # command that answers "where does this mine stand", rather than left to silence.
+  if [ ! -f "$TRUTHS/verify.md" ] && ls "$TRUTHS"/t[0-9]*.md >/dev/null 2>&1; then
+    echo "verification: none yet (no truths/verify.md) — truths exist but no cold verification has been recorded; run 'weavedoc verify' when you want one"
+  fi
   # Decisions parked on the user. Counted here because a completeness line that reports only
   # "열린 갭 0 · 열린 질문 0" reads as "nothing is waiting on you" while the queue holds eleven.
   if [ -n "$(hq_files)" ]; then
@@ -1505,7 +1513,12 @@ cmd_status() {
     # Reported UNCONDITIONALLY, not only when the tagged count is zero. Gating it behind `else`
     # meant one tagged entry hid every untagged one — reproducing, in the command that answers
     # "what is waiting on you", the very "queue reads 0 while entries sit in it" failure.
-    [ "${hq_untag:-0}" -gt 0 ] && echo "human queue: $hq_untag untagged entry(s) not counted above — retag them '- [open|ruled] [user-only|recommended|machine] …'"
+    # "untagged" means ONE thing here, the same thing FORMATS and check_hq_tags mean by it: an
+    # entry carrying no `[state]` tag at all. Entries that HAVE `[open]` but no ownership tag are
+    # a different population and are reported by their own term in the split line above. One word
+    # was covering both, so the two numbers described overlapping sets and neither could be acted
+    # on without reading the code.
+    [ "${hq_untag:-0}" -gt 0 ] && echo "human queue: $hq_untag entry(s) with no '[open]'/'[ruled]' state tag, not counted above — retag them '- [open|ruled] [user-only|recommended|machine] …'"
   fi
   return 0
 }
