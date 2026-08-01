@@ -35,9 +35,9 @@ humanqueue.enum.state: open|ruled
 humanqueue.enum.ownership: user-only|recommended|machine
 coverage.section.optional: legacy
 changelog.line.kinds: added|superseded|edited|removed|confirmed
-project.fm.optional: authority|required_tags|tone
+project.fm.optional: authority|required_tags|tone|gap_density
 plan.fm.required: doc_id|doc_type|tone|status
-plan.fm.optional: continues|cited_truths|scope_tags
+plan.fm.optional: continues|cited_truths|scope_tags|audience|publication_labels
 plan.fm.enum.status: planned|drafting|reviewing|done|stale
 project.fm.required: version|language|roles
 review.fm.optional: round|consecutive_passes

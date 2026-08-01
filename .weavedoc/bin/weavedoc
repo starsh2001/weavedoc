@@ -133,18 +133,35 @@ listfield() { echo "$1" | tr -d '[]"' | tr ',' '\n' | sed -E 's/^[[:space:]]*//;
 # over: `nocomment` is what handles comments, and the re-entry made `validate` block a document
 # whose review.md merely keeps an archived `# Fidelity violations` heading further down. Repeats
 # are surfaced by `dup_section` instead of being silently merged.
+# The exit rule is listed BEFORE the heading rule in both. With the other order an exact adjacent
+# repeat of the heading re-ENTERED the section instead of ending it, so "the first matching section"
+# was false of the very shape it was written to describe.
 section_body() { # $1=file (or - for stdin) $2="Header" -> body under the first "# Header"
   awk -v h="$2" '
-    $0 ~ ("^#[[:space:]]+" h "[[:space:]]*$") { on=1; next }
     on && /^#+[[:space:]]/ { exit }
+    $0 ~ ("^#[[:space:]]+" h "[[:space:]]*$") { on=1; next }
     on { print }
   ' "${1:--}" 2>/dev/null
 }
 section_body2() { # $1=file (or - for stdin) $2="Header" -> body under the first "## Header"
   awk -v h="$2" '
-    $0 ~ ("^##[[:space:]]+" h "[[:space:]]*$") { on=1; next }
     on && (/^#[[:space:]]/ || /^##[[:space:]]/) { exit }
+    $0 ~ ("^##[[:space:]]+" h "[[:space:]]*$") { on=1; next }
     on { print }
+  ' "${1:--}" 2>/dev/null
+}
+section_all() { # $1=file (or -) $2="Header" $3=level(1|2) -> body of EVERY matching section
+  # For ledgers that legitimately repeat their heading. `Fidelity violations` must NOT use this —
+  # a second copy of that heading is a bypass and `dup_section` blocks it. A Human queue, by
+  # contrast, is an append-per-round log: a real mine already carries three `## Adjudications`
+  # sections, and reading only the first made every later round's entries invisible to the counter
+  # AND to the ownership check at once.
+  awk -v h="$2" -v lv="$3" '
+    { if (lv==1) { hit = ($0 ~ ("^#[[:space:]]+" h "[[:space:]]*$"));  brk = /^#+[[:space:]]/ }
+      else       { hit = ($0 ~ ("^##[[:space:]]+" h "[[:space:]]*$")); brk = (/^#[[:space:]]/ || /^##[[:space:]]/) }
+      if (hit)      { on=1; next }
+      if (on && brk) { on=0; next }
+      if (on) print }
   ' "${1:--}" 2>/dev/null
 }
 dup_section() { # $1=file $2=header $3=level(1|2|0=any) $4=raw? (non-empty: do NOT strip comments)
@@ -245,9 +262,9 @@ is_noise() { # blank / comment / untouched template entry
   # gaps.md's Accepted line with its literal `scope:`/`recheck:` labels between them), so that is
   # the test — not "does the line look like the template", which broke from both sides before.
   # Nothing written after the slot at all is still an untouched stub.
-  # Known limit, stated: prose that itself contains an angle-bracketed token (`값이 <10%>다`) reads
-  # as a placeholder and falls back to the old behaviour — it errs toward the pre-ruling reading,
-  # never toward a new false block.
+  # Known limit, stated: prose that itself contains an angle-bracketed OR braced token
+  # (`값이 <10%>다`, `조항 {1}에 근거 없음`) reads as a placeholder and falls back to the old
+  # behaviour — it errs toward the pre-ruling reading, never toward a new false block.
   # NARROW: only a slot that is a genuine placeholder — no trace of a kind in it. A slot that
   # names a kind imperfectly (`<Contradiction>`, `<contradiction / unsupported>`) belongs to the
   # near-miss guidance, which gives a better message than the gate can ("fix the kind"), and
@@ -299,10 +316,13 @@ check_hq_tags() { # $1=file holding a "## Human queue" section
 hq_body() { # $1=file -> the Human queue body, whichever heading level the file uses
   # verify.md is `##`-sectioned, review.md is `#`-sectioned. The spec added the section to both
   # without saying which level, so read either rather than silently finding nothing in one of them.
-  local b
-  b=$(nocomment < "$1" | section_body2 - "Human queue")
-  [ -n "$b" ] || b=$(nocomment < "$1" | section_body - "Human queue")
-  printf '%s\n' "$b"
+  # EVERY matching section, not the first. Both levels are read unconditionally: `^# h$` cannot
+  # match a `##` heading and vice versa, so the union is exact and the old "try one, fall back to
+  # the other" step is unnecessary. Reading only the first hid every later round's entries from
+  # the status counter and from check_hq_tags simultaneously — `human queue: 0` and `✓ all checks
+  # passed` over a queue holding open, untagged entries.
+  nocomment < "$1" | section_all - "Human queue" 2
+  nocomment < "$1" | section_all - "Human queue" 1
 }
 fid_body() { # $1=file -> the 'Fidelity violations' body, ended by a SIBLING section, not by a sub-heading
   # Both obvious terminators are wrong, in opposite directions, and this file has shipped each of them:
@@ -859,7 +879,7 @@ cmd_validate() {
         }
       }
       END {
-        for(i=1;i<=nreq;i++) if(rt[i]!="" && !(rt[i] in seentag)) prob("required_tag " q(rt[i]) " has no live truths — retracted and discarded truths do not cover a topic (a tombstone is an extraction that never had standing); extract it from a material, or remove the tag from project.md required_tags")
+        for(i=1;i<=nreq;i++) if(rt[i]!="" && !(rt[i] in seentag)) prob("required_tag " q(rt[i]) " has no live truths — retracted and discarded truths do not cover a topic (a tombstone is an extraction that never had standing); extract it from a material, queue the question (the ask loop turns the answer into a user-answer material), or remove the tag from project.md required_tags — removing it switches the completeness warranty off for that topic")
         for(kx in kcount) if(kcount[kx]>1){
           split(kx,kk2,SUBSEP)
           prob(kk2[1] "  frontmatter key " q(kk2[2]) " appears " kcount[kx] " times → fm reads the FIRST, validate and reindex read the LAST, and census counts BOTH, so three commands report three different values for the same field. Keep one")
@@ -1026,7 +1046,7 @@ cmd_validate() {
     # of this check lives in its END block and cannot run when the awk does not.
     if ! ls "$TRUTHS"/t[0-9]*.md >/dev/null 2>&1; then
       while IFS= read -r rq; do
-        [ -n "$rq" ] && prob "required_tag '$rq' has no live truths — the mine holds no truth files at all; extract it from a material, or remove the tag from project.md required_tags"
+        [ -n "$rq" ] && prob "required_tag '$rq' has no live truths — the mine holds no truth files at all; extract it from a material, queue the question (the ask loop turns the answer into a user-answer material), or remove the tag from project.md required_tags — removing it switches the completeness warranty off for that topic"
       done <<EOF
 $reqtags
 EOF
@@ -1215,15 +1235,35 @@ EOF
       # outside are complements of one judge and no third state exists. The only remaining
       # invisible place is a comment interior (nocomment strips it first): archives stay legal by
       # ruling, and the mid-line-closer tripwire below covers the one breached comment shape.
-      local vkinds vklist vkre vline vslot vfold vhit vk vcnt vtag vrest
+      # Token comparison is NORMALISED (ruled 2026-08-01): each bracket interior is folded to
+      # lowercase alphanumerics before matching, so `[missing required]`, `[missing_required]`,
+      # a zero-width space inside the token, emphasis around it — every spelling variant of the
+      # three declared tokens — converge on one rule instead of each becoming a new finding. This
+      # is not a list: after folding, the comparison space is exactly the three tokens.
+      # THE VOCABULARY BOUNDARY, also ruled: kinds are the three fixed English tokens, period. A
+      # bracketed word outside that vocabulary (`[모순]`, `[aaa]`) is prose wearing brackets — the
+      # machine does not chase human wording (the same decision that left claim-vs-body to humans),
+      # and inside the gate's own zone such lines still fail closed via is_noise.
+      local vkinds vklist vkfold vline vslot vfold vhit vk vcnt vtag vrest kindscan
       vkinds=$(pipes "$(sch review.enum.kind)" | tr '\n' '|' | sed 's/|$//')
       vklist=$(pipes "$(sch review.enum.kind)" | tr '\n' ' ')
-      vkre=$vkinds
-      if [ -n "$vkre" ]; then
+      vkfold=$(printf '%s\n' $vklist | tr 'A-Z' 'a-z' | sed 's/[^a-z0-9]//g' | tr '\n' ' ')
+      kindscan='
+        BEGIN{ n=split(kf, K, " ") }
+        { line=$0; hit=0; s=line
+          while ((i = index(s, "[")) > 0) {
+            r = substr(s, i+1); j = index(r, "]")
+            f = (j>0 ? substr(r,1,j-1) : r)
+            f = tolower(f); gsub(/[^a-z0-9]/, "", f)
+            for (k=1;k<=n;k++) if (K[k]!="" && index(f, K[k])>0) hit=1
+            s = (j>0 ? substr(r, j+1) : "") }
+          if (mode=="p") { if (hit) print line } else if (hit) found=1 }
+        END{ if (mode!="p") exit found?0:1 }'
+      if [ -n "$vkfold" ]; then
         while IFS= read -r vline; do
           vline=${vline#O$'\t'}
           prob "$d review.md: a violation kind in brackets sits outside the 'Fidelity violations' section: '$vline' — the gate acts only inside that section, so however this line renders, the gate cannot act on it. An open violation belongs under the 'Fidelity violations' heading; a record or mention ABOUT a violation writes its kind without brackets (e.g. 'fixed: contradiction — …'); archived history belongs in an HTML comment with its closing '-->' on its own line"
-        done < <(fid_mark "$DOCUMENTS/$d/review.md" | grep -E '^O' | grep -iE "\[[^]]*($vkre)" || true)
+        done < <(fid_mark "$DOCUMENTS/$d/review.md" | grep -E '^O' | LC_ALL=C awk -v kf="$vkfold" -v mode=p "$kindscan" || true)
         # A line that TRIED to be a violation entry and failed to become one is told to fix itself,
         # instead of being binned as prose or as an untouched template. `is_noise` is still the sole
         # judge of what an entry IS — this loop only looks at the lines it calls noise, and asks a
@@ -1293,7 +1333,7 @@ EOF
           vtag=${vline%%$'\t'*}; vrest=${vline#*$'\t'}
           case "$vtag" in
             I) case "$vrest" in *"["*)
-                 printf '%s\n' "$vrest" | grep -qiE "\[[^]]*($vkre)" && vcnt=$((vcnt+1)) ;;
+                 printf '%s\n' "$vrest" | LC_ALL=C awk -v kf="$vkfold" -v mode=t "$kindscan" && vcnt=$((vcnt+1)) ;;
                esac ;;
             C) [ -n "$vrest" ] && [ "$vcnt" -gt 0 ] &&
                  prob "$d review.md: a comment swallows $vcnt violation-shaped entr(ies) and its closing '-->' is followed by '$vrest' on the same line — if that arrow is prose that accidentally closed a forgotten '<!--', close the comment where it was meant to end; if the archive is deliberate, put the closing '-->' on its own line"
@@ -1349,9 +1389,12 @@ EOF
         prob "$d has $consecrated but no 'Fidelity violations' heading the gate can read in review.md — the section title must match exactly (any heading level, no suffix, no numbering, no trailing space). A title the reader cannot find is silence, not a pass"
       else
         N_GATED=$((N_GATED+1))
+        # The FIRST counted entry is named in the message. Without it, a line the writer did not
+        # think of as an entry (a "(없음)" note that brackets a truth id, a sub-heading kept at the
+        # wrong tier) blocked the document with no thread back to the line that did it.
         while IFS= read -r line; do
           is_noise "$line" && continue
-          prob "$d has $consecrated but review.md 'Fidelity violations' is non-empty → consecrated through an open gate. Repair each violation by its kind (refine), re-run review until the section is empty — or remove $consecrated until the gate is clean; a violation is never edited away in review.md itself"
+          prob "$d has $consecrated but review.md 'Fidelity violations' is non-empty → consecrated through an open gate. First entry the gate sees: '$line'. Repair each violation by its kind (refine), re-run review until the section is empty — or remove $consecrated until the gate is clean; a violation is never edited away in review.md itself"
           break
         done < <(fid_body "$DOCUMENTS/$d/review.md")
       fi
@@ -1435,6 +1478,23 @@ cmd_impact() {
     echo "  -- documents mentioning its title --"
     grep -rlnF "$title" "$DOCUMENTS" 2>/dev/null | sed 's/^/  /' || true
   fi
+  # Through the truths. An external-audience document deliberately carries neither the material id
+  # nor its title (publication labels), so the two greps above come back empty at the exact moment
+  # gather's retraction flow tells the user to confirm the blast radius — a false "no documents".
+  # The id→truth→document chain always exists: plan.md's cited_truths is the propagation key.
+  echo "  -- documents citing its truths (via plan.md cited_truths) --"
+  local tid df hitdocs=""
+  for f in "$TRUTHS"/t[0-9]*.md; do
+    [ -f "$f" ] || continue
+    [ "$(fm "$f" source)" = "$n" ] || continue
+    tid=$(basename "$f" .md)
+    for df in "$DOCUMENTS"/*/plan.md; do
+      [ -f "$df" ] || continue
+      printf '%s' "$(fm "$df" cited_truths)" | grep -qE "(^|[^0-9a-z])$tid([^0-9]|$)" || continue
+      case " $hitdocs " in *" $df "*) ;; *) hitdocs="$hitdocs $df"; printf '  %s\n' "$df" ;; esac
+    done
+  done
+  [ -n "$hitdocs" ] || echo "  (none)"
 }
 
 # ===================== status =====================
@@ -1492,7 +1552,9 @@ cmd_status() {
     # entries, with a prescription ("retag them") that cannot be followed without destroying the
     # entry's structure — and validate said nothing, because check_hq_tags reads `- [` lines only.
     # Same root as the `- (없음)` shape: one predicate, both closed.
-    hq_untag=$(printf '%s\n' "$hq" | grep -vE '^- \[[<{]' 2>/dev/null | grep -E '^- ' 2>/dev/null | grep -vcE '^- \[(open|ruled)\]' || true)
+    # `- (없음)` / `- (none)` is the documented empty-queue idiom, not an entry — the earlier
+    # column-0 fix closed the sub-bullet half of this only.
+    hq_untag=$(printf '%s\n' "$hq" | grep -vE '^- \[[<{]' 2>/dev/null | grep -E '^- ' 2>/dev/null | grep -vE '^- \((없음|none)\)' 2>/dev/null | grep -vcE '^- \[(open|ruled)\]' || true)
     if [ "${hq_open:-0}" -gt 0 ]; then
       # The three buckets must SUM to the total. A `- [open]` with no ownership tag lands in the
       # total but in no bucket (and not in untagged either — that filter excludes `- [open]`
@@ -1559,8 +1621,10 @@ cmd_census() {
   # exactly this state (files 0, index entries N) that this early return made unreachable, so a
   # mine whose truths were deleted while index.md still listed them read as a fresh empty mine.
   if ! ls "$TRUTHS"/t[0-9]*.md >/dev/null 2>&1; then
+    # Distinct ids, same rule as the main branch — the line-count defect fixed there had been
+    # left in this sibling the same commit made reachable.
     local nidx0
-    nidx0=$(grep -cE '^- t[0-9]+:' "$TRUTHS/index.md" 2>/dev/null || true); nidx0=${nidx0:-0}
+    nidx0=$(grep -oE '^- t[0-9]+:' "$TRUTHS/index.md" 2>/dev/null | LC_ALL=C sort -u | grep -c . || true); nidx0=${nidx0:-0}
     if [ "$nidx0" -gt 0 ]; then
       echo "census: truth files 0 · index entries $nidx0"
       echo "  ✗ index entries with no truth file: $(grep -oE '^- t[0-9]+:' "$TRUTHS/index.md" 2>/dev/null | sed -E 's/^- (t[0-9]+):/\1/' | LC_ALL=C sort -u | tr '\n' ' ' | sed 's/ $//') — the truth files are gone while the index still lists them; run 'weavedoc validate' for the full picture"
@@ -1661,12 +1725,16 @@ cmd_census() {
     # The id is a REFERENCE, so it is canonicalised before `mstatus` looks for it. Without that,
     # `- m3` for folder `m003` looked up a folder that cannot exist, the retracted-skip could
     # never fire, and the denominator was subtracted twice for a material that was never in it.
+    # Same population rule as the numerator: an exemption naming a material that is not in the
+    # denominator (no converted.md, or retracted — already out) subtracts nothing. It used to
+    # subtract anyway, driving the ratio to 1/0 under a ✗ whose stated cause was false.
     local lid lidc
     n_legacy=0; n_legparsed=0
     for lid in $(nocomment < "$TRUTHS/coverage.md" | section_body2 - "legacy" \
                  | sed -nE 's/^[[:space:]]*-[[:space:]]*(m[0-9]+)\b.*/\1/p' | LC_ALL=C sort -u); do
       n_legparsed=$((n_legparsed+1))
       lidc=$(canon_id "$lid") || lidc=$lid
+      [ -f "$MATERIALS/$lidc/converted.md" ] || continue
       [ "$(mstatus "$lidc")" = "retracted" ] && continue
       n_legacy=$((n_legacy+1))
     done
@@ -1682,13 +1750,17 @@ cmd_census() {
   # same rule N_TRUTH and census's truth-file count already follow, and validate is loudly red
   # about the parse problem itself.
   if ls "$MATERIALS"/*/converted.md >/dev/null 2>&1; then
-    local n_conv n_retrm
+    # ONE parser for "is it retracted", on both sides of the ratio. The numerator asks mstatus
+    # (fm — first key, reads to EOF); this side used to run its own awk (last key, only when the
+    # frontmatter closes), and the two disagreed on a duplicate status: or an unclosed frontmatter,
+    # producing 1/0 under a ✗ that named a nonexistent cause.
+    local n_conv n_retrm mf
     n_conv=$(ls "$MATERIALS"/*/converted.md 2>/dev/null | grep -c . || true); n_conv=${n_conv:-0}
-    n_retrm=$(awk '
-      FNR==1 { infm=($0 ~ /^---[[:space:]]*$/); st=""; next }
-      infm && /^---[[:space:]]*$/ { if(st=="retracted") n++; infm=0; nextfile }
-      infm && /^status[[:space:]]*:/ { st=$0; sub(/^status[[:space:]]*:[[:space:]]*/,"",st); if(st !~ /^"/) sub(/[[:space:]]+#.*$/,"",st); sub(/[[:space:]]*$/,"",st); sub(/^"/,"",st); sub(/"$/,"",st) }
-      END { print n+0 }' "$MATERIALS"/*/converted.md)
+    n_retrm=0
+    for mf in "$MATERIALS"/*/converted.md; do
+      [ -f "$mf" ] || continue
+      [ "$(fm "$mf" status)" = "retracted" ] && n_retrm=$((n_retrm+1))
+    done
     n_mats=$(( n_conv - n_retrm ))
   fi
   local n_denom=$(( n_mats - n_legacy )); [ "$n_denom" -lt 0 ] && n_denom=0

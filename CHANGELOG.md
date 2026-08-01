@@ -4,6 +4,19 @@
 
 ---
 
+## 2026-08-01.5
+
+**Round 6 전체 (확인 17건) — critical 2 깊게, 나머지 15 가볍게 한 판.**
+
+- **C1 게이트, 철자 축**: 구역 규칙의 토큰 비교를 **정규화**(대괄호 안을 소문자 영숫자로 접어 비교) — `[missing required]`·제로폭 공백 등 철자 변형 전부가 규칙 하나로 수렴. **어휘 경계 재정**: kind는 고정 영어 토큰 3개뿐이고, `[모순]` 같은 어휘 밖 괄호는 산문(보증 밖, claim-vs-body와 같은 재정) — 절 안에서는 여전히 fail-closed. FORMATS 명문화, 케이스 3.
+- **C2 Human queue**: 반복 절이 적법한 장부인데 첫 절만 읽혀 뒤 라운드의 열린 항목이 status·validate 양쪽에서 동시에 안 보였음 → `section_all`로 전 절 읽기 + `section_body`의 인접-반복 재진입 버그 수정. 케이스 1.
+- **메타 가드 소생**: `meta_` 접두가 케이스 선택기에 없어 `.2`의 가드가 한 번도 실행된 적 없었음(그동안의 "170/170"은 그만큼 과장) → 선택기에 추가, 이제 돕니다.
+- **census 셋**: legacy 차감을 분자와 같은 모집단으로 · retracted 판정을 양변 모두 `fm` 하나로 · 0-truth 분기도 distinct id 계수로.
+- **가볍게 처리한 나머지**: 게이트 차단 메시지가 첫 항목을 지목(S3) · `impact`가 `cited_truths`를 경유해 발행 라벨 문서도 blast radius에 잡힘(S8) · `audience`/`publication_labels`(plan)·`gap_density`(project)에 주소 부여 — schema optional + 템플릿 + 스킬 필드명(S9) · 봉헌 go-ahead는 Human queue 아래 HTML 주석으로 기록(S10) · refine이 catalog.md status 열도 갱신(S11) · 반쯤 쓴 견본 한계 서술을 실제(꺾쇠+중괄호)로 정정(S2) · `- (없음)` 오계수 제거(N1) · plan 즉답 라우팅(N2) · Trigger A의 충돌 수리 1라운드 비용 명문화(N3) · required_tag 메시지에 ask 루프 경로 추가(N4).
+- `.2`의 실광산 근거 문구 정정: eclypse는 documents/가 비어 게이트 계열이 실행되지 않으므로 그 러닝은 truths 절반의 무회귀 근거만 됨(아래 `.2`에 표기). `.4`는 VERSION만 올라갔던 것 — 내용은 두 재정(verify.md 부재 적법+status 보고 / untagged 어휘 단일화)이며 이 항목이 그 기록임.
+
+검증: 직접 영향 케이스 17/17. (전수·실광산은 다음 큰 경계에서 1회.)
+
 ## 2026-08-01.3
 
 **Round 5의 나머지 전부 — 문서 6 · nice 5 · 재정 1.** 이로써 R5 확인 19건이 모두 닫혔습니다.

@@ -34,7 +34,7 @@ Pull a document from the data mine — decide its structure, tone, and which tru
    | **Scope** — which truths/tags belong in this document, which don't | Truths often span creative content + production tools + meta. The document rarely needs all of them. Show the tag list, propose in/out, confirm. |
    | **Format convention** — is there an existing format to follow? (e.g. namuwiki style, RFC, legal template) | If yes, research it (web search) before proposing structure. If the user names a reference, learn it first. |
    | **Root unit** — what is the top-level organizing entity? | A wiki about a project ≠ a wiki about a single character. |
-   | **Audience** — who reads this? Internal or external? | Tone, depth, jargon level all depend on this. **If external**, also settle the citation labels: material `title`s are internal names ("Support Runbook (excerpt)", literally "user answer"), and the visible half of a citation would otherwise ship them. Record a publication label per cited material in `plan.md` so `write`/`refine` use it — see FORMATS, citation markers. The `<!-- t:<id> -->` marker never changes; only what the reader sees does. |
+   | **Audience** — who reads this? Internal or external? | Tone, depth, jargon level all depend on this. **If external**, also settle the citation labels: material `title`s are internal names ("Support Runbook (excerpt)", literally "user answer"), and the visible half of a citation would otherwise ship them. Record it in `plan.md` frontmatter: `audience: external` plus `publication_labels: {m001: "…"}` so `write`/`refine` use it — see FORMATS, citation markers. The `<!-- t:<id> -->` marker never changes; only what the reader sees does. |
 
    **Multi-file specific (when output shape = multi-file):**
 
@@ -69,7 +69,7 @@ Pull a document from the data mine — decide its structure, tone, and which tru
 
 7. **Series.** If this continues prior documents, set `continues` and make sure those prior-doc materials exist (register them via gather if needed).
 
-8. **Structural-gap ask (checkpoint).** Any *required* section with no supporting truths for its tags → queue it in `questions.md` and ask the user, batched. Cross-check against `project.md` `required_tags` — a required tag with zero truths is a structural gap. See the ask policy — ask only for necessary, missing facts.
+8. **Structural-gap ask (checkpoint).** Any *required* section with no supporting truths for its tags → queue it in `questions.md` and ask the user, batched (if the user answers on the spot, the answer still routes through the pipeline — `gather` makes the `user-answer` material, `map` extracts the truth; plan itself never creates either). Cross-check against `project.md` `required_tags` — a required tag with zero truths is a structural gap. See the ask policy — ask only for necessary, missing facts.
 
 9. **Set `scope_tags`.** Collect all tags that appear in the section notes (step 4) into `plan.md` frontmatter `scope_tags`. This is the tag set this document covers — used by `weavedoc-map` to detect when new truths fall within this document's scope and mark it `stale`.
 
