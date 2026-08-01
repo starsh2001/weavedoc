@@ -100,6 +100,7 @@ WeaveDoc is a set of Claude Code skills. To use it in a project:
 - `pull <term>` — protocol-correct mine lookup for consumers *outside* the pipeline (creative sessions, other tools): searches claims+tags (body fallback) and mechanically applies the read protocol — superseded values point to their winner, unresolved conflicts / unsupported truths are flagged unusable, `as_of` / derived / plan-stage labels attached. See `.weavedoc/READ.md`; `init` plants a CLAUDE.md pointer so every session hits the protocol.
 - `gaps` — the mechanical declared-marker scan (미정/TBD/unchecked checkboxes) that floors the `weavedoc-gaps` skill.
 - `impact <material-id>` — which truths were extracted from a material and which documents cite it (the blast radius when a source is superseded or re-opened).
+- `scope` — what a verify round still owes: unverified materials (from each material's own `status`) and unverified truths (from `truths/verify.md` `## Verified units`), as sets, not adjectives. The verify skill reads its round scope from here rather than deciding it — asked which truths a round owed, a real run answered "all of them" and put five cold reviewers across 264 truths, three rounds deep, when the answer was 40.
 - `status` — each document's stage and its next step, plus the open Human-queue split (you decide / recommendation ready / machine can just do). `version` — the installed runtime's date.
 
 **The `examined:` line.** Every `validate` run prints, before its verdict, what it actually looked at:

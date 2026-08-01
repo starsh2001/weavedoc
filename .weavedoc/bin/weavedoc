@@ -22,6 +22,7 @@
 #   pull <term>       protocol-correct mine lookup for consumers outside the pipeline (see READ.md)
 #   impact <mID>      which truths were extracted from a material + which documents cite it (blast radius)
 #   status            each document's status + the next step
+#   scope             what a verify round still owes — unverified materials + truths, computed
 #   gaps              mine census + declared-marker scan (non-blocking floor for the weavedoc-gaps skill)
 #   census            mine census only (truth files vs index, numbering holes, live/status tallies)
 #   reindex [--check] regenerate truths/index.md + truths/tree.md from truth frontmatter (--check: diff only)
@@ -2236,11 +2237,143 @@ cmd_version() {
   return 0
 }
 
+# ===================== scope (what a verify round still owes) =====================
+# The unverified set, COMPUTED — never judged. Two populations, two ledgers, both already
+# mechanical: a material carries `status: verified` in its own frontmatter (verify writes it on
+# pass), and truths are covered by the `## Verified units` table in truths/verify.md. Disk is the
+# population; the difference is the round's scope.
+#
+# This is a command and not a paragraph because scope was a judgement call and the judgement was
+# wrong three rounds running: asked "which truths does this round owe?", a real run answered "all
+# of them" and spawned five cold reviewers across 264 truths, three times, when 38 were actually
+# unverified. The spec's own §7 re-check table said otherwise and was never opened. Prose can be
+# skipped; a number the tool prints before the round starts cannot.
+compress_ids() { # stdin: sorted canonical ids -> one line, consecutive runs collapsed to a-b
+  awk '
+    function pad(pp, nn) { return sprintf("%s%03d", pp, nn+0) }
+    function flush() { if (n0=="") return; if (n0==n1) printf "%s ", pad(p,n0); else printf "%s-%s ", pad(p,n0), pad(p,n1) }
+    { cp = substr($0,1,1); cn = substr($0,2)+0
+      if (n0 != "" && cp == p && cn == n1+1) { n1 = cn; next }
+      flush(); p = cp; n0 = cn; n1 = cn }
+    END { flush(); printf "\n" }'
+}
+scan_verified_units() { # -> "V<TAB><id>" per covered id · "U<TAB><line>" per entry with no verdict
+  # Reads the `## Verified units` ledger by VERDICT, never by line shape. The section's shape is
+  # not fixed — the production mine writes a markdown table, the shipped template writes bullets —
+  # and a parser that knew only one of them would read the other mine as "nothing verified", which
+  # is the full-mine round this command exists to prevent, arriving silently through the back door.
+  # Same lesson the fidelity gate already learned: judge the token, not the line.
+  [ -f "$TRUTHS/verify.md" ] || return 0
+  # Normalised first so every awk bracket expression below stays pure ASCII: a multibyte dash or
+  # middot inside `[...]` is read as a range endpoint, not a literal. `·` becomes a space because
+  # it only ever separates ids here (`t194·t195`).
+  nocomment < "$TRUTHS/verify.md" | section_all - "Verified units" \
+    | sed 's/–/-/g; s/—/-/g; s/·/ /g' \
+    | awk -v mark="$(sch verify.units.verified)" '
+    function pad(pp, nn) { return sprintf("%s%03d", pp, nn+0) }
+    BEGIN { if (mark == "") mark = "verified"; mark = tolower(mark) }
+    {
+      line = $0
+      if (line !~ /^[[:space:]]*[|-]/) next                # prose, not a ledger entry
+      if (line ~ /^[[:space:]]*\|[[:space:]|:-]*$/) next   # table separator row
+      if (line !~ /[mt][0-9]/) next                        # names no unit (header row, note)
+      # THE VERDICT DECIDES, not the presence of ids. Entries in this same section name units while
+      # reporting them failed or unrun (`| 전 자료·전 truth | **미통과** |`, `| T4 | R3 미실행 |`);
+      # harvesting ids without reading the verdict beside them would certify exactly the units the
+      # ledger just refused to certify. A substring test is not enough either — `unverified`
+      # contains `verified` — so the entry must END with the marker once trailing decoration
+      # (cell pipes, emphasis, punctuation) is stripped. That is the one convention both shapes
+      # already follow: the verdict is the last thing on the line.
+      v = line; gsub(/[[:space:]|*.-]+$/, "", v)
+      if (tolower(v) !~ ("(^|[^a-z_])" mark "$")) { print "U\t" line; next }
+      s = line
+      while (match(s, /[mt][0-9]+-[mt][0-9]+/)) {
+        r = substr(s, RSTART, RLENGTH); s = substr(s, RSTART + RLENGTH)
+        i = index(r, "-"); a = substr(r, 1, i-1); b = substr(r, i+1)
+        if (substr(a,1,1) != substr(b,1,1)) continue
+        for (k = substr(a,2)+0; k <= substr(b,2)+0; k++) print "V\t" pad(substr(a,1,1), k)
+      }
+      s = line   # range endpoints print twice; the sort -u downstream makes that free
+      while (match(s, /[mt][0-9]+/)) {
+        tok = substr(s, RSTART, RLENGTH); s = substr(s, RSTART + RLENGTH)
+        print "V\t" pad(substr(tok,1,1), substr(tok,2) + 0)
+      }
+    }'
+}
+cmd_scope() {
+  local m mstat n_mconv=0 n_mver=0 munver=""
+  while IFS= read -r m; do
+    [ -f "$MATERIALS/$m/converted.md" ] || continue
+    mstat=$(fm "$MATERIALS/$m/converted.md" status)
+    case "$mstat" in
+      # `used` means a document already cited it, which it could not have done unverified.
+      verified|used) n_mconv=$((n_mconv+1)); n_mver=$((n_mver+1)) ;;
+      # Withdrawn material is not owed — out of the numerator AND the denominator, or the ratio
+      # reports a debt nobody can ever pay down.
+      retracted)     ;;
+      *)             n_mconv=$((n_mconv+1)); munver="$munver $m" ;;
+    esac
+  done < <(material_ids)
+
+  local scan ondisk vids unmarked tunver tghost n_t=0 n_tunver=0
+  ondisk=$(ls "$TRUTHS"/t[0-9]*.md 2>/dev/null | sed -E 's|.*[/\\]t0*([0-9]+)\.md$|\1|' \
+           | awk '{printf "t%03d\n", $1}' | LC_ALL=C sort -u)
+  n_t=$(printf '%s' "$ondisk" | grep -c . || true); n_t=${n_t:-0}
+  scan=$(scan_verified_units)
+  vids=$(printf '%s\n' "$scan" | sed -n 's/^V\t//p' | grep -E '^t[0-9]' | LC_ALL=C sort -u)
+  unmarked=$(printf '%s\n' "$scan" | sed -n 's/^U\t//p')
+  tunver=$(comm -23 <(printf '%s\n' "$ondisk" | grep -E '^t[0-9]' || true) \
+                    <(printf '%s\n' "$vids"   | grep -E '^t[0-9]' || true))
+  tghost=$(comm -13 <(printf '%s\n' "$ondisk" | grep -E '^t[0-9]' || true) \
+                    <(printf '%s\n' "$vids"   | grep -E '^t[0-9]' || true))
+  n_tunver=$(printf '%s' "$tunver" | grep -c . || true); n_tunver=${n_tunver:-0}
+
+  echo "scope — what a verify round still owes (computed from disk + the ledgers, not judged)"
+  if [ "$n_mconv" -eq 0 ] && [ "$n_t" -eq 0 ]; then
+    echo "  nothing to verify yet — no converted material, no truths"
+    return 0
+  fi
+  if [ "$n_mconv" -gt 0 ]; then
+    printf '  materials  %s converted · %s verified · %s unverified   (source: each material frontmatter status)\n' \
+      "$n_mconv" "$n_mver" "$((n_mconv - n_mver))"
+    [ -n "$munver" ] && printf '    → %s\n' "$(printf '%s\n' $munver | LC_ALL=C sort -u | compress_ids)"
+  fi
+  if [ "$n_t" -gt 0 ]; then
+    printf '  truths     %s on disk · %s verified · %s unverified   (source: truths/verify.md ## Verified units)\n' \
+      "$n_t" "$((n_t - n_tunver))" "$n_tunver"
+    [ "$n_tunver" -gt 0 ] && printf '    → %s\n' "$(printf '%s\n' "$tunver" | compress_ids)"
+    if [ ! -f "$TRUTHS/verify.md" ]; then
+      echo "    (no truths/verify.md — nothing has been cold-verified, so every truth is owed)"
+    elif [ -n "$tghost" ]; then
+      # A ledger naming ids that no longer exist covers nothing; said out loud because the covered
+      # count would otherwise look larger than the mine and nobody could tell why.
+      printf '    ledger names %s id(s) with no truth file — they cover nothing: %s\n' \
+        "$(printf '%s' "$tghost" | grep -c . || true)" "$(printf '%s\n' "$tghost" | compress_ids)"
+    fi
+  fi
+  # SHOWN, never absorbed — the same discipline `status` applies to untagged queue entries. An
+  # entry that names units but carries no verdict covers nothing, and the safe failure direction is
+  # to verify it again; but silently treating it as unverified would look identical to a ledger
+  # that simply hadn't got there yet, and nobody would know a line needed one word added.
+  if [ -n "$unmarked" ]; then
+    printf '  ledger: %s entry(s) name units but end in no "%s" verdict — they cover nothing; add the verdict or leave the units owed:\n' \
+      "$(printf '%s' "$unmarked" | grep -c . || true)" "$(sch verify.units.verified)"
+    printf '%s\n' "$unmarked" | sed 's/^[[:space:]]*/    /'
+  fi
+  if [ "$((n_mconv - n_mver))" -eq 0 ] && [ "$n_tunver" -eq 0 ]; then
+    echo "  → nothing unverified. A round here would re-check what the ledger already covers."
+  else
+    echo "  → a round examines the sets above. Units already covered are not re-verified without a reason recorded in verify.md."
+  fi
+  return 0
+}
+
 # ===================== dispatch =====================
 case "${1:-}" in
   validate)   cmd_validate ;;
   impact)   shift; cmd_impact "${1:-}" ;;
   status)   cmd_status ;;
+  scope)    cmd_scope ;;
   gaps)     cmd_gaps ;;
   census)   cmd_census ;;
   reindex)  shift; cmd_reindex "${1:-}" ;;
@@ -2249,5 +2382,5 @@ case "${1:-}" in
   lang)     cmd_lang ;;
   locale)   cmd_locale ;;
   version)  cmd_version ;;
-  *) echo "weavedoc — validate | pull <term> | impact <material-id> | status | gaps | census | reindex [--check] | retag <old> <new> [--dry] | version | lang | locale"; exit 2 ;;
+  *) echo "weavedoc — validate | pull <term> | impact <material-id> | status | scope | gaps | census | reindex [--check] | retag <old> <new> [--dry] | version | lang | locale"; exit 2 ;;
 esac
