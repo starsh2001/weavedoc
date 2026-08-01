@@ -31,15 +31,27 @@ Ask **exactly** these questions, in order. Don't improvise, skip, or silently de
 - **Review strength** — *"문서 리뷰 강도: 1 / 2 / 3"* (추천: 1)
 - **Scale** — *"검증/리뷰 규모: skip / light / standard / full"* (추천: standard)
 
-Write the answers to `.weavedoc/config.yaml`. On a **reconfigure**, update config, **re-ensure the CLAUDE.md pointer block** (see §3 — idempotent), and **stop here**.
+Write the answers to `.weavedoc/config.yaml`. On a **reconfigure**, update config, then re-ensure the **two** idempotent guards from §3 — the **search shield (`.ignore`)** and the **CLAUDE.md pointer block** — and **stop here**. (Both bullets are marked *runs on reconfigure too*; a reconfigured mine that skips the shield leaves its raw layer searchable until the next gather.)
 
 ### 3. Create the mine infrastructure (first-time only)
 - **Folders.** Create `inbox/`, `materials/`, `truths/`, `documents/` per the config paths.
 - **project.md.** Create from `.weavedoc/templates/project.md` with minimal defaults:
   - `roles` — leave empty `[]`; the first `gather` proposes roles from the actual materials.
-  - `tone` — leave empty; each `plan` sets tone per document.
-  - `required_tags` — leave empty unless completeness is `required`.
+  - `tone` — leave empty; it is optional HERE (a standing project tone, if one exists). Each `plan` then writes a concrete tone into its own `plan.md`, where the field is required — "inherited" is resolved at plan time, not left blank.
+  - `required_tags` — leave empty unless completeness is `required`. When it IS `required`: ask the user which topics are mandatory **only if they can name them now** (a contract project usually can — 조항 categories are known before materials arrive); otherwise **defer explicitly**: leave `[]`, tell the user the completeness setting has no mechanical teeth until this list is filled (validate's required-tag check over an empty list checks nothing), and note that the first `gather`/`map` proposes candidates from the actual materials and the first `plan` (structural-gap step) cross-checks them. Deferring is legal; deferring *silently* is what leaves the setting inert.
   - Body — a one-line placeholder: the mine's character reveals itself as materials are gathered.
+- **Search shield (`.ignore`).** *Runs on **reconfigure** too.* Ensure the project root has an `.ignore` file shielding the raw layer from content searches (create if absent; if present, ensure the two entries exist). Use the **configured** `paths` values, not the literals:
+
+  ```
+  # WeaveDoc search shield — the raw layer is the AUDIT surface, not the read surface.
+  # ripgrep-family search (git or not) skips these by default, so a casual grep can
+  # never hand out raw, superseded source text. Deliberate reads by path still work —
+  # that is the audit path (verify, retraction). NOT .gitignore: originals stay versioned.
+  inbox/
+  materials/*/source.*
+  ```
+
+  This is the mechanical half of the read protocol: the CLAUDE.md block below tells a session *not* to read raw sources; this makes a content search *unable to find them* even in a session that never reads the block. Ruled 2026-07-31.
 - **CLAUDE.md pointer (read-protocol tripwire).** *Unlike the rest of §3, this bullet runs on **reconfigure** too (§2 points here).* Ensure the project's `CLAUDE.md` contains this fixed block between the markers (create the file if absent; if the markers exist, replace the block's content; otherwise append — **idempotent, never duplicated**). This is what makes any future session — including creative ones that never invoke a weavedoc skill — hit the read protocol before touching the mine:
 
   ```markdown
@@ -48,6 +60,9 @@ Write the answers to `.weavedoc/config.yaml`. On a **reconfigure**, update confi
   from it — for any purpose, including creative work — read and follow `.weavedoc/READ.md`
   (status filtering, as_of, provenance). For lookups, prefer:
   `bash .weavedoc/bin/weavedoc pull <tag-or-keyword>`.
+  Raw originals (inbox/, materials/*/source.*) are search-shielded by the root .ignore —
+  they are the audit layer. Never quote them as current fact; open one only deliberately,
+  by path, when auditing a conversion or a retraction.
   <!-- weavedoc:end -->
   ```
 
