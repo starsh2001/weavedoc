@@ -1,5 +1,5 @@
 ---
-id: t{N}
+id: t{NNN}          # zero-padded to at least 3 digits: t001, t042, t1000
 claim: "{one-sentence fact}"
 source: m{N}
 location: "{where in the source}"

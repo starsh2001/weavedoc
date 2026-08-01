@@ -40,6 +40,16 @@ One finding per line:
 
 A finding with no named consequence ("this seems unclear", "what about edge X?") is a **non-finding** — drop it. If a lens finds nothing, it returns `none` with a one-line note on what it checked.
 
+### The verdict line is the contract (ruled 2026-07-31)
+
+When a check that was supposed to run **did not run**, and the tool still prints its clean verdict (`✓`, exit 0), that is **`critical`** — regardless of how honest the accounting beside it was. Two cold rounds graded the same shape differently (one `high` because the accounting line said `← N NOT checked`, one `critical` because a purpose-built alarm had been switched off), so the rule is fixed here rather than re-argued each round:
+
+- **What a consumer acts on is the verdict line and the exit code.** Scripts read the exit code; a tired human reads the tick. An accounting line is *information*, not a warranty — it does not downgrade a green verdict over a membrane that never ran.
+- A silently-skipped **membrane** (the quote seal, the fidelity gate) is the strict case: green verdict + membrane not run = `critical`, full stop.
+- The honest accounting still matters — it is what makes the defect *findable*. It just doesn't change the grade.
+
+This cuts both ways: a check that ran and reported accurately is not critical merely because its message was unclear (that is `should-fix`).
+
 ### Examples
 
 #### verify (material)
@@ -79,11 +89,17 @@ Target: {target}
   truths: truths/*.md vs their source materials (extraction fidelity) + truths/coverage.md (the extraction ledger T2 audits)
   document-fidelity: draft.md vs cited truths (citation/grounding)
   document-advisory: draft.md + plan.md (quality/persuasiveness)
-Criteria: {the checklist items for this lens — M1-M3 / T1-T4 / fidelity gate / advisory persona}
+Criteria: {the checklist items for this lens — M1-M4 / T1-T5 / fidelity gate / advisory persona}
 You may read: {the files listed for this target, PLUS any material the target's converted.md
   explicitly cross-references (a value labeled "(m012 대조)" needs m012 to check), PLUS
   existence-checks on gaps.md/questions.md (a decision recorded there is not a missing fact)
   — never the full mine}
+  {T5 ONLY — the read-scope is DIFFERENT, not merely narrower: everything READ.md points a
+   consumer at, and only that — `weavedoc pull <term>`, the truth files it points at (rule 2),
+   `truths/index.md` / `truths/tree.md` / `census` (rule 5), and `project.md` required_tags so
+   you know which topics to pull. NO materials, NO source.*, NO coverage, NO conversion history
+   — reading those destroys the lens, whose whole value is seeing exactly what a consumer sees.
+   Questions needing material access are named and left, never answered.}
 Do NOT raise: explicitly labeled derivations/cross-references ("(m012 대조)", "> [note]",
   "> [machine-note]" lines) as hallucination; {the do-not-raise categories from adjudications}
 Write findings in {config.language}.
@@ -100,7 +116,7 @@ Write findings in {config.language}.
 
 ## Aggregate
 
-Merge findings from all reviewers; dedupe by (where + what). On a severity clash, take the higher.
+Merge findings from all reviewers; dedupe by (where + what). On a severity clash, take the higher. On a **kind** clash (two lenses judged the same defect e.g. `contradiction` vs `unsupported`), keep the kind whose diagnosis carries **more evidence** — `contradiction` (names the conflicting truth) over `unsupported` (names only absence) over `missing-required` — and note the displaced kind in the entry's prose; `refine` routes the repair by kind, so the merged entry must say which repair path won and that the other reading existed.
 
 ## Over-strictness triage (`full`; optional `standard`)
 
@@ -108,7 +124,11 @@ One more cold reviewer (the *defender*) rules each finding KEEP / DOWNGRADE / DR
 
 - **Drop:** anything out of scope (per the SCOPE rule above); anything failing the "name the consequence" test; anything in the do-not-raise categories; duplicates.
 - **Keep:** only findings with a named consequence at the stated severity.
-- **Semantic dismissals go to the human.** A drop whose reason is semantic — "원문에서 직접 함의됨", "파생이라 무해", "다른 파일에 기록돼 있음" — is not a drop: it goes to the state file's `## Human queue`, and only the user's ruling converts it to a do-not-raise.
+- **Semantic dismissals go to the human.** **The defender tags ownership, not the producer.** Every entry it routes to `## Human queue` is written `- [open] [<ownership>] …`, and the defender — already cold, already the one role allowed to judge these — assigns it: `user-only` (answering needs information **no material holds**, only the user), `recommended` (the machine can derive a defensible answer and the user is confirming taste or cost), `machine` (record hygiene with nothing to weigh). Two rules keep the tag honest, because the producer would otherwise be grading its own dismissal one level up — tagging a finding `machine` buries it in the "just say go" list as surely as dropping it:
+- **`machine` is the defender's to give, never the producer's.** If no defender ran, the producer writes `[open] [user-only]` — **not** a bare `[open]` (`validate` demands an ownership tag on every `[open]` entry) and **not** an untagged line (it disappears from every count). Only a user ruling moves an entry down.
+- **Retagging an existing untagged legacy entry also defaults to `user-only`.** That is the direction that surfaces rather than buries.
+
+A drop **or downgrade** whose reason is semantic — "원문에서 직접 함의됨", "파생이라 무해", "다른 파일에 기록돼 있음" — is not the defender's to finalize: it goes to the state file's `## Human queue`, and only the user's ruling converts it to a do-not-raise. The verdict set is KEEP / DOWNGRADE / DROP, and at `strength: 1` a `critical`→`should-fix` downgrade removes the finding from the run as surely as a drop — routing only drops to the queue let the same semantic judgement escape through the other verdict.
 - Returns the confirmed list + new do-not-raise additions + the human-queue entries.
 
 **Never touch fidelity violations** (contradiction/unsupported/missing-required) — those are facts, not opinions. Triage applies only to verify findings and advisory findings.
@@ -124,19 +144,32 @@ Write the round's verdict to the state file:
 
 ## Verify lenses — fixed order, first *N* per level
 
-### Material (M1–M3)
+### Material (M1–M4)
 1. **completeness-scanner** (M1) — every section, paragraph, table, data point in the original appears in converted.md. **Show the mapping**: original element → converted location. Missing content = FAIL.
 2. **accuracy-checker** (M2) — every value (number, date, name, amount) matches exactly. Cross-check ALL structured data. Show the comparison. Misread value = FAIL.
 3. **hallucination-hunter** (M3) — nothing in converted.md that isn't in the original. Trace each element back. Untraceable element = FAIL.
+4. **reachability-auditor** (M4) — **only for `origin: research` materials** (skip otherwise; not a PARTIAL, mark `— (n/a)`). The machine chose the query and read the result, so nothing human stood between the world and the record: can a later reviewer reach the same source and get the same value? Check `url` + `retrieved_at` are present and specific; `source.md` holds the fetched values **as fetched** — raw units, raw timezone, before any conversion; every derived figure in converted.md traces to one of them (a UT→KST conversion must show both sides). A value that can only be re-*searched*, not re-*checked*, = FAIL. Without this lens the `origin: research` rule is a promise the round never keeps.
 
-### Truths (T1–T4)
+### Truths (T1–T5)
 1. **claim-vs-quote** (T1) — the truth's claim accurately represents its verbatim quote. Claim drifts from its own quote = FAIL.
 2. **extraction-auditor** (T2) — every load-bearing fact in converted.md became a truth, **including full-text artifacts** (lyrics, clauses, code/specs — metadata-only extraction of an artifact is an omission). Audit the material's `## m<id>` section in `truths/coverage.md` (element → truth ids, `skipped:` + reason) against converted.md: manifest completeness + skip legitimacy + mapping accuracy. No coverage section = PARTIAL, never PASS. Important omission or illegitimate skip = FAIL.
 3. **atomicity-checker** (T3) — each truth is one fact (not two bundled). Bundled or distorted = FAIL.
 4. **tag-auditor** (T4) — tags correct and sufficient for conflict detection. A mistagged truth hides from cross-checks = should-fix.
+5. **consumer-reader** (T5) — **read the mine exactly as `.weavedoc/READ.md` tells a consumer to, and no other way.** Read-scope = everything READ.md points a consumer at, and only that: `bash .weavedoc/bin/weavedoc pull <tag>`, **the truth files pull points at** (rule 2), and **`truths/index.md` / `truths/tree.md` / `census`** (rule 5 — the entry points for finding things by tag), plus `project.md` `required_tags` so you know which topics a writer would pull. A reviewer barred from these would be *weaker* than a real consumer, and would judge a mine nobody actually reads. **Out of scope: materials, `source.*`, coverage, conversion history, how anything was produced.**
+
+   Method — this is the PASS condition, so do it and show it: pick **the topics a writer would actually pull** (each `required_tag`, plus every entity named in a project-language tag), run `pull` on each, and for each one write *what a consumer would now believe*. A round of T5 with the pulls and the belief statements shown is a PASS even when it finds nothing; without them it is PARTIAL. There is no "compare against the truth" here — the finding is always **a gap between what the mine holds and what a protocol-following reader ends up with**:
+   - a **guard that doesn't surface** — an "아직 정해지지 않았다" truth whose tags exclude the entities it guards, so `pull <entity>` returns two fixed values with the undecided span between them invisible and the reader interpolates (a real run: `pull 초아` gave 16세 and 17세 with no sign that the gap was undecided);
+   - a **claim narrower than its own body** — `pull` lists claims, so a fact reachable only by opening the file is a fact most consumers never see;
+   - a **superlative or ordering with no live basis** — the truths it rests on are `discarded`, but the sorted statement is still `ok`;
+   - an **`as_of` window a consumer can't resolve** — a phase label no live truth defines, so the reader cannot tell when the value holds;
+   - a **`discarded` truth whose winner pointer lands nowhere useful** — the successor exists but its claim doesn't carry the displaced value, so following the protocol still leaves the reader without it.
+
+   Explicitly NOT T5's business (they need material access, and other lenses own them): whether a `> [machine-note]` points into superseded prose (M3/mirror), whether a claim matches its quote (T1), whether extraction was complete (T2). Naming one is fine; raising it as a T5 finding is not. A consumer who would state something false = FAIL; one who would merely be under-informed = should-fix.
 
 ### Pass rule
 A check is **PASS only when a reviewer showed it** — pasted the mapping, quoted the comparison, traced the element. **"Looks fine" / "found nothing" is NOT a PASS** — that's exactly how a rubber-stamp waves an under-checked conversion through. An unshown check is **PARTIAL**, never PASS.
+
+**A lens the level never ran is `— (level)`, not PARTIAL.** PARTIAL means "should have been shown and wasn't" and blocks; a lens outside the level was never owed. Without this distinction `light` (T1–T2) and `standard` (T1–T3) could never pass at all, since their tables would always carry PARTIAL rows for lenses nobody was asked to run.
 
 ## Review — fidelity gate lenses
 

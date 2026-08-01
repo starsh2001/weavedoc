@@ -15,14 +15,22 @@ conflicts:               # source-vs-source conflict handling — detection is r
   attribution: ask       # ask | allow — 병기(keep both) needs user OK: per-conflict (ask) or standing project (allow)
 verify:                  # per-transformation fidelity check — upstream of the document-level review gate
   strength: 2            # 1=block on critical · 2=+should-fix · 3=+nice-to-have
-  max_rounds: 3          # exceeded -> escalate to the user, never auto-pass
-  repeat: 1              # clean rounds in a row required to pass
+  max_rounds: 5          # exceeded -> escalate to the user, never auto-pass
   scale: standard        # skip | light | standard | full — project default; format risk overrides per material
+  repeat:                # clean rounds IN A ROW required to pass, by scale. One clean round proves the
+    skip:     0          # round found nothing; two prove the target is quiet. A single pass is what a
+    light:    1          # real run mistook for "done" four times, each time with defects still in place.
+    standard: 1
+    full:     2          # the level used when the target is risky — that is where the second round pays
 review:                  # advisory quality pass — improves the doc but NEVER blocks consecration
   strength: 1            # 1=block on critical · 2=+should-fix · 3=+nice-to-have
-  max_rounds: 3          # exceeded -> escalate to the user, never auto-pass
-  repeat: 1              # clean rounds in a row required to pass
+  max_rounds: 5          # exceeded -> escalate to the user, never auto-pass
   scale: standard        # skip | light | standard | full
+  repeat:                # clean rounds IN A ROW required to pass, by scale
+    skip:     0
+    light:    1
+    standard: 1
+    full:     2
 gaps:                    # mine completeness register (weavedoc-gaps skill + `weavedoc gaps` scan)
   # markers: 미정|미완성|미확정|미상|TBD|TODO|추후 보강|추후 작업|추후 결정|정해지지 않|미해결
   #   ^ project-language incompleteness markers for the declared scan (grep alternation).

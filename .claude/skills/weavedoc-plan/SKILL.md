@@ -34,7 +34,7 @@ Pull a document from the data mine — decide its structure, tone, and which tru
    | **Scope** — which truths/tags belong in this document, which don't | Truths often span creative content + production tools + meta. The document rarely needs all of them. Show the tag list, propose in/out, confirm. |
    | **Format convention** — is there an existing format to follow? (e.g. namuwiki style, RFC, legal template) | If yes, research it (web search) before proposing structure. If the user names a reference, learn it first. |
    | **Root unit** — what is the top-level organizing entity? | A wiki about a project ≠ a wiki about a single character. |
-   | **Audience** — who reads this? | Tone, depth, jargon level all depend on this. |
+   | **Audience** — who reads this? Internal or external? | Tone, depth, jargon level all depend on this. **If external**, also settle the citation labels: material `title`s are internal names ("Support Runbook (excerpt)", literally "user answer"), and the visible half of a citation would otherwise ship them. Record it in `plan.md` frontmatter: `audience: external` plus `publication_labels: {m001: "…"}` so `write`/`refine` use it — see FORMATS, citation markers. The `<!-- t:<id> -->` marker never changes; only what the reader sees does. |
 
    **Multi-file specific (when output shape = multi-file):**
 
@@ -61,15 +61,15 @@ Pull a document from the data mine — decide its structure, tone, and which tru
 
 3. **Propose structure.** Now that all decisions are resolved: create `documents/<doc-id>/` and `plan.md` (from `.weavedoc/templates/plan.md`). Offer a section skeleton fit to `doc_type` + project + available materials + all elicitation answers. For multi-file plans, the skeleton is a page list with per-page structure rules and link conventions.
 
-4. **Section notes.** For each section (or page, if multi-file), set the note: purpose / truths by `tags` / `required|optional`. Map sections to truths by grepping tags in `truths/index.md` or `truths/*.md` frontmatter.
+4. **Section notes.** For each section (or page, if multi-file), set the note: `<!-- purpose: … | tags: … | required|optional -->`. The `tags` field carries **truth tags** (the vocabulary of `truths/*.md` `tags:`, not material role·topics) — step 9 harvests `scope_tags` from exactly these fields, and map's staleness trigger compares that against new truths' tags, so any other vocabulary here silently disables staleness. Map sections to truths by grepping tags in `truths/index.md` or `truths/*.md` frontmatter.
 
 5. **Semantic check.** Before presenting to the user, self-review the proposed structure: does every item sit in the right category? (e.g. a CEO doesn't go in "members"; a production tool reference doesn't go in a creative wiki.) Fix before showing.
 
-6. **Tone.** Inherit the project tone unless the user wants a per-document override.
+6. **Tone.** Inherit the project tone unless the user wants a per-document override — and **write the resolved value into `plan.md`, never leave the field blank to mean "inherited".** `tone` is a required plan field (`plan.fm.required`): an empty one fails `validate`, and a cold reader of the plan cannot resolve an inheritance that was never written down. If the project has no standing tone, the tone elicited for this document goes here.
 
 7. **Series.** If this continues prior documents, set `continues` and make sure those prior-doc materials exist (register them via gather if needed).
 
-8. **Structural-gap ask (checkpoint).** Any *required* section with no supporting truths for its tags → queue it in `questions.md` and ask the user, batched. Cross-check against `project.md` `required_tags` — a required tag with zero truths is a structural gap. See the ask policy — ask only for necessary, missing facts.
+8. **Structural-gap ask (checkpoint).** Any *required* section with no supporting truths for its tags → queue it in `questions.md` and ask the user, batched (if the user answers on the spot, the answer still routes through the pipeline — `gather` makes the `user-answer` material, `map` extracts the truth; plan itself never creates either). Cross-check against `project.md` `required_tags` — a required tag with zero truths is a structural gap. See the ask policy — ask only for necessary, missing facts.
 
 9. **Set `scope_tags`.** Collect all tags that appear in the section notes (step 4) into `plan.md` frontmatter `scope_tags`. This is the tag set this document covers — used by `weavedoc-map` to detect when new truths fall within this document's scope and mark it `stale`.
 
