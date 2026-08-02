@@ -1645,7 +1645,12 @@ block_gate_fid_c9_lonely() {
 # ---- command smoke floor (Phase 2: every CLI command has at least one covered run) ----
 acct_smoke_version() { vrun version; expect_pass; expect_has "fingerprint:"; }
 acct_smoke_lang()    { vrun lang;    expect_pass; expect_has "ko"; }
-acct_smoke_locale()  { vrun locale;  expect_pass; expect_has "ko"; }
+acct_smoke_locale() {
+  # `locale` probes the OS (env → Windows registry) and printing NOTHING on a bare box is its
+  # documented behavior — asserting "ko" here was asserting the dev machine, not the command
+  # (CI run 1 caught exactly that). The smoke floor is: it runs and exits 0.
+  vrun locale; expect_pass
+}
 acct_smoke_pull() {
   vrun pull 위약
   expect_pass

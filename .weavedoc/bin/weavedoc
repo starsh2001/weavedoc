@@ -1292,7 +1292,7 @@ EOF
     v=$(fm "$TRUTHS/verify.md" status)
     [ -z "$v" ] || pipes "$(sch verify.fm.enum.status)" | grep -qx "$v" || prob "truths/verify.md  status '$v' invalid → use $(sch verify.fm.enum.status)"
     while IFS= read -r k; do
-      nocomment < "$TRUTHS/verify.md" | grep -qE "^#{1,2}[[:space:]]+$k[[:space:]]*\$" ||
+      nocomment < "$TRUTHS/verify.md" | grep -qE "^#{1,2}[[:space:]]+${k}[[:space:]]*\$" ||
         prob "truths/verify.md  required section '$k' missing (verify.sections)"
     done < <(pipes "$(sch verify.sections)")
   fi

@@ -16,7 +16,7 @@ jobs:
   lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: bash -n (bin + suite)
         run: |
           bash -n .weavedoc/bin/weavedoc
@@ -30,7 +30,9 @@ jobs:
   regression-linux:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
+      - name: generate ko_KR.UTF-8 (pass_locales compares real locale behavior, not a warning)
+        run: sudo locale-gen ko_KR.UTF-8
       - name: run the regression suite
         run: bash tests/regress.sh
       - name: executed-case artifact (§7.3 — the case ID list, not just a PASS count)
@@ -76,7 +78,7 @@ jobs:
       run:
         shell: bash
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: macOS GNU toolchain (documented requirement — default BSD tools are unsupported)
         if: runner.os == 'macOS'
         run: |
@@ -113,7 +115,7 @@ jobs:
   manifest:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: bundle manifest is two-run byte-identical (Phase 0 condition, kept honest in CI)
         run: |
           bash tests/make-manifest.sh > m1.txt
