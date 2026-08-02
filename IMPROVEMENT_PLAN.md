@@ -1,6 +1,6 @@
 # WeaveDoc 통합 개선 계획
 
-> 상태: 실행 중 — §11 전 항목 결정 완료(2026-08-02) · Phase 0 완료(2026-08-02) · **Phase 1 완료(2026-08-02: COR-001~004 구현·회귀 통과, v1/v2 dual-reader, 내부 milestone — 공개 release 없음)** · **Phase 2 구성 완료(2026-08-02: mktemp 격리 + keyed resume cache · `.github/workflows/ci.yml` 신설 · 전 명령 smoke · fidtest 흡수 3/폐기 8 — "PR·tag에서 suite가 돈다"는 완료 조건은 첫 push 후 CI 실행으로 확인)** · 다음: push → CI 검증 → Phase 3 (schema v2 + migration)  
+> 상태: 실행 중 — §11 전 항목 결정 완료(2026-08-02) · Phase 0 완료(2026-08-02) · **Phase 1 완료(2026-08-02: COR-001~004 구현·회귀 통과, v1/v2 dual-reader, 내부 milestone — 공개 release 없음)** · **Phase 2 완료(2026-08-02: mktemp 격리 + keyed resume cache · CI 신설·green — lint/manifest/Ubuntu 226/226 65초/clean worktree, Windows·macOS는 tag·dispatch 시 — 4개 run에 걸쳐 CI가 실결함 5건을 잡아 수리: SC1087·locale smoke 2회·locale-gen·artifact 자기지적)** · 다음: Phase 3 (schema v2 + migration)  
 > 비교 기준: `v0.1.0` (`ff0b726`, runtime `2026-07-27.7`) → 현재 HEAD `7c199e6` (`v0.2.0` tag 이후 2개 commit, `git describe: v0.2.0-2-g7c199e6`, runtime `2026-08-02.2`)  
 > 목적: 현재판의 fidelity 강점을 보존하면서 정확성, 마이그레이션, 테스트, 성능, 배포 계약을 제품 수준으로 끌어올린다.
 
