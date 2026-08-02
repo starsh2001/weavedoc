@@ -62,3 +62,11 @@ config.enum.detection: standard|deep
 config.enum.attribution: ask|allow
 gaps.sections: Open|Accepted
 gaps.enum.kind: declared|reference|enumeration|symmetry
+# Machine-owned verification sidecar (WD-COR-003). Append-only TSV in truths/: one row per unit
+# per attest — id<TAB>sha256<TAB>verdict<TAB>round<TAB>standard<TAB>date. LAST row per id wins, so
+# re-verification is an append and the round history stays. `## Verified units` markdown rows
+# without a digest stay readable as `legacy-unbound`: preserved history that binds no bytes and
+# never counts digest-bound verified. Truth digest = whole file raw bytes; material digest =
+# converted.md minus its frontmatter `status:` line (lifecycle must not invalidate verification).
+verify.ledger.file: verify-ledger.tsv
+verify.ledger.verdicts: verified|failed

@@ -23,6 +23,7 @@
 #   impact <mID>      which truths were extracted from a material + which documents cite it (blast radius)
 #   status            each document's status + the next step
 #   scope             what a verify round still owes — unverified materials + truths, computed
+#   attest <verdict> <round> <standard> <id...>   record a verification: digest-bound sidecar row
 #   gaps              mine census + declared-marker scan (non-blocking floor for the weavedoc-gaps skill)
 #   census            mine census only (truth files vs index, numbering holes, live/status tallies)
 #   reindex [--check] regenerate truths/index.md + truths/tree.md from truth frontmatter (--check: diff only)
@@ -331,6 +332,36 @@ tfile_for() { # $1 = a truth id in any zero-padding -> the file that id names, i
   n=$(canon_id "$1") || return 1
   [ -f "$TRUTHS/$n.md" ] && { printf '%s' "$TRUTHS/$n.md"; return 0; }
   return 1
+}
+truth_digest() { # $1 = truth file -> sha256 of its raw bytes. THE spelling of "what was verified".
+  sha256sum "$1" | awk '{print $1}'
+}
+mat_digest() { # $1 = converted.md -> sha256 of the file MINUS its frontmatter `status:` line.
+  # `status` is the lifecycle axis: refine rewrites it at consecration, and a verification that
+  # died on a lifecycle stamp would re-fuse the two axes WD-COR-001 split. Only that one
+  # frontmatter line is excluded — a body line spelling `status:` is content and stays hashed.
+  awk '
+    NR==1 && /^---[[:space:]]*$/  { infm=1; print; next }
+    infm && /^---[[:space:]]*$/   { infm=0; print; next }
+    infm && /^status[[:space:]]*:/ { next }
+    { print }' "$1" | sha256sum | awk '{print $1}'
+}
+unit_digest() { # $1 = canonical id -> its digest by kind; rc 1 when the unit has no file
+  case "$1" in
+    m*) [ -f "$MATERIALS/$1/converted.md" ] || return 1; mat_digest "$MATERIALS/$1/converted.md" ;;
+    t*) local f; f=$(tfile_for "$1") || return 1; truth_digest "$f" ;;
+    *)  return 1 ;;
+  esac
+}
+ledger_file() { # -> the sidecar's filename; schema key first, code default second — an older
+  # project schema (testbed drift) must degrade to the shipped name, never to "truths/" itself.
+  local f; f=$(sch verify.ledger.file); printf '%s' "${f:-verify-ledger.tsv}"
+}
+ledger_rows() { # -> "id<TAB>digest<TAB>verdict" per unit; LAST row per id wins (append-only file)
+  local lf="$TRUTHS/$(ledger_file)"
+  [ -f "$lf" ] || return 0
+  awk -F'\t' '/^#/ { next } NF>=3 { d[$1]=$2; v[$1]=$3 } END { for (i in d) print i "\t" d[i] "\t" v[i] }' "$lf" \
+    | LC_ALL=C sort
 }
 mdir_for() { # $1 = a material id in any zero-padding -> the folder that id names, if one exists
   local n
@@ -1917,56 +1948,169 @@ scan_verified_units() { # -> "V<TAB><id>" per covered id · "U<TAB><line>" per e
       }
     }'
 }
+cmd_attest() { # attest <verified|failed> <round> <standard> <id...> — the verification write path
+  # THE one writer of verification records: the digest is computed here, never by hand, so the
+  # hash rule has a single spelling. All-or-nothing: every id resolves before one byte is written.
+  [ $# -ge 4 ] || { echo "usage: weavedoc attest <verified|failed> <round> <standard> <id...>"; return 2; }
+  local verdict="$1" round="$2" standard="$3"; shift 3
+  local vds; vds=$(sch verify.ledger.verdicts); vds=${vds:-verified|failed}
+  pipes "$vds" | grep -qx "$verdict" \
+    || { echo "attest: verdict '$verdict' must be one of: $vds"; return 2; }
+  case "$round" in ''|0|*[!0-9]*) echo "attest: round '$round' must be a positive integer"; return 2 ;; esac
+  local id cid st dg tf today rows="" line="" names=""
+  today=$(date +%F)
+  for id in "$@"; do
+    cid=$(canon_id "$id") || { echo "attest: '$id' is not a material/truth id — nothing written"; return 2; }
+    case "$cid" in
+      m*) [ -f "$MATERIALS/$cid/converted.md" ] || { echo "attest: no converted.md for '$id' ($cid) — nothing written"; return 2; }
+          st=$(fm "$MATERIALS/$cid/converted.md" status) ;;
+      *)  tf=$(tfile_for "$cid") || { echo "attest: no truth file for '$id' ($cid) — nothing written"; return 2; }
+          st=$(fm "$tf" status) ;;
+    esac
+    case "$st" in retracted|discarded)
+      echo "attest: $cid is $st — a tombstone is outside the verification population; nothing written"; return 2 ;; esac
+    dg=$(unit_digest "$cid") || { echo "attest: cannot digest '$id' ($cid) — nothing written"; return 2; }
+    printf -v line '%s\t%s\t%s\t%s\t%s\t%s' "$cid" "$dg" "$verdict" "$round" "$standard" "$today"
+    rows="$rows$line"$'\n'
+    names="$names $cid"
+  done
+  local lf tmp; lf="$TRUTHS/$(ledger_file)"; tmp="$lf.tmp.$$"
+  [ -d "$TRUTHS" ] || { echo "attest: no truths/ directory"; return 2; }
+  { if [ -f "$lf" ]; then cat "$lf"
+    else printf '# machine-owned verification ledger — append-only; LAST row per id wins. Written by `weavedoc attest`.\n# id\tsha256\tverdict\tround\tstandard\tdate\n'; fi
+    printf '%s' "$rows"; } > "$tmp" && mv "$tmp" "$lf" \
+    || { rm -f "$tmp" 2>/dev/null; echo "attest: ledger write failed"; return 1; }
+  # Human mirror line into `## Verified units` — the markdown stays the readable view. The sidecar
+  # is scope's source of truth, so a missing section costs readability, never coverage. Failed
+  # verdicts stay sidecar-only: a markdown row ending otherwise would be named as covering nothing.
+  if [ "$verdict" = "verified" ] && [ -f "$TRUTHS/verify.md" ] \
+     && grep -qE '^#+[[:space:]]*Verified units[[:space:]]*$' "$TRUTHS/verify.md"; then
+    local mline mtmp
+    mline=$(printf -- '- %s — R%s %s · %s · verified' "$(printf '%s' "$names" | sed 's/^ //; s/ / · /g')" "$round" "$today" "$standard")
+    mtmp="$TRUTHS/verify.md.tmp.$$"
+    awk -v line="$mline" '{ print } !done && /^#+[[:space:]]*Verified units[[:space:]]*$/ { print line; done=1 }' \
+      "$TRUTHS/verify.md" > "$mtmp" && mv "$mtmp" "$TRUTHS/verify.md" || rm -f "$mtmp" 2>/dev/null
+  fi
+  printf 'attest: %s — R%s · %s · %s —%s\n' "$verdict" "$round" "$standard" "$today" "$names"
+  return 0
+}
 cmd_scope() {
-  local m mstat n_mconv=0 n_mver=0 munver="" n_mused=0
+  local ledger; ledger=$(ledger_rows)
+
+  # ---- materials: population = converted.md holders minus tombstones. Evidence precedence:
+  # sidecar row (digest decides bound/stale, verdict decides failed) > v1 `status: verified`
+  # (legacy-unbound: real history, binds no bytes) > nothing (unverified).
+  local m mstat row dg vd cur
+  local n_mconv=0 n_mbound=0 n_mlegacy=0 n_mstale=0 n_mfail=0 n_munver=0 n_mused=0
+  local munver="" mstale="" mfail="" mlegacy=""
   while IFS= read -r m; do
     [ -f "$MATERIALS/$m/converted.md" ] || continue
     mstat=$(fm "$MATERIALS/$m/converted.md" status)
-    case "$mstat" in
-      # Conversion verification records ONLY in the material's own `status: verified` — the
-      # `## Verified units` ledger is the truths lane, so an m-id there covers no conversion.
-      verified)  n_mconv=$((n_mconv+1)); n_mver=$((n_mver+1)) ;;
-      # `used` is lifecycle, not a verdict (WD-COR-001): refine's consecration stamp OVERWRITES
-      # `verified`, so a used material is owed — counting it verified buried the debt of every
-      # verify-skipped material the moment a document cited it.
-      used)      n_mconv=$((n_mconv+1)); munver="$munver $m"; n_mused=$((n_mused+1)) ;;
-      # Withdrawn material is not owed — out of the numerator AND the denominator, or the ratio
-      # reports a debt nobody can ever pay down.
-      retracted) ;;
-      *)         n_mconv=$((n_mconv+1)); munver="$munver $m" ;;
-    esac
+    [ "$mstat" = "retracted" ] && continue
+    n_mconv=$((n_mconv+1))
+    row=$(printf '%s\n' "$ledger" | awk -F'\t' -v id="$m" '$1==id { print $2 "\t" $3; exit }')
+    if [ -n "$row" ]; then
+      dg=$(printf '%s' "$row" | cut -f1); vd=$(printf '%s' "$row" | cut -f2)
+      if [ "$vd" = "failed" ]; then n_mfail=$((n_mfail+1)); mfail="$mfail $m"
+      else
+        cur=$(mat_digest "$MATERIALS/$m/converted.md")
+        if [ "$cur" = "$dg" ]; then n_mbound=$((n_mbound+1))
+        else n_mstale=$((n_mstale+1)); mstale="$mstale $m"; fi
+      fi
+    elif [ "$mstat" = "verified" ]; then
+      n_mlegacy=$((n_mlegacy+1)); mlegacy="$mlegacy $m"
+    else
+      # `used` lands here too — lifecycle, not a verdict (WD-COR-001).
+      n_munver=$((n_munver+1)); munver="$munver $m"
+      [ "$mstat" = "used" ] && n_mused=$((n_mused+1))
+    fi
   done < <(material_ids)
 
-  local scan ondisk vids unmarked tunver tghost n_t=0 n_tunver=0
-  ondisk=$(ls "$TRUTHS"/t[0-9]*.md 2>/dev/null | sed -E 's|.*[/\\]t0*([0-9]+)\.md$|\1|' \
-           | awk '{printf "t%03d\n", $1}' | LC_ALL=C sort -u)
+  # ---- truths: ONE awk pass classifies live vs tombstone (retracted/discarded leave the
+  # population — the same rule retracted materials follow). Emits class<TAB>canon<TAB>rawbase.
+  local tl ondisk tomb n_t=0 n_tomb=0
+  tl=$(awk '
+    function emit() { if (f == "") return
+      n = split(f, seg, /[\/\\]/); raw = seg[n]; sub(/\.md$/, "", raw)
+      canon = sprintf("t%03d", substr(raw, 2) + 0)
+      if (st == "retracted" || st == "discarded") print "X\t" canon "\t" raw
+      else print "L\t" canon "\t" raw }
+    FNR==1 { emit(); f=FILENAME; st=""; infm=0 }
+    FNR==1 && /^---[[:space:]]*$/ { infm=1; next }
+    infm && /^---[[:space:]]*$/   { infm=0; next }
+    infm && st=="" && /^status[[:space:]]*:/ {
+      st=$0; sub(/^status[[:space:]]*:[[:space:]]*/, "", st)
+      if (st !~ /^"/) sub(/[[:space:]]+#.*$/, "", st)
+      sub(/[[:space:]]*$/, "", st); next }
+    END { emit() }' "$TRUTHS"/t[0-9]*.md 2>/dev/null)
+  ondisk=$(printf '%s\n' "$tl" | awk -F'\t' '$1=="L" { print $2 }' | LC_ALL=C sort -u)
+  tomb=$(printf '%s\n' "$tl" | awk -F'\t' '$1=="X" { print $2 }' | LC_ALL=C sort -u)
   n_t=$(printf '%s' "$ondisk" | grep -c . || true); n_t=${n_t:-0}
+  n_tomb=$(printf '%s' "$tomb" | grep -c . || true); n_tomb=${n_tomb:-0}
+
+  # ---- sidecar-covered live truths: current digests in ONE sha256sum spawn, then classify.
+  local strows scov="" tclass="" incov files cur_t
+  strows=$(printf '%s\n' "$ledger" | grep -E '^t[0-9]' || true)
+  if [ -n "$strows" ]; then
+    scov=$(printf '%s\n' "$strows" | cut -f1 | LC_ALL=C sort -u)
+    incov=$(comm -12 <(printf '%s\n' "$ondisk") <(printf '%s\n' "$scov"))
+    if [ -n "$incov" ]; then
+      files=$(awk -F'\t' 'NR==FNR { want[$0]=1; next } $1=="L" && ($2 in want) { print $3 ".md" }' \
+        <(printf '%s\n' "$incov") <(printf '%s\n' "$tl"))
+      cur_t=$(cd "$TRUTHS" && sha256sum $files 2>/dev/null \
+        | awk '{ f=$NF; sub(/^\*/, "", f)              # MSYS sha256sum defaults to binary mode: "hash *name"
+                 n=split(f, s, /[\/\\]/); b=s[n]; sub(/\.md$/, "", b); printf "t%03d\t%s\n", substr(b, 2) + 0, $1 }')
+      tclass=$(awk -F'\t' '
+        NR==FNR { cur[$1]=$2; next }
+        { if (!($1 in cur)) next
+          if ($3 == "failed") print "F\t" $1
+          else if (cur[$1] == $2) print "B\t" $1
+          else print "S\t" $1 }' <(printf '%s\n' "$cur_t") <(printf '%s\n' "$strows"))
+    fi
+  fi
+  local n_tbound n_tstale n_tfail tstale tfail
+  n_tbound=$(printf '%s\n' "$tclass" | grep -c '^B' || true)
+  n_tstale=$(printf '%s\n' "$tclass" | grep -c '^S' || true)
+  n_tfail=$(printf '%s\n' "$tclass" | grep -c '^F' || true)
+  tstale=$(printf '%s\n' "$tclass" | sed -n 's/^S\t//p' | LC_ALL=C sort -u)
+  tfail=$(printf '%s\n' "$tclass" | sed -n 's/^F\t//p' | LC_ALL=C sort -u)
+
+  # ---- v1 markdown ledger: verified ids not covered by the sidecar are legacy-unbound.
+  local scan vids unmarked tlegacy tunver tghost diskany n_tlegacy n_tunver
   scan=$(scan_verified_units)
   vids=$(printf '%s\n' "$scan" | sed -n 's/^V\t//p' | grep -E '^t[0-9]' | LC_ALL=C sort -u)
   unmarked=$(printf '%s\n' "$scan" | sed -n 's/^U\t//p')
-  tunver=$(comm -23 <(printf '%s\n' "$ondisk" | grep -E '^t[0-9]' || true) \
-                    <(printf '%s\n' "$vids"   | grep -E '^t[0-9]' || true))
-  tghost=$(comm -13 <(printf '%s\n' "$ondisk" | grep -E '^t[0-9]' || true) \
-                    <(printf '%s\n' "$vids"   | grep -E '^t[0-9]' || true))
-  n_tunver=$(printf '%s' "$tunver" | grep -c . || true); n_tunver=${n_tunver:-0}
+  diskany=$(printf '%s\n' "$ondisk" "$tomb" | grep . | LC_ALL=C sort -u)
+  tlegacy=$(comm -12 <(printf '%s\n' "$vids") <(printf '%s\n' "$ondisk") | comm -23 - <(printf '%s\n' "$scov"))
+  tunver=$(comm -23 <(printf '%s\n' "$ondisk") <(printf '%s\n' "$scov") | comm -23 - <(printf '%s\n' "$vids"))
+  tghost=$(printf '%s\n' "$vids" "$scov" | grep . | LC_ALL=C sort -u | comm -23 - <(printf '%s\n' "$diskany"))
+  n_tlegacy=$(printf '%s' "$tlegacy" | grep -c . || true)
+  n_tunver=$(printf '%s' "$tunver" | grep -c . || true)
 
   echo "scope — what a verify round still owes (computed from disk + the ledgers, not judged)"
-  if [ "$n_mconv" -eq 0 ] && [ "$n_t" -eq 0 ]; then
+  if [ "$n_mconv" -eq 0 ] && [ "$n_t" -eq 0 ] && [ "$n_tomb" -eq 0 ]; then
     echo "  nothing to verify yet — no converted material, no truths"
     return 0
   fi
   if [ "$n_mconv" -gt 0 ]; then
-    printf '  materials  %s converted · %s verified · %s unverified   (source: each material frontmatter status)\n' \
-      "$n_mconv" "$n_mver" "$((n_mconv - n_mver))"
+    printf '  materials  %s converted · %s verified (digest-bound) · %s legacy-unbound · %s stale · %s failed · %s unverified   (source: truths/%s + material frontmatter)\n' \
+      "$n_mconv" "$n_mbound" "$n_mlegacy" "$n_mstale" "$n_mfail" "$n_munver" "$(ledger_file)"
     [ -n "$munver" ] && printf '    → %s\n' "$(printf '%s\n' $munver | LC_ALL=C sort -u | compress_ids)"
     [ "$n_mused" -gt 0 ] && printf '    (%s of them status:used — `used` records citation, not verification; a verify round still owes them)\n' "$n_mused"
+    [ -n "$mstale" ]  && printf '    → stale: %s\n'  "$(printf '%s\n' $mstale  | LC_ALL=C sort -u | compress_ids)"
+    [ -n "$mfail" ]   && printf '    → failed: %s\n' "$(printf '%s\n' $mfail   | LC_ALL=C sort -u | compress_ids)"
+    [ -n "$mlegacy" ] && printf '    → legacy-unbound: %s\n' "$(printf '%s\n' $mlegacy | LC_ALL=C sort -u | compress_ids)"
   fi
-  if [ "$n_t" -gt 0 ]; then
-    printf '  truths     %s on disk · %s verified · %s unverified   (source: truths/verify.md ## Verified units)\n' \
-      "$n_t" "$((n_t - n_tunver))" "$n_tunver"
+  if [ "$n_t" -gt 0 ] || [ "$n_tomb" -gt 0 ]; then
+    printf '  truths     %s live · %s verified (digest-bound) · %s legacy-unbound · %s stale · %s failed · %s unverified   (source: truths/%s + ## Verified units)\n' \
+      "$n_t" "$n_tbound" "$n_tlegacy" "$n_tstale" "$n_tfail" "$n_tunver" "$(ledger_file)"
     [ "$n_tunver" -gt 0 ] && printf '    → %s\n' "$(printf '%s\n' "$tunver" | compress_ids)"
-    if [ ! -f "$TRUTHS/verify.md" ]; then
-      echo "    (no truths/verify.md — nothing has been cold-verified, so every truth is owed)"
+    [ -n "$tstale" ] && printf '    → stale: %s\n' "$(printf '%s\n' "$tstale" | compress_ids)"
+    [ -n "$tfail" ]  && printf '    → failed: %s\n' "$(printf '%s\n' "$tfail" | compress_ids)"
+    [ "$n_tlegacy" -gt 0 ] && printf '    → legacy-unbound: %s\n' "$(printf '%s\n' "$tlegacy" | compress_ids)"
+    [ "$n_tomb" -gt 0 ] && printf '    (%s tombstone truth(s) — retracted/discarded — out of scope)\n' "$n_tomb"
+    if [ ! -f "$TRUTHS/verify.md" ] && [ ! -f "$TRUTHS/$(ledger_file)" ]; then
+      echo "    (no verification ledger — nothing has been cold-verified, so every truth is owed)"
     elif [ -n "$tghost" ]; then
       # A ledger naming ids that no longer exist covers nothing; said out loud because the covered
       # count would otherwise look larger than the mine and nobody could tell why.
@@ -1983,7 +2127,10 @@ cmd_scope() {
       "$(printf '%s' "$unmarked" | grep -c . || true)" "$(sch verify.units.verified)"
     printf '%s\n' "$unmarked" | sed 's/^[[:space:]]*/    /'
   fi
-  if [ "$((n_mconv - n_mver))" -eq 0 ] && [ "$n_tunver" -eq 0 ]; then
+  local owed=$((n_munver + n_mstale + n_mfail + n_tunver + n_tstale + n_tfail))
+  if [ "$owed" -eq 0 ] && [ $((n_mlegacy + n_tlegacy)) -gt 0 ]; then
+    printf '  → nothing unverified — %s legacy-unbound unit(s) await digest binding: re-verify by risk (final-cited · high-risk · research/adopted/derived first). History is preserved, never counted digest-bound.\n' "$((n_mlegacy + n_tlegacy))"
+  elif [ "$owed" -eq 0 ]; then
     echo "  → nothing unverified. A round here would re-check what the ledger already covers."
   else
     echo "  → a round examines the sets above. Units already covered are not re-verified without a reason recorded in verify.md."
@@ -1997,6 +2144,7 @@ case "${1:-}" in
   impact)   shift; cmd_impact "${1:-}" ;;
   status)   cmd_status ;;
   scope)    cmd_scope ;;
+  attest)   shift; cmd_attest "$@" ;;
   gaps)     cmd_gaps ;;
   census)   cmd_census ;;
   reindex)  shift; cmd_reindex "${1:-}" ;;
@@ -2005,5 +2153,5 @@ case "${1:-}" in
   lang)     cmd_lang ;;
   locale)   cmd_locale ;;
   version)  cmd_version ;;
-  *) echo "weavedoc — validate | pull <term> | impact <material-id> | status | scope | gaps | census | reindex [--check] | retag <old> <new> [--dry] | version | lang | locale"; exit 2 ;;
+  *) echo "weavedoc — validate | pull <term> | impact <material-id> | status | scope | attest <verdict> <round> <standard> <id...> | gaps | census | reindex [--check] | retag <old> <new> [--dry] | version | lang | locale"; exit 2 ;;
 esac
