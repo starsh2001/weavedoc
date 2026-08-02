@@ -6,7 +6,7 @@
 
 ## 2026-08-02.7
 
-**CI 첫 실행이 잡은 3건 수리.** Phase 2에서 신설한 GitHub Actions의 첫 run이 곧바로 값을 했습니다 — ShellCheck 오류 1건(`$k[[:space:]]`가 배열 확장으로 오독되는 SC1087, 중괄호로 수정 — 동작 무변경), ko_KR 로케일 없는 runner에서의 케이스 실패 2건(`locale`은 빈 출력이 설계상 정상인데 smoke가 개발 머신을 단정하고 있었음 → 계약만 검증하도록 수정 · `pass_locales`는 CI에 locale-gen을 추가해 진짜 로케일 비교로 유지). 부수 실측: **같은 226케이스가 Ubuntu에서 65초, Windows Git Bash에서 ~35분** — WD-PERF-001의 "MSYS process spawn 비용이 주범" 진단이 CI로 입증됐습니다.
+**CI 첫 실행이 잡은 3건 수리.** Phase 2에서 신설한 GitHub Actions의 첫 run이 곧바로 값을 했습니다 — ShellCheck 오류 1건(`$k[[:space:]]`가 배열 확장으로 오독되는 SC1087, 중괄호로 수정 — 동작 무변경), ko_KR 로케일 없는 runner에서의 케이스 실패 2건(`locale`은 빈 출력이 설계상 정상인데 smoke가 개발 머신을 단정하고 있었음 → 계약만 검증하도록 수정(정확한 계약은 "코드+exit 0 **또는** 빈 출력+exit 1" — run 2가 후자를 가르쳐줘서 두 라운드 걸림) · `pass_locales`는 CI에 locale-gen을 추가해 진짜 로케일 비교로 유지). 부수 실측: **같은 226케이스가 Ubuntu에서 65초, Windows Git Bash에서 ~35분** — WD-PERF-001의 "MSYS process spawn 비용이 주범" 진단이 CI로 입증됐습니다.
 
 검증: `bash -n` 통과 · 영향 케이스 로컬(locale 2 · verify_section 1 · smoke 6) · 전수는 CI Ubuntu run이 push마다 65초로 수행.
 

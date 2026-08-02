@@ -1646,10 +1646,12 @@ block_gate_fid_c9_lonely() {
 acct_smoke_version() { vrun version; expect_pass; expect_has "fingerprint:"; }
 acct_smoke_lang()    { vrun lang;    expect_pass; expect_has "ko"; }
 acct_smoke_locale() {
-  # `locale` probes the OS (env → Windows registry) and printing NOTHING on a bare box is its
-  # documented behavior — asserting "ko" here was asserting the dev machine, not the command
-  # (CI run 1 caught exactly that). The smoke floor is: it runs and exits 0.
-  vrun locale; expect_pass
+  # `locale`'s contract has TWO documented outcomes: a short code + exit 0, or empty + exit 1
+  # ("init then asks"). What the smoke pins is that it terminates in one of them — not a usage
+  # error, not a crash. Getting here took two CI rounds: run 1 caught the smoke asserting "ko"
+  # (the dev machine), run 2 caught it asserting exit 0 (the Windows outcome only).
+  vrun locale
+  if [ "$RC" -eq 0 ] || [ "$RC" -eq 1 ]; then ok; else bad "locale exited $RC (contract: 0+code or 1+empty)"; fi
 }
 acct_smoke_pull() {
   vrun pull 위약
