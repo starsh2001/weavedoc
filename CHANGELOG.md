@@ -4,6 +4,18 @@
 
 ---
 
+## 2026-08-02.6
+
+**완전성 보증이 문구가 아니라 배선이 됩니다 (WD-COR-004) — Phase 1 종료.** gaps.md는 지금까지 "never a hard failure"였고, README는 조건 없이 "no silent gaps"를 약속했습니다 — 배선과 문구가 서로 달랐습니다. 이제 둘이 일치합니다.
+
+- **`fidelity.completeness: required`가 gap 레지스터를 gate 입력으로 만듭니다** — consecrated 출력이 있는데 gaps.md의 `# Open`에 항목이 남아 있으면 validate가 차단합니다. gaps.md 자체가 없어도 차단합니다: 한 번도 돌지 않은 워런티는 워런티가 아닙니다(게이트 기록 부재와 같은 fail-closed 규칙). `# Accepted`는 결정이므로 차단하지 않습니다.
+- **기본값(off)은 그대로** — fill-or-accept, 비차단. 대신 침묵하지 않습니다: `status`가 "completeness: off — omissions are not checked"를 찍고, `consecrate` 성공 출력에도 같은 한계가 붙습니다. "보고된 갭 0"이 "갭 없음"으로 읽히는 것을 막습니다.
+- **보증 문구 통일** — README 태그라인과 METHODOLOGY §7 워런티가 "검출된 contradiction은 조용히 출하되지 않는다"로 조여졌고, 완전성 보증은 required일 때만 주장합니다. FORMATS의 gaps.md 항목도 "Non-blocking by default"로 정정.
+
+실광산 영향 없음(documents 비어 있음 → 검사 미발동; status에 off 고지 한 줄 추가).
+
+검증: `bash -n` 통과 · 회귀 **217/217**(신규 6) · schema 불변.
+
 ## 2026-08-02.5
 
 **Review가 검토한 바이트에 결속됩니다 — seal-review · consecrate · gate digest (WD-COR-002).** 지금까지 gate는 "clean review가 존재한다"까지만 봤고, 그 review가 **지금 이 final의 바이트**를 검토했다는 증거는 없었습니다. clean review 뒤에 draft를 고쳐 final로 복사해도, final을 직접 고쳐도, 인용된 truth·source·config가 바뀌어도 gate는 초록불이었습니다. 이제 전부 잡힙니다.

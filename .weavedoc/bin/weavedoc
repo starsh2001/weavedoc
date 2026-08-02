@@ -1258,6 +1258,22 @@ EOF
     fi
   done < <(doc_ids)
 
+  # --- completeness warranty wiring (WD-COR-004) ---
+  # `fidelity.completeness: required` turns the OPEN gap register into a gate input. The default
+  # (off) keeps fill-or-accept non-blocking. required + a consecrated output + (no register at
+  # all | open entries) = fail — a warranty nobody ran is not a warranty, same rule as the gate's
+  # own record. Accepted entries are decisions and never block.
+  if [ "$N_CONSEC" -gt 0 ] && [ "$(cfgval completeness)" = "required" ]; then
+    if [ ! -f "$ROOT/gaps.md" ]; then
+      prob "completeness is 'required' and a consecrated output exists, but there is no gaps.md — the completeness register never ran. Run the weavedoc-gaps skill (fill-or-accept) before consecrating, or set fidelity.completeness: off to drop the warranty"
+    else
+      local nopen_
+      nopen_=$(nocomment < "$ROOT/gaps.md" | section_body - "Open" | countlines '^[[:space:]]*- ')
+      [ "${nopen_:-0}" -eq 0 ] && nopen_=$(nocomment < "$ROOT/gaps.md" | section_body2 - "Open" | countlines '^[[:space:]]*- ')
+      [ "${nopen_:-0}" -gt 0 ] && prob "completeness is 'required' but gaps.md holds ${nopen_} open gap(s) next to a consecrated output — fill each (question → user-answer material → map) or move it to Accepted with a reason; under 'required' an open gap is a violation, not a note"
+    fi
+  fi
+
   # --- truths/verify.md frontmatter + sections ---
   # verify.md is the one artifact a whole round of work rests on, so its frontmatter is checked here,
   # not left to prose: `status: pass` (not a valid value) reads as "verified" while no check agreed.
@@ -1425,6 +1441,12 @@ cmd_status() {
     # every untagged one. "untagged" = no `[state]` tag at all (as FORMATS and check_hq_tags mean it);
     # an `[open]` with no ownership tag is a different population, reported by the split line above.
     [ "${hq_untag:-0}" -gt 0 ] && echo "human queue: $hq_untag entry(s) with no '[open]'/'[ruled]' state tag, not counted above — retag them '- [open|ruled] [user-only|recommended|machine] …'"
+  fi
+  # The warranty's edge is disclosed, not implied (WD-COR-004): with completeness off, omissions
+  # are simply not checked, and a status that never says so lets "no gaps reported" read as
+  # "no gaps exist".
+  if [ "$(cfgval completeness)" != "required" ]; then
+    echo "completeness: off — omissions are not checked (fidelity.completeness in .weavedoc/config.yaml; 'required' wires gaps.md into the gate)"
   fi
   return 0
 }
@@ -2091,6 +2113,8 @@ cmd_consecrate() { # consecrate <doc-id> — stage candidate, verify seals, ONE 
   if cmd_validate; then
     [ -n "$oldfin" ] && rm -rf "$bak"
     echo "consecrate: $d consecrated — full validation: 1 run, clean. The reviewed draft IS the final, byte for byte."
+    [ "$(cfgval completeness)" != "required" ] \
+      && echo "  note: completeness is off — undetected omissions are outside this document's warranty (fidelity.completeness)"
     return 0
   else
     rm -rf "$fin"

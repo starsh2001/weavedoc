@@ -1,6 +1,6 @@
 # WeaveDoc
 
-**A document workflow that guarantees fidelity to the materials you vouch for — no contradiction, no unsupported claims, no silent gaps. You declare the truth; WeaveDoc guards it.**
+**A document workflow that guarantees fidelity to the materials you vouch for — no detected contradiction ships silently, no unsupported claims, no silently passed gaps (and with the completeness warranty on, no unaccepted ones). You declare the truth; WeaveDoc guards it.**
 
 WeaveDoc is a set of [Claude Code](https://claude.com/claude-code) skills + templates. You drop your materials in; it classifies and converts them, maps how they relate, drafts the document grounded strictly in those materials, and runs a **fidelity gate** — blocking any contradiction, unsupported claim, or (when configured) missing required element before the document can ship. It never invents facts: where a needed fact is missing, it asks you, and your answer becomes another cited source. A finished document re-enters as a material, so the truth-source grows — and the gate keeps that growth free of contradictions.
 
