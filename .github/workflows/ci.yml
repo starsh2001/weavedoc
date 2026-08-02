@@ -39,20 +39,20 @@ jobs:
         if: always()
         run: |
           key_dir=$(ls -d "${TMPDIR:-/tmp}"/wd-reg-* 2>/dev/null | head -1) || true
-          mkdir -p ci-artifact
+          mkdir -p "$RUNNER_TEMP/ci-artifact"
           { echo "commit: $GITHUB_SHA"
             echo "bundle: $(cat .weavedoc/VERSION)"
             echo "os: $(uname -sr)"
             echo "bash: $BASH_VERSION"
             echo "awk: $(awk --version 2>/dev/null | head -1)"
             echo "sed: $(sed --version 2>/dev/null | head -1)"
-          } > ci-artifact/env.txt
-          [ -n "$key_dir" ] && ls "$key_dir/res" > ci-artifact/executed-cases.txt || true
+          } > "$RUNNER_TEMP/ci-artifact/env.txt"
+          [ -n "$key_dir" ] && ls "$key_dir/res" > "$RUNNER_TEMP/ci-artifact/executed-cases.txt" || true
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: regression-ubuntu
-          path: ci-artifact/
+          path: ${{ runner.temp }}/ci-artifact/
       - name: clean worktree after tests (Phase 2 completion condition)
         run: |
           status=$(git status --porcelain)
@@ -93,18 +93,18 @@ jobs:
         if: always()
         run: |
           key_dir=$(ls -d "${TMPDIR:-/tmp}"/wd-reg-* 2>/dev/null | head -1) || true
-          mkdir -p ci-artifact
+          mkdir -p "$RUNNER_TEMP/ci-artifact"
           { echo "commit: $GITHUB_SHA"
             echo "bundle: $(cat .weavedoc/VERSION)"
             echo "os: $(uname -sr)"
             echo "bash: $BASH_VERSION"
-          } > ci-artifact/env.txt
-          [ -n "$key_dir" ] && ls "$key_dir/res" > ci-artifact/executed-cases.txt || true
+          } > "$RUNNER_TEMP/ci-artifact/env.txt"
+          [ -n "$key_dir" ] && ls "$key_dir/res" > "$RUNNER_TEMP/ci-artifact/executed-cases.txt" || true
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: regression-${{ matrix.os }}
-          path: ci-artifact/
+          path: ${{ runner.temp }}/ci-artifact/
       - name: clean worktree after tests
         run: |
           status=$(git status --porcelain)
