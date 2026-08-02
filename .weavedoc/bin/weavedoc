@@ -129,11 +129,17 @@ pipes() { echo "$1" | tr '|' '\n'; }
 is_placeholder() { # $1=value -> 0 when it is an untouched template placeholder
   # An unfilled `{…}` placeholder is not a value (ruled 2026-07-31) — write once read a placeholder
   # tone AS the document's tone. Pattern lives in the schema so there is one spelling.
+  # The schema pattern is `^[{][^{}]*[}]$` — "entirely ONE brace group". Matched with shell globs
+  # so the hot path spends no fork; the schema stays the SoT and meta_placeholder_pattern pins the
+  # two spellings together.
   [ -n "$1" ] || return 1
-  printf '%s\n' "$1" | grep -qE "${SCH[fm.placeholder]}"
+  case "$1" in
+    '{'*'}') case "$1" in *'{'*'{'*|*'}'*'}'*) return 1 ;; esac; return 0 ;;
+  esac
+  return 1
 }
 req_value() { # $1=file $2=key $3=label-for-message -> 0 when the field holds a real value
-  local rv; rv=$(fm "$1" "$2")
+  local rv; fmv "$1" "$2"; rv=$REPLY
   if [ -z "$rv" ]; then
     prob "$1  frontmatter '$2' missing"; return 1
   elif is_placeholder "$rv"; then
@@ -145,22 +151,52 @@ req_value() { # $1=file $2=key $3=label-for-message -> 0 when the field holds a 
 has_fm() { # $1=file -> 0 when line 1 opens a frontmatter block
   # One spelling of the opening fence — `^---[[:space:]]*$`, the same pattern every in-frontmatter
   # reader uses. A bare `"---"` literal comparison split on a trailing space and disabled the seal.
+  # Three forks (head|tr|grep) for one line became a builtin read — same pattern, same verdict.
+  local l
   [ -f "$1" ] || return 1
-  head -1 "$1" 2>/dev/null | tr -d '\r' | grep -qE '^---[[:space:]]*$'
+  IFS= read -r l < "$1" 2>/dev/null || return 1
+  l=${l%$'\r'}; l=${l%"${l##*[![:space:]]}"}
+  [ "$l" = "---" ]
 }
-fm() { # $1=file $2=key -> frontmatter value (within leading --- --- block)
-  awk -v k="$2" '
-    NR==1 && /^---[[:space:]]*$/ { infm=1; next }
+# Frontmatter is parsed ONCE PER FILE, not once per key (WD-PERF-001): validate asks a material for
+# ~15 fields, and at ~190ms per fork that was 15 awk spawns for one file. One pass fills the cache;
+# every later read is an array lookup. Value rules unchanged — trailing YAML comment stripped
+# outside quotes, quotes peeled, first spelling of a key wins.
+declare -A FMV FMLOADED
+fm_load() { # $1=file -> parse its frontmatter into FMV once
+  local f="$1" line k v
+  [ -n "${FMLOADED[$f]+x}" ] && return 0
+  FMLOADED[$f]=1
+  [ -f "$f" ] || return 0
+  while IFS= read -r line; do
+    k=${line%%$'\037'*}; v=${line#*$'\037'}
+    [ -n "${FMV[$f$'\037'$k]+x}" ] || FMV[$f$'\037'$k]=$v
+  done < <(awk '
+    NR==1 { if ($0 ~ /^---[[:space:]]*$/) infm=1; next }
     infm && /^---[[:space:]]*$/ { exit }
-    infm && $0 ~ "^"k"[[:space:]]*:" {
-      sub("^"k"[[:space:]]*:[[:space:]]*","")
-      # Strip a trailing YAML comment (the templates annotate enums inline), but NOT inside quotes,
-      # where `#` is literal and `claim`/`location` live. A value that is only a comment is empty.
-      if ($0 !~ /^"/) { sub(/[[:space:]]+#.*$/,""); if ($0 ~ /^#/) $0="" }
-      sub(/[[:space:]]*$/,""); sub(/^"/,""); sub(/"$/,""); print; exit }
-  ' "$1" 2>/dev/null
+    infm && /^[A-Za-z_][A-Za-z0-9_-]*[[:space:]]*:/ {
+      line=$0; k=line; sub(/[[:space:]]*:.*$/, "", k)
+      v=line; sub("^" k "[[:space:]]*:[[:space:]]*", "", v)
+      if (v !~ /^"/) { sub(/[[:space:]]+#.*$/, "", v); if (v ~ /^#/) v="" }
+      sub(/[[:space:]]*$/, "", v); sub(/^"/, "", v); sub(/"$/, "", v)
+      print k "\037" v }
+  ' "$f" 2>/dev/null)
+  return 0
 }
-listfield() { echo "$1" | tr -d '[]"' | tr ',' '\n' | sed -E 's/^[[:space:]]*//; s/[[:space:]]*$//' | grep -v '^$'; }
+fmv() { # $1=file $2=key -> value in REPLY, zero forks (the form hot loops must use)
+  fm_load "$1"; REPLY=${FMV[$1$'\037'$2]-}
+}
+fm() { fmv "$1" "$2"; printf '%s\n' "$REPLY"; }   # compat: still costs the caller's own $()
+listfield() { # `[a, b]` -> one item per line. Was five piped processes (echo|tr|tr|sed|grep);
+  # IFS=',' keeps items that contain spaces intact, which word splitting would have broken.
+  local s=$1 item IFS=','
+  s=${s//[/}; s=${s//]/}; s=${s//\"/}
+  for item in $s; do
+    item=${item#"${item%%[![:space:]]*}"}; item=${item%"${item##*[![:space:]]}"}
+    [ -n "$item" ] && printf '%s\n' "$item"
+  done
+  return 0
+}
 # Both take the FIRST matching section, ending at the next heading of that level. The exit rule is
 # listed BEFORE the heading rule, or an adjacent repeat of the heading re-enters instead of ending.
 # Repeats are `dup_section`'s job (not merged here); comments are `nocomment`'s.
