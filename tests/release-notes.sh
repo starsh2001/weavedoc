@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+# Release notes, generated — never hand-written (Phase 5 unit 13, WD-DOC-001/REL-001).
+# The v0.2.0 tag listed six commands as "new" that v0.1.0 already had; a hand-written list can
+# say anything. This one is derived: the "new commands" section is the DIFF of the two dispatch
+# tables, the numbers come from the tracked suite, and the manifest digest is computed here.
+#
+#   bash tests/release-notes.sh <prev-tag> <this-tag-or-ref>
+set -u
+REPO=$(cd "$(dirname "$0")/.." >/dev/null 2>&1 && pwd)
+PREV=${1:?usage: release-notes.sh <prev-tag> <this-tag>}
+THIS=${2:?usage: release-notes.sh <prev-tag> <this-tag>}
+cd "$REPO"
+
+bundle=$(cat .weavedoc/VERSION)
+prevbundle=$(git show "$PREV:.weavedoc/VERSION" 2>/dev/null | head -1)
+schema=$(grep -m1 '^schema.version:' .weavedoc/schema | sed 's/.*:[[:space:]]*//')
+manifest_sha=$(bash tests/make-manifest.sh | sha256sum | awk '{print $1}')
+cases=$(grep -cE '^(block|pass|acct|meta|e2e)_[a-z0-9_]*\(\)' tests/regress.sh)
+
+dispatch() { sed -n '/^case "\${1:-}" in/,/^esac/p' | grep -oE '^  [a-z-]+\)' | tr -d ' )' | LC_ALL=C sort; }
+newcmds=$(comm -13 <(git show "$PREV:.weavedoc/bin/weavedoc" 2>/dev/null | dispatch) \
+                   <(dispatch < .weavedoc/bin/weavedoc) | tr '\n' ' ')
+
+printf '# WeaveDoc %s\n\n' "$THIS"
+printf -- '- **runtime bundle**: `%s` (previous tag: `%s` = bundle `%s`)\n' "$bundle" "$PREV" "${prevbundle:-?}"
+printf -- '- **artifact schema**: `%s`\n' "$schema"
+printf -- '- **bundle manifest sha256**: `%s` — every behavior-deciding file (bin · schema · templates · READ · FORMATS · skills), hashed from git blob bytes; the attached `bundle.manifest` lists them\n' "$manifest_sha"
+printf -- '- **regression suite**: %s cases, tracked in `tests/` — the tallies for THIS tag are in this workflow'"'"'s regression jobs (Ubuntu + Windows required, macOS non-blocking)\n' "$cases"
+if [ -n "${newcmds% }" ]; then
+  printf -- '- **new commands since %s** *(generated from the dispatch diff — mechanically true)*: %s\n' "$PREV" "$newcmds"
+else
+  printf -- '- **new commands since %s**: none\n' "$PREV"
+fi
+printf '\n## Changes since %s (from CHANGELOG, newest first)\n\n' "$PREV"
+if [ -n "${prevbundle:-}" ]; then
+  awk -v stop="## $prevbundle" 'BEGIN { go = 0 } $0 == stop { exit } /^## / { go = 1 } go { print }' CHANGELOG.md
+else
+  echo "(previous bundle unknown — see CHANGELOG.md)"
+fi

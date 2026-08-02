@@ -122,3 +122,35 @@ jobs:
           bash tests/make-manifest.sh > m2.txt
           cmp m1.txt m2.txt
           sha256sum m1.txt
+
+  # A tag publishes only after every required job of THIS run is green — including the full
+  # Windows sweep. The notes are generated, never hand-written: the "new commands" list is the
+  # dispatch diff (the v0.2.0 tag hand-listed six commands its predecessor already had).
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [lint, regression-linux, manifest, regression-full]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - name: cohesion — tag, VERSION, CHANGELOG, schema are one fact (§9)
+        run: |
+          bash tests/doccheck.sh
+          echo "tag=$GITHUB_REF_NAME · bundle=$(cat .weavedoc/VERSION) · schema=$(grep -m1 '^schema.version:' .weavedoc/schema | sed 's/.*:[[:space:]]*//')"
+      - name: build the bundle manifest
+        run: |
+          bash tests/make-manifest.sh > bundle.manifest
+          sha256sum bundle.manifest | awk '{print $1}' > bundle.manifest.sha256
+      - name: generate release notes
+        run: |
+          prev=$(git describe --tags --abbrev=0 "${GITHUB_REF_NAME}^" 2>/dev/null || echo v0.1.0)
+          bash tests/release-notes.sh "$prev" "$GITHUB_REF_NAME" | tee notes.md
+      - name: publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" --title "WeaveDoc $GITHUB_REF_NAME" \
+            --notes-file notes.md bundle.manifest bundle.manifest.sha256
