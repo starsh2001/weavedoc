@@ -87,13 +87,50 @@ PROJECT="$ROOT/project.md"
 CATALOG="$ROOT/catalog.md"
 
 # ---- schema + generic markdown helpers ----
-sch()   { grep -E "^$1:" "$SCHEMA" 2>/dev/null | head -1 | sed -E "s/^$1:[[:space:]]*//"; }
+# The schema is read ONCE into memory (WD-PERF-001): the old sch() spawned grep+head+sed on every
+# lookup and validate makes hundreds, which on MSYS is most of the runtime. Exact-key matching also
+# fixes a latent bug — the old pattern interpolated the key into a regex, so `.` matched any char.
+declare -A SCH
+sch_load() {
+  [ -f "$SCHEMA" ] || return 0
+  local line k v
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in ''|'#'*) continue ;; esac
+    case "$line" in *:*) ;; *) continue ;; esac
+    k=${line%%:*}
+    case "$k" in ''|*[!a-zA-Z0-9._]*) continue ;; esac
+    v=${line#*:}; v=${v#"${v%%[![:space:]]*}"}
+    [ -n "${SCH[$k]+x}" ] || SCH["$k"]=$v   # first match wins, as the grep|head-1 did
+  done < "$SCHEMA"
+}
+sch()   { printf '%s\n' "${SCH[$1]-}"; }
+# MSYS forks at ~190ms (measured: 100 `echo|tr` pipelines = 38s, 100 builtin loops = 0.07s), so on
+# Windows the runtime IS the process count. These two do in-shell what `pipes … | grep -qx` and
+# `$(…)` did with three forks each; the pipe-list contract (values may contain spaces, never `|`)
+# is what makes the pure-string form exact rather than a word-splitting approximation.
+in_list() { # $1=needle $2=pipe-separated list -> 0 when the list holds exactly $1
+  case "|$2|" in *"|$1|"*) return 0 ;; esac
+  return 1
+}
+pipes() { local IFS='|'; printf '%s\n' $1; }   # kept for stream consumers; now fork-free itself
+# Every key the code reads through sch(). Declared, not derived: validate used to grep its own
+# source for this roster at runtime (WD-ARC-001) — a behavior that broke the moment the file was
+# renamed or read-only. `meta_schema_roster` proves this list still covers every sch() call site.
+SCH_KEYS="config.enum.attribution config.enum.completeness config.enum.detection config.enum.scale
+config.repeat.scales config.strength.range config.toplevel fm.placeholder humanqueue.enum.ownership
+humanqueue.enum.state material.fm.enum.origin material.fm.enum.stage material.fm.enum.status
+material.fm.required material.fm.required_when.research plan.fm.enum.status plan.fm.required
+project.fm.required review.enum.kind review.sections schema.version truth.fm.enum.provenance
+truth.fm.enum.status truth.fm.required truth.fm.resolution.decided_by
+truth.fm.resolution.decision_kind truth.fm.resolution.type verify.fm.enum.status verify.fm.required
+verify.ledger.file verify.ledger.verdicts verify.sections verify.units.verified"
+sch_load
 pipes() { echo "$1" | tr '|' '\n'; }
 is_placeholder() { # $1=value -> 0 when it is an untouched template placeholder
   # An unfilled `{…}` placeholder is not a value (ruled 2026-07-31) — write once read a placeholder
   # tone AS the document's tone. Pattern lives in the schema so there is one spelling.
   [ -n "$1" ] || return 1
-  printf '%s\n' "$1" | grep -qE "$(sch fm.placeholder)"
+  printf '%s\n' "$1" | grep -qE "${SCH[fm.placeholder]}"
 }
 req_value() { # $1=file $2=key $3=label-for-message -> 0 when the field holds a real value
   local rv; rv=$(fm "$1" "$2")
@@ -217,7 +254,7 @@ is_noise() { # blank / comment / untouched template entry
   case "$s" in *"["*) ;; *) return 0 ;; esac
   # An untouched template holds the placeholder NAME in its KIND slot — the one thing separating the
   # two shapes. The gate acts on the kind, so a line without a real one is not an entry it can act on.
-  for bk in $(pipes "$(sch review.enum.kind)"); do
+  for bk in $(pipes "${SCH[review.enum.kind]}"); do
     case "$s" in "- [$bk]"*|"- [<$bk>]"*|"- [{$bk}]"*) return 1 ;; esac
   done
   # A placeholder KIND slot is not enough — the REST decides (ruled 2026-08-01). A filled entry that
@@ -230,7 +267,7 @@ is_noise() { # blank / comment / untouched template entry
   # near-miss guidance, whose message is better; taking it here would swallow that jurisdiction.
   case "$s" in "- ["["{<"]*)
       slot=$(printf '%s' "$s" | sed -nE 's/^[^][]*\[([^]]*)\].*$/\1/p' | head -1 | tr '[:upper:]' '[:lower:]')
-      for bk in $(pipes "$(sch review.enum.kind)"); do
+      for bk in $(pipes "${SCH[review.enum.kind]}"); do
         case "$slot" in *"$bk"*) return 0 ;; esac
       done
       rest=${s#*]}
@@ -263,11 +300,11 @@ check_hq_tags() { # $1=file holding a "## Human queue" section
     case "$hqline" in *"- ["*) ;; *) continue ;; esac
     printf '%s' "$hqline" | grep -qE '^[[:space:]]*- \[' || continue
     hqs=$(printf '%s' "$hqline" | sed -nE 's/^[[:space:]]*- \[([^]]*)\].*/\1/p')
-    pipes "$(sch humanqueue.enum.state)" | grep -qx "$hqs" || continue
+    in_list "$hqs" "${SCH[humanqueue.enum.state]}" || continue
     [ "$hqs" = "open" ] || continue
     hqo=$(printf '%s' "$hqline" | sed -nE 's/^[[:space:]]*- \[[^]]*\][[:space:]]*\[([^]]*)\].*/\1/p')
     hqw=$(printf '%s' "$hqline" | sed -E 's/^[[:space:]]*- \[[^]]*\][[:space:]]*//; s/[[:space:]]*—.*$//')
-    pipes "$(sch humanqueue.enum.ownership)" | grep -qx "$hqo" \
+    in_list "$hqo" "${SCH[humanqueue.enum.ownership]}" \
       || prob "$rel  Human queue '[$hqs]' entry has no valid ownership tag → add [user-only|recommended|machine]: $hqw"
   done < <(hq_body "$1")
 }
@@ -293,7 +330,7 @@ fid_mark() { # $1=file -> EVERY nocomment line, prefixed I<TAB> (inside the viol
   # The ONE boundary judge: every line marked I (inside the violations section) or O (outside) from a
   # single walk, so "inside" and "outside" can't drift into a third state. Headings inside are I (the
   # near-miss guidance speaks to them); the heading that ENDS the section, and all after it, is O.
-  local sib; sib=$(pipes "$(sch review.sections)" | grep -vx 'Fidelity violations' | tr '\n' '|' | sed 's/|$//')
+  local sib; sib=$(pipes "${SCH[review.sections]}" | grep -vx 'Fidelity violations' | tr '\n' '|' | sed 's/|$//')
   nocomment < "$1" | awk -v sib="$sib" '
     function hlev(s){ if(match(s,/^#+/)) return RLENGTH; return 0 }
     function htext(s,   t){ t=s; sub(/^#+[[:space:]]+/,"",t); sub(/[[:space:]]+$/,"",t); return t }
@@ -368,10 +405,10 @@ unit_digest() { # $1 = canonical id -> its digest by kind; rc 1 when the unit ha
 }
 ledger_file() { # -> the sidecar's filename; schema key first, code default second — an older
   # project schema (testbed drift) must degrade to the shipped name, never to "truths/" itself.
-  local f; f=$(sch verify.ledger.file); printf '%s' "${f:-verify-ledger.tsv}"
+  local f; f=${SCH[verify.ledger.file]}; printf '%s' "${f:-verify-ledger.tsv}"
 }
 schema_ver() { # -> the schema version this runtime targets; same degrade rule as ledger_file
-  local s; s=$(sch schema.version); printf '%s' "${s:-2}"
+  local s; s=${SCH[schema.version]}; printf '%s' "${s:-2}"
 }
 ledger_rows() { # -> "id<TAB>digest<TAB>verdict" per unit; LAST row per id wins (append-only file)
   local lf="$TRUTHS/$(ledger_file)"
@@ -475,13 +512,12 @@ cmd_validate() {
   # with no url and no retrieved_at. A hand-kept list drifts, and its drift is invisible in exactly
   # the way this guard exists to prevent.
   local schkeys nschk
-  schkeys=$(grep -oE 'sch [a-z][a-z_.]+' "$SCRIPT_DIR/weavedoc" 2>/dev/null | awk '{print $2}' | LC_ALL=C sort -u)
-  nschk=$(echo "$schkeys" | grep -c . || true)
-  # If the derivation itself comes up short, say so instead of checking a handful quietly. Falling
-  # back without a word would be the same silent zero one level up.
+  schkeys="$SCH_KEYS"
+  nschk=$(printf '%s\n' $schkeys | grep -c . || true)
+  # The roster is declared (SCH_KEYS) rather than grepped out of this file at runtime. A truncated
+  # constant would check a handful quietly, so its size is still asserted out loud.
   if [ "${nschk:-0}" -lt 10 ]; then
-    prob "$SCHEMA  could not read the key roster out of $SCRIPT_DIR/weavedoc (got ${nschk:-0}) — falling back to four keys, so a schema missing any other key will NOT be reported"
-    schkeys="project.fm.required material.fm.required truth.fm.required truth.fm.enum.status"
+    prob "SCH_KEYS holds only ${nschk:-0} entries — the declared schema roster is truncated, so a schema missing any other key will NOT be reported"
   fi
   for k in $schkeys; do
     [ -n "$(sch "$k")" ] && continue
@@ -491,7 +527,7 @@ cmd_validate() {
 
   # --- project.md ---
   if [ -f "$PROJECT" ]; then
-    for k in $(pipes "$(sch project.fm.required)"); do
+    for k in $(pipes "${SCH[project.fm.required]}"); do
       req_value "$PROJECT" "$k" || true
     done
     ROLES=$(listfield "$(fm "$PROJECT" roles)")
@@ -512,7 +548,7 @@ cmd_validate() {
     # fully checked. That is this line telling the user "I did not look" about work it did do, which is
     # precisely the confusion the accounting exists to end, pointed the other way.
     N_MAT=$((N_MAT+1))
-    for k in $(pipes "$(sch material.fm.required)"); do
+    for k in $(pipes "${SCH[material.fm.required]}"); do
       req_value "$f" "$k" || continue
       v=$(fm "$f" "$k")
       case "$k" in added) is_date "$v" || prob "$f  added '$v' is not a date (YYYY-MM-DD, zero-padded, real month and day) — a field the format calls a date and nobody reads as one is a field that can say anything" ;; esac
@@ -541,16 +577,16 @@ cmd_validate() {
     [ -n "$idc" ] && [ "$id" != "$idc" ] &&
       prob "$MATERIALS/$id/  folder name is not the canonical id spelling — rename it to '$idc' (ids are zero-padded to at least three digits). Two spellings of one number resolve to the same id, so any reference to it becomes ambiguous"
     [ "$(fm "$f" id)" = "$id" ] || prob "$f  id '$(fm "$f" id)' != folder '$id'"
-    v=$(fm "$f" origin); pipes "$(sch material.fm.enum.origin)" | grep -qx "$v" || prob "$f  origin '$v' invalid → use $(sch material.fm.enum.origin)"
-    v=$(fm "$f" status); pipes "$(sch material.fm.enum.status)" | grep -qx "$v" || prob "$f  status '$v' invalid → use $(sch material.fm.enum.status)"
+    v=$(fm "$f" origin); in_list "$v" "${SCH[material.fm.enum.origin]}" || prob "$f  origin '$v' invalid → use ${SCH[material.fm.enum.origin]}"
+    v=$(fm "$f" status); in_list "$v" "${SCH[material.fm.enum.status]}" || prob "$f  status '$v' invalid → use ${SCH[material.fm.enum.status]}"
     v=$(fm "$f" role);   echo "$ROLES" | grep -qx "$v" || prob "$f  role '$v' not in project.md roles"
-    v=$(fm "$f" stage);  [ -z "$v" ] || pipes "$(sch material.fm.enum.stage)" | grep -qx "$v" || prob "$f  stage '$v' invalid → use $(sch material.fm.enum.stage)"
+    v=$(fm "$f" stage);  [ -z "$v" ] || in_list "$v" "${SCH[material.fm.enum.stage]}" || prob "$f  stage '$v' invalid → use ${SCH[material.fm.enum.stage]}"
     # origin: research — the machine gathered this, so the record must let a cold reviewer
     # re-reach the source. Without url+retrieved_at an externally-fetched value is indistinguishable
     # from something the user said (a real run filed searched astronomical data as 'user-answer',
     # and the whole age table ended up resting on a value verify could never re-check).
     if [ "$(fm "$f" origin)" = "research" ]; then
-      for k in $(pipes "$(sch material.fm.required_when.research)"); do
+      for k in $(pipes "${SCH[material.fm.required_when.research]}"); do
         v=$(fm "$f" "$k")
         [ -n "$v" ] || { prob "$f  origin 'research' requires frontmatter '$k' (a fetched value must stay re-checkable)"; continue; }
         case "$k" in retrieved_at) is_date "$v" || prob "$f  retrieved_at '$v' is not a date (YYYY-MM-DD, zero-padded, real month and day) — a field the format calls a date and nobody reads as one is a field that can say anything" ;; esac
@@ -612,7 +648,7 @@ cmd_validate() {
               | sed -E 's/^t0*([0-9]+)$/t\1/' | LC_ALL=C sort -u | tr '\n' ' ')
     # The schema is the SoT — READ, not paraphrased into awk. Hardcoding these enums here once made
     # "edit the schema, behaviour follows" false: editing it changed nothing and warned of nothing.
-    qout=$(WD_REQTAGS="$reqtags" awk -v matids="$matlist" -v retids="$retlist" -v mroot="$MATERIALS" -v remids="$remlist" -v resids="$reslist" -v Q="'"       -v treq="$(sch truth.fm.required | tr '|' ' ')"       -v tstenum="$(sch truth.fm.enum.status | tr '|' ' ')"       -v tprenum="$(sch truth.fm.enum.provenance | tr '|' ' ')"       -v rtypes="$(sch truth.fm.resolution.type | tr '|' ' ')"       -v rkinds="$(sch truth.fm.resolution.decision_kind | tr '|' ' ')"       -v rby="$(sch truth.fm.resolution.decided_by | tr '|' ' ')"       -v ph="$(sch fm.placeholder)" '
+    qout=$(WD_REQTAGS="$reqtags" awk -v matids="$matlist" -v retids="$retlist" -v mroot="$MATERIALS" -v remids="$remlist" -v resids="$reslist" -v Q="'"       -v treq="${SCH[truth.fm.required]//|/ }"       -v tstenum="${SCH[truth.fm.enum.status]//|/ }"       -v tprenum="${SCH[truth.fm.enum.provenance]//|/ }"       -v rtypes="${SCH[truth.fm.resolution.type]//|/ }"       -v rkinds="${SCH[truth.fm.resolution.decision_kind]//|/ }"       -v rby="${SCH[truth.fm.resolution.decided_by]//|/ }"       -v ph="${SCH[fm.placeholder]}" '
       function val(   s){ s=$0; sub(/^[^:]*:[[:space:]]*/,"",s); if(s !~ /^"/){ sub(/[[:space:]]+#.*$/,"",s); if(s ~ /^#/) s="" } sub(/[[:space:]]*$/,"",s); sub(/^"/,"",s); sub(/"$/,"",s); return s }
       function q(s){ return Q s Q }
       # Whitespace-collapsed so the seal does not fail on spacing. [[:space:]] covers the newline, so
@@ -1081,10 +1117,10 @@ EOF
   while IFS= read -r d; do
     p="$DOCUMENTS/$d/plan.md"
     if [ -f "$p" ]; then
-      for k in $(pipes "$(sch plan.fm.required)"); do
+      for k in $(pipes "${SCH[plan.fm.required]}"); do
         req_value "$p" "$k" || true
       done
-      v=$(fm "$p" status); pipes "$(sch plan.fm.enum.status)" | grep -qx "$v" || prob "$p  status '$v' invalid"
+      v=$(fm "$p" status); in_list "$v" "${SCH[plan.fm.enum.status]}" || prob "$p  status '$v' invalid"
       [ "$(fm "$p" doc_id)" = "$d" ] || prob "$p  doc_id '$(fm "$p" doc_id)' != folder '$d'"
       for c in $(listfield "$(fm "$p" continues)"); do
         [ -d "$DOCUMENTS/$c" ] || prob "$p  continues '$c' → no such document"
@@ -1118,7 +1154,7 @@ EOF
         [ "$(dup_section "$DOCUMENTS/$d/review.md" "$r" 0 raw)" -gt 0 ] || continue
         [ "$(dup_section "$DOCUMENTS/$d/review.md" "$r" 0)" -eq 0 ] &&
           prob "$d review.md has a '$r' heading that is gone once comments are stripped — a '-->' in ordinary prose closes an earlier '<!--', and everything between them (headings and open violations alike) is blanked before any check reads it. Close the comment where it was meant to end"
-      done < <(pipes "$(sch review.sections)")
+      done < <(pipes "${SCH[review.sections]}")
       # THE ZONE RULE (ruled 2026-08-01, replacing the shape census). A violation kind in brackets
       # may live in exactly one place — inside the 'Fidelity violations' section; anywhere else,
       # whatever the line looks like, it is named and blocked. The census died because recognising
@@ -1132,8 +1168,8 @@ EOF
       # a bracketed word outside that vocabulary (`[모순]`) is prose wearing brackets; the machine does
       # not chase human wording, and inside the zone such lines still fail closed via is_noise.
       local vkinds vklist vkfold vline vslot vfold vhit vk vcnt vtag vrest kindscan
-      vkinds=$(pipes "$(sch review.enum.kind)" | tr '\n' '|' | sed 's/|$//')
-      vklist=$(pipes "$(sch review.enum.kind)" | tr '\n' ' ')
+      vkinds=$(pipes "${SCH[review.enum.kind]}" | tr '\n' '|' | sed 's/|$//')
+      vklist=$(pipes "${SCH[review.enum.kind]}" | tr '\n' ' ')
       vkfold=$(printf '%s\n' $vklist | tr 'A-Z' 'a-z' | sed 's/[^a-z0-9]//g' | tr '\n' ' ')
       kindscan='
         BEGIN{ n=split(kf, K, " ") }
@@ -1298,17 +1334,17 @@ EOF
   # ABSENCE is not blocked, unlike catalog.md: `verify` is on-demand, so a never-verified mine has
   # no verify.md legitimately. status reports the absence (§ cmd_status).
   if [ -f "$TRUTHS/verify.md" ]; then
-    for k in $(pipes "$(sch verify.fm.required)"); do
+    for k in $(pipes "${SCH[verify.fm.required]}"); do
       v=$(fm "$TRUTHS/verify.md" "$k")
       [ -n "$v" ] || { prob "truths/verify.md  frontmatter '$k' missing"; continue; }
       case "$k" in verified_at) is_date "$v" || prob "truths/verify.md  verified_at '$v' is not a date (YYYY-MM-DD, zero-padded, real month and day) — a field the format calls a date and nobody reads as one is a field that can say anything" ;; esac
     done
     v=$(fm "$TRUTHS/verify.md" status)
-    [ -z "$v" ] || pipes "$(sch verify.fm.enum.status)" | grep -qx "$v" || prob "truths/verify.md  status '$v' invalid → use $(sch verify.fm.enum.status)"
+    [ -z "$v" ] || in_list "$v" "${SCH[verify.fm.enum.status]}" || prob "truths/verify.md  status '$v' invalid → use ${SCH[verify.fm.enum.status]}"
     while IFS= read -r k; do
       nocomment < "$TRUTHS/verify.md" | grep -qE "^#{1,2}[[:space:]]+${k}[[:space:]]*\$" ||
         prob "truths/verify.md  required section '$k' missing (verify.sections)"
-    done < <(pipes "$(sch verify.sections)")
+    done < <(pipes "${SCH[verify.sections]}")
   fi
 
   # --- Human queue ownership tags (truths/verify.md AND documents/*/review.md) ---
@@ -1317,9 +1353,9 @@ EOF
   while IFS= read -r hqf; do check_hq_tags "$hqf"; done < <(hq_files)
 
   # --- config enums ---
-  v=$(cfgval completeness); [ -z "$v" ] || pipes "$(sch config.enum.completeness)" | grep -qx "$v" || prob "config fidelity.completeness '$v' invalid"
-  v=$(cfgval detection);    [ -z "$v" ] || pipes "$(sch config.enum.detection)"    | grep -qx "$v" || prob "config conflicts.detection '$v' invalid"
-  v=$(cfgval attribution);  [ -z "$v" ] || pipes "$(sch config.enum.attribution)"  | grep -qx "$v" || prob "config conflicts.attribution '$v' invalid"
+  v=$(cfgval completeness); [ -z "$v" ] || in_list "$v" "${SCH[config.enum.completeness]}" || prob "config fidelity.completeness '$v' invalid"
+  v=$(cfgval detection);    [ -z "$v" ] || in_list "$v" "${SCH[config.enum.detection]}" || prob "config conflicts.detection '$v' invalid"
+  v=$(cfgval attribution);  [ -z "$v" ] || in_list "$v" "${SCH[config.enum.attribution]}" || prob "config conflicts.attribution '$v' invalid"
 
   # --- schema version negotiation (WD-MIG-002) + full config contract (WD-CFG-001) ---
   local pv cv sv sect ck
@@ -1336,14 +1372,14 @@ EOF
   SCHEMA_V1=0; { [ "$pv" = "1" ] || [ "$cv" = "1" ]; } && SCHEMA_V1=1
   for sect in verify review; do
     v=$(cfg2 "$sect" strength)
-    [ -z "$v" ] || pipes "$(sch config.strength.range)" | grep -qx "$v" \
-      || prob "config $sect.strength '$v' invalid → one of $(sch config.strength.range)"
+    [ -z "$v" ] || in_list "$v" "${SCH[config.strength.range]}" \
+      || prob "config $sect.strength '$v' invalid → one of ${SCH[config.strength.range]}"
     v=$(cfg2 "$sect" max_rounds)
     case "$v" in "") ;; 0|*[!0-9]*) prob "config $sect.max_rounds '$v' must be a positive integer — 'exceeded → escalate' needs a ceiling that can be exceeded" ;; esac
     v=$(cfg2 "$sect" scale)
-    [ -z "$v" ] || pipes "$(sch config.enum.scale)" | grep -qx "$v" \
-      || prob "config $sect.scale '$v' invalid → $(sch config.enum.scale)"
-    for ck in $(pipes "$(sch config.repeat.scales)"); do
+    [ -z "$v" ] || in_list "$v" "${SCH[config.enum.scale]}" \
+      || prob "config $sect.scale '$v' invalid → ${SCH[config.enum.scale]}"
+    for ck in $(pipes "${SCH[config.repeat.scales]}"); do
       v=$(cfg2 "$sect" "$ck")
       case "$v" in "") ;; *[!0-9]*) prob "config $sect.repeat.$ck '$v' must be a non-negative integer (clean rounds in a row)" ;; esac
     done
@@ -1351,8 +1387,8 @@ EOF
   # Unknown top-level keys: a NAMED warning, never a failure — extension vs typo is not
   # machine-decidable, but silence would let a typo'd knob read as configured.
   while IFS= read -r ck; do
-    pipes "$(sch config.toplevel)" | grep -qx "$ck" \
-      || echo "  warning: unknown config key '$ck' in .weavedoc/config.yaml — known top-level keys: $(sch config.toplevel)"
+    in_list "$ck" "${SCH[config.toplevel]}" \
+      || echo "  warning: unknown config key '$ck' in .weavedoc/config.yaml — known top-level keys: ${SCH[config.toplevel]}"
   done < <(awk '/^[A-Za-z_][A-Za-z0-9_]*:/ { s=$0; sub(/:.*/, "", s); print s }' "$CONFIG" 2>/dev/null)
 
   # Printed on both outcomes and before the verdict, so the verdict is never read without it.
@@ -2061,7 +2097,7 @@ scan_verified_units() { # -> "V<TAB><id>" per covered id · "U<TAB><line>" per e
   # reads as a range endpoint). `·` becomes a space — it only ever separates ids (`t194·t195`).
   nocomment < "$TRUTHS/verify.md" | section_all - "Verified units" \
     | sed 's/–/-/g; s/—/-/g; s/·/ /g' \
-    | awk -v mark="$(sch verify.units.verified)" '
+    | awk -v mark="${SCH[verify.units.verified]}" '
     function pad(pp, nn) { return sprintf("%s%03d", pp, nn+0) }
     BEGIN { if (mark == "") mark = "verified"; mark = tolower(mark) }
     {
@@ -2193,7 +2229,7 @@ scan_upgrade() { # -> kind<TAB>display, one v1→v2 migration item per line. Rea
     # Verdictless rows: success-shaped (passes N/N) gain the verdict word; anything else is named
     # for human review — the machine never certifies what the ledger did not.
     nocomment < "$TRUTHS/verify.md" | section_all - "Verified units" | sed 's/·/ /g' \
-      | awk -v vd="$(sch verify.units.verified)" '
+      | awk -v vd="${SCH[verify.units.verified]}" '
         BEGIN { if (vd == "") vd = "verified" }
         { line=$0
           if (line !~ /^[[:space:]]*[|-]/) next
@@ -2208,7 +2244,7 @@ scan_upgrade() { # -> kind<TAB>display, one v1→v2 migration item per line. Rea
     while IFS= read -r b; do
       nocomment < "$TRUTHS/verify.md" | grep -qE "^#{1,2}[[:space:]]+${b}[[:space:]]*\$" \
         || printf 'verify-section\ttruths/verify.md gains an empty section: ## %s\n' "$b"
-    done < <(pipes "$(sch verify.sections)")
+    done < <(pipes "${SCH[verify.sections]}")
   fi
   grep -qE '^[[:space:]]+repeat:[[:space:]]*[0-9]' "$CONFIG" 2>/dev/null \
     && printf 'repeat\tconfig scalar repeat → per-scale map (skip 0 · light/standard keep the scalar · full is one stricter)\n'
@@ -2354,7 +2390,7 @@ upgrade_apply() { # the staged, rollback-safe v1 → v2 transaction (§8 safety 
   # -- 2. verify.md: success rows gain their verdict word; missing sections appended empty.
   if [ -f "$TRUTHS/verify.md" ]; then
     bkup "${TRUTHS#"$ROOT"/}/verify.md"
-    awk -v vd="$(sch verify.units.verified)" '
+    awk -v vd="${SCH[verify.units.verified]}" '
       BEGIN { if (vd == "") vd = "verified" }
       { line=$0; t=line; gsub(/·/, " ", t)
         if (t !~ /^[[:space:]]*[|-]/ || t ~ /^[[:space:]]*\|[[:space:]|:-]*$/ || t !~ /[mt][0-9]/) { print line; next }
@@ -2365,7 +2401,7 @@ upgrade_apply() { # the staged, rollback-safe v1 → v2 transaction (§8 safety 
     while IFS= read -r b; do
       nocomment < "$TRUTHS/verify.md" | grep -qE "^#{1,2}[[:space:]]+${b}[[:space:]]*\$" \
         || printf '\n## %s\n' "$b" >> "$TRUTHS/verify.md"
-    done < <(pipes "$(sch verify.sections)")
+    done < <(pipes "${SCH[verify.sections]}")
   fi
 
   # -- 3. review history: bracketed kinds outside the gate lose their brackets (record form).
@@ -2441,8 +2477,8 @@ cmd_attest() { # attest <verified|failed> <round> <standard> <id...> — the ver
   # hash rule has a single spelling. All-or-nothing: every id resolves before one byte is written.
   [ $# -ge 4 ] || { echo "usage: weavedoc attest <verified|failed> <round> <standard> <id...>"; return 2; }
   local verdict="$1" round="$2" standard="$3"; shift 3
-  local vds; vds=$(sch verify.ledger.verdicts); vds=${vds:-verified|failed}
-  pipes "$vds" | grep -qx "$verdict" \
+  local vds; vds=${SCH[verify.ledger.verdicts]}; vds=${vds:-verified|failed}
+  in_list "$verdict" "$vds" \
     || { echo "attest: verdict '$verdict' must be one of: $vds"; return 2; }
   case "$round" in ''|0|*[!0-9]*) echo "attest: round '$round' must be a positive integer"; return 2 ;; esac
   local id cid st dg tf today rows="" line="" names=""
@@ -2618,7 +2654,7 @@ cmd_scope() {
   # that simply hadn't got there yet, and nobody would know a line needed one word added.
   if [ -n "$unmarked" ]; then
     printf '  ledger: %s entry(s) name units but end in no "%s" verdict — they cover nothing; add the verdict or leave the units owed:\n' \
-      "$(printf '%s' "$unmarked" | grep -c . || true)" "$(sch verify.units.verified)"
+      "$(printf '%s' "$unmarked" | grep -c . || true)" "${SCH[verify.units.verified]}"
     printf '%s\n' "$unmarked" | sed 's/^[[:space:]]*/    /'
   fi
   local owed=$((n_munver + n_mstale + n_mfail + n_tunver + n_tstale + n_tfail))
