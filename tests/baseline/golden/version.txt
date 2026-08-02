@@ -1,0 +1,2 @@
+2026-08-02.2
+fingerprint: a27fea330f6d  (bin+schema — compare this, not just the date)

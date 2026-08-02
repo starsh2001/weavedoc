@@ -1,0 +1,3 @@
+d1                 planned     → — (final)
+materials: 1
+human queue: 0
