@@ -4,6 +4,192 @@
 
 ---
 
+## 2026-08-02.16
+
+**진단 계약 완성 + 나머지 `--json` (단위 11b) · raw source 고지 (WD-SEC-001).**
+
+- **awk 내부 진단까지 전부 코드화** — truth·conflict·resolution·coverage·seal 계열 45곳이 `[CODE] ` 프리픽스를 달고 `emit_probs` 라우터로 합류합니다. 이제 **코드 없는 진단은 shell·awk 어디에도 없습니다**(`meta_uncoded_ratchet`가 shell 0 고정).
+- **`.weavedoc/FORMATS.md`에 diagnostic code 표 신설(86개)** — 코드가 계약, 산문은 표현임을 명문화. **`meta_diag_code_table`이 양방향 드리프트를 차단**합니다: 바이너리가 표에 없는 코드를 내면 실패, 표가 바이너리에 없는 코드를 적어도 실패. 문서와 코드가 갈라질 수 없습니다.
+- **`scope --json` · `version --json` 추가** — scope는 다섯 증거 등급을 카운트와 **id 배열**(`owed`)로 함께 내보내 소비자가 바로 행동할 수 있고, version은 bundle·fingerprint·schema_version을 구조화합니다.
+- **WD-SEC-001 — init이 raw source의 Git 포함을 명시 고지합니다**: `.ignore`는 검색 방패일 뿐 접근 제어도 Git 제외도 아니며, `materials/*/source.*`는 커밋되어 히스토리에 남는다는 사실과 선택지(비공개 저장소 / 광산 자체를 Git 밖에 / gitignore 하되 감사 추적 상실 감수)를 사용자에게 말하도록 스킬에 못박았습니다.
+
+검증: 신규 케이스 4(json_scope·json_version·diag_code_table·+11a분) 로컬 GREEN — 표 케이스는 첫 실행에서 자기 grep 패턴 결함(awk 형태 미인식)을 잡아 수정 후 통과 · 전수는 CI.
+
+## 2026-08-02.15
+
+**진단이 계약이 됩니다 — 안정 diagnostic code + `validate --json` (WD-CLI-002/QA-003, 단위 11a).**
+
+- **코드 체계**: `AREA-SLUG`(예: `GATE-FINAL-DIGEST`, `SEAL-QUOTE-MISSING`, `VER-DISAGREE`) — **코드가 계약이고 영문 산문은 표현**입니다. 사람 출력엔 `[CODE]` 프리픽스(인용·grep 가능), 이번 웨이브로 shell 측 진단 71/73곳 코드화(잔여 2는 라우터 내부 = 실질 0). `meta_uncoded_ratchet`이 shell 측 0을 고정 — 코드 없는 prob는 이제 suite가 거부합니다.
+- **`validate --json`**: stdout에 JSON 객체만 — `output_schema_version:1`, bundle, schema_version, result, problems, `examined`(seal/tombstone/gate/review-seal 카운트 전부), `diagnostics:[{code,message}]`, `warnings`. exit 규약 불변(0 pass · 1 fail). config unknown-key 경고도 `warn()` 수집기로 승격(`CFG-UNKNOWN-KEY`).
+- awk 벌크 경로(truths·coverage awk)는 `emit_probs` 라우터로 합류 — 대표 진단 `SEAL-QUOTE-MISSING`은 1차에 포함, 나머지 awk 내부 타입과 scope/version/upgrade의 `--json`, FORMATS 코드표는 **단위 11b**로 명시 잔여.
+
+검증: json 2 · ratchet 1 · human-code 1 · **gate 88/88**(프리픽스가 기존 단언 무손상) 로컬 · 전수는 CI.
+
+## 2026-08-02.14
+
+**document half의 E2E 척추 (WD-E2E-001).** `e2e_` 카테고리 신설 — 개별 판정이 아니라 **시퀀스**를 검증합니다: 문서 하나가 plan → draft → clean review → seal → consecrate를 실제 명령 흐름으로 통과하고, 관절마다 단언이 붙습니다.
+
+- `e2e_single_document` / `e2e_multi_document` — 단일 파일과 draft/ 트리 각각 탄생부터 봉인된 validate까지.
+- `e2e_stale_context_recovery` — 봉헌된 초록 → 인용 truth의 claim 변경 → hard red("review no longer describes this mine") → 재-seal → 다시 초록. 신선도의 왕복 전체.
+- `e2e_block_repair_{contradiction,unsupported,missing-required}` — 세 kind 각각: gate가 이름으로 거부 → **거부가 final을 남기지 않음을 단언** → 수리 → 재-seal → 봉헌.
+- `e2e_user_answer_chain` — ask 루프의 산출물 사슬(사용자 답변 → user-answer material → truth → 인용)이 통째로 validate·consecrate를 통과.
+- `e2e_open_queue_consecrates` — 2026-08-01 재정을 시퀀스로 고정: 열린 Human queue는 기계의 봉헌을 막지 않는다(고지·go-ahead는 스킬의 의무, 한 층 위).
+
+이 케이스들이 커버하지 **못하는** 것도 명시합니다: AI가 무엇을 쓸지 결정하는 절반 — 스킬 주도 실전 1회는 남은 과제로 플랜에 기록.
+
+검증: e2e 8/8 첫 실행 GREEN · 전수는 CI.
+
+## 2026-08-02.13
+
+**Phase 5 개시 — preflight와 "문서≠코드"의 기계 검사.**
+
+- **preflight (WD-CLI-001 마지막 항목)** — bash ≥ 4를 **첫 `declare -A` 이전에** 검사합니다: 3.2에서는 그 줄이 에러를 내고도 실행이 계속되어 배열이 스칼라처럼 조용히 굴러가는데, 정확히 그 은닉 실패를 끝냅니다. GNU sed/awk 검사는 validate와 쓰기 명령에서만(fork 2개 — 가벼운 읽기에 쓰지 않음; BSD 도구는 실패하지 않고 **조용히 다르게** 동작하므로 더 나쁨).
+- **`tests/doccheck.sh` 신설 + `meta_doc_sync` 케이스** — dispatch ↔ README ↔ bin 헤더 주석, VERSION ↔ CHANGELOG 최신 항목이 한 사실인지 기계 검사. 첫 실행에서 곧장 lang·locale 미문서화(WD-DOC-001 잔여)를 잡았고, 두 번째 실행에서 이 번들의 VERSION/CHANGELOG 불일치를 잡았습니다 — 자기 일을 두 번 증명한 셈입니다.
+- **문서 정합(WD-DOC-001)** — README 상단 요약을 dispatch 전체(16 명령)와 동기화, VERSION의 "날짜 비교" 안내를 fingerprint·schema 기준으로 교체, lang·locale 문서화, WORKFLOW에 bash≥4+GNU 요구사항 명시, "~220-truth" 시점성 숫자를 무시점 표현으로.
+
+검증: doccheck GREEN · 신규 meta 케이스 포함 그룹 로컬 · 전수는 CI.
+
+## 2026-08-02.12
+
+**경계가 단단해졌습니다 — Phase 4 종료 (WD-IO-001 + WD-CLI-001).** 쓰기는 트랜잭션이 됐고, 입력의 가장자리는 추측을 멈췄습니다.
+
+- **retag가 트랜잭션입니다** — 대상 경로 guard → 첫 수정 전 파일별 스냅샷 → 적용 → reindex → **full validation** → 실패 시 전량 원복 + 인덱스 재동기("rolled back"까지 케이스가 원문 tags로 증명). 미지의 3번째 플래그(`--forcee`)가 무시된 채 **실제 쓰기로 흐르던 결함**도 여기서 닫혔습니다 — 쓰기 명령은 추측하지 않습니다.
+- **reindex는 same-filesystem staging + atomic rename** — mktemp가 다른 마운트라 cp 중단 시 반쪽 인덱스가 남을 수 있던 창을 닫고, 실패는 exit code로 전파됩니다.
+- **write 명령의 workspace guard** — 리다이렉트된 경로는 어디든 **읽을** 수 있지만, 프로젝트 루트 밖으로 해석되거나 symlink를 통과하는 **쓰기**는 거부합니다(retag·reindex). symlink 케이스는 플랫폼 이중 판정: 진짜 symlink가 생기는 곳(Linux/CI)에선 거부를, MSYS처럼 복사로 degrade하는 곳에선 정상 동작을 각각 검증합니다.
+- **실달력 날짜** — `2026-02-31`, `2023-02-29`(비윤년)를 거부하고 `2024-02-29`는 통과합니다(그레고리력 윤년 규칙, 순수 셸 산술).
+- **truth 이름을 쓴 디렉터리**는 이름이 찍히고 세어지지 않습니다(gawk가 조용히 건너뛰어 검사가 안 돌던 자리).
+- **Verified units의 역방향·거대 range**(`t009-t002`, `t001-t99999`)는 전개 전에 판정되어 그 줄 전체가 "covers nothing"으로 이름 찍힙니다 — 오타 하나가 수만 id의 커버리지를 주조하지 못합니다.
+- **dispatch 전 명령 인자 엄격화** — 초과 인자·미지 flag는 usage+exit 2 (`validate --verbose`, `pull` 무인자, `reindex --check unexpected` 전부 케이스로 고정).
+- **`C:\…`는 절대경로로 인식**되어 루트 밑에 접합되지 않습니다.
+- **`audience: external`은 `publication_labels`를 요구**합니다(enum `internal|external` 신설, WD-CFG-001 마지막 조각).
+
+검증: 신규 17케이스 그룹 GREEN 로컬 · 전수는 CI · 케이스 자신이 잡은 설계 결함 1(범위 행을 절 밖에 붙여 스캐너가 못 보던 픽스처 — attest 미러와 같은 함정).
+
+## 2026-08-02.11
+
+**실광산 `validate`가 8분 18초 → 1분 46초 (−78.7%).** 최소 fixture만으로는 실사용을 대표할 수 없어, 같은 광산(자료 28 · truth 264)의 사본 두 벌에 구·신 번들을 놓고 각각 측정했습니다. **검사 범위·판정·`examined:` 수치가 완전히 동일합니다** — 빨라진 것이지 덜 검사하는 것이 아닙니다.
+
+- 호출 횟수 계측(내장 카운터 — `bash -x`는 MSYS에서 왜곡)이 다음 계층을 지목했습니다: `cfg2` 14회 · `cfgval` 5회(각각 awk 또는 grep+sed를 `$()` 안에서) · `nocomment` 15회(10회는 `dup_section` 뒤).
+- **config를 한 번만 파싱**해 두 관점으로 캐시합니다 — `CFGFLAT`(파일 전체 첫 매치 = cfgval의 의미), `CFG`(section.key = cfg2의 의미). 섹션 벽은 유지되어 `verify.strength`와 `review.strength`는 여전히 별개입니다.
+- **파일별 raw/주석제거 내용을 캐시**하고 `dup_section`은 그 위에서 내장으로 heading을 셉니다. Human queue 항목은 항목당 3 fork(grep+sed 2개) → 파라미터 확장.
+- 값 의미론 불변: 따옴표 밖 주석만 제거, 값 없는 콜론은 여전히 부재.
+
+최소 fixture 기준으로는 39.658초 → 14.06초(−65%)로 플랜의 −70%에 미달하지만, **실사용 기준으로는 −78.7%로 초과 달성**입니다. 개선폭 차이는 구조적입니다: 이번 최적화는 파일당·항목당 반복 fork를 없앤 것이라 대상 수에 비례해 이득이 커집니다. 두 수치를 모두 [perf-baseline.md](tests/baseline/perf-baseline.md)에 남겼습니다.
+
+검증: 회귀 **241/241 CI green** · 실광산 재검증에서 구·신 판정 동일.
+
+## 2026-08-02.10
+
+**성능 —39.7초에서 16.4초로 (−59%).** Phase 4의 본 작업. 블록별 실측이 범인을 정확히 지목했습니다: 자료 1개·문서 1개짜리 최소 fixture인데 **materials 블록 12.7초 · documents 8.0초**. 원인은 로직이 아니라 **키마다 파일을 다시 파싱**한 것이었습니다 — `fm()`이 필드마다 awk를 띄우고 `req_value()`가 그걸 또 불러서, 자료 하나에 fork 30개.
+
+- **frontmatter는 파일당 한 번만 파싱합니다** — 1회 파싱으로 캐시를 채우고, 이후 조회는 배열 참조(`fmv`는 `REPLY`에 담아 **fork 0**). 값 규칙(따옴표 밖 주석 제거·따옴표 벗기기·첫 철자 우선)은 그대로.
+- **`listfield`가 내장이 됐습니다** — `echo|tr|tr|sed|grep` 5개 프로세스 → 순수 파라미터 확장. `IFS=','`라서 **공백이 든 항목이 쪼개지지 않습니다**(word splitting이었으면 깨졌을 부분).
+- **`has_fm`**은 `head|tr|grep` 3 fork → 내장 read 한 줄. **`is_placeholder`**는 schema의 brace 패턴을 glob으로 판정(스키마는 여전히 의미의 SoT).
+- **zone rule의 상수 3개**가 문서마다 파이프 11개로 재계산되던 것을 파라미터 확장으로 — 문서가 많은 광산일수록 이득이 커집니다.
+
+측정(3회 median, 동일 fixture·머신): **39.658초 → 16.36초**. 목표 −70%(≤11.9초)에는 4.5초 남았고, 남은 분포는 [perf-baseline.md](tests/baseline/perf-baseline.md)에 기록했습니다.
+
+시도했다가 **되돌린 것**: `dup_section` 뒤에 파일별 heading 인구조사 캐시 — 호출자가 묻는 횟수보다 인구조사 비용이 커서 오히려 documents 블록이 5.17→6.30초가 됐습니다. 캐시가 항상 이긴다는 가정이 틀린 사례라 기록해 둡니다.
+
+측정 방법도 교정했습니다: `bash -x` 트레이스는 MSYS에서 stderr 쓰기 비용 때문에 라인당 ~12ms의 **가짜 균등 분포**를 만듭니다 — 블록 경계에 `EPOCHREALTIME`을 찍는 내장 마커만 신뢰합니다.
+
+검증: 회귀 **241/241 CI green**(브랜치 run) · `bash -n` 통과 · 형식 무변경.
+
+## 2026-08-02.9
+
+**Phase 4 착수 — 병목의 정체를 숫자로 확정하고, 첫 fork 절감.** 추측 대신 계측부터 했습니다: **MSYS에서 `echo | tr` 100회 = 38초, 같은 횟수의 내장 루프 = 0.07초.** fork 하나가 약 190ms입니다. 즉 Windows에서 `validate`의 실행시간은 로직이 아니라 **프로세스 수**입니다. 이 사실이 남은 성능 작업의 방향을 결정합니다.
+
+- **schema를 한 번만 읽습니다** — `sch()`가 조회마다 grep+head+sed 3개를 띄우던 것을 프로세스 시작 시 1회 로드 + 연관 배열 조회로. 호출부 40곳의 `$(sch …)` 명령 치환(각각 fork 1개)도 `${SCH[key]}` 직접 참조로 바꿔 fork 자체를 없앴습니다. **덤으로 잠복 버그 수정**: 옛 구현은 키를 정규식으로 보간해 `verify.sections`가 `verifyXsections`에도 매치됐습니다 — 이제 정확 일치입니다.
+- **runtime의 자기 소스 grep 제거 (WD-ARC-001)** — validate가 자기 파일을 grep해 schema 키 로스터를 유도하던 것을 선언 상수 `SCH_KEYS`로. 파일명이 바뀌거나 읽기 권한이 없으면 조용히 4개 키로 축소되던 경로가 사라졌습니다(로스터가 잘리면 여전히 소리내어 실패).
+- **enum 검사가 fork를 안 씁니다** — `pipes "$(sch X)" | grep -qx "$v"`(3 fork) 14곳을 순수 문자열 `in_list`(0 fork)로.
+
+측정: 최소 fixture median **39.658초 → 35.96초 (약 10% 단축)**. 목표(70%, ≤11.9초)에는 크게 못 미칩니다 — 남은 fork는 `cmd_validate` 한 함수에만 명령 치환 101개·파이프 28개로 퍼져 있어, 다음 조각인 **metadata 단일 AWK pass 통합**이 실제 승부처입니다. 이번 번들은 그 전제(캐시·상수 로스터·fork 없는 enum)를 놓은 것입니다.
+
+검증: `bash -n` 통과 · 로컬 85케이스 GREEN(치환이 광범위해 동작 보존을 우선 확인) · 전수 241은 CI Ubuntu.
+
+## 2026-08-02.8
+
+**Schema v2와 migration — Phase 3 종료, migration train 해제.** 이제 v1 광산이 스스로 v2가 되는 길이 있습니다: 검사와 적용이 분리된 `upgrade`, 그리고 버전이 실제 계약이 되는 협상.
+
+- **schema 협상 (WD-MIG-002)** — `.weavedoc/schema`가 `schema.version: 2`를 선언. project.md·config.yaml의 `version:`은 한 사실의 두 기록으로 일치를 검사하고, **미래 버전은 fail-closed**, v1은 dual-reader로 읽되 `upgrade --check`를 가리키는 공지 한 줄. `version` 명령이 schema 줄을 함께 찍습니다.
+- **config 전 계약 (WD-CFG-001, 조기)** — section-aware `cfg2` 신설: 평면 첫-매치 파서는 verify.strength 뒤의 review.strength를 영원히 못 봅니다. strength(1-3)·max_rounds(양의 정수)·scale(enum)·repeat(스케일별 비음수)를 verify/review 양쪽에서 검사, unknown top-level key는 **이름 찍는 경고**(확장인지 오타인지 기계가 못 가르므로 차단하지 않음).
+- **`upgrade --check | --dry-run | --apply` (WD-MIG-001)** — 기본은 read-only. apply는 §8 원칙 그대로: rename 충돌 전수 사전검사(하나면 0 byte) → 원본 스냅샷+manifest → canonicalize(m5→m005; strict 참조 필드·catalog·coverage·cited_truths까지, **산문·changelog·consecrated 바이트는 불변**) → 성공 증거(`passes N/N`) 있는 행만 verdict 부여(기계는 장부가 안 한 인증을 안 함) → 절 보강 → gate 밖 괄호 kind 기록의 괄호 제거 → scalar repeat→scale map → **digest-less 이력을 `legacy-unbound` 사이드카 행으로 실체화(digest 소급 날인 없음, §11)** → 버전 스탬프 → **full validation, 실패 시 전량 자동 원복**(회귀 케이스가 트리 해시 동일성으로 증명). 멱등: 두 번째 실행은 "nothing to do".
+- scope가 사이드카의 `legacy-unbound` verdict 행을 legacy로 집계(절대 stale 오분류 없음), 구 schema 프로젝트에서 새 키는 코드 기본값으로 degrade(`schema_ver`).
+- **UPGRADING.md 신설** — 사용자 절차서.
+- 실광산 `--check` 실측(read-only): 항목 4개 — 버전 스탬프 2 · scalar repeat · **244개 검증 unit의 legacy-unbound 실체화**. id는 이미 canonical이라 rename 0.
+
+검증: `bash -n` 통과 · 신규 15케이스 그룹 GREEN 로컬(schema 3 · config 6 · upgrade/rollback 6) · 전수 241은 CI Ubuntu가 검증 · 개발 중 스스로 찾은 결함 2 — rollback이 생성 파일을 재백업해 원복을 오염(bkup이 created 목록을 건너뛰도록 수정), 그리고 **CI가 잡은 제품 결함**: 배포 템플릿 project.md가 `version: 1`로 남아 init 직후의 새 프로젝트가 버전 불일치로 차단될 뻔(`pass_shipped_templates`가 정확히 그 조합을 지킴).
+
+## 2026-08-02.7
+
+**CI 첫 실행이 잡은 3건 수리.** Phase 2에서 신설한 GitHub Actions의 첫 run이 곧바로 값을 했습니다 — ShellCheck 오류 1건(`$k[[:space:]]`가 배열 확장으로 오독되는 SC1087, 중괄호로 수정 — 동작 무변경), ko_KR 로케일 없는 runner에서의 케이스 실패 2건(`locale`은 빈 출력이 설계상 정상인데 smoke가 개발 머신을 단정하고 있었음 → 계약만 검증하도록 수정(정확한 계약은 "코드+exit 0 **또는** 빈 출력+exit 1" — run 2가 후자를 가르쳐줘서 두 라운드 걸림) · `pass_locales`는 CI에 locale-gen을 추가해 진짜 로케일 비교로 유지). 부수 실측: **같은 226케이스가 Ubuntu에서 65초, Windows Git Bash에서 ~35분** — WD-PERF-001의 "MSYS process spawn 비용이 주범" 진단이 CI로 입증됐습니다.
+
+검증: `bash -n` 통과 · 영향 케이스 로컬(locale 2 · verify_section 1 · smoke 6) · 전수는 CI Ubuntu run이 push마다 65초로 수행.
+
+## 2026-08-02.6
+
+**완전성 보증이 문구가 아니라 배선이 됩니다 (WD-COR-004) — Phase 1 종료.** gaps.md는 지금까지 "never a hard failure"였고, README는 조건 없이 "no silent gaps"를 약속했습니다 — 배선과 문구가 서로 달랐습니다. 이제 둘이 일치합니다.
+
+- **`fidelity.completeness: required`가 gap 레지스터를 gate 입력으로 만듭니다** — consecrated 출력이 있는데 gaps.md의 `# Open`에 항목이 남아 있으면 validate가 차단합니다. gaps.md 자체가 없어도 차단합니다: 한 번도 돌지 않은 워런티는 워런티가 아닙니다(게이트 기록 부재와 같은 fail-closed 규칙). `# Accepted`는 결정이므로 차단하지 않습니다.
+- **기본값(off)은 그대로** — fill-or-accept, 비차단. 대신 침묵하지 않습니다: `status`가 "completeness: off — omissions are not checked"를 찍고, `consecrate` 성공 출력에도 같은 한계가 붙습니다. "보고된 갭 0"이 "갭 없음"으로 읽히는 것을 막습니다.
+- **보증 문구 통일** — README 태그라인과 METHODOLOGY §7 워런티가 "검출된 contradiction은 조용히 출하되지 않는다"로 조여졌고, 완전성 보증은 required일 때만 주장합니다. FORMATS의 gaps.md 항목도 "Non-blocking by default"로 정정.
+
+실광산 영향 없음(documents 비어 있음 → 검사 미발동; status에 off 고지 한 줄 추가).
+
+검증: `bash -n` 통과 · 회귀 **217/217**(신규 6) · schema 불변.
+
+## 2026-08-02.5
+
+**Review가 검토한 바이트에 결속됩니다 — seal-review · consecrate · gate digest (WD-COR-002).** 지금까지 gate는 "clean review가 존재한다"까지만 봤고, 그 review가 **지금 이 final의 바이트**를 검토했다는 증거는 없었습니다. clean review 뒤에 draft를 고쳐 final로 복사해도, final을 직접 고쳐도, 인용된 truth·source·config가 바뀌어도 gate는 초록불이었습니다. 이제 전부 잡힙니다.
+
+- **`weavedoc seal-review <doc-id> [draft|final]` 신설** — 라운드가 검토한 바이트(`reviewed_digest`: 단일 파일 raw bytes, 트리는 정렬 relpath `path\0sha256\n` manifest 재해시)와 판정의 지반(`review_context_digest`: cited truths · source materials · config · schema)을 review.md frontmatter에 고정합니다. 계산은 도구가, 손으로는 절대.
+- **`weavedoc consecrate <doc-id>` 신설 — final의 유일한 쓰기 경로.** gate 비움을 validate와 같은 reader로 재확인 → seal·draft·context 대조 → 같은 filesystem에 candidate staging → **candidate를 final 자리에 둔 채 full validation 정확히 1회** → 성공 시 atomic promote, 실패 시 원본 final 바이트 그대로 보존. 수동 복사와 사전 validate(2회 실행 bridge)는 스킬에서 금지로 명시.
+- **validate가 결속을 강제합니다** — sealed review의 digest와 final 바이트가 다르면 hard fail("Nobody reviewed the bytes that are about to ship"), context가 움직였어도 hard fail. digest 없는 v1 review는 `legacy-unbound`: `review seals:` 줄로 세어 보이되 차단하지 않습니다(migration train — v2 강제는 Phase 3에서).
+- **context의 material은 status-제외 digest로** 해시합니다 — consecration 직후 refine이 찍는 `used` 스탬프가 방금 통과한 review를 소급으로 stale로 만들면 정상 흐름이 자폭하기 때문입니다(`pass_gate_context_survives_used_stamp`가 고정).
+- 다중 파일 final/은 내용 변경·추가·삭제·rename 네 방향 전부 한 digest로 잡힙니다.
+- review 스킬은 매 라운드 후 seal, refine 스킬 step 9는 consecrate 호출로 바뀌었습니다.
+
+실광산 영향 없음 — documents가 비어 있어 결속 대상 final이 없습니다.
+
+검증: `bash -n` 통과 · 회귀 **211/211**(신규 17 · meta 로스터 +4 판정자 · 세션 강제종료로 오염된 1건은 단독 재실행 PASS) · 형식 추가는 review frontmatter 선택 필드 3종과 examined 아래 `review seals:` 줄.
+
+## 2026-08-02.4
+
+**검증에 digest가 생겼습니다 — `verify-ledger.tsv` 사이드카와 `attest` (WD-COR-003).** 지금까지 "verified"는 장부에 이름이 있다는 뜻이었지, 그때 검증한 바이트가 지금의 바이트라는 뜻이 아니었습니다. verified truth를 한 글자 고쳐도 장부는 몰랐습니다. 이제 검증 기록이 내용에 결속됩니다.
+
+- **`truths/verify-ledger.tsv` 신설** — machine-owned 사이드카. append-only TSV(id·sha256·verdict·round·standard·date), **id당 마지막 행이 이깁니다** — 재검증은 append고 라운드 이력은 남습니다. 쓰는 손은 `weavedoc attest` 하나뿐입니다.
+- **`weavedoc attest <verified|failed> <round> <standard> <id...>` 신설** — digest 계산의 단일 철자. all-or-nothing(해석 안 되는 id 하나면 0 byte 기록), tombstone 거부, verified verdict는 `## Verified units`에 사람용 미러 줄을 함께 삽입.
+- **digest 규칙** — truth는 파일 raw bytes 전체. material은 converted.md에서 **frontmatter `status:` 줄만 제외** — refine의 `used` 스탬프가 검증을 무효화하면 COR-001이 가른 두 축이 도로 붙기 때문입니다. 수동 수정·에이전트 실수·정상 re-map이 digest에는 전부 똑같이 보입니다.
+- **`scope`가 5개 증거 등급으로 집계합니다** — verified(digest-bound) · legacy-unbound · stale · failed · unverified. **라운드의 부채 = unverified + stale + failed.** digest 없는 v1 기록(자료 frontmatter `verified`, markdown 장부 행)은 `legacy-unbound`: 보존되는 이력이되 바이트를 묶지 않으므로 verified로 세지 않습니다(§11 결정 — blind stamp 금지). 위험도순 재검증 대상입니다.
+- **tombstone(retracted/discarded) truth가 모집단에서 빠집니다** — retracted material과 같은 규칙. 구 scope는 tombstone 3건을 갚을 수 없는 부채로, tombstone 커버리지를 verified로 각각 오계수하고 있었습니다.
+- 구버전 schema 프로젝트(테스트베드 혼용)에서는 새 schema 키가 코드 기본값으로 degrade합니다.
+- 스모크에서 MSYS `sha256sum`의 binary-mode 출력(`hash *file`)이 배치 digest 파서를 침묵 무력화하는 결함을 발견·수정했습니다 — 별표가 id에 붙어 모든 truth가 전 bucket에서 사라지는 형태였습니다.
+
+실광산(238 live): 자료 22 verified → **legacy-unbound**, truth 224 verified → **201 legacy-unbound**(23은 tombstone/ghost 커버리지 정정), 미검증 40 → **37**(3건이 tombstone), ghost 2건(t083·t211) 지목 유지. 부채가 늘어난 게 아니라 **이제 정직하게 분류**된 것입니다.
+
+검증: `bash -n` 통과 · 회귀 **194/194**(신규 10 · 갱신 3 · meta 로스터 +5 판정자) · 실광산 scope 재실행 ✓ · validate는 사이드카 옆에서 clean(`pass_attest_validate_clean`).
+
+## 2026-08-02.3
+
+**`used`는 검증이 아닙니다 — `scope` 상태축 수정 (IMPROVEMENT_PLAN WD-COR-001, Phase 1 착수).** material의 한 축 `status`에 lifecycle(`used`)과 검증 판정(`verified`)이 같이 살면서 `scope`가 `verified|used`를 한 묶음으로 세고 있었습니다. refine의 consecration은 `verified`를 `used`로 **덮어쓰므로**, verify를 건너뛴 자료도 문서에 한 번 인용되는 순간 검증 부채가 영구히 사라지는 구조였습니다.
+
+- `scope`는 material 검증을 이제 **자료 자신의 `status: verified`에서만** 읽습니다. `used`는 부채로 계산되고, 부채 목록 아래 `(N of them status:used — \`used\` records citation, not verification; a verify round still owes them)` 한 줄이 이유를 찍습니다.
+- `## Verified units`의 m-id는 material 검증의 근거가 되지 않습니다 — 그 장부는 truths 레인(추출 검증, converted↔truths)이고, material 검증(원본↔converted)의 v1 기록은 자료 frontmatter가 유일합니다(verify 스킬 §State). 신규 케이스가 이 구분까지 고정합니다: pristine 장부가 m001을 이름하지만 used 자료는 그래도 부채입니다.
+- 검증 판정이 `used` 스탬프를 살아남는 구조(별도 verification 기록 + content digest + `legacy-unbound`)는 다음 작업 단위(WD-COR-003)입니다 — 이 번들은 잘못된 초록불만 먼저 끕니다.
+- FORMATS의 material `status` enum에 `used` 뜻풀이를 추가했습니다(lifecycle이며 판정이 아님).
+
+검증: `bash -n` 통과 · 회귀 **184/184**(신규 2: `acct_scope_used_unverified` · `acct_scope_verified_evidence_only`) · 실광산 scope 출력 불변 — used 자료 0건(문서 절반 미가동)이라 첫 consecration부터 물었을 버그를 그 전에 제거 · schema 불변.
+
+## 2026-08-02.2
+
+**주석 정리 — 코드 무변경.** `bin/weavedoc`의 주석이 40%(950줄)까지 불어 있었고, 그 대부분이 "이 줄을 간단히 고치려다 뭐가 깨졌다"는 회귀-방지 서사였습니다. 그런데 산문 경고는 실제로 회귀를 못 막았고(통일 지시 주석이 있었는데도 감사 라운드마다 재발), 막은 건 테스트였습니다 — 즉 가장 약한 매체로 회귀 방지를 하고 있었던 셈입니다. 그 서사를 걷어내고 **불변식 한두 줄 + KNOWN LIMIT**만 남겼습니다.
+
+- 주석 **950 → 567줄**(40% → 28%). **코드는 1400줄 그대로** — 각 편집이 코드 줄은 건드리지 않고 주석 줄만 교체했으므로 코드 무변경은 기계적으로 보장됩니다.
+- 원칙: 블록마다 "무엇을 하는가/어떤 불변식인가" 한두 줄과, 코드가 의도적으로 불완전한 지점(`KNOWN LIMIT`)만 유지. `in a real run …`·`used to …` 같은 재현 서사는 삭제. 명령 doc·게이트 구역 규칙 설명·재정 근거는 남김.
+- awk 프로그램 내부 주석은 전체가 작은따옴표(`'…'`) 안이라 아포스트로피 하나로 문자열이 깨지므로, 그 규칙을 지켜 압축.
+
+검증: `bash -n` 통과 · 회귀 **182/182** · 실광산 재검증 불변(scope·validate 출력 동일). 형식 변경 없음(스킬·schema·FORMATS 불변).
+
 ## 2026-08-02.1
 
 **검증 범위를 기계가 정합니다 — `weavedoc scope` 신설.** 이 번들은 결함 수정이 아니라 **운용 실패 한 건**에서 나왔습니다. 실광산 재검증에서 "이 라운드가 갚아야 할 truth가 무엇인가"에 기계가 답했어야 했는데 판단으로 답해서, **264건 전체에 콜드 리뷰어 5명을 세 라운드** 돌렸습니다. 실제 미검증은 40건이었고, 규격 §8의 재확인 등급표가 이미 같은 말을 하고 있었으나 열리지 않았습니다. 산문은 건너뛸 수 있고 명령은 못 건너뜁니다 — 그 차이가 이 번들입니다.

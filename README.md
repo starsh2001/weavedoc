@@ -1,6 +1,6 @@
 # WeaveDoc
 
-**A document workflow that guarantees fidelity to the materials you vouch for — no contradiction, no unsupported claims, no silent gaps. You declare the truth; WeaveDoc guards it.**
+**A document workflow that guarantees fidelity to the materials you vouch for — no detected contradiction ships silently, no unsupported claims, no silently passed gaps (and with the completeness warranty on, no unaccepted ones). You declare the truth; WeaveDoc guards it.**
 
 WeaveDoc is a set of [Claude Code](https://claude.com/claude-code) skills + templates. You drop your materials in; it classifies and converts them, maps how they relate, drafts the document grounded strictly in those materials, and runs a **fidelity gate** — blocking any contradiction, unsupported claim, or (when configured) missing required element before the document can ship. It never invents facts: where a needed fact is missing, it asks you, and your answer becomes another cited source. A finished document re-enters as a material, so the truth-source grows — and the gate keeps that growth free of contradictions.
 
@@ -73,8 +73,10 @@ gaps.md                 the mine completeness register (# Open / # Accepted)
 .weavedoc/config.yaml   language · paths · fidelity · review settings
 .weavedoc/schema         the format contract (machine SoT; FORMATS.md mirrors it)
 .weavedoc/READ.md        the read protocol — how ANY consumer safely reads the mine
-.weavedoc/bin/weavedoc   deterministic checks — validate · pull · census · reindex · retag · impact · status · gaps
-.weavedoc/VERSION        runtime bundle version (date) — compare install vs this repo
+.weavedoc/bin/weavedoc   deterministic checks — validate · pull · impact · status · scope · attest ·
+                         seal-review · consecrate · upgrade · gaps · census · reindex · retag ·
+                         version · lang · locale
+.weavedoc/VERSION        runtime bundle label (date) — identity is `version`'s fingerprint, not the date
 ```
 
 **Field names and section headers are fixed English — the parser contract. Content is written in your project's language** (`config.language`, set once at init). Plain language, no coined terms. Full spec: [.weavedoc/FORMATS.md](.weavedoc/FORMATS.md).
@@ -87,7 +89,7 @@ WeaveDoc is a set of Claude Code skills. To use it in a project:
 2. Ask Claude: **"weavedoc init"** — it creates the workspace and `.weavedoc/config.yaml`.
 3. Drop materials into `inbox/`, then: **"gather"** → **"map"** (with **"verify"** after each to cold-check the hop, and **"gaps"** to check completeness) → **"plan the report"** → **"write it"** → **"review it"** (→ **"refine"** until clean).
 
-**Keeping installs in sync.** `bash .weavedoc/bin/weavedoc version` prints the installed runtime's date (`.weavedoc/VERSION`); compare it against this repo's before trusting an old install. If you evolve the skills/runtime *inside* a project (the testbed pattern), backport here and bump `VERSION` — the runtime once grew two weeks ahead inside a testbed while this repo went stale.
+**Keeping installs in sync.** `bash .weavedoc/bin/weavedoc version` prints three lines: the bundle date label, the **fingerprint** (bin+schema content hash — compare THIS, two installs can share a date while their bin differs), and the **schema version** this runtime reads. Releases add a SemVer tag whose bundle manifest covers every behavior-deciding file. If you evolve the skills/runtime *inside* a project (the testbed pattern), backport here and bump `VERSION` — the runtime once grew two weeks ahead inside a testbed while this repo went stale.
 
 ## Deterministic checks
 
@@ -100,8 +102,13 @@ WeaveDoc is a set of Claude Code skills. To use it in a project:
 - `pull <term>` — protocol-correct mine lookup for consumers *outside* the pipeline (creative sessions, other tools): searches claims+tags (body fallback) and mechanically applies the read protocol — superseded values point to their winner, unresolved conflicts / unsupported truths are flagged unusable, `as_of` / derived / plan-stage labels attached. See `.weavedoc/READ.md`; `init` plants a CLAUDE.md pointer so every session hits the protocol.
 - `gaps` — the mechanical declared-marker scan (미정/TBD/unchecked checkboxes) that floors the `weavedoc-gaps` skill.
 - `impact <material-id>` — which truths were extracted from a material and which documents cite it (the blast radius when a source is superseded or re-opened).
-- `scope` — what a verify round still owes: unverified materials (from each material's own `status`) and unverified truths (from `truths/verify.md` `## Verified units`), as sets, not adjectives. The verify skill reads its round scope from here rather than deciding it — asked which truths a round owed, a real run answered "all of them" and put five cold reviewers across 264 truths, three rounds deep, when the answer was 40.
-- `status` — each document's stage and its next step, plus the open Human-queue split (you decide / recommendation ready / machine can just do). `version` — the installed runtime's date.
+- `scope` — what a verify round still owes, split by evidence class: **verified (digest-bound)** — a `truths/verify-ledger.tsv` row whose sha256 matches the unit's current bytes · **legacy-unbound** — a digest-less v1 record (a material's own `status: verified`, or a markdown `## Verified units` row) that is preserved history but binds no bytes · **stale** — digest mismatch, the unit changed after verification · **failed** · **unverified**. A round owes `unverified + stale + failed`; legacy-unbound is re-verified by risk priority, not wholesale. The verify skill reads its round scope from here rather than deciding it — asked which truths a round owed, a real run answered "all of them" and put five cold reviewers across 264 truths, three rounds deep, when the answer was 40.
+- `attest <verified|failed> <round> <standard> <id...>` — the verification write path: computes each unit's digest (the one spelling of the hash rule — truth = whole file; material = `converted.md` minus its lifecycle `status:` line), appends sidecar rows (append-only, last row per id wins), and mirrors a readable line into `## Verified units`. All-or-nothing on an unresolvable id; tombstones are refused.
+- `seal-review <doc-id> [draft|final]` — pins a finished review round to the exact bytes it reviewed (`reviewed_digest`) and the ground its verdict rests on (`review_context_digest`: cited truths, their sources, config, schema). `validate` hard-fails a final whose bytes or context differ from its sealed review; a digest-less (v1) review reads as legacy-unbound — shown, non-blocking.
+- `consecrate <doc-id>` — the only write path to final: re-checks the gate with validate's own reader, verifies seal + draft + context, stages a candidate on the same filesystem, runs **one** full validation with the candidate in place, and atomically promotes — any failure preserves the original final byte-for-byte.
+- `upgrade [--check|--dry-run|--apply]` — v1 mine → schema 2. Check and apply are separate; apply is staged with a backup + manifest, ends in a full validation, and rolls back byte-identically on failure. History is preserved as `legacy-unbound`, never back-stamped with a digest. See [UPGRADING.md](UPGRADING.md).
+- `status` — each document's stage and its next step, plus the open Human-queue split (you decide / recommendation ready / machine can just do). `version` — bundle date · fingerprint · schema version.
+- `lang` — the project's prose language from config (skills read every reply's language from this). `locale` — the OS language probe init uses for its default (a short code + exit 0, or empty + exit 1 meaning "init should ask").
 
 **The `examined:` line.** Every `validate` run prints, before its verdict, what it actually looked at:
 
@@ -127,7 +134,7 @@ The AI gate judges *meaning*; `validate` enforces *form and truth coherence* —
 
 ## Status
 
-Working, half-proven. The mine-building half (gather · map · verify · gaps) is battle-tested on a real project (~220-truth mine) — most rules in the skills cite an actual failure they now prevent. The document half (plan · write · review · refine) is designed and implemented but not yet exercised end-to-end. Expect rough edges there.
+Working, half-proven. The mine-building half (gather · map · verify · gaps) is battle-tested on a real project mine holding hundreds of truths — most rules in the skills cite an actual failure they now prevent. The document half (plan · write · review · refine) is implemented and its mechanical spine (seal → consecrate → gate digests) is regression-covered end-to-end, but no real document has been driven through the skills yet. Expect rough edges there.
 
 ## License and the name
 

@@ -123,7 +123,7 @@ The gate, the conflict rules, the provenance field, and the validator exist beca
 
 ## Appendix — the warranty in one line
 
-WeaveDoc guarantees: *this document does not contradict, and does not omit against, the source you declared and vouched for; any conflict between your sources was surfaced, not silently resolved; and nothing was invented.* It does not guarantee that your sources are true — that is yours to author. It keeps what you declared coherent, and grows it without letting a contradiction in.
+WeaveDoc guarantees: *no contradiction it detected ships silently against the source you declared and vouched for; every **detected** conflict between your sources is surfaced, not silently resolved; nothing was invented; and — when the completeness warranty (`fidelity.completeness: required`) is on — no structural gap passes the gate unfilled and unaccepted.* It does not guarantee that your sources are true — that is yours to author — and it cannot promise to detect every semantic contradiction; what it promises is that a detected one can never be shipped quietly. It keeps what you declared coherent, and grows it without letting a detected contradiction in.
 
 ---
 

@@ -3,3 +3,5 @@
 # by grep/awk that treat a stray \r as part of the value.
 * text=auto
 .weavedoc/** text eol=lf
+# tests/ is bash + machine-read artifacts (manifest hashes, golden diffs) — same reason as above.
+tests/** text eol=lf
