@@ -26,6 +26,7 @@
 #   attest <verdict> <round> <standard> <id...>   record a verification: digest-bound sidecar row
 #   seal-review <doc-id> [draft|final]   pin the clean review to the reviewed bytes + context
 #   consecrate <doc-id>   stage candidate → verify seals → ONE full validation → atomic promote
+#   upgrade [--check|--dry-run|--apply]   v1 mine → schema 2 (default --check, read-only)
 #   gaps              mine census + declared-marker scan (non-blocking floor for the weavedoc-gaps skill)
 #   census            mine census only (truth files vs index, numbering holes, live/status tallies)
 #   reindex [--check] regenerate truths/index.md + truths/tree.md from truth frontmatter (--check: diff only)
@@ -65,6 +66,16 @@ cfg() { # $1=key $2=default -> a paths: value, resolved relative to ROOT
 cfgval() { # $1=key -> raw value (no path resolution); first indented-or-not match
   grep -E "^[[:space:]]*$1:[[:space:]]" "$CONFIG" 2>/dev/null | head -1 \
     | sed -E "s/^[[:space:]]*$1:[[:space:]]*//; s/[[:space:]]*#.*$//; s/[[:space:]]*$//"
+}
+cfg2() { # $1=top-level section $2=key -> the value inside that section ONLY (WD-CFG-001).
+  # cfgval is first-match across the whole file and can never see review.strength behind
+  # verify.strength — the section walls are what make the two knobs two knobs.
+  awk -v sec="$1" -v key="$2" '
+    /^[A-Za-z_][A-Za-z0-9_]*:/ { insec = (index($0, sec ":") == 1) ? 1 : 0; next }
+    insec && $0 ~ ("^[[:space:]]+" key "[[:space:]]*:") {
+      sub("^[[:space:]]+" key "[[:space:]]*:[[:space:]]*", "")
+      if ($0 !~ /^"/) sub(/[[:space:]]*#.*$/, "")
+      sub(/[[:space:]]*$/, ""); print; exit }' "$CONFIG" 2>/dev/null
 }
 rp() { ( cd "$1" >/dev/null 2>&1 && pwd -P ); }   # real path; empty when it does not exist
 # Two spellings of one folder are one folder. String-comparing `paths` read `./materials` and an
@@ -358,6 +369,9 @@ unit_digest() { # $1 = canonical id -> its digest by kind; rc 1 when the unit ha
 ledger_file() { # -> the sidecar's filename; schema key first, code default second — an older
   # project schema (testbed drift) must degrade to the shipped name, never to "truths/" itself.
   local f; f=$(sch verify.ledger.file); printf '%s' "${f:-verify-ledger.tsv}"
+}
+schema_ver() { # -> the schema version this runtime targets; same degrade rule as ledger_file
+  local s; s=$(sch schema.version); printf '%s' "${s:-2}"
 }
 ledger_rows() { # -> "id<TAB>digest<TAB>verdict" per unit; LAST row per id wins (append-only file)
   local lf="$TRUTHS/$(ledger_file)"
@@ -1307,6 +1321,40 @@ EOF
   v=$(cfgval detection);    [ -z "$v" ] || pipes "$(sch config.enum.detection)"    | grep -qx "$v" || prob "config conflicts.detection '$v' invalid"
   v=$(cfgval attribution);  [ -z "$v" ] || pipes "$(sch config.enum.attribution)"  | grep -qx "$v" || prob "config conflicts.attribution '$v' invalid"
 
+  # --- schema version negotiation (WD-MIG-002) + full config contract (WD-CFG-001) ---
+  local pv cv sv sect ck
+  sv=$(schema_ver)
+  pv=$(fm "$PROJECT" version); cv=$(cfgval version)
+  case "$pv" in
+    ''|*[!0-9]*) prob "project.md version '$pv' is not an integer — the schema version field is the negotiation handle" ;;
+    *) [ "$pv" -gt "$sv" ] && prob "project.md declares schema version $pv, newer than this runtime supports (≤$sv) — upgrade the runtime bundle, never guess at a future format" ;;
+  esac
+  case "$cv" in ''|*[!0-9]*) prob "config version '$cv' is not an integer" ;; esac
+  if [ -n "$pv" ] && [ -n "$cv" ] && [ "$pv" != "$cv" ]; then
+    prob "project.md version ($pv) and config.yaml version ($cv) disagree — two records of one fact must agree; upgrade stamps both"
+  fi
+  SCHEMA_V1=0; { [ "$pv" = "1" ] || [ "$cv" = "1" ]; } && SCHEMA_V1=1
+  for sect in verify review; do
+    v=$(cfg2 "$sect" strength)
+    [ -z "$v" ] || pipes "$(sch config.strength.range)" | grep -qx "$v" \
+      || prob "config $sect.strength '$v' invalid → one of $(sch config.strength.range)"
+    v=$(cfg2 "$sect" max_rounds)
+    case "$v" in "") ;; 0|*[!0-9]*) prob "config $sect.max_rounds '$v' must be a positive integer — 'exceeded → escalate' needs a ceiling that can be exceeded" ;; esac
+    v=$(cfg2 "$sect" scale)
+    [ -z "$v" ] || pipes "$(sch config.enum.scale)" | grep -qx "$v" \
+      || prob "config $sect.scale '$v' invalid → $(sch config.enum.scale)"
+    for ck in $(pipes "$(sch config.repeat.scales)"); do
+      v=$(cfg2 "$sect" "$ck")
+      case "$v" in "") ;; *[!0-9]*) prob "config $sect.repeat.$ck '$v' must be a non-negative integer (clean rounds in a row)" ;; esac
+    done
+  done
+  # Unknown top-level keys: a NAMED warning, never a failure — extension vs typo is not
+  # machine-decidable, but silence would let a typo'd knob read as configured.
+  while IFS= read -r ck; do
+    pipes "$(sch config.toplevel)" | grep -qx "$ck" \
+      || echo "  warning: unknown config key '$ck' in .weavedoc/config.yaml — known top-level keys: $(sch config.toplevel)"
+  done < <(awk '/^[A-Za-z_][A-Za-z0-9_]*:/ { s=$0; sub(/:.*/, "", s); print s }' "$CONFIG" 2>/dev/null)
+
   # Printed on both outcomes and before the verdict, so the verdict is never read without it.
   local sealpart gatenote="" N_UNCHK
   # The "NOT checked" marker fires on never-checked only, not on anything short of the file count —
@@ -1322,6 +1370,7 @@ EOF
   # review next to a final is real history that binds no bytes — visible, never silently equal
   # to a sealed one.
   [ "$N_CONSEC" -gt 0 ] && echo "  review seals: $N_RSEAL digest-bound · $N_RLEGACY legacy-unbound"
+  [ "${SCHEMA_V1:-0}" = "1" ] && echo "  schema: v1 mine — readable (dual-reader), current format is v$(schema_ver); run 'bash .weavedoc/bin/weavedoc upgrade --check' to see the migration"
   if [ "$PROBLEMS" -eq 0 ]; then echo "✓ validate: all checks passed"; return 0
   else echo "✗ validate: $PROBLEMS problem(s)"; return 1; fi
 }
@@ -1984,6 +2033,7 @@ cmd_version() {
   fp=$(cat "$SCRIPT_DIR/weavedoc" "$SCRIPT_DIR/../schema" 2>/dev/null \
        | { command -v sha1sum >/dev/null 2>&1 && sha1sum || cksum; } | awk '{print $1}')
   [ -n "$fp" ] && echo "fingerprint: ${fp:0:12}  (bin+schema — compare this, not just the date)"
+  echo "schema: $(schema_ver) (this runtime reads ≤$(schema_ver); a v1 mine migrates via 'upgrade')"
   return 0
 }
 
@@ -2123,6 +2173,269 @@ cmd_consecrate() { # consecrate <doc-id> — stage candidate, verify seals, ONE 
     return 1
   fi
 }
+scan_upgrade() { # -> kind<TAB>display, one v1→v2 migration item per line. Read-only; shared by
+  # --check, --dry-run and --apply so the three can never disagree about what the migration IS.
+  local pv cv b c d f n
+  pv=$(fm "$PROJECT" version 2>/dev/null); cv=$(cfgval version)
+  [ "$pv" = "1" ] && printf 'version\tproject.md version: 1 → 2\n'
+  [ "$cv" = "1" ] && printf 'version\tconfig.yaml version: 1 → 2\n'
+  for d in "$MATERIALS"/*/; do
+    [ -d "$d" ] || continue; b=$(basename "$d")
+    c=$(canon_id "$b") || continue
+    [ "$b" = "$c" ] || printf 'rename\tmaterials/%s → %s (folder, id:, catalog, strict references)\n' "$b" "$c"
+  done
+  for f in "$TRUTHS"/t[0-9]*.md; do
+    [ -f "$f" ] || continue; b=$(basename "$f" .md)
+    c=$(canon_id "$b") || continue
+    [ "$b" = "$c" ] || printf 'rename\ttruths/%s → %s (file, id:, strict references)\n' "$b" "$c"
+  done
+  if [ -f "$TRUTHS/verify.md" ]; then
+    # Verdictless rows: success-shaped (passes N/N) gain the verdict word; anything else is named
+    # for human review — the machine never certifies what the ledger did not.
+    nocomment < "$TRUTHS/verify.md" | section_all - "Verified units" | sed 's/·/ /g' \
+      | awk -v vd="$(sch verify.units.verified)" '
+        BEGIN { if (vd == "") vd = "verified" }
+        { line=$0
+          if (line !~ /^[[:space:]]*[|-]/) next
+          if (line ~ /^[[:space:]]*\|[[:space:]|:-]*$/) next
+          if (line !~ /[mt][0-9]/) next
+          v=line; gsub(/[[:space:]|*.-]+$/, "", v)
+          if (tolower(v) ~ ("(^|[^a-z_])" vd "$")) next
+          if (line ~ /passes[[:space:]]*[0-9]+\/[0-9]+/)
+            print "verdict\tVerified units row gains its trailing verdict word: " line
+          else
+            print "verdict-manual\trow names units but shows no success evidence — review by hand: " line }'
+    while IFS= read -r b; do
+      nocomment < "$TRUTHS/verify.md" | grep -qE "^#{1,2}[[:space:]]+${b}[[:space:]]*\$" \
+        || printf 'verify-section\ttruths/verify.md gains an empty section: ## %s\n' "$b"
+    done < <(pipes "$(sch verify.sections)")
+  fi
+  grep -qE '^[[:space:]]+repeat:[[:space:]]*[0-9]' "$CONFIG" 2>/dev/null \
+    && printf 'repeat\tconfig scalar repeat → per-scale map (skip 0 · light/standard keep the scalar · full is one stricter)\n'
+  for d in $(doc_ids); do
+    f="$DOCUMENTS/$d/review.md"; [ -f "$f" ] || continue
+    n=$(nocomment < "$f" | awk '
+      /^#/ { sec=$0; sub(/^#+[[:space:]]*/, "", sec); sub(/[[:space:]]*$/, "", sec); next }
+      sec != "Fidelity violations" && /^[[:space:]]*[-|*].*\[[A-Za-z_ -]+\]/ {
+        s=$0; match(s, /\[[A-Za-z_ -]+\]/); k=substr(s, RSTART+1, RLENGTH-2)
+        gsub(/[^a-zA-Z]/, "", k); k=tolower(k)
+        if (k=="contradiction" || k=="unsupported" || k=="missingrequired") cnt++ }
+      END { print cnt+0 }')
+    [ "${n:-0}" -gt 0 ] && printf 'review-history\tdocuments/%s/review.md: %s bracketed kind record(s) outside the gate → brackets removed (record form; VERIFY none was an open violation)\n' "$d" "$n"
+  done
+  # Ledger materialization belongs to the v1 migration only: on a v2 mine, a markdown row with
+  # no sidecar twin is the LEGAL legacy-unbound state (preserved, re-verified by risk) — not
+  # pending work, or "nothing to do" would be unreachable for any mine with history.
+  if [ "$pv" = "1" ] || [ "$cv" = "1" ]; then
+    local vids scov miss
+    vids=$(scan_verified_units | sed -n 's/^V\t//p' | LC_ALL=C sort -u)
+    scov=$(ledger_rows | cut -f1 | LC_ALL=C sort -u)
+    miss=$(comm -23 <(printf '%s\n' "$vids" | grep . || true) <(printf '%s\n' "$scov" | grep . || true))
+    [ -n "$miss" ] && printf 'ledger\t%s markdown-verified unit(s) → verify-ledger.tsv rows verdict=legacy-unbound (digest NOT back-stamped — §11 decision)\n' "$(printf '%s' "$miss" | grep -c .)"
+  fi
+  return 0
+}
+cmd_upgrade() { # upgrade [--check|--dry-run|--apply] [--from 0.1] — v1 mine → schema 2
+  local mode="--check" from="0.1"
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --check|--dry-run|--apply) mode="$1" ;;
+      --from) shift; from="${1:-}" ;;
+      *) echo "usage: weavedoc upgrade [--check|--dry-run|--apply] [--from 0.1]"; return 2 ;;
+    esac
+    shift
+  done
+  [ "$from" = "0.1" ] || { echo "upgrade: only --from 0.1 is supported (v1 → schema $(schema_ver))"; return 2; }
+  local items n
+  items=$(scan_upgrade)
+  n=$(printf '%s' "$items" | grep -c . || true); n=${n:-0}
+  if [ "$n" -eq 0 ]; then
+    echo "upgrade: nothing to do — the mine is already at schema $(schema_ver)"
+    return 0
+  fi
+  case "$mode" in
+    --check)
+      echo "upgrade --check: $n migration item(s) v1 → schema $(schema_ver)  (read-only — nothing written)"
+      printf '%s\n' "$items" | awk -F'\t' '{ printf "  [%s] %s\n", $1, $2 }'
+      echo "  next: weavedoc upgrade --dry-run (full plan) · weavedoc upgrade --apply (staged, rollback-safe)"
+      return 1 ;;
+    --dry-run)
+      echo "upgrade --dry-run: $n item(s), 0 write(s) — the plan:"
+      printf '%s\n' "$items" | awk -F'\t' '{ print "  would: " $2 }'
+      echo "  expected after apply: project at schema $(schema_ver) · validate clean · history preserved as legacy-unbound, never back-stamped"
+      return 1 ;;
+    --apply)
+      upgrade_apply "$n" ;;
+  esac
+}
+upgrade_apply() { # the staged, rollback-safe v1 → v2 transaction (§8 safety principles 1–12)
+  local nitems="$1" today bak
+  today=$(date +%F)
+  bak="$ROOT/.upgrade-backup-$today.$$"
+
+  # -- helpers: every touched path is snapshotted ONCE before its first edit; every created path
+  # -- is recorded. Rollback = remove created, restore touched, in that order.
+  bkup() { local p="$1"
+    [ -e "$ROOT/$p" ] || return 0
+    [ -e "$bak/$p" ] && return 0
+    # A path this transaction CREATED is not an original — snapshotting it would make rollback
+    # resurrect the mid-transaction copy right after the created-removal pass deleted it.
+    [ -f "$bak/.created" ] && grep -qxF "$p" "$bak/.created" && return 0
+    mkdir -p "$bak/$(dirname "$p")" 2>/dev/null
+    cp -r "$ROOT/$p" "$bak/$p"
+    printf '%s\n' "$p" >> "$bak/.touched"
+  }
+  crtd() { printf '%s\n' "$1" >> "$bak/.created"; }
+  rollback() {
+    local p
+    [ -f "$bak/.created" ] && while IFS= read -r p; do rm -rf "$ROOT/$p"; done < "$bak/.created"
+    [ -f "$bak/.touched" ] && while IFS= read -r p; do rm -rf "$ROOT/$p"; cp -r "$bak/$p" "$ROOT/$p"; done < "$bak/.touched"
+    rm -rf "$bak"
+  }
+  canon_refs() { # $1=old $2=new — canonicalize STRICT reference fields + ledgers; NEVER prose
+    local o="$1" nw="$2" f pass
+    for pass in 1 2; do   # boundary regex can eat a shared separator between adjacent ids
+      for f in "$TRUTHS"/t[0-9]*.md; do
+        [ -f "$f" ] || continue
+        bkup "${f#"$ROOT"/}"
+        sed -E -i "/^[[:space:]]*(source|conflict_with|derived_from|corroborated_by|winner|corrects)[[:space:]]*:/ s/(^|[^0-9A-Za-z])${o}([^0-9A-Za-z]|\$)/\\1${nw}\\2/g" "$f"
+      done
+      if [ -f "$ROOT/catalog.md" ]; then
+        bkup catalog.md
+        sed -E -i "s/\|([[:space:]]*)${o}([[:space:]]*)\|/|\\1${nw}\\2|/g" "$ROOT/catalog.md"
+      fi
+      if [ -f "$TRUTHS/coverage.md" ]; then
+        bkup "${TRUTHS#"$ROOT"/}/coverage.md"
+        sed -E -i "s/(^|[^0-9A-Za-z])${o}([^0-9A-Za-z]|\$)/\\1${nw}\\2/g" "$TRUTHS/coverage.md"
+      fi
+      for f in $(doc_ids); do
+        [ -f "$DOCUMENTS/$f/plan.md" ] || continue
+        bkup "${DOCUMENTS#"$ROOT"/}/$f/plan.md"
+        sed -E -i "/^[[:space:]]*cited_truths[[:space:]]*:/ s/(^|[^0-9A-Za-z])${o}([^0-9A-Za-z]|\$)/\\1${nw}\\2/g" "$DOCUMENTS/$f/plan.md"
+      done
+    done
+  }
+
+  # -- precheck (§8 principle 3): every rename target must be free BEFORE one byte moves.
+  local b c d f pairs=""
+  for d in "$MATERIALS"/*/; do
+    [ -d "$d" ] || continue; b=$(basename "$d"); c=$(canon_id "$b") || continue
+    [ "$b" = "$c" ] && continue
+    [ -e "$MATERIALS/$c" ] && { echo "upgrade: rename collision — materials/$c already exists next to materials/$b; resolve by hand (nothing written)"; return 1; }
+    pairs="$pairs m:$b:$c"
+  done
+  for f in "$TRUTHS"/t[0-9]*.md; do
+    [ -f "$f" ] || continue; b=$(basename "$f" .md); c=$(canon_id "$b") || continue
+    [ "$b" = "$c" ] && continue
+    [ -e "$TRUTHS/$c.md" ] && { echo "upgrade: rename collision — truths/$c.md already exists next to truths/$b.md; resolve by hand (nothing written)"; return 1; }
+    pairs="$pairs t:$b:$c"
+  done
+  mkdir -p "$bak" || { echo "upgrade: cannot create backup dir $bak"; return 1; }
+
+  # -- 1. canonical renames + strict-reference rewrite (prose and changelog history untouched:
+  # -- lenient resolution reads old spellings, and consecrated bytes are never edited).
+  local kind old new
+  for b in $pairs; do
+    kind=${b%%:*}; c=${b#*:}; old=${c%%:*}; new=${c#*:}
+    if [ "$kind" = "m" ]; then
+      bkup "${MATERIALS#"$ROOT"/}/$old"
+      cp -r "$MATERIALS/$old" "$MATERIALS/$new"; rm -rf "$MATERIALS/$old"
+      crtd "${MATERIALS#"$ROOT"/}/$new"
+      sed -i "s/^id: $old\$/id: $new/" "$MATERIALS/$new/converted.md"
+    else
+      bkup "${TRUTHS#"$ROOT"/}/$old.md"
+      cp "$TRUTHS/$old.md" "$TRUTHS/$new.md"; rm -f "$TRUTHS/$old.md"
+      crtd "${TRUTHS#"$ROOT"/}/$new.md"
+      sed -i "s/^id: $old\$/id: $new/" "$TRUTHS/$new.md"
+    fi
+    canon_refs "$old" "$new"
+  done
+
+  # -- 2. verify.md: success rows gain their verdict word; missing sections appended empty.
+  if [ -f "$TRUTHS/verify.md" ]; then
+    bkup "${TRUTHS#"$ROOT"/}/verify.md"
+    awk -v vd="$(sch verify.units.verified)" '
+      BEGIN { if (vd == "") vd = "verified" }
+      { line=$0; t=line; gsub(/·/, " ", t)
+        if (t !~ /^[[:space:]]*[|-]/ || t ~ /^[[:space:]]*\|[[:space:]|:-]*$/ || t !~ /[mt][0-9]/) { print line; next }
+        v=t; gsub(/[[:space:]|*.-]+$/, "", v)
+        if (tolower(v) ~ ("(^|[^a-z_])" vd "$")) { print line; next }
+        if (t ~ /passes[[:space:]]*[0-9]+\/[0-9]+/) print line " · " vd; else print line }
+    ' "$TRUTHS/verify.md" > "$TRUTHS/.verify.tmp" && mv "$TRUTHS/.verify.tmp" "$TRUTHS/verify.md"
+    while IFS= read -r b; do
+      nocomment < "$TRUTHS/verify.md" | grep -qE "^#{1,2}[[:space:]]+${b}[[:space:]]*\$" \
+        || printf '\n## %s\n' "$b" >> "$TRUTHS/verify.md"
+    done < <(pipes "$(sch verify.sections)")
+  fi
+
+  # -- 3. review history: bracketed kinds outside the gate lose their brackets (record form).
+  for d in $(doc_ids); do
+    f="$DOCUMENTS/$d/review.md"; [ -f "$f" ] || continue
+    bkup "${DOCUMENTS#"$ROOT"/}/$d/review.md"
+    awk '
+      /^#/ { sec=$0; sub(/^#+[[:space:]]*/, "", sec); sub(/[[:space:]]*$/, "", sec); print; next }
+      sec != "Fidelity violations" && /^[[:space:]]*[-|*].*\[[A-Za-z_ -]+\]/ {
+        s=$0; match(s, /\[[A-Za-z_ -]+\]/); k=substr(s, RSTART+1, RLENGTH-2)
+        kn=k; gsub(/[^a-zA-Z]/, "", kn); kn=tolower(kn)
+        if (kn=="contradiction" || kn=="unsupported" || kn=="missingrequired") { sub(/\[[A-Za-z_ -]+\]/, k, s); print s; next } }
+      { print }' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+  done
+
+  # -- 4. config: scalar repeat → per-scale map; then version stamps (both records of one fact).
+  if grep -qE '^[[:space:]]+repeat:[[:space:]]*[0-9]' "$CONFIG" 2>/dev/null; then
+    bkup .weavedoc/config.yaml
+    awk '
+      /^  repeat:[[:space:]]*[0-9]/ {
+        v=$0; sub(/^  repeat:[[:space:]]*/, "", v); sub(/[[:space:]#].*$/, "", v)
+        print "  repeat:                # clean rounds IN A ROW required to pass, by scale (migrated from scalar " v ")"
+        print "    skip:     0"
+        print "    light:    " v
+        print "    standard: " v
+        print "    full:     " v+1
+        next }
+      { print }' "$CONFIG" > "$CONFIG.tmp" && mv "$CONFIG.tmp" "$CONFIG"
+  fi
+
+  # -- 5. regenerate the generated views under the canonical spellings.
+  bkup "${TRUTHS#"$ROOT"/}/index.md"; bkup "${TRUTHS#"$ROOT"/}/tree.md"
+  cmd_reindex >/dev/null 2>&1
+
+  # -- 6. materialize digest-less verified history as legacy-unbound sidecar rows — preserved,
+  # -- never back-stamped with a digest the verification never computed (§11 decision).
+  local vids scov miss lf
+  vids=$(scan_verified_units | sed -n 's/^V\t//p' | LC_ALL=C sort -u)
+  scov=$(ledger_rows | cut -f1 | LC_ALL=C sort -u)
+  miss=$(comm -23 <(printf '%s\n' "$vids" | grep . || true) <(printf '%s\n' "$scov" | grep . || true))
+  if [ -n "$miss" ]; then
+    lf="$TRUTHS/$(ledger_file)"
+    if [ -f "$lf" ]; then bkup "${TRUTHS#"$ROOT"/}/$(ledger_file)"; else crtd "${TRUTHS#"$ROOT"/}/$(ledger_file)"; fi
+    { [ -f "$lf" ] && cat "$lf" \
+        || printf '# machine-owned verification ledger — append-only; LAST row per id wins. Written by `weavedoc attest`.\n# id\tsha256\tverdict\tround\tstandard\tdate\n'
+      printf '%s\n' "$miss" | awk -v d="$today" '{ printf "%s\t-\tlegacy-unbound\t-\t-\t%s\n", $1, d }'
+    } > "$lf.tmp" && mv "$lf.tmp" "$lf"
+  fi
+
+  # -- 7. version stamps, LAST among the edits: a crashed apply resumes as a v1 rescan.
+  bkup project.md; sed -i 's/^version: 1$/version: 2/' "$PROJECT"
+  bkup .weavedoc/config.yaml; sed -i 's/^version: 1/version: 2/' "$CONFIG"
+
+  # -- 8. the same full validation everything else answers to (§8 principles 7–8).
+  if cmd_validate; then
+    { echo "upgrade applied: $today · bundle $(cat "$ROOT/.weavedoc/VERSION" 2>/dev/null) · $nitems item(s)"
+      echo "touched (originals preserved in this directory):"
+      [ -f "$bak/.touched" ] && sed 's/^/  /' "$bak/.touched" | LC_ALL=C sort -u
+      echo "created:"
+      [ -f "$bak/.created" ] && sed 's/^/  /' "$bak/.created" | LC_ALL=C sort -u
+    } > "$bak/MANIFEST.txt"
+    echo "upgrade --apply: applied $nitems item(s) — schema $(schema_ver), validate clean."
+    echo "  backup + manifest: ${bak#"$ROOT"/}/ (originals; delete when you no longer want the restore point)"
+    return 0
+  else
+    rollback
+    echo "upgrade --apply: post-apply validation FAILED — every change rolled back, the mine is byte-identical to before. Fix the problems above (they predate the migration), then re-run."
+    return 1
+  fi
+}
 cmd_attest() { # attest <verified|failed> <round> <standard> <id...> — the verification write path
   # THE one writer of verification records: the digest is computed here, never by hand, so the
   # hash rule has a single spelling. All-or-nothing: every id resolves before one byte is written.
@@ -2187,6 +2500,9 @@ cmd_scope() {
     if [ -n "$row" ]; then
       dg=$(printf '%s' "$row" | cut -f1); vd=$(printf '%s' "$row" | cut -f2)
       if [ "$vd" = "failed" ]; then n_mfail=$((n_mfail+1)); mfail="$mfail $m"
+      elif [ "$vd" = "legacy-unbound" ]; then
+        # migration-written row: history preserved, no bytes bound — never digest-compared
+        n_mlegacy=$((n_mlegacy+1)); mlegacy="$mlegacy $m"
       else
         cur=$(mat_digest "$MATERIALS/$m/converted.md")
         if [ "$cur" = "$dg" ]; then n_mbound=$((n_mbound+1))
@@ -2238,6 +2554,7 @@ cmd_scope() {
       tclass=$(awk -F'\t' '
         NR==FNR { cur[$1]=$2; next }
         { if (!($1 in cur)) next
+          if ($3 == "legacy-unbound") { print "L\t" $1; next }
           if ($3 == "failed") print "F\t" $1
           else if (cur[$1] == $2) print "B\t" $1
           else print "S\t" $1 }' <(printf '%s\n' "$cur_t") <(printf '%s\n' "$strows"))
@@ -2257,6 +2574,8 @@ cmd_scope() {
   unmarked=$(printf '%s\n' "$scan" | sed -n 's/^U\t//p')
   diskany=$(printf '%s\n' "$ondisk" "$tomb" | grep . | LC_ALL=C sort -u)
   tlegacy=$(comm -12 <(printf '%s\n' "$vids") <(printf '%s\n' "$ondisk") | comm -23 - <(printf '%s\n' "$scov"))
+  # sidecar rows written by migration carry the legacy verdict themselves — union both sources
+  tlegacy=$(printf '%s\n' "$tlegacy" "$(printf '%s\n' "$tclass" | sed -n 's/^L\t//p')" | grep . | LC_ALL=C sort -u)
   tunver=$(comm -23 <(printf '%s\n' "$ondisk") <(printf '%s\n' "$scov") | comm -23 - <(printf '%s\n' "$vids"))
   tghost=$(printf '%s\n' "$vids" "$scov" | grep . | LC_ALL=C sort -u | comm -23 - <(printf '%s\n' "$diskany"))
   n_tlegacy=$(printf '%s' "$tlegacy" | grep -c . || true)
@@ -2322,6 +2641,7 @@ case "${1:-}" in
   attest)   shift; cmd_attest "$@" ;;
   seal-review) shift; cmd_seal_review "${1:-}" "${2:-}" ;;
   consecrate)  shift; cmd_consecrate "${1:-}" ;;
+  upgrade)  shift; cmd_upgrade "$@" ;;
   gaps)     cmd_gaps ;;
   census)   cmd_census ;;
   reindex)  shift; cmd_reindex "${1:-}" ;;

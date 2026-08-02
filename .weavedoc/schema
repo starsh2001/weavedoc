@@ -70,4 +70,18 @@ gaps.enum.kind: declared|reference|enumeration|symmetry
 # never counts digest-bound verified. Truth digest = whole file raw bytes; material digest =
 # converted.md minus its frontmatter `status:` line (lifecycle must not invalidate verification).
 verify.ledger.file: verify-ledger.tsv
+# Verdicts ATTESTABLE by `weavedoc attest`. Migration additionally writes `legacy-unbound` rows
+# (digest column `-`) for pre-digest history — readers count those as legacy, never stale/bound.
 verify.ledger.verdicts: verified|failed
+# Artifact schema version this runtime reads and writes (WD-MIG-002). A project declares its own
+# in project.md AND config.yaml `version:` — two records of one fact, checked for agreement. A
+# project NEWER than this is fail-closed (guessing at a future format is how corruption ships);
+# a v1 project stays readable (dual-reader) and validate points it at `weavedoc upgrade --check`.
+schema.version: 2
+# Config contract (WD-CFG-001) — every knob has a type/range; verify/review are section-aware
+# (a flat first-match reader can never see review.strength behind verify.strength). Unknown
+# top-level keys are a NAMED WARNING, never a failure: extension vs typo is not machine-decidable.
+config.toplevel: version|language|paths|fidelity|conflicts|verify|review|gaps
+config.enum.scale: skip|light|standard|full
+config.strength.range: 1|2|3
+config.repeat.scales: skip|light|standard|full
