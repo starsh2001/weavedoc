@@ -4,6 +4,21 @@
 
 ---
 
+## 2026-08-02.5
+
+**Review가 검토한 바이트에 결속됩니다 — seal-review · consecrate · gate digest (WD-COR-002).** 지금까지 gate는 "clean review가 존재한다"까지만 봤고, 그 review가 **지금 이 final의 바이트**를 검토했다는 증거는 없었습니다. clean review 뒤에 draft를 고쳐 final로 복사해도, final을 직접 고쳐도, 인용된 truth·source·config가 바뀌어도 gate는 초록불이었습니다. 이제 전부 잡힙니다.
+
+- **`weavedoc seal-review <doc-id> [draft|final]` 신설** — 라운드가 검토한 바이트(`reviewed_digest`: 단일 파일 raw bytes, 트리는 정렬 relpath `path\0sha256\n` manifest 재해시)와 판정의 지반(`review_context_digest`: cited truths · source materials · config · schema)을 review.md frontmatter에 고정합니다. 계산은 도구가, 손으로는 절대.
+- **`weavedoc consecrate <doc-id>` 신설 — final의 유일한 쓰기 경로.** gate 비움을 validate와 같은 reader로 재확인 → seal·draft·context 대조 → 같은 filesystem에 candidate staging → **candidate를 final 자리에 둔 채 full validation 정확히 1회** → 성공 시 atomic promote, 실패 시 원본 final 바이트 그대로 보존. 수동 복사와 사전 validate(2회 실행 bridge)는 스킬에서 금지로 명시.
+- **validate가 결속을 강제합니다** — sealed review의 digest와 final 바이트가 다르면 hard fail("Nobody reviewed the bytes that are about to ship"), context가 움직였어도 hard fail. digest 없는 v1 review는 `legacy-unbound`: `review seals:` 줄로 세어 보이되 차단하지 않습니다(migration train — v2 강제는 Phase 3에서).
+- **context의 material은 status-제외 digest로** 해시합니다 — consecration 직후 refine이 찍는 `used` 스탬프가 방금 통과한 review를 소급으로 stale로 만들면 정상 흐름이 자폭하기 때문입니다(`pass_gate_context_survives_used_stamp`가 고정).
+- 다중 파일 final/은 내용 변경·추가·삭제·rename 네 방향 전부 한 digest로 잡힙니다.
+- review 스킬은 매 라운드 후 seal, refine 스킬 step 9는 consecrate 호출로 바뀌었습니다.
+
+실광산 영향 없음 — documents가 비어 있어 결속 대상 final이 없습니다.
+
+검증: `bash -n` 통과 · 회귀 **211/211**(신규 17 · meta 로스터 +4 판정자 · 세션 강제종료로 오염된 1건은 단독 재실행 PASS) · 형식 추가는 review frontmatter 선택 필드 3종과 examined 아래 `review seals:` 줄.
+
 ## 2026-08-02.4
 
 **검증에 digest가 생겼습니다 — `verify-ledger.tsv` 사이드카와 `attest` (WD-COR-003).** 지금까지 "verified"는 장부에 이름이 있다는 뜻이었지, 그때 검증한 바이트가 지금의 바이트라는 뜻이 아니었습니다. verified truth를 한 글자 고쳐도 장부는 몰랐습니다. 이제 검증 기록이 내용에 결속됩니다.

@@ -24,6 +24,8 @@
 #   status            each document's status + the next step
 #   scope             what a verify round still owes — unverified materials + truths, computed
 #   attest <verdict> <round> <standard> <id...>   record a verification: digest-bound sidecar row
+#   seal-review <doc-id> [draft|final]   pin the clean review to the reviewed bytes + context
+#   consecrate <doc-id>   stage candidate → verify seals → ONE full validation → atomic promote
 #   gaps              mine census + declared-marker scan (non-blocking floor for the weavedoc-gaps skill)
 #   census            mine census only (truth files vs index, numbering holes, live/status tallies)
 #   reindex [--check] regenerate truths/index.md + truths/tree.md from truth frontmatter (--check: diff only)
@@ -363,6 +365,51 @@ ledger_rows() { # -> "id<TAB>digest<TAB>verdict" per unit; LAST row per id wins 
   awk -F'\t' '/^#/ { next } NF>=3 { d[$1]=$2; v[$1]=$3 } END { for (i in d) print i "\t" d[i] "\t" v[i] }' "$lf" \
     | LC_ALL=C sort
 }
+artifact_digest() { # $1 = file OR directory -> sha256. THE spelling of "which bytes were reviewed".
+  # Directory: `relpath\0sha256\n` manifest, relpaths LC_ALL=C ascending, manifest re-hashed —
+  # so adding, removing, renaming or editing any file under final/ changes the one digest.
+  if [ -d "$1" ]; then
+    ( cd "$1" && find . -type f | sed 's|^\./||' | LC_ALL=C sort | while IFS= read -r p; do
+        printf '%s\0%s\n' "$p" "$(sha256sum "$p" | awk '{print $1}')"
+      done ) | sha256sum | awk '{print $1}'
+  elif [ -f "$1" ]; then
+    sha256sum "$1" | awk '{print $1}'
+  else
+    return 1
+  fi
+}
+doc_draft_path() { # $1=doc-id -> the draft artifact (directory wins, mirroring final resolution)
+  if   [ -d "$DOCUMENTS/$1/draft" ];    then printf '%s' "$DOCUMENTS/$1/draft"
+  elif [ -f "$DOCUMENTS/$1/draft.md" ]; then printf '%s' "$DOCUMENTS/$1/draft.md"
+  else return 1; fi
+}
+doc_final_path() { # $1=doc-id -> the final artifact (directory wins, mirroring cmd_validate)
+  if   [ -d "$DOCUMENTS/$1/final" ];    then printf '%s' "$DOCUMENTS/$1/final"
+  elif [ -f "$DOCUMENTS/$1/final.md" ]; then printf '%s' "$DOCUMENTS/$1/final.md"
+  else return 1; fi
+}
+context_digest() { # $1=doc-id -> sha256 over the ground the review's verdict rests on:
+  # cited truths (whole file) + their source materials (mat_digest — the `used` stamp lands AFTER
+  # consecration and must not stale the review it consecrated under) + config + schema.
+  # Manifest rule: repo-relative `path\0sha256\n`, LC_ALL=C sorted, re-hashed.
+  local d="$1" t tf src seen="" cited
+  cited=$(fm "$DOCUMENTS/$d/plan.md" cited_truths 2>/dev/null | tr -d '[],')
+  {
+    for t in $cited; do
+      tf=$(tfile_for "$t") || continue
+      printf '%s\0%s\n' "truths/$(basename "$tf")" "$(truth_digest "$tf")"
+      src=$(canon_id "$(fm "$tf" source)") || src=""
+      if [ -n "$src" ] && [ -f "$MATERIALS/$src/converted.md" ]; then
+        case " $seen " in *" $src "*) ;; *)
+          seen="$seen $src"
+          printf '%s\0%s\n' "materials/$src/converted.md" "$(mat_digest "$MATERIALS/$src/converted.md")" ;;
+        esac
+      fi
+    done
+    [ -f "$CONFIG" ] && printf '%s\0%s\n' ".weavedoc/config.yaml" "$(sha256sum "$CONFIG" | awk '{print $1}')"
+    [ -f "$SCHEMA" ] && printf '%s\0%s\n' ".weavedoc/schema" "$(sha256sum "$SCHEMA" | awk '{print $1}')"
+  } | LC_ALL=C sort | sha256sum | awk '{print $1}'
+}
 mdir_for() { # $1 = a material id in any zero-padding -> the folder that id names, if one exists
   local n
   [ -d "$MATERIALS/$1" ] && { printf '%s' "$MATERIALS/$1"; return 0; }
@@ -394,7 +441,7 @@ cmd_validate() {
   # What was actually examined, reported next to what exists. The counts decide nothing; they make
   # "did not look" (redirected paths, unreadable schema, empty source, unclosed frontmatter) stop
   # resembling "looked and found nothing".
-  local N_TRUTH=0 N_SEALED=0 N_MAT=0 N_DOC=0 N_GATED=0 N_CONSEC=0 N_SEALFAIL=0 N_TOMB=0
+  local N_TRUTH=0 N_SEALED=0 N_MAT=0 N_DOC=0 N_GATED=0 N_CONSEC=0 N_SEALFAIL=0 N_TOMB=0 N_RSEAL=0 N_RLEGACY=0
 
   # The checks below now READ the schema instead of paraphrasing it, which is right — but it means an
   # unreadable schema turns them OFF rather than making them fail. Silence would look exactly like a
@@ -1190,6 +1237,24 @@ EOF
           break
         done < <(fid_body "$DOCUMENTS/$d/review.md")
       fi
+      # v2 review binding (WD-COR-002): a sealed review pins bytes + context. Presence of the
+      # field activates enforcement; absence is legacy-unbound — counted, shown, never blocking
+      # until schema v2 (migration train).
+      if [ -f "$DOCUMENTS/$d/review.md" ]; then
+        local rdg_ rcx_ findg_
+        rdg_=$(fm "$DOCUMENTS/$d/review.md" reviewed_digest); rdg_=${rdg_#sha256:}
+        if [ -n "$rdg_" ]; then
+          N_RSEAL=$((N_RSEAL+1))
+          findg_=$(artifact_digest "$(doc_final_path "$d")")
+          [ "$findg_" = "$rdg_" ] || prob "$d $consecrated is not the bytes the clean review reviewed (reviewed_digest mismatch) — something changed after the seal; re-review, then re-consecrate. Nobody reviewed the bytes that are about to ship"
+          rcx_=$(fm "$DOCUMENTS/$d/review.md" review_context_digest); rcx_=${rcx_#sha256:}
+          if [ -n "$rcx_" ] && [ "$(context_digest "$d")" != "$rcx_" ]; then
+            prob "$d review context changed after the seal (a cited truth, its source material, config or schema moved) — the clean review no longer describes this mine; re-review"
+          fi
+        else
+          N_RLEGACY=$((N_RLEGACY+1))
+        fi
+      fi
     fi
   done < <(doc_ids)
 
@@ -1237,6 +1302,10 @@ EOF
   [ "$N_UNCHK" -gt 0 ]    && sealpart="$sealpart ← $N_UNCHK NOT checked"
   [ "$N_GATED" -lt "$N_CONSEC" ] && gatenote=" ← $((N_CONSEC - N_GATED)) NOT gate-checked"
   echo "  examined: materials $N_MAT · truths $N_TRUTH ($sealpart) · documents $N_DOC ($N_CONSEC consecrated, $N_GATED gate-checked$gatenote)"
+  # Review seals are counted out loud whenever anything is consecrated: a legacy (digest-less)
+  # review next to a final is real history that binds no bytes — visible, never silently equal
+  # to a sealed one.
+  [ "$N_CONSEC" -gt 0 ] && echo "  review seals: $N_RSEAL digest-bound · $N_RLEGACY legacy-unbound"
   if [ "$PROBLEMS" -eq 0 ]; then echo "✓ validate: all checks passed"; return 0
   else echo "✗ validate: $PROBLEMS problem(s)"; return 1; fi
 }
@@ -1948,6 +2017,88 @@ scan_verified_units() { # -> "V<TAB><id>" per covered id · "U<TAB><line>" per e
       }
     }'
 }
+cmd_seal_review() { # seal-review <doc-id> [draft|final] — pin what the clean review reviewed
+  # Writes reviewed_kind + reviewed_digest + review_context_digest into review.md frontmatter.
+  # Digests are computed HERE, never by hand — one spelling. The review skill calls this right
+  # after finishing a round, while "what the reviewer read" and "what is on disk" are one thing.
+  local d="${1:-}" kind="${2:-draft}"
+  [ -n "$d" ] || { echo "usage: weavedoc seal-review <doc-id> [draft|final]"; return 2; }
+  case "$kind" in draft|final) ;; *) echo "seal-review: kind '$kind' must be draft|final"; return 2 ;; esac
+  local rev="$DOCUMENTS/$d/review.md"
+  [ -f "$rev" ] || { echo "seal-review: no review.md for '$d' — run review first"; return 2; }
+  head -1 "$rev" | grep -q '^---' || { echo "seal-review: review.md has no frontmatter block to seal into"; return 2; }
+  local art adg cdg
+  if [ "$kind" = draft ]; then art=$(doc_draft_path "$d") || { echo "seal-review: no draft for '$d'"; return 2; }
+  else art=$(doc_final_path "$d") || { echo "seal-review: no final for '$d'"; return 2; }; fi
+  adg=$(artifact_digest "$art") || { echo "seal-review: cannot digest $art"; return 2; }
+  cdg=$(context_digest "$d")
+  local tmp="$rev.tmp.$$"
+  awk -v k="$kind" -v a="sha256:$adg" -v c="sha256:$cdg" '
+    NR==1 && /^---[[:space:]]*$/ { infm=1; print; next }
+    infm && /^---[[:space:]]*$/ {
+      print "reviewed_kind: " k
+      print "reviewed_digest: " a
+      print "review_context_digest: " c
+      infm=0; print; next }
+    infm && /^(reviewed_kind|reviewed_digest|review_context_digest)[[:space:]]*:/ { next }
+    { print }' "$rev" > "$tmp" && mv "$tmp" "$rev" \
+    || { rm -f "$tmp" 2>/dev/null; echo "seal-review: write failed"; return 1; }
+  printf 'seal-review: %s %s sealed\n  reviewed_digest: sha256:%s\n  review_context_digest: sha256:%s\n' \
+    "$d" "$kind" "$adg" "$cdg"
+  return 0
+}
+cmd_consecrate() { # consecrate <doc-id> — stage candidate, verify seals, ONE full validation, atomic promote
+  # The §5.3 flow, mechanized: the reviewed draft becomes final byte-for-byte or nothing changes.
+  local d="${1:-}"
+  [ -n "$d" ] || { echo "usage: weavedoc consecrate <doc-id>"; return 2; }
+  local rev="$DOCUMENTS/$d/review.md"
+  [ -f "$rev" ] || { echo "consecrate: no review.md for '$d' — run review first"; return 2; }
+  # 1. The gate must be empty — the same reader validate uses, or the two could disagree.
+  local line
+  while IFS= read -r line; do
+    is_noise "$line" && continue
+    echo "consecrate: open gate — review.md 'Fidelity violations' is non-empty ('$line'). Refine until the gate is clean"; return 2
+  done < <(fid_body "$rev")
+  # 2. Sealed, and sealed over the DRAFT (consecrate promotes a reviewed draft).
+  local rdg rkind
+  rdg=$(fm "$rev" reviewed_digest); rdg=${rdg#sha256:}
+  [ -n "$rdg" ] || { echo "consecrate: unsealed review (no reviewed_digest) — after the clean round run: weavedoc seal-review $d draft"; return 2; }
+  rkind=$(fm "$rev" reviewed_kind)
+  [ "$rkind" = "draft" ] || { echo "consecrate: reviewed_kind is '$rkind' — consecrate promotes a reviewed DRAFT; re-seal with kind draft"; return 2; }
+  # 3. The draft on disk must BE the reviewed bytes.
+  local art cur
+  art=$(doc_draft_path "$d") || { echo "consecrate: no draft for '$d'"; return 2; }
+  cur=$(artifact_digest "$art")
+  [ "$cur" = "$rdg" ] || { echo "consecrate: draft changed after the clean review (digest mismatch) — re-review, then consecrate"; return 2; }
+  # 4. The ground must not have shifted under the review.
+  local rcx nowcx
+  rcx=$(fm "$rev" review_context_digest); rcx=${rcx#sha256:}
+  if [ -n "$rcx" ]; then
+    nowcx=$(context_digest "$d")
+    [ "$nowcx" = "$rcx" ] || { echo "consecrate: review context changed (cited truth, source material, config or schema) — the clean review no longer describes this mine; re-review"; return 2; }
+  fi
+  # 5. Stage the candidate on the same filesystem, verify the copy, swap, validate ONCE.
+  local isdir=0 cand fin oldfin="" bak="$DOCUMENTS/$d/.final.bak"
+  [ -d "$art" ] && isdir=1
+  if [ $isdir -eq 1 ]; then cand="$DOCUMENTS/$d/.candidate.final"; rm -rf "$cand"; cp -r "$art" "$cand"
+  else cand="$DOCUMENTS/$d/.candidate.final.md"; cp "$art" "$cand"; fi
+  [ "$(artifact_digest "$cand")" = "$rdg" ] \
+    || { rm -rf "$cand"; echo "consecrate: candidate copy does not match the reviewed digest — copy failed; nothing promoted"; return 1; }
+  oldfin=$(doc_final_path "$d") || oldfin=""
+  if [ -n "$oldfin" ]; then rm -rf "$bak"; mv "$oldfin" "$bak"; fi
+  if [ $isdir -eq 1 ]; then fin="$DOCUMENTS/$d/final"; else fin="$DOCUMENTS/$d/final.md"; fi
+  mv "$cand" "$fin"
+  if cmd_validate; then
+    [ -n "$oldfin" ] && rm -rf "$bak"
+    echo "consecrate: $d consecrated — full validation: 1 run, clean. The reviewed draft IS the final, byte for byte."
+    return 0
+  else
+    rm -rf "$fin"
+    [ -n "$oldfin" ] && mv "$bak" "$oldfin"
+    echo "consecrate: full validation FAILED after staging — candidate rejected, original final preserved untouched. Fix the problems above and re-run."
+    return 1
+  fi
+}
 cmd_attest() { # attest <verified|failed> <round> <standard> <id...> — the verification write path
   # THE one writer of verification records: the digest is computed here, never by hand, so the
   # hash rule has a single spelling. All-or-nothing: every id resolves before one byte is written.
@@ -2145,6 +2296,8 @@ case "${1:-}" in
   status)   cmd_status ;;
   scope)    cmd_scope ;;
   attest)   shift; cmd_attest "$@" ;;
+  seal-review) shift; cmd_seal_review "${1:-}" "${2:-}" ;;
+  consecrate)  shift; cmd_consecrate "${1:-}" ;;
   gaps)     cmd_gaps ;;
   census)   cmd_census ;;
   reindex)  shift; cmd_reindex "${1:-}" ;;
@@ -2153,5 +2306,5 @@ case "${1:-}" in
   lang)     cmd_lang ;;
   locale)   cmd_locale ;;
   version)  cmd_version ;;
-  *) echo "weavedoc — validate | pull <term> | impact <material-id> | status | scope | attest <verdict> <round> <standard> <id...> | gaps | census | reindex [--check] | retag <old> <new> [--dry] | version | lang | locale"; exit 2 ;;
+  *) echo "weavedoc — validate | pull <term> | impact <material-id> | status | scope | attest <verdict> <round> <standard> <id...> | seal-review <doc-id> [draft|final] | consecrate <doc-id> | gaps | census | reindex [--check] | retag <old> <new> [--dry] | version | lang | locale"; exit 2 ;;
 esac

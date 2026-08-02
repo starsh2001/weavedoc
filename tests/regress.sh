@@ -669,7 +669,8 @@ meta_single_judges() {
   # judge fails here before a cold reviewer has to find it.
   local B="$REPO/.weavedoc/bin/weavedoc" bad="" fn n
   for fn in is_noise has_fm fid_mark fid_body nocomment canon_id is_placeholder req_value \
-            truth_digest mat_digest unit_digest ledger_rows ledger_file; do
+            truth_digest mat_digest unit_digest ledger_rows ledger_file \
+            artifact_digest context_digest doc_draft_path doc_final_path; do
     n=$(grep -cE "^${fn}\(\)" "$B" || true)
     [ "${n:-0}" -eq 1 ] || bad="$bad ${fn}=${n};"
   done
@@ -1429,6 +1430,128 @@ block_attest_bad_target() {
   expect_block "t999"
   vrun scope
   expect_has "0 verified (digest-bound)"
+}
+
+# ---- WD-COR-002: review/final digest binding + staged consecration ----
+mktree() { # convert d1 to a multi-file draft/ + final/ (final = byte-identical copy)
+  rm -f "$W/documents/d1/draft.md" "$W/documents/d1/final.md"
+  mkdir -p "$W/documents/d1/draft"
+  printf '# 1장\n\n위약금은 계약금액의 10%%다. <!-- t:t001 -->\n' > "$W/documents/d1/draft/01.md"
+  printf '# 2장\n\n끝.\n' > "$W/documents/d1/draft/02.md"
+  cp -r "$W/documents/d1/draft" "$W/documents/d1/final"
+}
+pass_gate_seal_and_match() {
+  # seal-review pins the reviewed bytes + context; a final that IS those bytes passes, and the
+  # seal is counted out loud.
+  vrun seal-review d1 draft
+  expect_has "reviewed_digest"
+  vrun validate; expect_pass
+  expect_has "review seals: 1 digest-bound"
+}
+block_gate_final_digest_single() {
+  # One character into final.md after the clean review → refuse: nobody reviewed these bytes.
+  vrun seal-review d1 draft
+  printf '몰래 한 줄.\n' >> "$W/documents/d1/final.md"
+  vrun validate; expect_block "not the bytes the clean review reviewed"
+}
+block_gate_context_truth_changed() {
+  # The verdict rested on t001; changing the claim under it stales the review. Frontmatter edit,
+  # not body — the verbatim seal must stay green so THIS check is the one that fires.
+  vrun seal-review d1 draft
+  sed -i 's/^claim: "위약금은 계약금액의 10%다"$/claim: "위약금은 계약금액의 11%다"/' "$W/truths/t001.md"
+  vrun validate; expect_block "review context changed"
+}
+block_gate_context_source_changed() {
+  # A source material growing a clause after the review → context stale. Appending keeps t001's
+  # quote intact, so the anti-laundering seal stays green and the context check is what fires.
+  vrun seal-review d1 draft
+  printf '\n제11조 신설 조항.\n' >> "$W/materials/m001/converted.md"
+  vrun validate; expect_block "review context changed"
+}
+pass_gate_context_survives_used_stamp() {
+  # Consecration stamps materials `used` AFTER the review — the context digest hashes materials
+  # with the lifecycle line excluded (mat_digest), or the normal flow would stale its own review.
+  vrun seal-review d1 draft
+  sed -i 's/^status: converted$/status: used/' "$W/materials/m001/converted.md"
+  vrun validate; expect_pass
+}
+block_gate_context_config_changed() {
+  vrun seal-review d1 draft
+  printf '# context poke\n' >> "$W/.weavedoc/config.yaml"
+  vrun validate; expect_block "review context changed"
+}
+pass_gate_legacy_review_unbound() {
+  # A v1 review (no digest fields) next to a final stays valid — migration train: presence of
+  # the v2 field activates enforcement; absence is legacy-unbound, counted and never blocking.
+  vrun validate; expect_pass
+  expect_has "1 legacy-unbound"
+}
+pass_consecrate_promotes() {
+  # The §5.3 flow: candidate staged, digests matched, ONE full validation, atomic promote.
+  rm -f "$W/documents/d1/final.md"
+  vrun seal-review d1 draft
+  vrun consecrate d1
+  expect_pass
+  expect_has "full validation: 1 run"
+  OUT=$(cat "$W/documents/d1/final.md"); RC=0
+  expect_has "위약금은 계약금액의 10%다"
+}
+block_consecrate_stale_draft() {
+  # Draft moved after the seal → consecrate refuses; nothing is written.
+  vrun seal-review d1 draft
+  printf '추가 문장.\n' >> "$W/documents/d1/draft.md"
+  vrun consecrate d1
+  expect_block "draft changed after the clean review"
+}
+block_consecrate_unsealed() {
+  # A v1 (digest-less) review cannot drive the new consecration path — seal first.
+  vrun consecrate d1
+  expect_block "unsealed"
+}
+block_consecrate_open_gate() {
+  REV '- [contradiction] 3장 — t001과 모순'
+  vrun seal-review d1 draft
+  vrun consecrate d1
+  expect_block "open gate"
+}
+acct_consecrate_failure_preserves_final() {
+  # Post-swap full validation fails → the original final is byte-restored, candidate unpromoted.
+  # The break (missing index) is outside the context manifest, so prechecks pass and the failure
+  # lands exactly where the rollback path lives.
+  printf '개정판. <!-- t:t001 -->\n' > "$W/documents/d1/draft.md"
+  vrun seal-review d1 draft
+  rm -f "$W/truths/index.md"
+  vrun consecrate d1
+  expect_block "original final preserved"
+  OUT=$(cat "$W/documents/d1/final.md"); RC=0
+  expect_has "위약금은 계약금액의 10%다"
+  expect_hasnt "개정판"
+}
+pass_gate_tree_seal_match() {
+  mktree
+  vrun seal-review d1 draft
+  vrun validate; expect_pass
+  expect_has "review seals: 1 digest-bound"
+}
+block_gate_tree_content() {
+  mktree; vrun seal-review d1 draft
+  printf 'x\n' >> "$W/documents/d1/final/02.md"
+  vrun validate; expect_block "not the bytes the clean review reviewed"
+}
+block_gate_tree_added() {
+  mktree; vrun seal-review d1 draft
+  printf '# 3장\n' > "$W/documents/d1/final/03.md"
+  vrun validate; expect_block "not the bytes the clean review reviewed"
+}
+block_gate_tree_removed() {
+  mktree; vrun seal-review d1 draft
+  rm "$W/documents/d1/final/02.md"
+  vrun validate; expect_block "not the bytes the clean review reviewed"
+}
+block_gate_tree_renamed() {
+  mktree; vrun seal-review d1 draft
+  mv "$W/documents/d1/final/02.md" "$W/documents/d1/final/02b.md"
+  vrun validate; expect_block "not the bytes the clean review reviewed"
 }
 acct_status_untagged_open() {
   # R3-N2: a `- [open]` with no ownership tag landed in the total but in no bucket and not in
