@@ -99,7 +99,7 @@ mkpristine() {
 
   cat > "$PRISTINE/project.md" <<'EOF'
 ---
-version: 1
+version: 2
 language: ko
 roles: [계약서]
 tone: 담백
@@ -108,6 +108,7 @@ required_tags: []
 
 최소 픽스처 프로젝트.
 EOF
+  sed -i 's/^version: 1$/version: 2/' "$PRISTINE/.weavedoc/config.yaml"
 
   cat > "$PRISTINE/catalog.md" <<'EOF'
 # 자료 목록
@@ -1640,6 +1641,151 @@ block_gate_fid_c9_lonely() {
   # sections are not enforced, and their absence cannot become a bypass.
   printf -- '---\nround: 1\n---\n\n# Fidelity violations\n\n- [contradiction] 3장 — t001과 모순\n' > "$W/documents/d1/review.md"
   vrun validate; expect_block "consecrated through an open gate"
+}
+
+# ---- WD-MIG-002 + WD-CFG-001 (Phase 3 unit 6): schema v2 negotiation + full config contract ----
+block_schema_future_version() {
+  # A schema newer than this runtime supports is fail-closed — guessing at a future format is
+  # how silent corruption ships.
+  sed -i 's/^version: 2$/version: 3/' "$W/project.md"
+  vrun validate; expect_block "newer than this runtime"
+}
+acct_schema_v1_notice() {
+  # v1 stays readable (dual-reader) but not silent: the notice names the exact next command.
+  sed -i 's/^version: 2$/version: 1/' "$W/project.md"
+  sed -i 's/^version: 2$/version: 1/' "$W/.weavedoc/config.yaml"
+  vrun validate
+  expect_pass
+  expect_has "upgrade --check"
+}
+block_schema_version_disagreement() {
+  # project.md and config.yaml each carry a version; two records of one fact must agree.
+  sed -i 's/^version: 2$/version: 1/' "$W/.weavedoc/config.yaml"
+  vrun validate; expect_block "disagree"
+}
+block_config_review_strength_range() {
+  # The failing case that proves section-aware reading: verify.strength stays legal while
+  # review.strength is out of range — a first-match flat reader cannot even see it.
+  sed -i '/^review:/,/^gaps:/ s/^  strength: 1/  strength: 9/' "$W/.weavedoc/config.yaml"
+  vrun validate; expect_block "review.strength"
+}
+block_config_verify_max_rounds() {
+  sed -i '/^verify:/,/^review:/ s/^  max_rounds: 5/  max_rounds: 0/' "$W/.weavedoc/config.yaml"
+  vrun validate; expect_block "verify.max_rounds"
+}
+block_config_bad_scale() {
+  sed -i '/^verify:/,/^review:/ s/^  scale: standard/  scale: turbo/' "$W/.weavedoc/config.yaml"
+  vrun validate; expect_block "verify.scale"
+}
+block_config_bad_repeat() {
+  sed -i '/^verify:/,/^review:/ s/^    full:     2/    full:     -1/' "$W/.weavedoc/config.yaml"
+  vrun validate; expect_block "verify.repeat"
+}
+acct_config_unknown_key_warned() {
+  # Unknown top-level keys are a named warning, not a failure (decided: a user extension or a
+  # typo both deserve a line; only a typo deserves a red build, and the machine cannot tell).
+  printf 'mystery: x\n' >> "$W/.weavedoc/config.yaml"
+  vrun validate
+  expect_pass
+  expect_has "unknown config key"
+  expect_has "mystery"
+}
+
+# ---- WD-MIG-001 (Phase 3 units 7–8): the v0.1 golden mine and the upgrade path ----
+mkv1() { # devolve the pristine workspace into an authentic v0.1-shaped mine
+  sed -i 's/^version: 2$/version: 1/' "$W/project.md"
+  sed -i 's/^version: 2/version: 1/' "$W/.weavedoc/config.yaml"
+  sed -i 's/^  max_rounds: 5/  max_rounds: 3/' "$W/.weavedoc/config.yaml"
+  # the v0.1 scalar repeat (the exact shape WD-MIG-001 names)
+  awk '
+    /^    (skip|light|standard|full):/ { next }
+    /^  repeat:/ { print "  repeat: 1              # clean rounds in a row required to pass"; next }
+    { print }' "$W/.weavedoc/config.yaml" > "$W/.cfg.tmp" && mv "$W/.cfg.tmp" "$W/.weavedoc/config.yaml"
+  # v0.1 short ids, with every reference spelled the old way
+  mv "$W/materials/m001" "$W/materials/m1"
+  sed -i 's/^id: m001$/id: m1/' "$W/materials/m1/converted.md"
+  sed -i 's/| m001 |/| m1 |/' "$W/catalog.md"
+  mv "$W/truths/t001.md" "$W/truths/t1.md"
+  sed -i 's/^id: t001$/id: t1/; s/^source: m001$/source: m1/' "$W/truths/t1.md"
+  sed -i 's/t001/t1/g; s/m001/m1/g' "$W/truths/coverage.md" "$W/truths/changelog.md" "$W/documents/d1/plan.md"
+  # verify.md as v0.1 wrote it: a verdictless success row, no Human queue / Adjudications
+  printf -- '---\nstatus: passed\nround: 1\nverified_at: 2026-07-30\n---\n\n## Verified units\n\n- m1 · t1 — R1 2026-07-30 · passes 2/2\n' > "$W/truths/verify.md"
+  # a bracketed kind as legacy HISTORY outside the gate (the zone rule postdates v0.1)
+  printf -- '\n- [contradiction] 3장 — R1에서 수정 완료\n' >> "$W/documents/d1/review.md"
+  rm -f "$W/truths/verify-ledger.tsv"
+  ( cd "$W" && bash .weavedoc/bin/weavedoc reindex >/dev/null 2>&1 )
+}
+acct_upgrade_uptodate() {
+  # Idempotence starts at the reader: a current mine reports zero work, exit 0.
+  vrun upgrade --check
+  expect_pass
+  expect_has "nothing to do"
+}
+acct_upgrade_check_v1() {
+  # --check is the read-only census of the migration: names every item class, exits 1 as the
+  # scriptable "migration needed" signal.
+  mkv1
+  vrun upgrade --check
+  [ "$RC" -eq 1 ] || bad "expected exit 1 (migration needed), got $RC"
+  expect_has "version: 1 → 2"
+  expect_has "m1 → m001"
+  expect_has "t1 → t001"
+  expect_has "verdict"
+  expect_has "repeat"
+  expect_has "--dry-run"
+}
+acct_upgrade_dryrun_readonly() {
+  # dry-run prints the full plan and writes NOTHING — proven by hashing the whole tree.
+  mkv1
+  local pre post
+  pre=$(cd "$W" && find . -type f | LC_ALL=C sort | xargs sha256sum 2>/dev/null | sha256sum | awk '{print $1}')
+  vrun upgrade --dry-run
+  post=$(cd "$W" && find . -type f | LC_ALL=C sort | xargs sha256sum 2>/dev/null | sha256sum | awk '{print $1}')
+  [ "$RC" -eq 1 ] || bad "expected exit 1 (migration needed), got $RC"
+  expect_has "would"
+  if [ "$pre" = "$post" ]; then ok; else bad "dry-run modified the tree"; fi
+}
+block_upgrade_bad_flag() {
+  vrun upgrade --frobnicate
+  expect_block "usage"
+}
+acct_upgrade_apply_golden() {
+  # The §6 completion conditions in one flow: the v0.1 golden mine migrates, validates clean,
+  # reports its history as legacy-unbound, and a second upgrade finds zero work (idempotence).
+  mkv1
+  vrun upgrade --apply
+  expect_pass
+  expect_has "applied"
+  vrun validate
+  expect_pass
+  vrun scope
+  expect_has "legacy-unbound"
+  vrun upgrade --check
+  expect_has "nothing to do"
+}
+acct_upgrade_rollback() {
+  # Post-apply full validation fails (a broken verbatim seal the scan does not look for) → every
+  # byte is restored; proven by hashing the whole tree before and after.
+  mkv1
+  printf '몰래 추가된 줄.\n' >> "$W/truths/t1.md"
+  local pre post
+  pre=$(cd "$W" && find . -type f | LC_ALL=C sort | xargs sha256sum 2>/dev/null | sha256sum | awk '{print $1}')
+  vrun upgrade --apply
+  [ "$RC" -eq 1 ] || bad "expected exit 1 after rollback, got $RC"
+  expect_has "rolled back"
+  post=$(cd "$W" && find . -type f | LC_ALL=C sort | xargs sha256sum 2>/dev/null | sha256sum | awk '{print $1}')
+  if [ "$pre" = "$post" ]; then ok; else bad "tree differs after rollback"; fi
+}
+block_upgrade_apply_collision() {
+  # A rename target that already exists aborts BEFORE any write (§8 principle 3).
+  mkv1
+  mkdir -p "$W/materials/m001"
+  local pre post
+  pre=$(cd "$W" && find . -type f | LC_ALL=C sort | xargs sha256sum 2>/dev/null | sha256sum | awk '{print $1}')
+  vrun upgrade --apply
+  expect_block "collision"
+  post=$(cd "$W" && find . -type f | LC_ALL=C sort | xargs sha256sum 2>/dev/null | sha256sum | awk '{print $1}')
+  if [ "$pre" = "$post" ]; then ok; else bad "collision precheck wrote something"; fi
 }
 
 # ---- command smoke floor (Phase 2: every CLI command has at least one covered run) ----

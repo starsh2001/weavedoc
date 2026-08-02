@@ -4,6 +4,19 @@
 
 ---
 
+## 2026-08-02.8
+
+**Schema v2와 migration — Phase 3 종료, migration train 해제.** 이제 v1 광산이 스스로 v2가 되는 길이 있습니다: 검사와 적용이 분리된 `upgrade`, 그리고 버전이 실제 계약이 되는 협상.
+
+- **schema 협상 (WD-MIG-002)** — `.weavedoc/schema`가 `schema.version: 2`를 선언. project.md·config.yaml의 `version:`은 한 사실의 두 기록으로 일치를 검사하고, **미래 버전은 fail-closed**, v1은 dual-reader로 읽되 `upgrade --check`를 가리키는 공지 한 줄. `version` 명령이 schema 줄을 함께 찍습니다.
+- **config 전 계약 (WD-CFG-001, 조기)** — section-aware `cfg2` 신설: 평면 첫-매치 파서는 verify.strength 뒤의 review.strength를 영원히 못 봅니다. strength(1-3)·max_rounds(양의 정수)·scale(enum)·repeat(스케일별 비음수)를 verify/review 양쪽에서 검사, unknown top-level key는 **이름 찍는 경고**(확장인지 오타인지 기계가 못 가르므로 차단하지 않음).
+- **`upgrade --check | --dry-run | --apply` (WD-MIG-001)** — 기본은 read-only. apply는 §8 원칙 그대로: rename 충돌 전수 사전검사(하나면 0 byte) → 원본 스냅샷+manifest → canonicalize(m5→m005; strict 참조 필드·catalog·coverage·cited_truths까지, **산문·changelog·consecrated 바이트는 불변**) → 성공 증거(`passes N/N`) 있는 행만 verdict 부여(기계는 장부가 안 한 인증을 안 함) → 절 보강 → gate 밖 괄호 kind 기록의 괄호 제거 → scalar repeat→scale map → **digest-less 이력을 `legacy-unbound` 사이드카 행으로 실체화(digest 소급 날인 없음, §11)** → 버전 스탬프 → **full validation, 실패 시 전량 자동 원복**(회귀 케이스가 트리 해시 동일성으로 증명). 멱등: 두 번째 실행은 "nothing to do".
+- scope가 사이드카의 `legacy-unbound` verdict 행을 legacy로 집계(절대 stale 오분류 없음), 구 schema 프로젝트에서 새 키는 코드 기본값으로 degrade(`schema_ver`).
+- **UPGRADING.md 신설** — 사용자 절차서.
+- 실광산 `--check` 실측(read-only): 항목 4개 — 버전 스탬프 2 · scalar repeat · **244개 검증 unit의 legacy-unbound 실체화**. id는 이미 canonical이라 rename 0.
+
+검증: `bash -n` 통과 · 신규 16케이스 그룹 GREEN 로컬(schema 3 · config 6 · upgrade/rollback 8) · 전수 242는 push 시 CI Ubuntu가 검증 · rollback에서 스스로 찾은 결함 1(생성 파일의 재백업이 rollback을 오염 — bkup이 created 목록을 건너뛰도록 수정).
+
 ## 2026-08-02.7
 
 **CI 첫 실행이 잡은 3건 수리.** Phase 2에서 신설한 GitHub Actions의 첫 run이 곧바로 값을 했습니다 — ShellCheck 오류 1건(`$k[[:space:]]`가 배열 확장으로 오독되는 SC1087, 중괄호로 수정 — 동작 무변경), ko_KR 로케일 없는 runner에서의 케이스 실패 2건(`locale`은 빈 출력이 설계상 정상인데 smoke가 개발 머신을 단정하고 있었음 → 계약만 검증하도록 수정(정확한 계약은 "코드+exit 0 **또는** 빈 출력+exit 1" — run 2가 후자를 가르쳐줘서 두 라운드 걸림) · `pass_locales`는 CI에 locale-gen을 추가해 진짜 로케일 비교로 유지). 부수 실측: **같은 226케이스가 Ubuntu에서 65초, Windows Git Bash에서 ~35분** — WD-PERF-001의 "MSYS process spawn 비용이 주범" 진단이 CI로 입증됐습니다.
