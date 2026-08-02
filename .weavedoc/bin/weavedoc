@@ -1204,9 +1204,11 @@ EOF
       # a bracketed word outside that vocabulary (`[모순]`) is prose wearing brackets; the machine does
       # not chase human wording, and inside the zone such lines still fail closed via is_noise.
       local vkinds vklist vkfold vline vslot vfold vhit vk vcnt vtag vrest kindscan
-      vkinds=$(pipes "${SCH[review.enum.kind]}" | tr '\n' '|' | sed 's/|$//')
-      vklist=$(pipes "${SCH[review.enum.kind]}" | tr '\n' ' ')
-      vkfold=$(printf '%s\n' $vklist | tr 'A-Z' 'a-z' | sed 's/[^a-z0-9]//g' | tr '\n' ' ')
+      # Three constants derived from one schema value — eleven forks' worth of pipes, recomputed
+      # for every document. Pure parameter expansion now: same three shapes, no processes.
+      vkinds=${SCH[review.enum.kind]}
+      vklist=${vkinds//|/ }
+      vkfold=""; for vk in $vklist; do vk=${vk,,}; vkfold+="${vk//[!a-z0-9]/} "; done
       kindscan='
         BEGIN{ n=split(kf, K, " ") }
         { line=$0; hit=0; s=line

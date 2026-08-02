@@ -16,6 +16,21 @@ WD-PERF-001의 기준선. 계획서 §2의 방법대로 동일 fixture를 3회 �
 
 **median = 39.658s** (min 37.757 · max 42.258)
 
+## 진행 (Phase 4)
+
+같은 fixture · 같은 머신 · 같은 방법(3회 median)으로 추적한다.
+
+| 시점 | median | baseline 대비 |
+|---|---:|---:|
+| Phase 0 기준선 (bundle 2026-08-02.2) | 39.658s | — |
+| schema 캐시 · 선언 로스터 · fork 없는 enum (`.9`) | 35.96s | −9% |
+| **frontmatter 파일당 1회 파싱 · 내장 listfield/has_fm/placeholder** | **17.41s** | **−56%** |
+| **+ zone-rule 상수 내장화** | **16.36s** | **−59%** |
+
+Phase 4 목표는 −70% (≤11.9s). 남은 분포(문서 1·자료 1 fixture 기준): documents 약 4s · truths-awk 2.2s · ledgers 1.4s · materials 1.4s · verify.md 1.1s.
+
+**측정 방법 메모.** `bash -x` 트레이스는 MSYS에서 stderr 쓰기 비용이 커서 결과를 왜곡한다(라인당 ~12ms의 가짜 균등 분포). 블록 경계에 `EPOCHREALTIME`을 찍는 내장 마커가 정확하다 — Phase 4의 진단은 전부 그 방식이다.
+
 ## 환경
 
 | 항목 | 값 |
