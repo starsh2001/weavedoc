@@ -1788,6 +1788,111 @@ block_upgrade_apply_collision() {
   if [ "$pre" = "$post" ]; then ok; else bad "collision precheck wrote something"; fi
 }
 
+# ---- WD-CLI-001 + WD-IO-001 (Phase 4 remainder): boundary defects + write transactions ----
+block_date_feb31() {
+  # A field the format calls a date must not accept a day the calendar does not have.
+  sed -i 's/^added: 2026-07-01$/added: 2026-02-31/' "$W/materials/m001/converted.md"
+  vrun validate; expect_block "not a date"
+}
+block_date_leap() {
+  sed -i 's/^added: 2026-07-01$/added: 2023-02-29/' "$W/materials/m001/converted.md"
+  vrun validate; expect_block "not a date"
+}
+pass_date_leap() {
+  sed -i 's/^added: 2026-07-01$/added: 2024-02-29/' "$W/materials/m001/converted.md"
+  vrun validate; expect_pass
+}
+block_truth_shaped_directory() {
+  # A directory wearing a truth filename is not a truth — counting it would inflate the
+  # population and every per-file reader would quietly fail on it.
+  mkdir -p "$W/truths/t009.md"
+  vrun validate; expect_block "directory"
+}
+acct_ledger_range_reversed() {
+  # A reversed range expands to nothing in a naive loop — silently covering zero units while
+  # looking like a ledger row. It is named instead, and covers nothing loudly.
+  sed -i '/^## Verified units$/a - t009-t002 — R1 2026-07-30 · verified' "$W/truths/verify.md"
+  vrun scope
+  expect_has "t009-t002"
+  expect_has "cover nothing"
+}
+acct_ledger_range_giant() {
+  # An absurd span must not expand: the cap keeps one typo from minting a million covered ids.
+  sed -i '/^## Verified units$/a - t001-t99999 — R1 2026-07-30 · verified' "$W/truths/verify.md"
+  vrun scope
+  expect_has "t001-t99999"
+  expect_has "cover nothing"
+}
+block_cli_validate_extra_arg() {
+  vrun validate --verbose
+  expect_block "usage"
+}
+block_cli_pull_noarg() {
+  vrun pull
+  expect_block "usage"
+}
+block_cli_reindex_unexpected() {
+  # Pins the fix the plan names: `reindex --check unexpected` must not succeed.
+  vrun reindex --check unexpected
+  expect_block "usage"
+}
+block_retag_unknown_flag() {
+  # The unknown third flag used to be ignored — "--forcee" meant "--dry misspelled" to the user
+  # and "write everything" to the tool. A write command must not guess.
+  vrun retag 위약 위약금2 --forcee
+  expect_block "usage"
+  OUT=$(cat "$W/truths/t001.md"); RC=0
+  expect_has "tags: [위약]"
+}
+acct_cfg_windows_abs_path() {
+  # `C:\…` is an absolute path, not a folder name to glue under the project root.
+  sed -i 's|^  materials: materials$|  materials: C:\\wd-nope|' "$W/.weavedoc/config.yaml"
+  vrun validate
+  expect_has "C:/wd-nope"
+}
+block_retag_outside_root() {
+  # A write command refuses a target that resolves outside the project (WD-IO-001) — a
+  # redirected path may READ from wherever the user says; writing there is another matter.
+  mkdir -p "$W/../wd-esc-$$"
+  cp "$W/truths/t001.md" "$W/../wd-esc-$$/"
+  sed -i "s|^  truths: truths$|  truths: ../wd-esc-$$|" "$W/.weavedoc/config.yaml"
+  vrun retag 위약 위약담보
+  expect_block "outside the project root"
+  rm -rf "$W/../wd-esc-$$"
+}
+acct_retag_symlink_guard() {
+  # Dual-behavior on purpose: where `ln -s` makes a real symlink (Linux, CI), the write is
+  # refused through it; on MSYS `ln -s` degrades to a copy, and then the copy is a normal dir
+  # and retag works — each platform asserts what is true THERE.
+  mv "$W/truths" "$W/truths-real"
+  ln -s "$W/truths-real" "$W/truths" 2>/dev/null || mv "$W/truths-real" "$W/truths"
+  vrun retag 위약 위약담보
+  if [ -L "$W/truths" ]; then expect_block "symlink"
+  else expect_pass; fi
+}
+acct_retag_rollback() {
+  # Post-write validation fails (catalog removed — a break retag does not cause and cannot fix)
+  # → every edited file is restored; the tag rename must not survive a red validate.
+  rm -f "$W/catalog.md"
+  vrun retag 위약 위약담보
+  expect_block "rolled back"
+  OUT=$(cat "$W/truths/t001.md"); RC=0
+  expect_has "tags: [위약]"
+}
+block_plan_audience_invalid() {
+  sed -i 's/^scope_tags: \[위약\]$/scope_tags: [위약]\naudience: 사외/' "$W/documents/d1/plan.md"
+  vrun validate; expect_block "audience"
+}
+block_plan_external_needs_labels() {
+  # An external document ships with its publication labels or not at all (WD-CFG-001).
+  sed -i 's/^scope_tags: \[위약\]$/scope_tags: [위약]\naudience: external/' "$W/documents/d1/plan.md"
+  vrun validate; expect_block "publication_labels"
+}
+pass_plan_external_labeled() {
+  sed -i 's/^scope_tags: \[위약\]$/scope_tags: [위약]\naudience: external\npublication_labels: [대외공개]/' "$W/documents/d1/plan.md"
+  vrun validate; expect_pass
+}
+
 # ---- command smoke floor (Phase 2: every CLI command has at least one covered run) ----
 acct_smoke_version() { vrun version; expect_pass; expect_has "fingerprint:"; }
 acct_smoke_lang()    { vrun lang;    expect_pass; expect_has "ko"; }

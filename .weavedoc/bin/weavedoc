@@ -61,7 +61,13 @@ cfg() { # $1=key $2=default -> a paths: value, resolved relative to ROOT
   v=$(grep -E "^[[:space:]]+$1:[[:space:]]" "$CONFIG" 2>/dev/null | head -1 \
       | sed -E "s/^[[:space:]]+$1:[[:space:]]*//; s/[[:space:]]*#.*$//; s/[[:space:]]*$//")
   [ -z "$v" ] && v="$2"
-  case "$v" in /*) echo "$v" ;; *) echo "$ROOT/$v" ;; esac
+  case "$v" in
+    /*) echo "$v" ;;
+    # A Windows drive-absolute path is absolute, not a folder name to glue under ROOT — the old
+    # fallthrough produced "$ROOT/C:\x", a path that exists nowhere and misreports as a redirect.
+    [A-Za-z]:[\\/]*) printf '%s\n' "${v//\\//}" ;;
+    *) echo "$ROOT/$v" ;;
+  esac
 }
 # The config is read ONCE (WD-PERF-001): cfgval was grep+head+sed and cfg2 an awk, both inside
 # `$(…)`, and validate asks ~19 questions of a 30-line file — 38 forks at ~190ms. One pass fills
@@ -98,6 +104,17 @@ cfg2() { # $1=top-level section $2=key -> the value inside that section ONLY (WD
   cfg_load; printf '%s\n' "${CFG[$1.$2]-}"
 }
 rp() { ( cd "$1" >/dev/null 2>&1 && pwd -P ); }   # real path; empty when it does not exist
+require_inside_root() { # $1=dir $2=command — a WRITE target outside the project, or reached
+  # through a symlink, is refused (WD-IO-001). Reads may follow a redirected path wherever the
+  # user pointed it; writing there is another matter.
+  local p="${1%/}" rr pr
+  if [ -L "$p" ]; then echo "$2: refusing to write through a symlink: $p" >&2; return 1; fi
+  rr=$(rp "$ROOT"); pr=$(rp "$p")
+  [ -n "$pr" ] || { echo "$2: write target does not exist: $p" >&2; return 1; }
+  case "$pr/" in "$rr"/*) return 0 ;; esac
+  echo "$2: refusing to write outside the project root: $p (resolves to $pr; root is $rr)" >&2
+  return 1
+}
 # Two spellings of one folder are one folder. String-comparing `paths` read `./materials` and an
 # absolute path to the default folder as redirects, and validate then falsely blocked the run.
 MATERIALS=$(cfg materials "materials"); MATERIALS=${MATERIALS%/}
@@ -140,6 +157,7 @@ SCH_KEYS="config.enum.attribution config.enum.completeness config.enum.detection
 config.repeat.scales config.strength.range config.toplevel fm.placeholder humanqueue.enum.ownership
 humanqueue.enum.state material.fm.enum.origin material.fm.enum.stage material.fm.enum.status
 material.fm.required material.fm.required_when.research plan.fm.enum.status plan.fm.required
+plan.fm.enum.audience
 project.fm.required review.enum.kind review.sections schema.version truth.fm.enum.provenance
 truth.fm.enum.status truth.fm.required truth.fm.resolution.decided_by
 truth.fm.resolution.decision_kind truth.fm.resolution.type verify.fm.enum.status verify.fm.required
@@ -462,8 +480,17 @@ is_date() { # $1 -> 0 when it is a real YYYY-MM-DD
   # One judge for every date in the mine — checks shape AND value (2026-99-99 fails, so does an
   # unpadded 2026-7-3). Zero-padding is required by the format; the message says which half is wrong.
   case "$1" in [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]) ;; *) return 1 ;; esac
-  local mm dd; mm=${1#*-}; mm=${mm%-*}; dd=${1##*-}
-  [ "$mm" -ge 1 ] && [ "$mm" -le 12 ] && [ "$dd" -ge 1 ] && [ "$dd" -le 31 ]
+  # Real calendar, not just shape: 2026-02-31 is a value nobody can read as a date, and the one
+  # field a supersedes resolution orders by must not hold one. Leap rule is the full Gregorian
+  # (div-4 minus centuries plus div-400), in shell arithmetic — no fork.
+  local y=$((10#${1%%-*})) m=$((10#${1:5:2})) d=$((10#${1:8:2})) max=31
+  [ "$m" -ge 1 ] && [ "$m" -le 12 ] || return 1
+  case $m in
+    4|6|9|11) max=30 ;;
+    2) max=28
+       if [ $((y % 4)) -eq 0 ] && { [ $((y % 100)) -ne 0 ] || [ $((y % 400)) -eq 0 ]; }; then max=29; fi ;;
+  esac
+  [ "$d" -ge 1 ] && [ "$d" -le "$max" ]
 }
 canon_id() { # $1 = an id in any zero-padding -> its ONE canonical spelling; empty when not a numeric id
   # The single definition of "how a number is spelled as an id" — used both to resolve a file and to
@@ -726,6 +753,11 @@ cmd_validate() {
   # describe the mine, and the checks needing them must still run when the truths are gone — that
   # state (files 0, index still naming them) is exactly what those checks exist to catch.
   local matlist="" retlist="" reslist="" reqtags qout qn f d
+  # A directory wearing a truth filename is not a truth: gawk skips it with a stderr warning, so
+  # every per-file check would quietly not run on it while the name sits in the population.
+  for f in "$TRUTHS"/t[0-9]*.md; do
+    [ -d "$f" ] && prob "$f  is a directory wearing a truth filename — not a truth and not counted; rename or remove it"
+  done
   for d in "$MATERIALS"/*/; do [ -d "$d" ] && matlist="$matlist $(basename "$d")"; done
   for d in "$MATERIALS"/*/; do
     [ -f "$d/converted.md" ] || continue
@@ -1233,6 +1265,17 @@ EOF
         case "$c" in t[0-9]*) tfile_for "$c" >/dev/null || prob "$p  cited_truths '$c' → no such truth. Trigger A matches documents by this list, so a dangling id exempts this document from staleness detection" ;;
           *) prob "$p  cited_truths '$c' is not a truth id (expected tNNN)" ;; esac
       done
+      # audience: external requires publication labels (WD-CFG-001) — an external document ships
+      # with its labels or not at all.
+      fmv "$p" audience; v=$REPLY
+      if [ -n "$v" ]; then
+        in_list "$v" "${SCH[plan.fm.enum.audience]}" || prob "$p  audience '$v' invalid → ${SCH[plan.fm.enum.audience]}"
+        if [ "$v" = "external" ]; then
+          fmv "$p" publication_labels
+          { [ -n "$REPLY" ] && ! is_placeholder "$REPLY"; } \
+            || prob "$p  audience 'external' but publication_labels is missing or an untouched placeholder — an external document ships with its labels or not at all"
+        fi
+      fi
     else
       prob "$DOCUMENTS/$d/  no plan.md"
     fi
@@ -1931,8 +1974,18 @@ cmd_reindex() {
     else echo "tree.md: DIFFERS from regenerated content:"; diff "$dt" "$tmpt" | head -20; rc=1; fi
     rm -f "$di" "$dt"
   else
-    cp "$tmpi" "$TRUTHS/index.md"; cp "$tmpt" "$TRUTHS/tree.md"
-    echo "regenerated truths/index.md + truths/tree.md ($(printf '%s\n' "$rec" | grep -c .) truths)"
+    # Same-filesystem staging + atomic rename (WD-IO-001): mktemp lives on another mount, so a
+    # bare cp could die mid-write and leave a half-index behind. Failures propagate, not vanish.
+    require_inside_root "$TRUTHS" reindex || { rm -f "$tmpi" "$tmpt"; return 1; }
+    local sti="$TRUTHS/.index.md.tmp.$$" stt="$TRUTHS/.tree.md.tmp.$$"
+    if cp "$tmpi" "$sti" && cp "$tmpt" "$stt" \
+       && mv "$sti" "$TRUTHS/index.md" && mv "$stt" "$TRUTHS/tree.md"; then
+      echo "regenerated truths/index.md + truths/tree.md ($(printf '%s\n' "$rec" | grep -c .) truths)"
+    else
+      rm -f "$sti" "$stt" "$tmpi" "$tmpt"
+      echo "reindex: write failed — the staged copies were discarded" >&2
+      return 1
+    fi
   fi
   rm -f "$tmpi" "$tmpt"
   return $rc
@@ -1949,7 +2002,18 @@ cmd_retag() {
   case "$old$new" in *--dry*) echo "usage: weavedoc retag <old> <new> [--dry]"; return 2 ;; esac
   { [ -n "$old" ] && [ -n "$new" ]; } || { echo "usage: weavedoc retag <old> <new> [--dry]"; return 2; }
   [ "$old" = "$new" ] && { echo "retag: old and new are identical"; return 2; }
-  [ "$flag" = "--dry" ] && dry=1
+  # An unknown third flag used to be ignored — "--forcee" meant "--dry misspelled" to the user
+  # and "write everything" to the tool. A write command must not guess.
+  case "$flag" in "") ;; --dry) dry=1 ;; *) echo "usage: weavedoc retag <old> <new> [--dry]"; return 2 ;; esac
+  # Write mode is a transaction (WD-IO-001): targets are guarded, every file is snapshotted before
+  # its first edit, and the whole rename answers to a post-write full validation — fail and every
+  # byte is restored, indexes re-synced. A tag rename must not be able to half-happen.
+  local RETAG_BAK=""
+  if [ "$dry" -eq 0 ]; then
+    require_inside_root "$TRUTHS" retag || return 1
+    require_inside_root "$DOCUMENTS" retag || return 1
+    RETAG_BAK=$(mktemp -d "$ROOT/.retag-bak.XXXXXX") || { echo "retag: cannot create the backup dir"; return 1; }
+  fi
   # `old`/`new` ride via ENVIRON, never `awk -v`: -v escape-processes the value, so a backslash in a
   # tag expands to a real newline+TAB and splits the rewritten line, which validate then reads clean.
   # Frontmatter ONLY: matching over the whole file rewrote a BODY that quotes a list-shaped line
@@ -1981,7 +2045,12 @@ cmd_retag() {
     }
     mode=="w" { print }
     END { if(mode=="c") print chg+0 }'
-  rewrite_file() { # $1=file $2=key — in-place via tmp
+  rewrite_file() { # $1=file $2=key — in-place via tmp, original snapshotted once for rollback
+    if [ -n "$RETAG_BAK" ]; then
+      local rel=${1#"$ROOT"/} bk
+      bk="$RETAG_BAK/${rel//\//__}"
+      if [ ! -f "$bk" ]; then cp "$1" "$bk" && printf '%s\n' "$rel" >> "$RETAG_BAK/.list"; fi
+    fi
     t=$(mktemp)
     # Preserve the file's line endings: awk writes LF, so a one-tag rename rewrote every line of a
     # CRLF file — a whole-file diff for one word. Trailing CRs normalised to exactly one.
@@ -2027,13 +2096,29 @@ cmd_retag() {
     [ -f "$f" ] && grep -qF -- "$old" "$f" && freetext="$freetext $f"
   done
   [ -n "$freetext" ] && echo "  review manually (free-text mentions of '$old', not rewritten):$freetext"
-  if [ "$dry" -eq 0 ] && [ "$truthhits" -gt 0 ]; then
-    cmd_reindex ""
-    echo "done — $total file(s) rewritten. Run 'weavedoc validate' to seal."
-  elif [ "$dry" -eq 0 ]; then
-    echo "done — $total file(s) rewritten (no truth tags touched; indexes unchanged)."
+  if [ "$dry" -eq 1 ]; then return 0; fi
+  if [ "$total" -eq 0 ]; then rm -rf "$RETAG_BAK"; return 0; fi
+  # Commit path: regenerate the views, then the same full validation everything answers to.
+  local vout vrc=0
+  if [ "$truthhits" -gt 0 ]; then cmd_reindex "" >/dev/null || vrc=1; fi
+  if [ "$vrc" -eq 0 ]; then vout=$(cmd_validate 2>&1) || vrc=1; fi
+  if [ "$vrc" -eq 0 ]; then
+    rm -rf "$RETAG_BAK"
+    echo "done — $total file(s) rewritten · post-validate clean."
+    return 0
   fi
-  return 0
+  # Rollback: restore every snapshot, re-sync the generated views to the restored tags.
+  printf '%s\n' "${vout:-}" | sed 's/^/  /'
+  local rel
+  if [ -f "$RETAG_BAK/.list" ]; then
+    while IFS= read -r rel; do
+      [ -n "$rel" ] && cp "$RETAG_BAK/${rel//\//__}" "$ROOT/$rel"
+    done < "$RETAG_BAK/.list"
+  fi
+  [ "$truthhits" -gt 0 ] && cmd_reindex "" >/dev/null 2>&1
+  rm -rf "$RETAG_BAK"
+  echo "retag: post-write validation FAILED — every edit rolled back, indexes re-synced; the mine is as before. The problems above predate the rename." >&2
+  return 1
 }
 
 # ===================== pull (protocol-correct mine lookup — the read-side census) =====================
@@ -2214,6 +2299,17 @@ scan_verified_units() { # -> "V<TAB><id>" per covered id · "U<TAB><line>" per e
       # must END with the marker once trailing decoration is stripped — the verdict is last on the line.
       v = line; gsub(/[[:space:]|*.-]+$/, "", v)
       if (tolower(v) !~ ("(^|[^a-z_])" mark "$")) { print "U\t" line; next }
+      # Ranges are validated BEFORE anything from this line is emitted: a reversed span expands
+      # to zero in a naive loop (silent), an absurd one to millions (one typo minting coverage) —
+      # either way the LINE covers nothing and is named with the other cover-nothing entries.
+      s = line; badrange = 0
+      while (match(s, /[mt][0-9]+-[mt][0-9]+/)) {
+        r = substr(s, RSTART, RLENGTH); s = substr(s, RSTART + RLENGTH)
+        i = index(r, "-"); a = substr(r, 1, i-1); b = substr(r, i+1)
+        if (substr(a,1,1) != substr(b,1,1)) continue
+        if (substr(b,2)+0 < substr(a,2)+0 || substr(b,2)+0 - substr(a,2)+0 > 9999) { badrange = 1; break }
+      }
+      if (badrange) { print "U\t" line; next }
       s = line
       while (match(s, /[mt][0-9]+-[mt][0-9]+/)) {
         r = substr(s, RSTART, RLENGTH); s = substr(s, RSTART + RLENGTH)
@@ -2772,22 +2868,25 @@ cmd_scope() {
 }
 
 # ===================== dispatch =====================
+# Every command validates its FULL argument list (WD-CLI-001): an extra argument or an unknown
+# flag is a typo'd intention, and a tool that ignores it does something other than what was asked.
+usage2() { echo "usage: $1" >&2; exit 2; }
 case "${1:-}" in
-  validate)   cmd_validate ;;
-  impact)   shift; cmd_impact "${1:-}" ;;
-  status)   cmd_status ;;
-  scope)    cmd_scope ;;
+  validate) shift; [ $# -eq 0 ] || usage2 "weavedoc validate";  cmd_validate ;;
+  impact)   shift; [ $# -eq 1 ] || usage2 "weavedoc impact <material-id>"; cmd_impact "$1" ;;
+  status)   shift; [ $# -eq 0 ] || usage2 "weavedoc status";   cmd_status ;;
+  scope)    shift; [ $# -eq 0 ] || usage2 "weavedoc scope";    cmd_scope ;;
   attest)   shift; cmd_attest "$@" ;;
-  seal-review) shift; cmd_seal_review "${1:-}" "${2:-}" ;;
-  consecrate)  shift; cmd_consecrate "${1:-}" ;;
+  seal-review) shift; { [ $# -ge 1 ] && [ $# -le 2 ]; } || usage2 "weavedoc seal-review <doc-id> [draft|final]"; cmd_seal_review "$1" "${2:-}" ;;
+  consecrate)  shift; [ $# -eq 1 ] || usage2 "weavedoc consecrate <doc-id>"; cmd_consecrate "$1" ;;
   upgrade)  shift; cmd_upgrade "$@" ;;
-  gaps)     cmd_gaps ;;
-  census)   cmd_census ;;
-  reindex)  shift; cmd_reindex "${1:-}" ;;
-  retag)    shift; cmd_retag "${1:-}" "${2:-}" "${3:-}" ;;
-  pull)     shift; cmd_pull "${1:-}" ;;
-  lang)     cmd_lang ;;
-  locale)   cmd_locale ;;
-  version)  cmd_version ;;
+  gaps)     shift; [ $# -eq 0 ] || usage2 "weavedoc gaps";     cmd_gaps ;;
+  census)   shift; [ $# -eq 0 ] || usage2 "weavedoc census";   cmd_census ;;
+  reindex)  shift; cmd_reindex "$@" ;;
+  retag)    shift; { [ $# -ge 2 ] && [ $# -le 3 ]; } || usage2 "weavedoc retag <old> <new> [--dry]"; cmd_retag "$1" "$2" "${3:-}" ;;
+  pull)     shift; [ $# -eq 1 ] || usage2 "weavedoc pull <term>"; cmd_pull "$1" ;;
+  lang)     shift; [ $# -eq 0 ] || usage2 "weavedoc lang";     cmd_lang ;;
+  locale)   shift; [ $# -eq 0 ] || usage2 "weavedoc locale";   cmd_locale ;;
+  version)  shift; [ $# -eq 0 ] || usage2 "weavedoc version";  cmd_version ;;
   *) echo "weavedoc — validate | pull <term> | impact <material-id> | status | scope | attest <verdict> <round> <standard> <id...> | seal-review <doc-id> [draft|final] | consecrate <doc-id> | gaps | census | reindex [--check] | retag <old> <new> [--dry] | version | lang | locale"; exit 2 ;;
 esac

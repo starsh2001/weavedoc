@@ -44,6 +44,9 @@ project.fm.optional: authority|required_tags|tone|gap_density
 plan.fm.required: doc_id|doc_type|tone|status
 plan.fm.optional: continues|cited_truths|scope_tags|audience|publication_labels
 plan.fm.enum.status: planned|drafting|reviewing|done|stale
+# `audience: external` requires publication_labels (WD-CFG-001): an external document ships with
+# its labels or not at all.
+plan.fm.enum.audience: internal|external
 project.fm.required: version|language|roles
 review.fm.optional: round|consecutive_passes|reviewed_kind|reviewed_digest|review_context_digest
 review.enum.reviewed_kind: draft|final
