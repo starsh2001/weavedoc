@@ -1918,17 +1918,22 @@ scan_verified_units() { # -> "V<TAB><id>" per covered id · "U<TAB><line>" per e
     }'
 }
 cmd_scope() {
-  local m mstat n_mconv=0 n_mver=0 munver=""
+  local m mstat n_mconv=0 n_mver=0 munver="" n_mused=0
   while IFS= read -r m; do
     [ -f "$MATERIALS/$m/converted.md" ] || continue
     mstat=$(fm "$MATERIALS/$m/converted.md" status)
     case "$mstat" in
-      # `used` means a document already cited it, which it could not have done unverified.
-      verified|used) n_mconv=$((n_mconv+1)); n_mver=$((n_mver+1)) ;;
+      # Conversion verification records ONLY in the material's own `status: verified` — the
+      # `## Verified units` ledger is the truths lane, so an m-id there covers no conversion.
+      verified)  n_mconv=$((n_mconv+1)); n_mver=$((n_mver+1)) ;;
+      # `used` is lifecycle, not a verdict (WD-COR-001): refine's consecration stamp OVERWRITES
+      # `verified`, so a used material is owed — counting it verified buried the debt of every
+      # verify-skipped material the moment a document cited it.
+      used)      n_mconv=$((n_mconv+1)); munver="$munver $m"; n_mused=$((n_mused+1)) ;;
       # Withdrawn material is not owed — out of the numerator AND the denominator, or the ratio
       # reports a debt nobody can ever pay down.
-      retracted)     ;;
-      *)             n_mconv=$((n_mconv+1)); munver="$munver $m" ;;
+      retracted) ;;
+      *)         n_mconv=$((n_mconv+1)); munver="$munver $m" ;;
     esac
   done < <(material_ids)
 
@@ -1954,6 +1959,7 @@ cmd_scope() {
     printf '  materials  %s converted · %s verified · %s unverified   (source: each material frontmatter status)\n' \
       "$n_mconv" "$n_mver" "$((n_mconv - n_mver))"
     [ -n "$munver" ] && printf '    → %s\n' "$(printf '%s\n' $munver | LC_ALL=C sort -u | compress_ids)"
+    [ "$n_mused" -gt 0 ] && printf '    (%s of them status:used — `used` records citation, not verification; a verify round still owes them)\n' "$n_mused"
   fi
   if [ "$n_t" -gt 0 ]; then
     printf '  truths     %s on disk · %s verified · %s unverified   (source: truths/verify.md ## Verified units)\n' \

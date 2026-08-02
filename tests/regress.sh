@@ -1340,6 +1340,22 @@ acct_scope_failed_row_not_coverage() {
   vrun scope
   expect_has "0 verified"
 }
+acct_scope_used_unverified() {
+  # WD-COR-001: `used` is lifecycle, not a verdict — a material that skipped verify and then got
+  # cited must stay owed, or the debt vanishes forever. The pristine ledger names m001 in
+  # `## Verified units`, so this also pins that a truths-lane mention (extraction ledger) is not
+  # a conversion verdict: material verification records ONLY in the material's own status.
+  sed -i 's/^status: converted$/status: used/' "$W/materials/m001/converted.md"
+  vrun scope
+  expect_has "materials  1 converted · 0 verified · 1 unverified"
+  expect_has "records citation, not verification"
+}
+acct_scope_verified_evidence_only() {
+  # The one v1 evidence of material (conversion) verification: the material's own `status: verified`.
+  sed -i 's/^status: converted$/status: verified/' "$W/materials/m001/converted.md"
+  vrun scope
+  expect_has "materials  1 converted · 1 verified · 0 unverified"
+}
 acct_status_untagged_open() {
   # R3-N2: a `- [open]` with no ownership tag landed in the total but in no bucket and not in
   # untagged — `open 5 — 2 · 1 · 1` with the missing one nowhere. The remainder is now shown.

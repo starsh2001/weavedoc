@@ -4,6 +4,17 @@
 
 ---
 
+## 2026-08-02.3
+
+**`used`는 검증이 아닙니다 — `scope` 상태축 수정 (IMPROVEMENT_PLAN WD-COR-001, Phase 1 착수).** material의 한 축 `status`에 lifecycle(`used`)과 검증 판정(`verified`)이 같이 살면서 `scope`가 `verified|used`를 한 묶음으로 세고 있었습니다. refine의 consecration은 `verified`를 `used`로 **덮어쓰므로**, verify를 건너뛴 자료도 문서에 한 번 인용되는 순간 검증 부채가 영구히 사라지는 구조였습니다.
+
+- `scope`는 material 검증을 이제 **자료 자신의 `status: verified`에서만** 읽습니다. `used`는 부채로 계산되고, 부채 목록 아래 `(N of them status:used — \`used\` records citation, not verification; a verify round still owes them)` 한 줄이 이유를 찍습니다.
+- `## Verified units`의 m-id는 material 검증의 근거가 되지 않습니다 — 그 장부는 truths 레인(추출 검증, converted↔truths)이고, material 검증(원본↔converted)의 v1 기록은 자료 frontmatter가 유일합니다(verify 스킬 §State). 신규 케이스가 이 구분까지 고정합니다: pristine 장부가 m001을 이름하지만 used 자료는 그래도 부채입니다.
+- 검증 판정이 `used` 스탬프를 살아남는 구조(별도 verification 기록 + content digest + `legacy-unbound`)는 다음 작업 단위(WD-COR-003)입니다 — 이 번들은 잘못된 초록불만 먼저 끕니다.
+- FORMATS의 material `status` enum에 `used` 뜻풀이를 추가했습니다(lifecycle이며 판정이 아님).
+
+검증: `bash -n` 통과 · 회귀 **184/184**(신규 2: `acct_scope_used_unverified` · `acct_scope_verified_evidence_only`) · 실광산 scope 출력 불변 — used 자료 0건(문서 절반 미가동)이라 첫 consecration부터 물었을 버그를 그 전에 제거 · schema 불변.
+
 ## 2026-08-02.2
 
 **주석 정리 — 코드 무변경.** `bin/weavedoc`의 주석이 40%(950줄)까지 불어 있었고, 그 대부분이 "이 줄을 간단히 고치려다 뭐가 깨졌다"는 회귀-방지 서사였습니다. 그런데 산문 경고는 실제로 회귀를 못 막았고(통일 지시 주석이 있었는데도 감사 라운드마다 재발), 막은 건 테스트였습니다 — 즉 가장 약한 매체로 회귀 방지를 하고 있었던 셈입니다. 그 서사를 걷어내고 **불변식 한두 줄 + KNOWN LIMIT**만 남겼습니다.

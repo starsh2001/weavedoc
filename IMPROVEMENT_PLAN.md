@@ -625,7 +625,7 @@ macOS 기본 Bash 3.2/BSD 도구를 지원하지 않는다면 preflight가 명�
 
 | 요구사항 | 핵심 테스트 ID | 구현 단계 |
 |---|---|---|
-| WD-COR-001 | `scope_used_unverified`, `scope_verified_evidence_only` | Phase 1 |
+| WD-COR-001 | `acct_scope_used_unverified`, `acct_scope_verified_evidence_only` | Phase 1 — 구현·통과 2026-08-02 |
 | WD-COR-002 | `gate_final_digest_single`, `gate_final_digest_multi`, `gate_context_digest`, `gate_candidate_validate_once`, `gate_candidate_failure_preserves_final` | Phase 1 |
 | WD-COR-003 | `scope_material_digest_stale`, `scope_truth_digest_stale`, `scope_legacy_unbound`, `legacy_reverify_binds_digest` | Phase 1 |
 | WD-COR-004 | `completeness_required_blocks`, `completeness_off_discloses` | Phase 1 |
