@@ -1,0 +1,5 @@
+scope — what a verify round still owes (computed from disk + the ledgers, not judged)
+  materials  1 converted · 0 verified · 1 unverified   (source: each material frontmatter status)
+    → m001 
+  truths     1 on disk · 1 verified · 0 unverified   (source: truths/verify.md ## Verified units)
+  → a round examines the sets above. Units already covered are not re-verified without a reason recorded in verify.md.
