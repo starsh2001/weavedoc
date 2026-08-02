@@ -627,7 +627,7 @@ macOS 기본 Bash 3.2/BSD 도구를 지원하지 않는다면 preflight가 명�
 |---|---|---|
 | WD-COR-001 | `acct_scope_used_unverified`, `acct_scope_verified_evidence_only` | Phase 1 — 구현·통과 2026-08-02 |
 | WD-COR-002 | `gate_final_digest_single`, `gate_final_digest_multi`, `gate_context_digest`, `gate_candidate_validate_once`, `gate_candidate_failure_preserves_final` | Phase 1 |
-| WD-COR-003 | `scope_material_digest_stale`, `scope_truth_digest_stale`, `scope_legacy_unbound`, `legacy_reverify_binds_digest` | Phase 1 |
+| WD-COR-003 | `acct_scope_material_digest_stale`, `acct_scope_truth_digest_stale`, `acct_scope_legacy_unbound`, `acct_legacy_reverify_binds_digest` (+`acct_scope_bound_verified`, `acct_scope_lifecycle_not_stale`, `acct_scope_failed_recorded`, `acct_scope_retracted_truth_excluded`, `pass_attest_validate_clean`, `block_attest_bad_target`) | Phase 1 — 구현·통과 2026-08-02 |
 | WD-COR-004 | `completeness_required_blocks`, `completeness_off_discloses` | Phase 1 |
 | WD-QA-001~003 | `clean_clone_regression`, `parallel_isolation`, `resume_cache_key` | Phase 2 |
 | WD-MIG-001~002 | `upgrade_v010_golden`, `upgrade_legacy_digest_no_blind_stamp`, `upgrade_legacy_digest_bind_with_evidence`, `upgrade_idempotent`, `upgrade_rollback` | Phase 3 |

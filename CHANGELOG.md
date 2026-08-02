@@ -4,6 +4,22 @@
 
 ---
 
+## 2026-08-02.4
+
+**검증에 digest가 생겼습니다 — `verify-ledger.tsv` 사이드카와 `attest` (WD-COR-003).** 지금까지 "verified"는 장부에 이름이 있다는 뜻이었지, 그때 검증한 바이트가 지금의 바이트라는 뜻이 아니었습니다. verified truth를 한 글자 고쳐도 장부는 몰랐습니다. 이제 검증 기록이 내용에 결속됩니다.
+
+- **`truths/verify-ledger.tsv` 신설** — machine-owned 사이드카. append-only TSV(id·sha256·verdict·round·standard·date), **id당 마지막 행이 이깁니다** — 재검증은 append고 라운드 이력은 남습니다. 쓰는 손은 `weavedoc attest` 하나뿐입니다.
+- **`weavedoc attest <verified|failed> <round> <standard> <id...>` 신설** — digest 계산의 단일 철자. all-or-nothing(해석 안 되는 id 하나면 0 byte 기록), tombstone 거부, verified verdict는 `## Verified units`에 사람용 미러 줄을 함께 삽입.
+- **digest 규칙** — truth는 파일 raw bytes 전체. material은 converted.md에서 **frontmatter `status:` 줄만 제외** — refine의 `used` 스탬프가 검증을 무효화하면 COR-001이 가른 두 축이 도로 붙기 때문입니다. 수동 수정·에이전트 실수·정상 re-map이 digest에는 전부 똑같이 보입니다.
+- **`scope`가 5개 증거 등급으로 집계합니다** — verified(digest-bound) · legacy-unbound · stale · failed · unverified. **라운드의 부채 = unverified + stale + failed.** digest 없는 v1 기록(자료 frontmatter `verified`, markdown 장부 행)은 `legacy-unbound`: 보존되는 이력이되 바이트를 묶지 않으므로 verified로 세지 않습니다(§11 결정 — blind stamp 금지). 위험도순 재검증 대상입니다.
+- **tombstone(retracted/discarded) truth가 모집단에서 빠집니다** — retracted material과 같은 규칙. 구 scope는 tombstone 3건을 갚을 수 없는 부채로, tombstone 커버리지를 verified로 각각 오계수하고 있었습니다.
+- 구버전 schema 프로젝트(테스트베드 혼용)에서는 새 schema 키가 코드 기본값으로 degrade합니다.
+- 스모크에서 MSYS `sha256sum`의 binary-mode 출력(`hash *file`)이 배치 digest 파서를 침묵 무력화하는 결함을 발견·수정했습니다 — 별표가 id에 붙어 모든 truth가 전 bucket에서 사라지는 형태였습니다.
+
+실광산(238 live): 자료 22 verified → **legacy-unbound**, truth 224 verified → **201 legacy-unbound**(23은 tombstone/ghost 커버리지 정정), 미검증 40 → **37**(3건이 tombstone), ghost 2건(t083·t211) 지목 유지. 부채가 늘어난 게 아니라 **이제 정직하게 분류**된 것입니다.
+
+검증: `bash -n` 통과 · 회귀 **194/194**(신규 10 · 갱신 3 · meta 로스터 +5 판정자) · 실광산 scope 재실행 ✓ · validate는 사이드카 옆에서 clean(`pass_attest_validate_clean`).
+
 ## 2026-08-02.3
 
 **`used`는 검증이 아닙니다 — `scope` 상태축 수정 (IMPROVEMENT_PLAN WD-COR-001, Phase 1 착수).** material의 한 축 `status`에 lifecycle(`used`)과 검증 판정(`verified`)이 같이 살면서 `scope`가 `verified|used`를 한 묶음으로 세고 있었습니다. refine의 consecration은 `verified`를 `used`로 **덮어쓰므로**, verify를 건너뛴 자료도 문서에 한 번 인용되는 순간 검증 부채가 영구히 사라지는 구조였습니다.

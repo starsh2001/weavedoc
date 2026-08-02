@@ -668,7 +668,8 @@ meta_single_judges() {
   # watched by the suite itself: each grep pins an invariant about the BINARY, so a new duplicate
   # judge fails here before a cold reviewer has to find it.
   local B="$REPO/.weavedoc/bin/weavedoc" bad="" fn n
-  for fn in is_noise has_fm fid_mark fid_body nocomment canon_id is_placeholder req_value; do
+  for fn in is_noise has_fm fid_mark fid_body nocomment canon_id is_placeholder req_value \
+            truth_digest mat_digest unit_digest ledger_rows ledger_file; do
     n=$(grep -cE "^${fn}\(\)" "$B" || true)
     [ "${n:-0}" -eq 1 ] || bad="$bad ${fn}=${n};"
   done
@@ -1308,13 +1309,13 @@ acct_status_material_count() {
 }
 acct_scope_counts_unverified() {
   # The command the verify skill now reads its round scope from, and the number that replaced
-  # "all of them, again": the ledger covers t001, so a NEW truth is the only thing owed.
-  # Doubles as the bullet-shape test — the shipped template writes bullets, the production mine
-  # writes a table, and a parser knowing only one reads the other mine as "nothing verified",
-  # which is the full-mine round this command exists to prevent, arriving silently.
+  # "all of them, again": the markdown ledger covers t001 (legacy-unbound under WD-COR-003), so
+  # a NEW truth is the only thing unverified. Doubles as the bullet-shape test — the shipped
+  # template writes bullets, the production mine writes a table, and a parser knowing only one
+  # reads the other mine as "nothing verified", the full-mine round this command prevents.
   printf -- '---\nid: t002\nclaim: "대금은 5천만원이다"\nsource: m001\ntags: [대금]\nstatus: ok\n---\n\n제3조 대금은 5천만원으로 한다.\n' > "$W/truths/t002.md"
   vrun scope
-  expect_has "1 verified"
+  expect_has "1 legacy-unbound"
   expect_has "1 unverified"
   expect_has "t002"
 }
@@ -1347,14 +1348,87 @@ acct_scope_used_unverified() {
   # a conversion verdict: material verification records ONLY in the material's own status.
   sed -i 's/^status: converted$/status: used/' "$W/materials/m001/converted.md"
   vrun scope
-  expect_has "materials  1 converted · 0 verified · 1 unverified"
+  expect_has "materials  1 converted · 0 verified"
+  expect_has "1 unverified"
   expect_has "records citation, not verification"
 }
 acct_scope_verified_evidence_only() {
-  # The one v1 evidence of material (conversion) verification: the material's own `status: verified`.
+  # WD-COR-003: v1 `status: verified` is a digest-less verification record — real history,
+  # preserved, but it binds no bytes. It is `legacy-unbound`, never digest-bound verified.
   sed -i 's/^status: converted$/status: verified/' "$W/materials/m001/converted.md"
   vrun scope
-  expect_has "materials  1 converted · 1 verified · 0 unverified"
+  expect_has "materials  1 converted · 0 verified (digest-bound) · 1 legacy-unbound"
+}
+acct_scope_legacy_unbound() {
+  # The pristine mine is a v1 mine: t001 verified by a digest-less markdown row. Shown apart as
+  # legacy-unbound and excluded from the digest-bound count (WD-COR-003).
+  vrun scope
+  expect_has "truths     1 live · 0 verified (digest-bound) · 1 legacy-unbound"
+}
+acct_scope_bound_verified() {
+  # attest pins current bytes; the unit counts digest-bound verified and nothing is owed on it.
+  vrun attest verified 2 standard m001 t001
+  vrun scope
+  expect_has "materials  1 converted · 1 verified (digest-bound) · 0 legacy-unbound · 0 stale · 0 failed · 0 unverified"
+  expect_has "truths     1 live · 1 verified (digest-bound) · 0 legacy-unbound · 0 stale · 0 failed · 0 unverified"
+}
+acct_scope_truth_digest_stale() {
+  # One character in a verified truth → stale. A manual edit, an agent slip, and a normal re-map
+  # all look identical to the digest; that is the point (WD-COR-003).
+  vrun attest verified 2 standard t001
+  printf '한 글자.\n' >> "$W/truths/t001.md"
+  vrun scope
+  expect_has "1 stale"
+  expect_has "→ stale: t001"
+}
+acct_scope_material_digest_stale() {
+  vrun attest verified 2 standard m001
+  printf '\n제9조 추가 조항.\n' >> "$W/materials/m001/converted.md"
+  vrun scope
+  expect_has "materials  1 converted · 0 verified (digest-bound) · 0 legacy-unbound · 1 stale"
+}
+acct_scope_lifecycle_not_stale() {
+  # The axis split pays off here: refine's `used` stamp rewrites only the frontmatter status
+  # line, and the material digest excludes exactly that line — verification survives use.
+  vrun attest verified 2 standard m001
+  sed -i 's/^status: converted$/status: used/' "$W/materials/m001/converted.md"
+  vrun scope
+  expect_has "materials  1 converted · 1 verified (digest-bound) · 0 legacy-unbound · 0 stale · 0 failed · 0 unverified"
+}
+acct_legacy_reverify_binds_digest() {
+  # Re-verifying a legacy-unbound unit promotes it: the sidecar row binds bytes, and the old
+  # markdown row stops counting as legacy — covered is covered once.
+  vrun attest verified 2 standard t001
+  vrun scope
+  expect_has "truths     1 live · 1 verified (digest-bound) · 0 legacy-unbound"
+}
+acct_scope_failed_recorded() {
+  # A failed verdict is a record, not coverage — the unit stays owed and is counted apart.
+  vrun attest failed 2 standard t001
+  vrun scope
+  expect_has "1 failed"
+}
+acct_scope_retracted_truth_excluded() {
+  # Tombstones (retracted/discarded) leave the population — the same rule retracted materials
+  # already follow: not owed, or the ratio reports a debt nobody can ever pay down.
+  printf -- '---\nid: t002\nclaim: "지체상금 조항이 있다"\nsource: m001\ntags: [위약]\nstatus: retracted\n---\n' > "$W/truths/t002.md"
+  printf -- '- removed: t002 (2026-07-30) — 원문에 없었다\n' >> "$W/truths/changelog.md"
+  ( cd "$W" && bash .weavedoc/bin/weavedoc reindex >/dev/null 2>&1 )
+  vrun scope
+  expect_has "truths     1 live"
+  expect_has "1 tombstone"
+}
+pass_attest_validate_clean() {
+  # The sidecar is additive: no v1 glob or census sees it, and validate stays clean next to it.
+  vrun attest verified 2 standard m001 t001
+  vrun validate; expect_pass
+}
+block_attest_bad_target() {
+  # attest is all-or-nothing: one unresolvable id and NOTHING is written.
+  vrun attest verified 2 standard t001 t999
+  expect_block "t999"
+  vrun scope
+  expect_has "0 verified (digest-bound)"
 }
 acct_status_untagged_open() {
   # R3-N2: a `- [open]` with no ownership tag landed in the total but in no bucket and not in

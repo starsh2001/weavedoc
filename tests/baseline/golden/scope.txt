@@ -1,5 +1,6 @@
 scope — what a verify round still owes (computed from disk + the ledgers, not judged)
-  materials  1 converted · 0 verified · 1 unverified   (source: each material frontmatter status)
+  materials  1 converted · 0 verified (digest-bound) · 0 legacy-unbound · 0 stale · 0 failed · 1 unverified   (source: truths/verify-ledger.tsv + material frontmatter)
     → m001 
-  truths     1 on disk · 1 verified · 0 unverified   (source: truths/verify.md ## Verified units)
+  truths     1 live · 0 verified (digest-bound) · 1 legacy-unbound · 0 stale · 0 failed · 0 unverified   (source: truths/verify-ledger.tsv + ## Verified units)
+    → legacy-unbound: t001 
   → a round examines the sets above. Units already covered are not re-verified without a reason recorded in verify.md.
