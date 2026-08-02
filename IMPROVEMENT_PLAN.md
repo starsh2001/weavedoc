@@ -1,6 +1,6 @@
 # WeaveDoc 통합 개선 계획
 
-> 상태: 실행 중 — §11 전 항목 결정 완료(2026-08-02) · Phase 0 완료(2026-08-02) · **Phase 1 완료(2026-08-02: COR-001~004 구현·회귀 통과, v1/v2 dual-reader, 내부 milestone — 공개 release 없음)** · 다음: Phase 2 (테스트·CI 신설)  
+> 상태: 실행 중 — §11 전 항목 결정 완료(2026-08-02) · Phase 0 완료(2026-08-02) · **Phase 1 완료(2026-08-02: COR-001~004 구현·회귀 통과, v1/v2 dual-reader, 내부 milestone — 공개 release 없음)** · **Phase 2 구성 완료(2026-08-02: mktemp 격리 + keyed resume cache · `.github/workflows/ci.yml` 신설 · 전 명령 smoke · fidtest 흡수 3/폐기 8 — "PR·tag에서 suite가 돈다"는 완료 조건은 첫 push 후 CI 실행으로 확인)** · 다음: push → CI 검증 → Phase 3 (schema v2 + migration)  
 > 비교 기준: `v0.1.0` (`ff0b726`, runtime `2026-07-27.7`) → 현재 HEAD `7c199e6` (`v0.2.0` tag 이후 2개 commit, `git describe: v0.2.0-2-g7c199e6`, runtime `2026-08-02.2`)  
 > 목적: 현재판의 fidelity 강점을 보존하면서 정확성, 마이그레이션, 테스트, 성능, 배포 계약을 제품 수준으로 끌어올린다.
 
@@ -486,7 +486,7 @@ Phase 1의 새 verification/review 필드와 Phase 3의 upgrade 도구 사이에
 
 - Phase 0에서 추적한 suite를 정식 `tests/` 구조로 정리하고 `fidtest.sh`의 고유 케이스를 통합
 - unique temp/trap/cache key 적용
-- diagnostic code 기반 exact assertions
+- diagnostic code 기반 exact assertions *(2026-08-02 기록: §10 단위 11의 diagnostic code 도입과 동시로 이동 — 코드 체계가 없는 상태의 code 기반 assertion은 성립하지 않고, 전 진단 메시지에 code를 붙이는 변경은 Phase 2의 behavior-neutral 원칙과 충돌한다)*
 - 현재 없는 `.github/workflows/`를 신설하고 PR·tag trigger를 구성
 - Ubuntu·Windows Git Bash를 required matrix로, macOS Bash 5 + GNU toolchain을 우선 non-blocking matrix로 구성
 - `bash -n`, ShellCheck, regression, migration, smoke jobs 분리

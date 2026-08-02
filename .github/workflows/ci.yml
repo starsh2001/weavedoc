@@ -1,0 +1,90 @@
+name: ci
+
+# Phase 2 (IMPROVEMENT_PLAN WD-QA-001~003): the same suite on PRs, pushes and tags.
+# Ubuntu + Windows Git Bash are required; macOS runs non-blocking until the support claim is
+# either promoted to required or retracted together with its docs (§7.2 policy).
+
+on:
+  push:
+    branches: ["main", "improve/**"]
+    tags: ["v*"]
+  pull_request:
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: bash -n (bin + suite)
+        run: |
+          bash -n .weavedoc/bin/weavedoc
+          bash -n tests/regress.sh
+          bash -n tests/make-manifest.sh
+      - name: shellcheck (errors block; the full style pass is a §9 release condition)
+        run: |
+          sudo apt-get update -q && sudo apt-get install -y -q shellcheck
+          shellcheck --severity=error .weavedoc/bin/weavedoc tests/regress.sh tests/make-manifest.sh
+
+  regression:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            required: true
+          - os: windows-latest
+            required: true
+          - os: macos-latest
+            required: false   # non-blocking until promoted or retracted (§7.2)
+    runs-on: ${{ matrix.os }}
+    continue-on-error: ${{ !matrix.required }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - name: macOS GNU toolchain (documented requirement — default BSD tools are unsupported)
+        if: runner.os == 'macOS'
+        run: |
+          brew install bash gawk gnu-sed coreutils
+          echo "/usr/local/opt/gnu-sed/libexec/gnubin" >> "$GITHUB_PATH"
+          echo "/opt/homebrew/opt/gnu-sed/libexec/gnubin" >> "$GITHUB_PATH"
+          echo "/usr/local/opt/coreutils/libexec/gnubin" >> "$GITHUB_PATH"
+          echo "/opt/homebrew/opt/coreutils/libexec/gnubin" >> "$GITHUB_PATH"
+      - name: run the regression suite
+        run: bash tests/regress.sh
+      - name: executed-case artifact (§7.3 — the case ID list, not just a PASS count)
+        if: always()
+        run: |
+          key_dir=$(ls -d "${TMPDIR:-/tmp}"/wd-reg-* 2>/dev/null | head -1) || true
+          mkdir -p ci-artifact
+          { echo "commit: $GITHUB_SHA"
+            echo "bundle: $(cat .weavedoc/VERSION)"
+            echo "os: $(uname -sr)"
+            echo "bash: $BASH_VERSION"
+            echo "awk: $(awk --version 2>/dev/null | head -1)"
+            echo "sed: $(sed --version 2>/dev/null | head -1)"
+          } > ci-artifact/env.txt
+          [ -n "$key_dir" ] && ls "$key_dir/res" > ci-artifact/executed-cases.txt || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: regression-${{ matrix.os }}
+          path: ci-artifact/
+      - name: clean worktree after tests (Phase 2 completion condition)
+        run: |
+          status=$(git status --porcelain)
+          if [ -n "$status" ]; then
+            echo "worktree not clean after the suite:"; echo "$status"; exit 1
+          fi
+
+  manifest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: bundle manifest is two-run byte-identical (Phase 0 condition, kept honest in CI)
+        run: |
+          bash tests/make-manifest.sh > m1.txt
+          bash tests/make-manifest.sh > m2.txt
+          cmp m1.txt m2.txt
+          sha256sum m1.txt

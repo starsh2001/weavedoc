@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
-# WeaveDoc regression suite — the case table from notes/HANDOFF §4, executable.
+# WeaveDoc regression suite — tracked in tests/ since Phase 0 (IMPROVEMENT_PLAN WD-QA-001).
 #
-# Lives in notes/ (gitignored) on purpose: the previous harness sat in /tmp and was lost between
-# sessions, so every round paid to rebuild it. Fixtures go under $TMPDIR/wd-reg.
+# Fixtures: a per-run mktemp workspace, removed on exit — parallel runs cannot collide.
+# Results: a keyed cache dir under $TMPDIR (key = commit + bundle bytes + OS + tool versions),
+# which is what makes --resume safe across exactly one thing: the same configuration.
 #
 #   bash notes/regress.sh            # every case (parallel)
 #   bash notes/regress.sh gate       # only cases whose name contains "gate"
@@ -17,9 +18,37 @@
 
 set -u
 REPO=$(cd "$(dirname "$0")/.." >/dev/null 2>&1 && pwd)
-BASE="${TMPDIR:-/tmp}/wd-reg"
-PRISTINE="$BASE/pristine"
-RES="$BASE/res"
+
+# ---- workspace & result-cache isolation (WD-QA-002) ----
+# Fixtures live in a per-run mktemp dir removed by trap: two runs can never collide, and an
+# interrupted run leaves no workspace behind. Results live in a KEYED cache dir — the key hashes
+# commit + bundle bytes + OS + tool versions, so --resume can only ever reuse results produced by
+# THIS exact configuration. A different key is a different directory: stale results are
+# unreachable, not filtered. WD_REG_KEY_SALT exists so a test can force a fresh key.
+KEY=$( { git -C "$REPO" rev-parse HEAD 2>/dev/null
+         cat "$REPO/.weavedoc/VERSION" 2>/dev/null
+         sha256sum "$REPO/.weavedoc/bin/weavedoc" "$REPO/.weavedoc/schema" 2>/dev/null | awk '{print $1}'
+         uname -sr; bash --version | head -1; awk --version 2>/dev/null | head -1; sed --version 2>/dev/null | head -1
+         printf '%s' "${WD_REG_KEY_SALT:-}"
+       } | sha256sum | awk '{print $1}' | cut -c1-12 )
+CACHE="${TMPDIR:-/tmp}/wd-reg-$KEY"
+RES="$CACHE/res"
+# Workers inherit the parent's workspace via env; only the invocation that CREATED the mktemp
+# dir removes it (a worker must never delete the floor the other workers stand on).
+CREATED_WORK=0
+if [ -n "${WD_REG_WORK:-}" ] && [ -d "${WD_REG_WORK:-}" ]; then
+  WORK="$WD_REG_WORK"
+else
+  WORK=$(mktemp -d "${TMPDIR:-/tmp}/wd-reg-work.XXXXXX")
+  CREATED_WORK=1
+  export WD_REG_WORK="$WORK"
+fi
+PRISTINE="$WORK/pristine"
+cleanup() { [ "$CREATED_WORK" -eq 1 ] && rm -rf "$WORK" 2>/dev/null; }
+trap cleanup EXIT
+# Best-effort child reaping on abort (MSYS process groups are approximate; the mktemp removal
+# above is what guarantees no cross-run contamination either way).
+trap 'trap - INT TERM; kill 0 2>/dev/null' INT TERM
 W=""
 OUT=""; RC=0
 CASE=""
@@ -1590,6 +1619,50 @@ acct_consecrate_completeness_off_note() {
   vrun consecrate d1
   expect_has "completeness is off"
 }
+
+# ---- fidtest.sh absorption (Phase 2, WD-QA-001) — the three shapes the inventory could not
+# map to an existing case, pinned at their live verdicts. The other eight were duplicates
+# (tests/baseline/fidtest-inventory.md holds the mapping); the side-by-side harness itself is
+# retired — its two-reader purpose ended when meta_single_judges pinned fid_body to ONE judge.
+block_gate_fid_c4_sib2_open() {
+  # ## siblings around the # gate do not soften it: a violation directly under the gate blocks.
+  printf -- '---\nround: 1\n---\n\n# Fidelity violations\n\n- [contradiction] 3장 — t001과 모순\n\n## Findings\n\n## Adjudications\n\n## Human queue\n' > "$W/documents/d1/review.md"
+  vrun validate; expect_block "consecrated through an open gate"
+}
+block_gate_fid_c8_ambiguous_tier() {
+  # Every section at ## and the violation after '## Findings': whatever tier a reader guesses,
+  # the bracketed kind sits outside the gate zone and blocks for exactly that reason.
+  printf -- '---\nround: 1\n---\n\n# Fidelity violations\n\n## Findings\n\n- [contradiction] 3장 — t001과 모순\n\n## Adjudications\n\n## Human queue\n' > "$W/documents/d1/review.md"
+  vrun validate; expect_block "outside the 'Fidelity violations' section"
+}
+block_gate_fid_c9_lonely() {
+  # A review holding ONLY the gate section with an open entry still blocks — missing sibling
+  # sections are not enforced, and their absence cannot become a bypass.
+  printf -- '---\nround: 1\n---\n\n# Fidelity violations\n\n- [contradiction] 3장 — t001과 모순\n' > "$W/documents/d1/review.md"
+  vrun validate; expect_block "consecrated through an open gate"
+}
+
+# ---- command smoke floor (Phase 2: every CLI command has at least one covered run) ----
+acct_smoke_version() { vrun version; expect_pass; expect_has "fingerprint:"; }
+acct_smoke_lang()    { vrun lang;    expect_pass; expect_has "ko"; }
+acct_smoke_locale()  { vrun locale;  expect_pass; expect_has "ko"; }
+acct_smoke_pull() {
+  vrun pull 위약
+  expect_pass
+  expect_has "t001"
+  expect_has "usable 1"
+}
+acct_smoke_impact() {
+  vrun impact m001
+  expect_pass
+  expect_has "truths extracted from it"
+  expect_has "t001"
+}
+acct_smoke_gaps() {
+  vrun gaps
+  expect_pass
+  expect_has "RAW scan, not an open count"
+}
 acct_status_untagged_open() {
   # R3-N2: a `- [open]` with no ownership tag landed in the total but in no bucket and not in
   # untagged — `open 5 — 2 · 1 · 1` with the missing one nowhere. The remainder is now shown.
@@ -1627,13 +1700,15 @@ pass_crlf_retag() {
   OUT="(line endings preserved both ways)"; ok
 }
 pass_space_in_path() {
-  local sw="$BASE/space-$$/with space/proj"
-  rm -rf "$BASE/space-$$" 2>/dev/null; mkdir -p "$BASE/space-$$/with space"
+  # Lives under the per-run mktemp workspace like every other fixture — the trap cleans it, and
+  # `set -u` is why a stale variable here dies loudly instead of writing into a shared /tmp path.
+  local sw="$WORK/space-$$/with space/proj"
+  rm -rf "$WORK/space-$$" 2>/dev/null; mkdir -p "$WORK/space-$$/with space"
   cp -r "$PRISTINE" "$sw"
   OUT=$( ( cd "$sw" && $TO bash .weavedoc/bin/weavedoc validate ) 2>&1 ); RC=$?
   expect_pass
   expect_has "materials 1"
-  rm -rf "$BASE/space-$$" 2>/dev/null
+  rm -rf "$WORK/space-$$" 2>/dev/null
 }
 pass_shipped_templates() {
   # A project built from the three shipped templates, filled in exactly as documented.
@@ -1709,7 +1784,7 @@ acct_materials_redirected() {
 
 runone() { # $1 = case name; runs in its own fixture copy, writes $RES/<case>
   CASE="$1"
-  W="$BASE/w/$CASE"
+  W="$WORK/w/$CASE"
   rm -rf "$W" 2>/dev/null; mkdir -p "$W"
   cp -r "$PRISTINE"/. "$W"/
   RESULT=""; OUT=""; RC=0
@@ -1722,6 +1797,10 @@ runone() { # $1 = case name; runs in its own fixture copy, writes $RES/<case>
 
 if [ -n "$ONE" ]; then
   mkdir -p "$RES"
+  # Standalone --one with no inherited workspace: build the fixture instead of failing on a
+  # missing pristine (a stale shared pristine once ran an OLD bin against a new case — the keyed
+  # per-run workspace removes that class entirely).
+  [ -d "$PRISTINE" ] || mkpristine
   runone "$ONE"
   cat "$RES/$ONE"
   grep -q "	PASS" "$RES/$ONE"
@@ -1736,17 +1815,19 @@ if [ -n "$FILTER" ]; then CASES=$(printf '%s\n' "$CASES" | grep -F "$FILTER" || 
 [ -z "$CASES" ] && { echo "no cases match [$FILTER]"; exit 2; }
 
 echo "weavedoc regression — $(cd "$REPO" && git rev-parse --short HEAD 2>/dev/null) / bundle $(cat "$REPO/.weavedoc/VERSION") / $(printf '%s\n' "$CASES" | wc -l | tr -d ' ') cases, -j$JOBS"
+echo "  env: $(uname -sr) · bash ${BASH_VERSION%%(*} · cache key $KEY"
 bash -n "$REPO/.weavedoc/bin/weavedoc" || { echo "!! bin/weavedoc does not parse"; exit 2; }
 mkpristine
 OUT=$( ( cd "$PRISTINE" && bash .weavedoc/bin/weavedoc validate ) 2>&1 ) || {
   echo "!! the pristine fixture does not validate — every case below would be meaningless"
   printf '%s\n' "$OUT" | sed 's/^/   | /'; exit 2
 }
-mkdir -p "$RES" "$BASE/w"
-# --resume keeps results already on disk and runs only what is missing. One `validate` costs ~40s
-# here even at -j6, so a full sweep outlives a single foreground command; without resume every
-# interruption threw away the whole sweep.
-if [ "$RESUME" -eq 0 ]; then rm -rf "$RES" "$BASE/w" 2>/dev/null; mkdir -p "$RES" "$BASE/w"; fi
+mkdir -p "$RES" "$WORK/w"
+# --resume keeps results already in THIS key's cache and runs only what is missing. One `validate`
+# costs ~40s here even at -j6, so a full sweep outlives a single foreground command; without
+# resume every interruption threw away the whole sweep. A different commit/bundle/toolchain is a
+# different key — its cache is a different directory, so cross-configuration reuse cannot happen.
+if [ "$RESUME" -eq 0 ]; then rm -rf "$RES" "$WORK/w" 2>/dev/null; mkdir -p "$RES" "$WORK/w"; fi
 
 TODO=""
 for CASE in $CASES; do
