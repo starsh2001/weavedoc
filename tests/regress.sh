@@ -1553,6 +1553,43 @@ block_gate_tree_renamed() {
   mv "$W/documents/d1/final/02.md" "$W/documents/d1/final/02b.md"
   vrun validate; expect_block "not the bytes the clean review reviewed"
 }
+
+# ---- WD-COR-004: completeness warranty — required wires the gap register into the gate ----
+req_completeness() { sed -i 's/^  completeness: off/  completeness: required/' "$W/.weavedoc/config.yaml"; }
+block_completeness_required_open_gap() {
+  # `required` + a consecrated output + an OPEN gap = a violation, not a note. The default (off)
+  # keeps fill-or-accept non-blocking; the knob is what turns the register into a gate input.
+  req_completeness
+  printf '# Open\n\n- [declared] m001 — 대금 조항 미완성 — "미정" 표기\n\n# Accepted\n' > "$W/gaps.md"
+  vrun validate; expect_block "open gap"
+}
+block_completeness_required_no_register() {
+  # `required` with no gaps.md at all: the register never ran, so the warranty is void — a
+  # warranty nobody ran is not a warranty (fail-closed, same as the gate's own record).
+  req_completeness
+  vrun validate; expect_block "no gaps.md"
+}
+pass_completeness_required_accepted_only() {
+  # Accepted gaps are decisions, not debt — `required` blocks only what is still open.
+  req_completeness
+  printf '# Open\n\n# Accepted\n\n- [declared] m001 — 부속서 없음 — 의도적 제외 — scope: 위약 — recheck: 부속서 입수 시 — as-of: t001\n' > "$W/gaps.md"
+  vrun validate; expect_pass
+}
+pass_completeness_off_register_ignored() {
+  # The default stays the default: off = fill-or-accept, never a hard failure.
+  printf '# Open\n\n- [declared] m001 — 대금 조항 미완성 — "미정" 표기\n\n# Accepted\n' > "$W/gaps.md"
+  vrun validate; expect_pass
+}
+acct_status_completeness_off() {
+  vrun status
+  expect_has "completeness: off"
+}
+acct_consecrate_completeness_off_note() {
+  rm -f "$W/documents/d1/final.md"
+  vrun seal-review d1 draft
+  vrun consecrate d1
+  expect_has "completeness is off"
+}
 acct_status_untagged_open() {
   # R3-N2: a `- [open]` with no ownership tag landed in the total but in no bucket and not in
   # untagged — `open 5 — 2 · 1 · 1` with the missing one nowhere. The remainder is now shown.

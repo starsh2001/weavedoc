@@ -1,3 +1,4 @@
 d1                 planned     → — (final)
 materials: 1
 human queue: 0
+completeness: off — omissions are not checked (fidelity.completeness in .weavedoc/config.yaml; 'required' wires gaps.md into the gate)
