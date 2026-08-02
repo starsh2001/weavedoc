@@ -97,7 +97,7 @@ The fidelity gate keeps the record faithful to the sources. This layer guards th
 
 ## 6. Deterministic checks (`.weavedoc/bin/weavedoc`)
 
-A dependency-free bash checker (needs only `git`'s bash) — the mechanical floor under the AI gate. Format source of truth is `.weavedoc/schema` (which `FORMATS.md` mirrors).
+A dependency-free checker — the mechanical floor under the AI gate. Requirements (preflighted at startup): **bash ≥ 4** + **GNU awk/sed** — Windows Git Bash ships all three; macOS needs `brew install bash gawk gnu-sed` (the default 3.2/BSD tools are not supported). Format source of truth is `.weavedoc/schema` (which `FORMATS.md` mirrors).
 
 - **`validate`** — format + truth coherence, exits non-zero with the list:
   - required frontmatter · enums · `id` matches filename · role ∈ project roles;

@@ -1893,6 +1893,14 @@ pass_plan_external_labeled() {
   vrun validate; expect_pass
 }
 
+meta_doc_sync() {
+  # Docs and code agree, checked mechanically (Phase 5): dispatch ↔ README ↔ bin header, and
+  # VERSION ↔ CHANGELOG's newest entry. Green only while all four surfaces say one thing.
+  OUT=$(bash "$REPO/tests/doccheck.sh" 2>&1); RC=$?
+  expect_pass
+  expect_has "docs and code agree"
+}
+
 # ---- command smoke floor (Phase 2: every CLI command has at least one covered run) ----
 acct_smoke_version() { vrun version; expect_pass; expect_has "fingerprint:"; }
 acct_smoke_lang()    { vrun lang;    expect_pass; expect_has "ko"; }

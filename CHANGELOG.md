@@ -4,6 +4,16 @@
 
 ---
 
+## 2026-08-02.13
+
+**Phase 5 개시 — preflight와 "문서≠코드"의 기계 검사.**
+
+- **preflight (WD-CLI-001 마지막 항목)** — bash ≥ 4를 **첫 `declare -A` 이전에** 검사합니다: 3.2에서는 그 줄이 에러를 내고도 실행이 계속되어 배열이 스칼라처럼 조용히 굴러가는데, 정확히 그 은닉 실패를 끝냅니다. GNU sed/awk 검사는 validate와 쓰기 명령에서만(fork 2개 — 가벼운 읽기에 쓰지 않음; BSD 도구는 실패하지 않고 **조용히 다르게** 동작하므로 더 나쁨).
+- **`tests/doccheck.sh` 신설 + `meta_doc_sync` 케이스** — dispatch ↔ README ↔ bin 헤더 주석, VERSION ↔ CHANGELOG 최신 항목이 한 사실인지 기계 검사. 첫 실행에서 곧장 lang·locale 미문서화(WD-DOC-001 잔여)를 잡았고, 두 번째 실행에서 이 번들의 VERSION/CHANGELOG 불일치를 잡았습니다 — 자기 일을 두 번 증명한 셈입니다.
+- **문서 정합(WD-DOC-001)** — README 상단 요약을 dispatch 전체(16 명령)와 동기화, VERSION의 "날짜 비교" 안내를 fingerprint·schema 기준으로 교체, lang·locale 문서화, WORKFLOW에 bash≥4+GNU 요구사항 명시, "~220-truth" 시점성 숫자를 무시점 표현으로.
+
+검증: doccheck GREEN · 신규 meta 케이스 포함 그룹 로컬 · 전수는 CI.
+
 ## 2026-08-02.12
 
 **경계가 단단해졌습니다 — Phase 4 종료 (WD-IO-001 + WD-CLI-001).** 쓰기는 트랜잭션이 됐고, 입력의 가장자리는 추측을 멈췄습니다.

@@ -73,8 +73,10 @@ gaps.md                 the mine completeness register (# Open / # Accepted)
 .weavedoc/config.yaml   language · paths · fidelity · review settings
 .weavedoc/schema         the format contract (machine SoT; FORMATS.md mirrors it)
 .weavedoc/READ.md        the read protocol — how ANY consumer safely reads the mine
-.weavedoc/bin/weavedoc   deterministic checks — validate · pull · census · reindex · retag · impact · status · gaps
-.weavedoc/VERSION        runtime bundle version (date) — compare install vs this repo
+.weavedoc/bin/weavedoc   deterministic checks — validate · pull · impact · status · scope · attest ·
+                         seal-review · consecrate · upgrade · gaps · census · reindex · retag ·
+                         version · lang · locale
+.weavedoc/VERSION        runtime bundle label (date) — identity is `version`'s fingerprint, not the date
 ```
 
 **Field names and section headers are fixed English — the parser contract. Content is written in your project's language** (`config.language`, set once at init). Plain language, no coined terms. Full spec: [.weavedoc/FORMATS.md](.weavedoc/FORMATS.md).
@@ -87,7 +89,7 @@ WeaveDoc is a set of Claude Code skills. To use it in a project:
 2. Ask Claude: **"weavedoc init"** — it creates the workspace and `.weavedoc/config.yaml`.
 3. Drop materials into `inbox/`, then: **"gather"** → **"map"** (with **"verify"** after each to cold-check the hop, and **"gaps"** to check completeness) → **"plan the report"** → **"write it"** → **"review it"** (→ **"refine"** until clean).
 
-**Keeping installs in sync.** `bash .weavedoc/bin/weavedoc version` prints the installed runtime's date (`.weavedoc/VERSION`); compare it against this repo's before trusting an old install. If you evolve the skills/runtime *inside* a project (the testbed pattern), backport here and bump `VERSION` — the runtime once grew two weeks ahead inside a testbed while this repo went stale.
+**Keeping installs in sync.** `bash .weavedoc/bin/weavedoc version` prints three lines: the bundle date label, the **fingerprint** (bin+schema content hash — compare THIS, two installs can share a date while their bin differs), and the **schema version** this runtime reads. Releases add a SemVer tag whose bundle manifest covers every behavior-deciding file. If you evolve the skills/runtime *inside* a project (the testbed pattern), backport here and bump `VERSION` — the runtime once grew two weeks ahead inside a testbed while this repo went stale.
 
 ## Deterministic checks
 
@@ -105,7 +107,8 @@ WeaveDoc is a set of Claude Code skills. To use it in a project:
 - `seal-review <doc-id> [draft|final]` — pins a finished review round to the exact bytes it reviewed (`reviewed_digest`) and the ground its verdict rests on (`review_context_digest`: cited truths, their sources, config, schema). `validate` hard-fails a final whose bytes or context differ from its sealed review; a digest-less (v1) review reads as legacy-unbound — shown, non-blocking.
 - `consecrate <doc-id>` — the only write path to final: re-checks the gate with validate's own reader, verifies seal + draft + context, stages a candidate on the same filesystem, runs **one** full validation with the candidate in place, and atomically promotes — any failure preserves the original final byte-for-byte.
 - `upgrade [--check|--dry-run|--apply]` — v1 mine → schema 2. Check and apply are separate; apply is staged with a backup + manifest, ends in a full validation, and rolls back byte-identically on failure. History is preserved as `legacy-unbound`, never back-stamped with a digest. See [UPGRADING.md](UPGRADING.md).
-- `status` — each document's stage and its next step, plus the open Human-queue split (you decide / recommendation ready / machine can just do). `version` — the installed runtime's date.
+- `status` — each document's stage and its next step, plus the open Human-queue split (you decide / recommendation ready / machine can just do). `version` — bundle date · fingerprint · schema version.
+- `lang` — the project's prose language from config (skills read every reply's language from this). `locale` — the OS language probe init uses for its default (a short code + exit 0, or empty + exit 1 meaning "init should ask").
 
 **The `examined:` line.** Every `validate` run prints, before its verdict, what it actually looked at:
 
@@ -131,7 +134,7 @@ The AI gate judges *meaning*; `validate` enforces *form and truth coherence* —
 
 ## Status
 
-Working, half-proven. The mine-building half (gather · map · verify · gaps) is battle-tested on a real project (~220-truth mine) — most rules in the skills cite an actual failure they now prevent. The document half (plan · write · review · refine) is designed and implemented but not yet exercised end-to-end. Expect rough edges there.
+Working, half-proven. The mine-building half (gather · map · verify · gaps) is battle-tested on a real project mine holding hundreds of truths — most rules in the skills cite an actual failure they now prevent. The document half (plan · write · review · refine) is implemented and its mechanical spine (seal → consecrate → gate digests) is regression-covered end-to-end, but no real document has been driven through the skills yet. Expect rough edges there.
 
 ## License and the name
 
