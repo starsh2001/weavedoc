@@ -15,7 +15,7 @@
 - **UPGRADING.md 신설** — 사용자 절차서.
 - 실광산 `--check` 실측(read-only): 항목 4개 — 버전 스탬프 2 · scalar repeat · **244개 검증 unit의 legacy-unbound 실체화**. id는 이미 canonical이라 rename 0.
 
-검증: `bash -n` 통과 · 신규 16케이스 그룹 GREEN 로컬(schema 3 · config 6 · upgrade/rollback 8) · 전수 242는 push 시 CI Ubuntu가 검증 · rollback에서 스스로 찾은 결함 1(생성 파일의 재백업이 rollback을 오염 — bkup이 created 목록을 건너뛰도록 수정).
+검증: `bash -n` 통과 · 신규 15케이스 그룹 GREEN 로컬(schema 3 · config 6 · upgrade/rollback 6) · 전수 241은 CI Ubuntu가 검증 · 개발 중 스스로 찾은 결함 2 — rollback이 생성 파일을 재백업해 원복을 오염(bkup이 created 목록을 건너뛰도록 수정), 그리고 **CI가 잡은 제품 결함**: 배포 템플릿 project.md가 `version: 1`로 남아 init 직후의 새 프로젝트가 버전 불일치로 차단될 뻔(`pass_shipped_templates`가 정확히 그 조합을 지킴).
 
 ## 2026-08-02.7
 
