@@ -4,6 +4,17 @@
 
 ---
 
+## 2026-08-02.16
+
+**진단 계약 완성 + 나머지 `--json` (단위 11b) · raw source 고지 (WD-SEC-001).**
+
+- **awk 내부 진단까지 전부 코드화** — truth·conflict·resolution·coverage·seal 계열 45곳이 `[CODE] ` 프리픽스를 달고 `emit_probs` 라우터로 합류합니다. 이제 **코드 없는 진단은 shell·awk 어디에도 없습니다**(`meta_uncoded_ratchet`가 shell 0 고정).
+- **`.weavedoc/FORMATS.md`에 diagnostic code 표 신설(86개)** — 코드가 계약, 산문은 표현임을 명문화. **`meta_diag_code_table`이 양방향 드리프트를 차단**합니다: 바이너리가 표에 없는 코드를 내면 실패, 표가 바이너리에 없는 코드를 적어도 실패. 문서와 코드가 갈라질 수 없습니다.
+- **`scope --json` · `version --json` 추가** — scope는 다섯 증거 등급을 카운트와 **id 배열**(`owed`)로 함께 내보내 소비자가 바로 행동할 수 있고, version은 bundle·fingerprint·schema_version을 구조화합니다.
+- **WD-SEC-001 — init이 raw source의 Git 포함을 명시 고지합니다**: `.ignore`는 검색 방패일 뿐 접근 제어도 Git 제외도 아니며, `materials/*/source.*`는 커밋되어 히스토리에 남는다는 사실과 선택지(비공개 저장소 / 광산 자체를 Git 밖에 / gitignore 하되 감사 추적 상실 감수)를 사용자에게 말하도록 스킬에 못박았습니다.
+
+검증: 신규 케이스 4(json_scope·json_version·diag_code_table·+11a분) 로컬 GREEN — 표 케이스는 첫 실행에서 자기 grep 패턴 결함(awk 형태 미인식)을 잡아 수정 후 통과 · 전수는 CI.
+
 ## 2026-08-02.15
 
 **진단이 계약이 됩니다 — 안정 diagnostic code + `validate --json` (WD-CLI-002/QA-003, 단위 11a).**

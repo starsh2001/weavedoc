@@ -229,3 +229,95 @@ A **filled** gap does not live here — the value enters via `questions.md` → 
 - `verify` — per-transformation fidelity check (upstream of the document-level review gate). `strength` (1 = block on critical, 2 = + should-fix, 3 = + nice-to-have — default 2), `max_rounds`, `repeat` (**clean rounds in a row** required to pass, keyed by scale — `full` defaults to 2; one clean round is not a pass), `scale` (`skip` | `light` | `standard` | `full` — project default; material format overrides per the format-risk table in `weavedoc-verify`).
 - `review` — the **advisory** quality pass (never blocks consecration): `strength` (1 = block on critical, 2 = + should-fix, 3 = + nice-to-have — advisory findings only), `max_rounds` (exceeded → escalate to the user, never auto-pass), `repeat` (**clean rounds in a row** required, keyed by scale — `full` defaults to 2), `scale` (`skip` | `light` | `standard` | `full` — reviewer count/effort).
 - `gaps` — the **mine completeness register** knobs (`weavedoc-gaps`; non-blocking). `markers` — a `|`-separated grep alternation of project-language incompleteness markers scanned by `weavedoc gaps` (e.g. `미정|미완성|TBD|추후 보강`); optional, a Korean-leaning default applies if unset.
+
+## Diagnostic codes (the machine contract)
+
+Every problem and warning the checker emits carries a **stable code**. The code is the contract — automation matches on it; the English message is presentation and may be reworded at any time. Human output prints `[CODE] message`; `--json` carries `{"code":…,"message":…}`. `meta_diag_code_table` fails the suite if the binary emits a code missing here, or if this table names a code the binary cannot emit.
+
+| code | what it means |
+|---|---|
+| `CAT-GHOST-ROW` | catalog row names a material folder that does not exist |
+| `CAT-MISSING` | materials exist but `catalog.md` does not |
+| `CAT-NO-ROW` | material has no catalog row |
+| `CFG-ENUM` | config value outside its enum |
+| `CFG-PATH-MISSING` | a configured `paths:` entry does not exist |
+| `CFG-PATH-REDIRECT` | a configured path redirects away from the default that also exists |
+| `CFG-RANGE` | config number outside its allowed range |
+| `CFG-UNKNOWN-KEY` | *(warning)* unknown top-level config key |
+| `COMP-NO-REGISTER` | completeness `required` but no `gaps.md` — the warranty never ran |
+| `COMP-OPEN-GAPS` | completeness `required` and open gaps sit next to a consecrated output |
+| `CONFLICT-BOTH-RETRACTED` | both sides of an open conflict were retracted |
+| `CONFLICT-RECIPROCITY` | `conflict_with` is not mutual |
+| `CONFLICT-STALE` | still `conflict` though the counterpart is resolved/gone |
+| `COVERAGE-DANGLING` | coverage manifest mentions an id that no longer exists |
+| `COVERAGE-LEGACY` | `## legacy` exemption section is malformed |
+| `COVERAGE-SECTION` | coverage section missing or misnamed for a material |
+| `DATE-INVALID` | a date field is not a real zero-padded `YYYY-MM-DD` |
+| `DISCARDED-RULE` | `discarded` truth violates its resolution rules |
+| `DISCARDED-SELF-WIN` | `discarded` but its own resolution names it the winner |
+| `FM-DUPLICATE-KEY` | the same frontmatter key appears twice |
+| `FM-MISSING` | a required frontmatter field is absent |
+| `FM-PLACEHOLDER` | a field still holds the untouched template placeholder |
+| `GATE-CONTEXT-CHANGED` | cited truth / source / config / schema moved after the review seal |
+| `GATE-FINAL-DIGEST` | the final is not the bytes the clean review reviewed |
+| `GATE-NO-HEADING` | consecrated output with no readable `Fidelity violations` heading |
+| `GATE-NO-REVIEW` | consecrated output with no `review.md` at all |
+| `GATE-OPEN` | consecrated through a non-empty `Fidelity violations` section |
+| `HQ-UNTAGGED` | Human-queue entry without a valid ownership tag |
+| `IDX-MISSING` | `truths/index.md` or `tree.md` absent (run `reindex`) |
+| `IDX-SYNC` | index and truth files disagree (run `reindex`) |
+| `MAT-CORRECTS-DANGLING` | `corrects` names a material that does not exist |
+| `MAT-CORRECTS-SELF` | a material corrects itself |
+| `MAT-ENUM` | material `origin`/`status`/`stage` outside its enum |
+| `MAT-FM-UNCLOSED` | material frontmatter is never closed — the body is empty to every reader |
+| `MAT-ID-MISMATCH` | `id:` disagrees with the folder name |
+| `MAT-ID-NONCANON` | folder name is not the canonical zero-padded id |
+| `MAT-NO-CONVERTED` | material folder without `converted.md` |
+| `MAT-RESEARCH-FIELDS` | `origin: research` without `url` / `retrieved_at` |
+| `MAT-ROLE` | material role is not declared in `project.md` |
+| `OK-BUT-LOST` | `status: ok` while its resolution says it lost |
+| `PLAN-AUDIENCE` | plan `audience` outside its enum |
+| `PLAN-CITED-DANGLING` | `cited_truths` names a truth that does not exist |
+| `PLAN-CITED-NOT-ID` | `cited_truths` entry is not a truth id |
+| `PLAN-CONTINUES-DANGLING` | `continues` names a document that does not exist |
+| `PLAN-DOCID` | `doc_id` disagrees with the folder name |
+| `PLAN-ENUM` | plan `status` outside its enum |
+| `PLAN-LABELS` | `audience: external` without `publication_labels` |
+| `PLAN-MISSING` | document folder without `plan.md` |
+| `PROJ-AUTHORITY` | `authority` names a role `project.md` does not declare |
+| `PROJ-MISSING` | `project.md` absent (run `weavedoc init`) |
+| `PROV-DERIVED-REFS` | `provenance: derived` without `derived_from` |
+| `PROV-ENUM` | truth `provenance` outside its enum |
+| `REQTAG-EMPTY` | a `required_tags` tag has no live truths |
+| `RESOLUTION-ENUM` | resolution `type`/`decision_kind`/`decided_by` outside its enum |
+| `RESOLUTION-NO-DECIDER` | a user-resolved resolution with no `decided_by` |
+| `REVIEW-COMMENT-SWALLOWS` | a comment hides violation-shaped entries from the gate |
+| `REVIEW-DUP-HEADING` | more than one `Fidelity violations` heading — only the first is read |
+| `REVIEW-KIND-OUTSIDE` | a bracketed violation kind sits outside the gate's zone |
+| `REVIEW-KIND-SHAPE` | a gate entry the reader cannot act on (leading `#` or `-->`) |
+| `REVIEW-KIND-UNKNOWN` | bracketed slot inside the gate is not an exact violation kind |
+| `REVIEW-LOST-SECTION` | a declared section vanishes once comments are stripped |
+| `REVIEW-UNTERMINATED-COMMENT` | `review.md` ends inside an open `<!--` |
+| `SCHEMA-ROSTER` | the declared schema key roster is truncated |
+| `SCHEMA-UNREADABLE` | `.weavedoc/schema` is missing or unreadable — no verdict is issued |
+| `SEAL-QUOTE-MISSING` | a truth's verbatim body is not found in its source (laundering risk) |
+| `SEAL-RETRACTED` | seal check hit a retracted source |
+| `SEAL-SPLIT-BLOCK` | body lines are each verbatim but not one contiguous block |
+| `TRUTH-BODY-EMPTY` | truth body is empty — there is no verbatim quote to seal |
+| `TRUTH-BODY-FRAGMENT` | truth body is a single too-short fragment |
+| `TRUTH-DIR` | a directory wearing a truth filename |
+| `TRUTH-ENUM` | truth `status` outside its enum |
+| `TRUTH-FM-UNCLOSED` | truth frontmatter is never closed |
+| `TRUTH-ID-MISMATCH` | `id:` disagrees with the filename |
+| `TRUTH-ID-NONCANON` | filename is not the canonical zero-padded id |
+| `TRUTH-NO-FM` | file in `truths/` has no frontmatter — not read as a truth at all |
+| `TRUTH-REF-DANGLING` | a truth reference field names an id that does not exist |
+| `TRUTH-RETRACTED-RULE` | a retracted truth violates its retraction rules |
+| `TRUTH-SOURCE-DANGLING` | `source` names a material that does not exist |
+| `TRUTH-STATUS-LEGACY` | pre-rename legacy `status` value |
+| `VER-DISAGREE` | `project.md` and `config.yaml` schema versions disagree |
+| `VER-FUTURE` | the project declares a schema newer than this runtime supports |
+| `VER-NOT-INT` | a schema version field is not an integer |
+| `VERIFY-ENUM` | `truths/verify.md` `status` outside its enum |
+| `VERIFY-SECTION` | a required `verify.md` section is missing |
+| `WINNER-RETRACTED` | a resolution winner is retracted |

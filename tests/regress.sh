@@ -2016,6 +2016,37 @@ acct_diag_code_human() {
   vrun validate
   expect_block "[SEAL-QUOTE-MISSING]"
 }
+acct_json_scope() {
+  vrun scope --json
+  expect_pass
+  expect_has '"command":"scope"'
+  expect_has '"owed":["m001"]'
+  expect_has '"legacy_unbound":1'
+}
+acct_json_version() {
+  vrun version --json
+  expect_pass
+  expect_has '"fingerprint"'
+  expect_has '"schema_version":2'
+}
+meta_diag_code_table() {
+  # FORMATS documents every code the binary can emit, and documents no code it cannot — the
+  # table is the contract's published half, so drift in either direction is a defect.
+  # Two emission shapes, both harvested: shell `prob CODE "…"` / `warn CODE "…"`, and awk
+  # `prob("[CODE] " …)`. Comment lines are skipped so the doc-comment's own `prob CODE` example
+  # is not mistaken for an emitted code.
+  local B="$REPO/.weavedoc/bin/weavedoc" F="$REPO/.weavedoc/FORMATS.md" bad="" c emitted
+  emitted=$( { grep -vE '^[[:space:]]*#' "$B" | grep -oE '\b(prob|warn) [A-Z][A-Z0-9-]+' | awk '{print $2}'
+               grep -oE 'prob\("\[[A-Z][A-Z0-9-]+' "$B" | sed 's/.*\[//'; } | grep -v '^CODE$' | LC_ALL=C sort -u)
+  for c in $emitted; do
+    grep -q "\`$c\`" "$F" || bad="$bad UNDOCUMENTED:$c"
+  done
+  for c in $(grep -oE '^\| `[A-Z][A-Z0-9-]+`' "$F" | tr -d '|` ' | LC_ALL=C sort -u); do
+    printf '%s\n' "$emitted" | grep -qx "$c" || bad="$bad ORPHAN:$c"
+  done
+  OUT="${bad:-all codes documented and all documented codes exist}"; RC=0
+  if [ -z "$bad" ]; then ok; else bad "diagnostic code table drift:$bad"; fi
+}
 meta_uncoded_ratchet() {
   # Every SHELL prob site carries a code; the two matches allowed are emit_probs' router lines.
   # awk-emitted diagnostics are wave 11b — this ratchet keeps the shell side at zero meanwhile.

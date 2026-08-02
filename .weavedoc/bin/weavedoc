@@ -848,24 +848,24 @@ cmd_validate() {
       function prob(m){ print "  " m; probs++ }
       function tf_done(   v,tg,nn,ii,ta,wv,wm,w2,ty,selfwin){
         allfile[tid]=tfile; allstat[tid]=tstatus
-        if(tidfield != tid) prob(tfile "  id " q(tidfield) " != filename " q(tid))
+        if(tidfield != tid) prob("[TRUTH-ID-MISMATCH] " tfile "  id " q(tidfield) " != filename " q(tid))
         # Driven by truth.fm.required (the key census this awk collects), not hardcoded. Present AND
         # non-empty: checking only that the KEY exists is how a bare `source:` passed — the seal is
         # guarded by `tsrc!=""`, so an empty source ran it zero times and a fabricated body went in as
         # `status: ok`.
         for(rk in reqkey){
-          if(!((tfile SUBSEP rk) in kcount)) prob(tfile "  frontmatter " q(rk) " missing")
-          else if(kval[tfile,rk]=="") prob(tfile "  frontmatter " q(rk) " is empty — a key with no value is not a value, and for " q("source") " it silently switches the quote seal off")
+          if(!((tfile SUBSEP rk) in kcount)) prob("[FM-MISSING] " tfile "  frontmatter " q(rk) " missing")
+          else if(kval[tfile,rk]=="") prob("[FM-MISSING] " tfile "  frontmatter " q(rk) " is empty — a key with no value is not a value, and for " q("source") " it silently switches the quote seal off")
           # Same rule as the shell-side req_value, same pattern — read from the schema, not
           # rewritten here. An unfilled placeholder is an instruction, not a value.
-          else if(ph!="" && kval[tfile,rk] ~ ph) prob(tfile "  frontmatter " q(rk) " still holds the template placeholder " kval[tfile,rk] " — that is an instruction, not a value. Replace it with the real value; if the value genuinely belongs in braces, put any character outside them")
+          else if(ph!="" && kval[tfile,rk] ~ ph) prob("[FM-MISSING] " tfile "  frontmatter " q(rk) " still holds the template placeholder " kval[tfile,rk] " — that is an instruction, not a value. Replace it with the real value; if the value genuinely belongs in braces, put any character outside them")
         }
-        if(hassource && tsrc!="" && !(tsrc in mat)) prob(tfile "  source " q(tsrc) " → no material folder")
+        if(hassource && tsrc!="" && !(tsrc in mat)) prob("[TRUTH-SOURCE-DANGLING] " tfile "  source " q(tsrc) " → no material folder")
         v=tstatus
         if(v=="resolved")
-          prob(tfile "  status " q("resolved") " is the pre-rename legacy value → winner-self/attribute: " q("ok") ", loser: " q("discarded"))
+          prob("[TRUTH-STATUS-LEGACY] " tfile "  status " q("resolved") " is the pre-rename legacy value → winner-self/attribute: " q("ok") ", loser: " q("discarded"))
         else if(!(v in okstatus))
-          prob(tfile "  status " q(v) " invalid → use " tstenum " (truth.fm.enum.status)")
+          prob("[TRUTH-ENUM] " tfile "  status " q(v) " invalid → use " tstenum " (truth.fm.enum.status)")
         # retracted = never a valid extraction. The file stays as a tombstone so the id is never
         # reused and census need not ask "was t241 deleted or lost?"
         # The resolution enums. Hand-editing frontmatter is allowed, so a hand-written decision record
@@ -876,22 +876,22 @@ cmd_validate() {
           # or `{type : pick, …}` blinds all four readers at once — an out-of-enum type and a winner
           # naming a nonexistent truth then pass under a clean tick.
           if(match(rv,/type[[:space:]]*:[[:space:]]*[^,}]+/)){ rt2=substr(rv,RSTART,RLENGTH); sub(/^type[[:space:]]*:[[:space:]]*/,"",rt2); sub(/[[:space:]]+$/,"",rt2)
-            if(!(rt2 in oktype)) prob(tfile "  resolution type " q(rt2) " invalid → use " rtypes " (truth.fm.resolution.type)") }
+            if(!(rt2 in oktype)) prob("[RESOLUTION-ENUM] " tfile "  resolution type " q(rt2) " invalid → use " rtypes " (truth.fm.resolution.type)") }
           if(match(rv,/decision_kind[[:space:]]*:[[:space:]]*[^,}]+/)){ rk2=substr(rv,RSTART,RLENGTH); sub(/^decision_kind[[:space:]]*:[[:space:]]*/,"",rk2); sub(/[[:space:]]+$/,"",rk2)
-            if(!(rk2 in okkind)) prob(tfile "  resolution decision_kind " q(rk2) " invalid → use " rkinds " (truth.fm.resolution.decision_kind)") }
+            if(!(rk2 in okkind)) prob("[RESOLUTION-ENUM] " tfile "  resolution decision_kind " q(rk2) " invalid → use " rkinds " (truth.fm.resolution.decision_kind)") }
           if(match(rv,/decided_by[[:space:]]*:[[:space:]]*[^,}]+/)){ rb2=substr(rv,RSTART,RLENGTH); sub(/^decided_by[[:space:]]*:[[:space:]]*/,"",rb2); sub(/[[:space:]]+$/,"",rb2)
-            if(!(rb2 in okby)) prob(tfile "  resolution decided_by " q(rb2) " invalid → use " rby " (truth.fm.resolution.decided_by)") }
-          else prob(tfile "  resolution has no " q("decided_by") " → the provenance of a DECISION is the second membrane; without it the mine cannot say whether a human ruled or the machine picked")
+            if(!(rb2 in okby)) prob("[RESOLUTION-ENUM] " tfile "  resolution decided_by " q(rb2) " invalid → use " rby " (truth.fm.resolution.decided_by)") }
+          else prob("[RESOLUTION-NO-DECIDER] " tfile "  resolution has no " q("decided_by") " → the provenance of a DECISION is the second membrane; without it the mine cannot say whether a human ruled or the machine picked")
         }
         if(v=="retracted" && tresolution!="")
-          prob(tfile "  status " q("retracted") " must not carry a resolution — it lost no conflict; record the withdrawal in truths/changelog.md as " q("removed:"))
+          prob("[TRUTH-RETRACTED-RULE] " tfile "  status " q("retracted") " must not carry a resolution — it lost no conflict; record the withdrawal in truths/changelog.md as " q("removed:"))
         if(v=="retracted"){
           retracted[tid]=1; tidz=tid; sub(/^t0*/,"t",tidz); if(tidz!="t") retracted[tidz]=1
           # Without this, `retracted` would be the one unusable status with no mechanical obligation —
           # a cheap way to disappear an inconvenient truth. The `removed:` line keeps it answerable.
           tidn=tid; sub(/^t0*/,"t",tidn); if(tidn=="t") tidn=tid
           if(!(tidn in removedlog))
-            prob(tfile "  status " q("retracted") " but truths/changelog.md has no " q("removed: " tid) " line → a withdrawal with no recorded reason is indistinguishable from a quiet deletion")
+            prob("[TRUTH-RETRACTED-RULE] " tfile "  status " q("retracted") " but truths/changelog.md has no " q("removed: " tid) " line → a withdrawal with no recorded reason is indistinguishable from a quiet deletion")
         }
         # Normalise zero-padding and remember the status, or `conflict_with: [t5]` never matches
         # retracted `t005` and a resolved truth is told to re-open a conflict it does not have.
@@ -903,8 +903,8 @@ cmd_validate() {
           for(ii=1;ii<=nn;ii++){ if(ta[ii]=="") continue
             cwn=ta[ii]; sub(/^t0*/,"t",cwn); if(cwn=="t") cwn=ta[ii]
             cwof[tid]=cwof[tid] " " cwn } }
-        if(v=="conflict" && tconflict=="") prob(tfile "  status is " q("conflict") " but no conflict_with field")
-        if(v=="discarded" && tresolution=="") prob(tfile "  status is " q("discarded") " but no resolution field (a discard must record its decision)")
+        if(v=="conflict" && tconflict=="") prob("[CONFLICT-RECIPROCITY] " tfile "  status is " q("conflict") " but no conflict_with field")
+        if(v=="discarded" && tresolution=="") prob("[DISCARDED-RULE] " tfile "  status is " q("discarded") " but no resolution field (a discard must record its decision)")
         # status = validity axis, resolution = history. Guard the two mismatches:
         if(tresolution!=""){
           w2=""; ty=""
@@ -915,25 +915,25 @@ cmd_validate() {
           # value out of the mine.
           selfwin = (w2!="" && (match(w2, "(^|[^0-9A-Za-z])" tid "([^0-9]|$)") || match(w2, "(^|[^0-9A-Za-z])" tidn3 "([^0-9]|$)")))
           if(v=="discarded" && selfwin)
-            prob(tfile "  discarded but resolution.winner is itself → it WON its conflict; set status " q("ok"))
+            prob("[DISCARDED-SELF-WIN] " tfile "  discarded but resolution.winner is itself → it WON its conflict; set status " q("ok"))
           if(v=="ok" && w2!="" && !selfwin && ty!="attribute")
-            prob(tfile "  ok but its resolution says it lost (winner elsewhere) → set status " q("discarded"))
+            prob("[OK-BUT-LOST] " tfile "  ok but its resolution says it lost (winner elsewhere) → set status " q("discarded"))
         }
         if(tprov!="" && !(tprov in okprov))
-          prob(tfile "  provenance " q(tprov) " invalid → use " tprenum " (truth.fm.enum.provenance)")
+          prob("[PROV-ENUM] " tfile "  provenance " q(tprov) " invalid → use " tprenum " (truth.fm.enum.provenance)")
         if(tprov=="derived" && !hasderivedfrom)
-          prob(tfile "  provenance is " q("derived") " but no derived_from field (derivations must show their chain)")
+          prob("[PROV-DERIVED-REFS] " tfile "  provenance is " q("derived") " but no derived_from field (derivations must show their chain)")
         # `origin: research` stops laundering at the material; without this it resumes one level down.
         # Nobody stated a value the machine fetched, and `stated` is the default — so silence lands there.
         if(hassource && (tsrc in research) && (tprov=="" || tprov=="stated"))
-          prob(tfile "  source " q(tsrc) " is " q("origin: research") " (machine-fetched) but provenance is " q("stated") " → nobody stated it; use " q("adopted") " (user accepted the fetched value) or " q("derived") " (computed from it)")
+          prob("[TRUTH-SOURCE-DANGLING] " tfile "  source " q(tsrc) " is " q("origin: research") " (machine-fetched) but provenance is " q("stated") " → nobody stated it; use " q("adopted") " (user accepted the fetched value) or " q("derived") " (computed from it)")
         if(hassource && (tsrc in ret) && (v=="ok" || v=="conflict"))
-          prob(tfile "  source " q(tsrc) " is retracted but status is " q(v) " → set unsupported (map retraction propagation)")
+          prob("[TRUTH-SOURCE-DANGLING] " tfile "  source " q(tsrc) " is retracted but status is " q(v) " → set unsupported (map retraction propagation)")
         if(tresolution!="" && match(tresolution,/winner[[:space:]]*:[[:space:]]*(\[[^]]*\]|[^,}]+)/)){
           wv=substr(tresolution,RSTART,RLENGTH); w3=wv
           while(match(wv,/m[0-9]+/)){
             wm=substr(wv,RSTART,RLENGTH); wv=substr(wv,RSTART+RLENGTH)
-            if(wm in ret) prob(tfile "  resolution winner references retracted " wm " → basis gone; re-open the conflict (map)")
+            if(wm in ret) prob("[WINNER-RETRACTED] " tfile "  resolution winner references retracted " wm " → basis gone; re-open the conflict (map)")
           }
           # A loser pointing at a retracted winner sends every consumer following the successor
           # straight to a tombstone — the second escape route (resolve, then retract the winner).
@@ -998,7 +998,7 @@ cmd_validate() {
         # A list value whose bracket never closes reads as empty or as the rest of the line depending
         # on the reader, and retag cannot rewrite it. Named here so the user has a repair path.
         if($0 ~ /^[a-z_]+[[:space:]]*:[[:space:]]*\[/ && $0 !~ /\]/)
-          prob(FILENAME "  frontmatter " q(substr($0,1,index($0,":")-1)) " opens a list with '[' that never closes on this line — readers disagree about where the value ends, and 'retag' cannot rewrite it. Close the bracket")
+          prob("[FM-DUPLICATE-KEY] " FILENAME "  frontmatter " q(substr($0,1,index($0,":")-1)) " opens a list with '[' that never closes on this line — readers disagree about where the value ends, and 'retag' cannot rewrite it. Close the bracket")
         if($0 ~ /^[a-z_]+[[:space:]]*:/){ kk=$0; sub(/[[:space:]]*:.*$/,"",kk); kcount[FILENAME,kk]++; kval[FILENAME,kk]=val() }
         # Every field pattern below is `^key[[:space:]]*:` — the SAME shape the key census one line
         # up uses, and the same shape fm() uses. They used to read `^key:[[:space:]]`, which demands
@@ -1062,27 +1062,27 @@ cmd_validate() {
         }
       }
       END {
-        for(i=1;i<=nreq;i++) if(rt[i]!="" && !(rt[i] in seentag)) prob("required_tag " q(rt[i]) " has no live truths — retracted and discarded truths do not cover a topic (a tombstone is an extraction that never had standing); extract it from a material, queue the question (the ask loop turns the answer into a user-answer material), or remove the tag from project.md required_tags — removing it switches the completeness warranty off for that topic")
+        for(i=1;i<=nreq;i++) if(rt[i]!="" && !(rt[i] in seentag)) prob("[REQTAG-EMPTY] required_tag " q(rt[i]) " has no live truths — retracted and discarded truths do not cover a topic (a tombstone is an extraction that never had standing); extract it from a material, queue the question (the ask loop turns the answer into a user-answer material), or remove the tag from project.md required_tags — removing it switches the completeness warranty off for that topic")
         for(kx in kcount) if(kcount[kx]>1){
           split(kx,kk2,SUBSEP)
-          prob(kk2[1] "  frontmatter key " q(kk2[2]) " appears " kcount[kx] " times → fm reads the FIRST, validate and reindex read the LAST, and census counts BOTH, so three commands report three different values for the same field. Keep one")
+          prob("[FM-DUPLICATE-KEY] " kk2[1] "  frontmatter key " q(kk2[2]) " appears " kcount[kx] " times → fm reads the FIRST, validate and reindex read the LAST, and census counts BOTH, so three commands report three different values for the same field. Keep one")
         }
         # The tombstone withdrawal reason, judged after the WHOLE body is read (deciding on the first
         # matching line made the verdict depend on line order). One absent line supports "never had
         # standing"; the file fails only when EVERY line is still verbatim there.
         for(t in sealstat)
           if(sealstat[t]=="retracted" && (t in stillthere) && !(t in sealbroken))
-            prob(sealfile[t] "  status " q("retracted") " but its quote IS still verbatim in " mroot "/" sealsrc[t] "/converted.md → the withdrawal reason (never had standing) is unsupported. If the fact is real and only " q("source") " was wrong, repoint it (map); if it lost a conflict, use " q("discarded") " with a resolution")
+            prob("[SEAL-RETRACTED] " sealfile[t] "  status " q("retracted") " but its quote IS still verbatim in " mroot "/" sealsrc[t] "/converted.md → the withdrawal reason (never had standing) is unsupported. If the fact is real and only " q("source") " was wrong, repoint it (map); if it lost a conflict, use " q("discarded") " with a resolution")
         # Retracting one side of an open conflict strands the other: it stays `conflict`, READ.md
         # tells consumers "use NEITHER side", and no resolution was recorded — the machinery bypassed.
         for(k in reflist){
           split(k, kp, "")
           if(!(reflist[k] in existsn))
-            prob("truths/" kp[1] ".md  " kp[2] " references " q(kp[3]) " — no such truth or material. A dangling id here is silent: the checks that depend on it (retracted counterpart, reciprocity, derivation chain) simply never fire")
+            prob("[TRUTH-REF-DANGLING] truths/" kp[1] ".md  " kp[2] " references " q(kp[3]) " — no such truth or material. A dangling id here is silent: the checks that depend on it (retracted counterpart, reciprocity, derivation chain) simply never fire")
         }
         for(w4 in winnerof)
           if((w4 in retracted) || ((w4 in norm2raw) && (norm2raw[w4] in retracted)))
-            prob("truths/" w4 ".md  is retracted but is named the WINNER by" winnerof[w4] " → those losers point their successor at a tombstone, and a consumer following the protocol is told the fact is not in the mine. Re-open the conflict or make the surviving value a live truth")
+            prob("[WINNER-RETRACTED] truths/" w4 ".md  is retracted but is named the WINNER by" winnerof[w4] " → those losers point their successor at a tombstone, and a consumer following the protocol is told the fact is not in the mine. Re-open the conflict or make the surviving value a live truth")
         # Compare NORMALISED against NORMALISED, report the RAW file id — a mixed comparison fired the
         # once-per-pair guard both ways below 100 and named a nonexistent file. Built first in its own
         # pass: a normalised conflict index, so reciprocity reads a complete table, not a half-built one.
@@ -1098,16 +1098,16 @@ cmd_validate() {
             # side is a tombstone (the retracted-counterpart check above owns that).
             if(statusof[x]=="conflict" && !(cw2[i] in retracted) && (cw2[i] in existsn)){
               if(!(cw2[i] in cwofn) || index(" " cwofn[cw2[i]] " ", " " xn " ")==0)
-                prob("truths/" x ".md  names " disp " in conflict_with but " disp " does not name " x " back → a one-sided conflict cannot be applied by READ.md rule 2, so pull reports the silent side as usable. Fix BOTH files in one edit: set conflict_with on each naming the other, AND set both status " q("conflict") " — doing only the first produces the next error one step later")
+                prob("[CONFLICT-RECIPROCITY] truths/" x ".md  names " disp " in conflict_with but " disp " does not name " x " back → a one-sided conflict cannot be applied by READ.md rule 2, so pull reports the silent side as usable. Fix BOTH files in one edit: set conflict_with on each naming the other, AND set both status " q("conflict") " — doing only the first produces the next error one step later")
               else if((cw2[i] in rawof) && statusof[rawof[cw2[i]]]!="conflict" && statusof[rawof[cw2[i]]]!="")
-                prob("truths/" disp ".md  is in an open conflict with " x " but its own status is " q(statusof[rawof[cw2[i]]]) " → both parties to an unresolved conflict must be " q("conflict") ", or the conflict must be resolved on both")
+                prob("[CONFLICT-RECIPROCITY] truths/" disp ".md  is in an open conflict with " x " but its own status is " q(statusof[rawof[cw2[i]]]) " → both parties to an unresolved conflict must be " q("conflict") ", or the conflict must be resolved on both")
             }
             if((cw2[i] in retracted) && !(x in retracted) && statusof[x]=="conflict")
-              prob("truths/" x ".md  is still " q("conflict") " against " disp ", which was retracted → the other side was withdrawn without resolving the conflict; re-open or resolve " x)
+              prob("[CONFLICT-STALE] truths/" x ".md  is still " q("conflict") " against " disp ", which was retracted → the other side was withdrawn without resolving the conflict; re-open or resolve " x)
             # Retracting BOTH sides was the loophole: an open conflict vanished for two changelog
             # lines with no user ruling. The machine never disposes of a conflict on its own.
             else if((cw2[i] in retracted) && (x in retracted) && xn < cw2[i])
-              prob("truths/" x ".md and " disp " were BOTH retracted while in open conflict → a conflict may not be disposed of by withdrawing both sides; the machine never resolves a conflict on its own. Record the user ruling (resolution / adjudication) or re-open one side")
+              prob("[CONFLICT-BOTH-RETRACTED] truths/" x ".md and " disp " were BOTH retracted while in open conflict → a conflict may not be disposed of by withdrawing both sides; the machine never resolves a conflict on its own. Record the user ruling (resolution / adjudication) or re-open one side")
           }
         }
         # Accounting, not a check: reporting sealed-vs-present makes the "silent zero" leaks (empty
@@ -1115,7 +1115,7 @@ cmd_validate() {
         # non-blank line is unchecked, not clean. Tombstones are exempt (a retracted truth may be a stub).
         for(_bt in allstat)
           if(allstat[_bt]!="retracted" && nbody[_bt]+0==0)
-            prob(allfile[_bt] "  body is empty — the verbatim quote is what the seal checks, so a truth with no body line is unchecked rather than checked-and-clean")
+            prob("[TRUTH-BODY-EMPTY] " allfile[_bt] "  body is empty — the verbatim quote is what the seal checks, so a truth with no body line is unchecked rather than checked-and-clean")
         # One token is not a quote: a substring that short is in almost any material, so the seal
         # passes on nothing while the count reads "sealed". KNOWN LIMIT: a two-token fragment still
         # gets through — the floor is the lowest that means anything, not a full guard.
@@ -1126,11 +1126,11 @@ cmd_validate() {
           _blk=wsnorm(bblk[_sp]); if(_blk=="") continue
           if(!(sealsrc[_sp] in bodyws)) bodyws[sealsrc[_sp]]=wsnorm(body[sealsrc[_sp]])
           if(index(bodyws[sealsrc[_sp]], _blk)==0)
-            prob(sealfile[_sp] "  every body line is verbatim in " mroot "/" sealsrc[_sp] "/converted.md but they are NOT adjacent in it — quoting lines that sit apart splices them into one passage the source never had (markdown renders the block as a single paragraph). Quote one continuous passage, or split this into one truth per passage")
+            prob("[SEAL-SPLIT-BLOCK] " sealfile[_sp] "  every body line is verbatim in " mroot "/" sealsrc[_sp] "/converted.md but they are NOT adjacent in it — quoting lines that sit apart splices them into one passage the source never had (markdown renders the block as a single paragraph). Quote one continuous passage, or split this into one truth per passage")
         }
         for(_fr in allstat)
           if(allstat[_fr]!="retracted" && nbody[_fr]+0>0 && ntok[_fr]+0<2)
-            prob(allfile[_fr] "  body is a single fragment (" q(bfirst[_fr]) ") — the seal is a substring test, and a fragment that short is in almost any material, so finding it verbatim proves nothing about the claim. Quote the whole line (or table row) the fact sits in")
+            prob("[TRUTH-BODY-FRAGMENT] " allfile[_fr] "  body is a single fragment (" q(bfirst[_fr]) ") — the seal is a substring test, and a fragment that short is in almost any material, so finding it verbatim proves nothing about the claim. Quote the whole line (or table row) the fact sits in")
         # `sealed` must mean the seal PASSED, not that it ran (sealsrc is set before index() decides),
         # or a quote confirmed ABSENT counts as sealed — and the confirmation screen reads this number
         # as "N/N verbatim confirmed". Four outcomes: passed · FAILED · tombstone · never checked.
@@ -1244,7 +1244,7 @@ EOF
         }
         /^##[[:space:]]+m[0-9]+([[:space:]]|$)/ {
           sec=$2
-          if(!(sec in mat)) prob("truths/coverage.md  " q("## " sec) " → no material folder")
+          if(!(sec in mat)) prob("[COVERAGE-SECTION] truths/coverage.md  " q("## " sec) " → no material folder")
           hassec[norm(sec)]=sec; next
         }
         /^##[[:space:]]+legacy[[:space:]]*$/ { sec=""; inleg=1; next }
@@ -1269,7 +1269,7 @@ EOF
               if(_rp[2]+0>=1 && _rp[2]+0<=12 && _rp[3]+0>=1 && _rp[3]+0<=31) rdok=1
             }
             if(!rdok || $0 !~ /"[^"]+"/)
-              prob("truths/coverage.md  " q("## legacy") " exempts " q(lid) " without a recorded ruling → add ruled: YYYY-MM-DD plus the quoted user utterance on the same line; the machine does not exempt itself")
+              prob("[COVERAGE-LEGACY] truths/coverage.md  " q("## legacy") " exempts " q(lid) " without a recorded ruling → add ruled: YYYY-MM-DD plus the quoted user utterance on the same line; the machine does not exempt itself")
           }
           next
         }
@@ -1277,7 +1277,7 @@ EOF
           line=$0
           while(match(line,/t[0-9]+/)){
             id=substr(line,RSTART,RLENGTH); line=substr(line,RSTART+RLENGTH)
-            if(!(id in tsrc) && !(norm(id) in tid2file)) prob("truths/coverage.md  mentions " q(id) " — no such truth file")
+            if(!(id in tsrc) && !(norm(id) in tid2file)) prob("[COVERAGE-DANGLING] truths/coverage.md  mentions " q(id) " — no such truth file")
             else if(sec!="") mention[norm(sec) "," (norm(id)!="" ? norm(id) : id)]=1
           }
         }
@@ -1285,12 +1285,12 @@ EOF
           # Checked here, not inline: `## legacy` may sit above the `## m<id>` sections, and
           # hassec[] is only complete once the whole file has been read.
           for(l in legseen){
-            if(!(l in mat)) prob("truths/coverage.md  " q("## legacy") " exempts " q(l) " — no such material")
-            else if(norm(l) in hassec) prob("truths/coverage.md  " q("## legacy") " exempts " q(l) " but it has its own " q("## " hassec[norm(l)]) " section — it is covered, not exempt (that drops the denominator while the numerator stays, which can push the ratio above 1)")
+            if(!(l in mat)) prob("[COVERAGE-LEGACY] truths/coverage.md  " q("## legacy") " exempts " q(l) " — no such material")
+            else if(norm(l) in hassec) prob("[COVERAGE-LEGACY] truths/coverage.md  " q("## legacy") " exempts " q(l) " but it has its own " q("## " hassec[norm(l)]) " section — it is covered, not exempt (that drops the denominator while the numerator stays, which can push the ratio above 1)")
           }
           for(t in tsrc){ s=norm(tsrc[t])
             if((s in hassec) && !((s "," norm(t)) in mention))
-              prob("truths/coverage.md  " q("## " hassec[s]) " missing " q(t) " — extracted from " tsrc[t] " but absent from its coverage section (update at map)")
+              prob("[COVERAGE-SECTION] truths/coverage.md  " q("## " hassec[s]) " missing " q(t) " — extracted from " tsrc[t] " but absent from its coverage section (update at map)")
           }
           print "CFAILS " probs+0
         }
@@ -2323,9 +2323,14 @@ cmd_version() {
   if   [ -f "$ROOT/.weavedoc/VERSION" ]; then vf="$ROOT/.weavedoc/VERSION"
   elif [ -f "$SCRIPT_DIR/../VERSION" ];  then vf="$SCRIPT_DIR/../VERSION"
   else echo "(no VERSION file)"; return 1; fi
-  cat "$vf"
   fp=$(cat "$SCRIPT_DIR/weavedoc" "$SCRIPT_DIR/../schema" 2>/dev/null \
        | { command -v sha1sum >/dev/null 2>&1 && sha1sum || cksum; } | awk '{print $1}')
+  if [ "$WD_JSON" = 1 ]; then
+    printf '{"output_schema_version":1,"command":"version","bundle":"%s","fingerprint":"%s","schema_version":%s}\n' \
+      "$(json_esc "$(cat "$vf")")" "$(json_esc "${fp:0:12}")" "$(schema_ver)"
+    return 0
+  fi
+  cat "$vf"
   [ -n "$fp" ] && echo "fingerprint: ${fp:0:12}  (bin+schema — compare this, not just the date)"
   echo "schema: $(schema_ver) (this runtime reads ≤$(schema_ver); a v1 mine migrates via 'upgrade')"
   return 0
@@ -2889,6 +2894,20 @@ cmd_scope() {
   n_tlegacy=$(printf '%s' "$tlegacy" | grep -c . || true)
   n_tunver=$(printf '%s' "$tunver" | grep -c . || true)
 
+  if [ "$WD_JSON" = 1 ]; then
+    # Sets, not adjectives — the same five evidence classes the human view prints, as arrays a
+    # consumer can act on (a verify round owes unverified + stale + failed).
+    jarr() { local out="" x; for x in $1; do out+="${out:+,}\"$(json_esc "$x")\""; done; printf '[%s]' "$out"; }
+    printf '{"output_schema_version":1,"command":"scope","bundle":"%s","schema_version":%s,' \
+      "$(json_esc "$(cat "$ROOT/.weavedoc/VERSION" 2>/dev/null)")" "$(schema_ver)"
+    printf '"materials":{"converted":%s,"verified_bound":%s,"legacy_unbound":%s,"stale":%s,"failed":%s,"unverified":%s,"used_but_unverified":%s,"owed":%s},' \
+      "$n_mconv" "$n_mbound" "$n_mlegacy" "$n_mstale" "$n_mfail" "$n_munver" "$n_mused" "$(jarr "$munver $mstale $mfail")"
+    printf '"truths":{"live":%s,"verified_bound":%s,"legacy_unbound":%s,"stale":%s,"failed":%s,"unverified":%s,"tombstones":%s,"owed":%s},' \
+      "$n_t" "$n_tbound" "$n_tlegacy" "$n_tstale" "$n_tfail" "$n_tunver" "$n_tomb" \
+      "$(jarr "$(printf '%s %s %s' "$tunver" "$tstale" "$tfail" | tr '\n' ' ')")"
+    printf '"ghost_ledger_ids":%s}\n' "$(jarr "$(printf '%s' "$tghost" | tr '\n' ' ')")"
+    return 0
+  fi
   echo "scope — what a verify round still owes (computed from disk + the ledgers, not judged)"
   if [ "$n_mconv" -eq 0 ] && [ "$n_t" -eq 0 ] && [ "$n_tomb" -eq 0 ]; then
     echo "  nothing to verify yet — no converted material, no truths"
@@ -2948,7 +2967,7 @@ case "${1:-}" in
   validate) shift; [ "${1:-}" = "--json" ] && { WD_JSON=1; shift; }; [ $# -eq 0 ] || usage2 "weavedoc validate [--json]"; cmd_validate ;;
   impact)   shift; [ $# -eq 1 ] || usage2 "weavedoc impact <material-id>"; cmd_impact "$1" ;;
   status)   shift; [ $# -eq 0 ] || usage2 "weavedoc status";   cmd_status ;;
-  scope)    shift; [ $# -eq 0 ] || usage2 "weavedoc scope";    cmd_scope ;;
+  scope)    shift; [ "${1:-}" = "--json" ] && { WD_JSON=1; shift; }; [ $# -eq 0 ] || usage2 "weavedoc scope [--json]"; cmd_scope ;;
   attest)   shift; cmd_attest "$@" ;;
   seal-review) shift; { [ $# -ge 1 ] && [ $# -le 2 ]; } || usage2 "weavedoc seal-review <doc-id> [draft|final]"; cmd_seal_review "$1" "${2:-}" ;;
   consecrate)  shift; [ $# -eq 1 ] || usage2 "weavedoc consecrate <doc-id>"; cmd_consecrate "$1" ;;
@@ -2960,6 +2979,6 @@ case "${1:-}" in
   pull)     shift; [ $# -eq 1 ] || usage2 "weavedoc pull <term>"; cmd_pull "$1" ;;
   lang)     shift; [ $# -eq 0 ] || usage2 "weavedoc lang";     cmd_lang ;;
   locale)   shift; [ $# -eq 0 ] || usage2 "weavedoc locale";   cmd_locale ;;
-  version)  shift; [ $# -eq 0 ] || usage2 "weavedoc version";  cmd_version ;;
+  version)  shift; [ "${1:-}" = "--json" ] && { WD_JSON=1; shift; }; [ $# -eq 0 ] || usage2 "weavedoc version [--json]"; cmd_version ;;
   *) echo "weavedoc — validate | pull <term> | impact <material-id> | status | scope | attest <verdict> <round> <standard> <id...> | seal-review <doc-id> [draft|final] | consecrate <doc-id> | gaps | census | reindex [--check] | retag <old> <new> [--dry] | version | lang | locale"; exit 2 ;;
 esac
