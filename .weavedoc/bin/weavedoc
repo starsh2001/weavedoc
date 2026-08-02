@@ -192,9 +192,9 @@ is_placeholder() { # $1=value -> 0 when it is an untouched template placeholder
 req_value() { # $1=file $2=key $3=label-for-message -> 0 when the field holds a real value
   local rv; fmv "$1" "$2"; rv=$REPLY
   if [ -z "$rv" ]; then
-    prob "$1  frontmatter '$2' missing"; return 1
+    prob FM-MISSING "$1  frontmatter '$2' missing"; return 1
   elif is_placeholder "$rv"; then
-    prob "$1  frontmatter '$2' still holds the template placeholder $rv — that is an instruction, not a value, and every consumer reads it as one (write took a placeholder tone as the document's tone). Replace it with the real value; if the value genuinely belongs in braces, put any character outside them"
+    prob FM-PLACEHOLDER "$1  frontmatter '$2' still holds the template placeholder $rv — that is an instruction, not a value, and every consumer reads it as one (write took a placeholder tone as the document's tone). Replace it with the real value; if the value genuinely belongs in braces, put any character outside them"
     return 1
   fi
   return 0
@@ -436,7 +436,7 @@ check_hq_tags() { # $1=file holding a "## Human queue" section
     case "$hqr" in '['*) hqo=${hqr#\[}; case "$hqo" in *\]*) hqo=${hqo%%\]*} ;; *) hqo="" ;; esac ;; esac
     hqw=$(printf '%s' "$hqline" | sed -E 's/^[[:space:]]*- \[[^]]*\][[:space:]]*//; s/[[:space:]]*—.*$//')
     in_list "$hqo" "${SCH[humanqueue.enum.ownership]}" \
-      || prob "$rel  Human queue '[$hqs]' entry has no valid ownership tag → add [user-only|recommended|machine]: $hqw"
+      || prob HQ-UNTAGGED "$rel  Human queue '[$hqs]' entry has no valid ownership tag → add [user-only|recommended|machine]: $hqw"
   done < <(hq_body "$1")
 }
 hq_body() { # $1=file -> the Human queue body, whichever heading level the file uses
@@ -626,7 +626,50 @@ hq_files() { # -> every file carrying a "## Human queue" section, ONE PER LINE
 # a trailing YAML comment from an UNQUOTED value, and must stay in sync. If you touch one, touch all
 # five and re-run the template project through validate — fixing only `fm()` left the bulk awk broken.
 PROBLEMS=0
-prob() { printf '  %s\n' "$*"; PROBLEMS=$((PROBLEMS+1)); }
+DIAGS=""; WARNS=""            # JSON mode collectors: CODE\x02message records joined by \x01
+WD_JSON=${WD_JSON:-0}
+# Diagnostics carry a STABLE code (WD-CLI-002/WD-QA-003): `prob CODE "message"` — the code is the
+# contract, the English prose is presentation and may change. The single-arg form still works and
+# reports as UNCODED; meta_uncoded_ratchet pins how many such sites remain, so the number can only
+# fall. Human output prefixes the code; JSON output carries it as a field.
+prob() {
+  local code="UNCODED"
+  if [ $# -ge 2 ]; then code="$1"; shift; fi
+  PROBLEMS=$((PROBLEMS+1))
+  if [ "$WD_JSON" = 1 ]; then DIAGS+="${code}"$'\002'"$*"$'\001'
+  else printf '  [%s] %s\n' "$code" "$*"; fi
+}
+warn() { # same shape, non-counting — surfaced, never failing
+  local code="UNCODED"
+  if [ $# -ge 2 ]; then code="$1"; shift; fi
+  if [ "$WD_JSON" = 1 ]; then WARNS+="${code}"$'\002'"$*"$'\001'
+  else printf '  warning: [%s] %s\n' "$code" "$*"; fi
+}
+emit_probs() { # stdin: lines an awk pass emitted, each "[CODE] rest" (or bare → UNCODED)
+  local line code
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    case "$line" in
+      "["*"]"*) code=${line%%]*}; code=${code#\[}; prob "$code" "${line#*\] }" ;;
+      *) prob "$line" ;;
+    esac
+  done
+}
+json_esc() { # $1 -> JSON-safe string on stdout
+  local s=$1
+  s=${s//\\/\\\\}; s=${s//\"/\\\"}; s=${s//$'\n'/\\n}; s=${s//$'\t'/\\t}; s=${s//$'\r'/}
+  printf '%s' "$s"
+}
+json_diag_array() { # $1=collector -> [{"code":..,"message":..},...]
+  local recs=$1 out="" rec code msg
+  while [ -n "$recs" ]; do
+    rec=${recs%%$'\001'*}; recs=${recs#*$'\001'}
+    code=${rec%%$'\002'*}; msg=${rec#*$'\002'}
+    out+="${out:+,}{\"code\":\"$(json_esc "$code")\",\"message\":\"$(json_esc "$msg")\"}"
+    [ "$recs" = "$rec" ] && break
+  done
+  printf '[%s]' "$out"
+}
 
 cmd_validate() {
   preflight_gnu || return 2
@@ -644,8 +687,8 @@ cmd_validate() {
   # moving these, so a typo while moving folders silently switches both membranes off.
   for k in materials truths documents; do
     eval "v=\$$(echo "$k" | tr a-z A-Z)"
-    [ -d "$v" ] || prob "config paths.$k → '$v' does not exist. Every check that walks it runs zero times, which is indistinguishable from passing"
-    [ "$(rp "$v")" = "$(rp "$ROOT/$k")" ] || { [ -d "$ROOT/$k" ] && prob "config paths.$k points at '$v' but '$ROOT/$k' also exists on disk — whatever is in it is NOT being checked"; }
+    [ -d "$v" ] || prob CFG-PATH-MISSING "config paths.$k → '$v' does not exist. Every check that walks it runs zero times, which is indistinguishable from passing"
+    [ "$(rp "$v")" = "$(rp "$ROOT/$k")" ] || { [ -d "$ROOT/$k" ] && prob CFG-PATH-REDIRECT "config paths.$k points at '$v' but '$ROOT/$k' also exists on disk — whatever is in it is NOT being checked"; }
   done
 
   # The roster is DERIVED from this file, not remembered. Four keys used to stand here while
@@ -659,11 +702,11 @@ cmd_validate() {
   # The roster is declared (SCH_KEYS) rather than grepped out of this file at runtime. A truncated
   # constant would check a handful quietly, so its size is still asserted out loud.
   if [ "${nschk:-0}" -lt 10 ]; then
-    prob "SCH_KEYS holds only ${nschk:-0} entries — the declared schema roster is truncated, so a schema missing any other key will NOT be reported"
+    prob SCHEMA-ROSTER "SCH_KEYS holds only ${nschk:-0} entries — the declared schema roster is truncated, so a schema missing any other key will NOT be reported"
   fi
   for k in $schkeys; do
     [ -n "$(sch "$k")" ] && continue
-    prob "$SCHEMA  cannot read '$k' — the format SoT is missing or unreadable, so the checks that read it would silently pass. Restore .weavedoc/schema before trusting any verdict"
+    prob SCHEMA-UNREADABLE "$SCHEMA  cannot read '$k' — the format SoT is missing or unreadable, so the checks that read it would silently pass. Restore .weavedoc/schema before trusting any verdict"
     echo "✗ validate: $PROBLEMS problem(s)"; return 1
   done
 
@@ -674,16 +717,16 @@ cmd_validate() {
     done
     ROLES=$(listfield "$(fm "$PROJECT" roles)")
     for a in $(listfield "$(fm "$PROJECT" authority)"); do
-      echo "$ROLES" | grep -qx "$a" || prob "$PROJECT  authority '$a' is not a declared role"
+      echo "$ROLES" | grep -qx "$a" || prob PROJ-AUTHORITY "$PROJECT  authority '$a' is not a declared role"
     done
   else
-    prob "$PROJECT  missing (run 'weavedoc init')"; ROLES=""
+    prob PROJ-MISSING "$PROJECT  missing (run 'weavedoc init')"; ROLES=""
   fi
 
   # --- each material ---
   while IFS= read -r id; do
     f="$MATERIALS/$id/converted.md"
-    [ -f "$f" ] || { prob "$MATERIALS/$id/  no converted.md"; continue; }
+    [ -f "$f" ] || { prob MAT-NO-CONVERTED "$MATERIALS/$id/  no converted.md"; continue; }
     # Counted HERE, in the loop that checks them. It used to come from the truths awk as a by-product,
     # and that awk is skipped entirely when the mine has no t*.md yet — so every project reported
     # "materials 0" for the whole window between gather and map while the materials were in fact being
@@ -693,12 +736,12 @@ cmd_validate() {
     for k in $(pipes "${SCH[material.fm.required]}"); do
       req_value "$f" "$k" || continue
       v=$(fm "$f" "$k")
-      case "$k" in added) is_date "$v" || prob "$f  added '$v' is not a date (YYYY-MM-DD, zero-padded, real month and day) — a field the format calls a date and nobody reads as one is a field that can say anything" ;; esac
+      case "$k" in added) is_date "$v" || prob DATE-INVALID "$f  added '$v' is not a date (YYYY-MM-DD, zero-padded, real month and day) — a field the format calls a date and nobody reads as one is a field that can say anything" ;; esac
     done
     # `dated` is optional, but when present it is the ONE field a supersedes resolution orders
     # materials by — an unparseable value there decides a conflict the wrong way round, silently.
     v=$(fm "$f" dated)
-    [ -n "$v" ] && { is_date "$v" || prob "$f  dated '$v' is not a date (YYYY-MM-DD, zero-padded, real month and day) — this is the field a 'supersedes' resolution orders materials by, so a value nobody can read as a date decides conflicts by accident"; }
+    [ -n "$v" ] && { is_date "$v" || prob DATE-INVALID "$f  dated '$v' is not a date (YYYY-MM-DD, zero-padded, real month and day) — this is the field a 'supersedes' resolution orders materials by, so a value nobody can read as a date decides conflicts by accident"; }
     # The same leak the truth side has a dedicated check for, one door over — and silent here in a
     # nastier way. The truths awk collects a material body only AFTER its frontmatter closes, so a
     # converted.md whose second `---` is missing has an EMPTY body, and then every truth sourced from
@@ -710,19 +753,19 @@ cmd_validate() {
       awk 'NR==1 { if($0 ~ /^---[[:space:]]*$/) infm=1; next }
            infm && /^---[[:space:]]*$/ { closed=1; exit }
            END { exit closed?0:1 }' "$f" ||
-        prob "$f  frontmatter is never closed (a second '---' is missing) — the parser stays inside it to EOF, so this material has no body at all and every truth sourced from it is reported as a quote missing from its source"
+        prob MAT-FM-UNCLOSED "$f  frontmatter is never closed (a second '---' is missing) — the parser stays inside it to EOF, so this material has no body at all and every truth sourced from it is reported as a quote missing from its source"
     fi
     # One number, one spelling. `m5` and `m005` normalise to the same id, so a mine holding both
     # makes every reference to it ambiguous — and the resolvers, which are deliberately lenient about
     # padding, would answer with whichever they happened to find first.
     idc=$(canon_id "$id" || true)
     [ -n "$idc" ] && [ "$id" != "$idc" ] &&
-      prob "$MATERIALS/$id/  folder name is not the canonical id spelling — rename it to '$idc' (ids are zero-padded to at least three digits). Two spellings of one number resolve to the same id, so any reference to it becomes ambiguous"
-    [ "$(fm "$f" id)" = "$id" ] || prob "$f  id '$(fm "$f" id)' != folder '$id'"
-    v=$(fm "$f" origin); in_list "$v" "${SCH[material.fm.enum.origin]}" || prob "$f  origin '$v' invalid → use ${SCH[material.fm.enum.origin]}"
-    v=$(fm "$f" status); in_list "$v" "${SCH[material.fm.enum.status]}" || prob "$f  status '$v' invalid → use ${SCH[material.fm.enum.status]}"
-    v=$(fm "$f" role);   echo "$ROLES" | grep -qx "$v" || prob "$f  role '$v' not in project.md roles"
-    v=$(fm "$f" stage);  [ -z "$v" ] || in_list "$v" "${SCH[material.fm.enum.stage]}" || prob "$f  stage '$v' invalid → use ${SCH[material.fm.enum.stage]}"
+      prob MAT-ID-NONCANON "$MATERIALS/$id/  folder name is not the canonical id spelling — rename it to '$idc' (ids are zero-padded to at least three digits). Two spellings of one number resolve to the same id, so any reference to it becomes ambiguous"
+    [ "$(fm "$f" id)" = "$id" ] || prob MAT-ID-MISMATCH "$f  id '$(fm "$f" id)' != folder '$id'"
+    v=$(fm "$f" origin); in_list "$v" "${SCH[material.fm.enum.origin]}" || prob MAT-ENUM "$f  origin '$v' invalid → use ${SCH[material.fm.enum.origin]}"
+    v=$(fm "$f" status); in_list "$v" "${SCH[material.fm.enum.status]}" || prob MAT-ENUM "$f  status '$v' invalid → use ${SCH[material.fm.enum.status]}"
+    v=$(fm "$f" role);   echo "$ROLES" | grep -qx "$v" || prob MAT-ROLE "$f  role '$v' not in project.md roles"
+    v=$(fm "$f" stage);  [ -z "$v" ] || in_list "$v" "${SCH[material.fm.enum.stage]}" || prob MAT-ENUM "$f  stage '$v' invalid → use ${SCH[material.fm.enum.stage]}"
     # origin: research — the machine gathered this, so the record must let a cold reviewer
     # re-reach the source. Without url+retrieved_at an externally-fetched value is indistinguishable
     # from something the user said (a real run filed searched astronomical data as 'user-answer',
@@ -730,16 +773,16 @@ cmd_validate() {
     if [ "$(fm "$f" origin)" = "research" ]; then
       for k in $(pipes "${SCH[material.fm.required_when.research]}"); do
         v=$(fm "$f" "$k")
-        [ -n "$v" ] || { prob "$f  origin 'research' requires frontmatter '$k' (a fetched value must stay re-checkable)"; continue; }
-        case "$k" in retrieved_at) is_date "$v" || prob "$f  retrieved_at '$v' is not a date (YYYY-MM-DD, zero-padded, real month and day) — a field the format calls a date and nobody reads as one is a field that can say anything" ;; esac
+        [ -n "$v" ] || { prob MAT-RESEARCH-FIELDS "$f  origin 'research' requires frontmatter '$k' (a fetched value must stay re-checkable)"; continue; }
+        case "$k" in retrieved_at) is_date "$v" || prob DATE-INVALID "$f  retrieved_at '$v' is not a date (YYYY-MM-DD, zero-padded, real month and day) — a field the format calls a date and nobody reads as one is a field that can say anything" ;; esac
       done
     fi
     # corrects: this material displaces named parts of earlier materials
     for ref in $(listfield "$(fm "$f" corrects)"); do
       case "$ref" in m[0-9]*) ;; *) continue ;; esac
       mid=$(printf '%s' "$ref" | sed -E 's/^(m[0-9]+).*/\1/')
-      mdir_for "$mid" >/dev/null || prob "$f  corrects '$ref' → no such material"
-      [ "$mid" = "$id" ] && prob "$f  corrects itself"
+      mdir_for "$mid" >/dev/null || prob MAT-CORRECTS-DANGLING "$f  corrects '$ref' → no such material"
+      [ "$mid" = "$id" ] && prob MAT-CORRECTS-SELF "$f  corrects itself"
     done
   done < <(material_ids)
 
@@ -747,14 +790,14 @@ cmd_validate() {
   # Absence is reported, not treated as "nothing to check": a missing catalog.md would switch the
   # orphan cross-check off in both directions under a clean tick. Only once materials exist.
   if [ ! -f "$CATALOG" ] && [ -n "$(material_ids)" ]; then
-    prob "$CATALOG  missing — materials exist but the catalog does not, so the orphan cross-check (material with no row, row with no folder) runs zero times in both directions. Run gather, which writes it"
+    prob CAT-MISSING "$CATALOG  missing — materials exist but the catalog does not, so the orphan cross-check (material with no row, row with no folder) runs zero times in both directions. Run gather, which writes it"
   fi
   if [ -f "$CATALOG" ]; then
     while IFS= read -r id; do
-      catalog_ids | grep -qx "$id" || prob "$CATALOG  material '$id' has no catalog row"
+      catalog_ids | grep -qx "$id" || prob CAT-NO-ROW "$CATALOG  material '$id' has no catalog row"
     done < <(material_ids)
     while IFS= read -r id; do
-      [ -d "$MATERIALS/$id" ] || prob "$CATALOG  row '$id' has no material folder"
+      [ -d "$MATERIALS/$id" ] || prob CAT-GHOST-ROW "$CATALOG  row '$id' has no material folder"
     done < <(catalog_ids)
   fi
 
@@ -770,7 +813,7 @@ cmd_validate() {
   # A directory wearing a truth filename is not a truth: gawk skips it with a stderr warning, so
   # every per-file check would quietly not run on it while the name sits in the population.
   for f in "$TRUTHS"/t[0-9]*.md; do
-    [ -d "$f" ] && prob "$f  is a directory wearing a truth filename — not a truth and not counted; rename or remove it"
+    [ -d "$f" ] && prob TRUTH-DIR "$f  is a directory wearing a truth filename — not a truth and not counted; rename or remove it"
   done
   for d in "$MATERIALS"/*/; do [ -d "$d" ] && matlist="$matlist $(basename "$d")"; done
   for d in "$MATERIALS"/*/; do
@@ -1013,7 +1056,7 @@ cmd_validate() {
             sealbroken[tid]=1
             if(tstatus!="retracted" && !(tid in unsealed)){
               unsealed[tid]=1
-              prob(tfile "  quote not found in " mroot "/" tsrc "/converted.md (laundering risk)")
+              prob("[SEAL-QUOTE-MISSING] " tfile "  quote not found in " mroot "/" tsrc "/converted.md (laundering risk)")
             }
           } else stillthere[tid]=1
         }
@@ -1111,8 +1154,8 @@ cmd_validate() {
     # so the two commands cannot disagree about how many truth files exist.
     N_TRUTH=$(ls "$TRUTHS"/t[0-9]*.md 2>/dev/null | grep -c . || true); N_TRUTH=${N_TRUTH:-0}
     if [ "${qn:-0}" -gt 0 ]; then
-      printf '%s\n' "$qout" | grep -v '^QCOUNTS ' | sed '$d'
-      PROBLEMS=$((PROBLEMS + qn))
+      # Routed through prob so JSON mode collects them and codes ride the [CODE] prefix.
+      emit_probs < <(printf '%s\n' "$qout" | grep -v '^QCOUNTS ' | sed '$d' | sed 's/^  //')
     fi
 
     # A truth file whose line 1 is not '---' is invisible to every check above (the parser never
@@ -1126,17 +1169,17 @@ cmd_validate() {
       # by side and every id-keyed table above collapses them into one entry.
       tb=$(basename "$tf" .md); tc=$(canon_id "$tb" || true)
       [ -n "$tc" ] && [ "$tb" != "$tc" ] &&
-        prob "$tf  filename is not the canonical id spelling — rename it to '$tc.md' and set 'id: $tc' (ids are zero-padded to at least three digits). Two spellings of one number resolve to the same id, so the reciprocity, winner and retracted tables would collapse both files into one entry"
+        prob TRUTH-ID-NONCANON "$tf  filename is not the canonical id spelling — rename it to '$tc.md' and set 'id: $tc' (ids are zero-padded to at least three digits). Two spellings of one number resolve to the same id, so the reciprocity, winner and retracted tables would collapse both files into one entry"
       if has_fm "$tf"; then
         awk 'NR==1 { if($0 ~ /^---[[:space:]]*$/) infm=1; next }
              infm && /^---[[:space:]]*$/ { closed=1; exit }
              END { exit closed?0:1 }' "$tf" && continue
         nofm="$nofm $(basename "$tf" .md)"
-        prob "$tf  frontmatter is never closed (a second '---' is missing) — the parser stays inside it to EOF, so every check on this file runs zero times and its body is never sealed"
+        prob TRUTH-FM-UNCLOSED "$tf  frontmatter is never closed (a second '---' is missing) — the parser stays inside it to EOF, so every check on this file runs zero times and its body is never sealed"
         continue
       fi
       nofm="$nofm $(basename "$tf" .md)"
-      prob "$tf  no frontmatter (line 1 must be '---') — this file is not read as a truth at all, so every check on it silently passes and no index entry can ever be generated for it"
+      prob TRUTH-NO-FM "$tf  no frontmatter (line 1 must be '---') — this file is not read as a truth at all, so every check on it silently passes and no index entry can ever be generated for it"
     done
   fi
 
@@ -1149,14 +1192,14 @@ cmd_validate() {
     # of this check lives in its END block and cannot run when the awk does not.
     if ! ls "$TRUTHS"/t[0-9]*.md >/dev/null 2>&1; then
       while IFS= read -r rq; do
-        [ -n "$rq" ] && prob "required_tag '$rq' has no live truths — the mine holds no truth files at all; extract it from a material, queue the question (the ask loop turns the answer into a user-answer material), or remove the tag from project.md required_tags — removing it switches the completeness warranty off for that topic"
+        [ -n "$rq" ] && prob REQTAG-EMPTY "required_tag '$rq' has no live truths — the mine holds no truth files at all; extract it from a material, queue the question (the ask loop turns the answer into a user-answer material), or remove the tag from project.md required_tags — removing it switches the completeness warranty off for that topic"
       done <<EOF
 $reqtags
 EOF
     fi
     # generated index files must exist if truths exist — and index must be in sync (ids both ways)
-    [ -f "$TRUTHS/index.md" ] || prob "truths/index.md missing (run 'weavedoc reindex')"
-    [ -f "$TRUTHS/tree.md" ]  || prob "truths/tree.md missing (run 'weavedoc reindex')"
+    [ -f "$TRUTHS/index.md" ] || prob IDX-MISSING "truths/index.md missing (run 'weavedoc reindex')"
+    [ -f "$TRUTHS/tree.md" ]  || prob IDX-MISSING "truths/tree.md missing (run 'weavedoc reindex')"
     if [ -f "$TRUTHS/index.md" ]; then
       local fids iids sid
       fids=$(ls "$TRUTHS"/t[0-9]*.md 2>/dev/null | sed -E 's/.*[\/\\](t[0-9]+)\.md$/\1/' | LC_ALL=C sort)
@@ -1165,10 +1208,10 @@ EOF
         # Not an index problem when the file has no frontmatter — reindex cannot fix that, and telling
         # the user to run it again is the loop itself.
         case " $nofm " in *" $sid "*) continue ;; esac
-        prob "truths/index.md  no entry for $sid (run 'weavedoc reindex')"
+        prob IDX-SYNC "truths/index.md  no entry for $sid (run 'weavedoc reindex')"
       done
       for sid in $(comm -13 <(printf '%s\n' "$fids") <(printf '%s\n' "$iids")); do
-        prob "truths/index.md  entry '$sid' has no truth file (run 'weavedoc reindex')"
+        prob IDX-SYNC "truths/index.md  entry '$sid' has no truth file (run 'weavedoc reindex')"
       done
     fi
 
@@ -1254,8 +1297,7 @@ EOF
       ' <(nocomment < "$TRUTHS/coverage.md"))
       cn=$(printf '%s\n' "$cout" | tail -1); cn=${cn#CFAILS }
       if [ "${cn:-0}" -gt 0 ]; then
-        printf '%s\n' "$cout" | sed '$d'
-        PROBLEMS=$((PROBLEMS + cn))
+        emit_probs < <(printf '%s\n' "$cout" | sed '$d' | sed 's/^  //')
       fi
     fi
   fi
@@ -1267,31 +1309,31 @@ EOF
       for k in $(pipes "${SCH[plan.fm.required]}"); do
         req_value "$p" "$k" || true
       done
-      v=$(fm "$p" status); in_list "$v" "${SCH[plan.fm.enum.status]}" || prob "$p  status '$v' invalid"
-      [ "$(fm "$p" doc_id)" = "$d" ] || prob "$p  doc_id '$(fm "$p" doc_id)' != folder '$d'"
+      v=$(fm "$p" status); in_list "$v" "${SCH[plan.fm.enum.status]}" || prob PLAN-ENUM "$p  status '$v' invalid"
+      [ "$(fm "$p" doc_id)" = "$d" ] || prob PLAN-DOCID "$p  doc_id '$(fm "$p" doc_id)' != folder '$d'"
       for c in $(listfield "$(fm "$p" continues)"); do
-        [ -d "$DOCUMENTS/$c" ] || prob "$p  continues '$c' → no such document"
+        [ -d "$DOCUMENTS/$c" ] || prob PLAN-CONTINUES-DANGLING "$p  continues '$c' → no such document"
       done
       # cited_truths is the lookup key for Trigger A propagation: when a truth changes, this list is
       # what says which documents must go stale. A dangling id there is silent in the worst way —
       # the document is simply never matched, so it stays green forever while its ground moved.
       for c in $(listfield "$(fm "$p" cited_truths)"); do
-        case "$c" in t[0-9]*) tfile_for "$c" >/dev/null || prob "$p  cited_truths '$c' → no such truth. Trigger A matches documents by this list, so a dangling id exempts this document from staleness detection" ;;
-          *) prob "$p  cited_truths '$c' is not a truth id (expected tNNN)" ;; esac
+        case "$c" in t[0-9]*) tfile_for "$c" >/dev/null || prob PLAN-CITED-DANGLING "$p  cited_truths '$c' → no such truth. Trigger A matches documents by this list, so a dangling id exempts this document from staleness detection" ;;
+          *) prob PLAN-CITED-NOT-ID "$p  cited_truths '$c' is not a truth id (expected tNNN)" ;; esac
       done
       # audience: external requires publication labels (WD-CFG-001) — an external document ships
       # with its labels or not at all.
       fmv "$p" audience; v=$REPLY
       if [ -n "$v" ]; then
-        in_list "$v" "${SCH[plan.fm.enum.audience]}" || prob "$p  audience '$v' invalid → ${SCH[plan.fm.enum.audience]}"
+        in_list "$v" "${SCH[plan.fm.enum.audience]}" || prob PLAN-AUDIENCE "$p  audience '$v' invalid → ${SCH[plan.fm.enum.audience]}"
         if [ "$v" = "external" ]; then
           fmv "$p" publication_labels
           { [ -n "$REPLY" ] && ! is_placeholder "$REPLY"; } \
-            || prob "$p  audience 'external' but publication_labels is missing or an untouched placeholder — an external document ships with its labels or not at all"
+            || prob PLAN-LABELS "$p  audience 'external' but publication_labels is missing or an untouched placeholder — an external document ships with its labels or not at all"
         fi
       fi
     else
-      prob "$DOCUMENTS/$d/  no plan.md"
+      prob PLAN-MISSING "$DOCUMENTS/$d/  no plan.md"
     fi
     # Three ways to BLIND the gate's reader, checked here because this decides whether a doc may ship:
     #   1. a second copy of the heading — only the FIRST section is read;
@@ -1302,16 +1344,16 @@ EOF
       # Counted at ANY heading level. The spec never fixed the level for this section, so a copy
       # one level down is a second copy just the same, and only the first is ever read.
       [ "$(dup_section "$DOCUMENTS/$d/review.md" "Fidelity violations" 0)" -gt 1 ] &&
-        prob "$d review.md has more than one 'Fidelity violations' heading (at any level) — only the first is read, so violations under the others would ship unseen. Merge them"
+        prob REVIEW-DUP-HEADING "$d review.md has more than one 'Fidelity violations' heading (at any level) — only the first is read, so violations under the others would ship unseen. Merge them"
       comment_balanced "$DOCUMENTS/$d/review.md" ||
-        prob "$d review.md ends inside an unterminated '<!--' — everything after it is blanked out before any check reads it, so open violations below would ship unseen. Close the comment"
+        prob REVIEW-UNTERMINATED-COMMENT "$d review.md ends inside an unterminated '<!--' — everything after it is blanked out before any check reads it, so open violations below would ship unseen. Close the comment"
       # Archiving a closed round in a comment stays legal, so the test is whether a section the file
       # ITSELF declares survives the strip — present raw but gone afterwards = a lost section.
       while IFS= read -r r; do
         [ -n "$r" ] || continue
         [ "$(dup_section "$DOCUMENTS/$d/review.md" "$r" 0 raw)" -gt 0 ] || continue
         [ "$(dup_section "$DOCUMENTS/$d/review.md" "$r" 0)" -eq 0 ] &&
-          prob "$d review.md has a '$r' heading that is gone once comments are stripped — a '-->' in ordinary prose closes an earlier '<!--', and everything between them (headings and open violations alike) is blanked before any check reads it. Close the comment where it was meant to end"
+          prob REVIEW-LOST-SECTION "$d review.md has a '$r' heading that is gone once comments are stripped — a '-->' in ordinary prose closes an earlier '<!--', and everything between them (headings and open violations alike) is blanked before any check reads it. Close the comment where it was meant to end"
       done < <(pipes "${SCH[review.sections]}")
       # THE ZONE RULE (ruled 2026-08-01, replacing the shape census). A violation kind in brackets
       # may live in exactly one place — inside the 'Fidelity violations' section; anywhere else,
@@ -1345,7 +1387,7 @@ EOF
       if [ -n "$vkfold" ]; then
         while IFS= read -r vline; do
           vline=${vline#O$'\t'}
-          prob "$d review.md: a violation kind in brackets sits outside the 'Fidelity violations' section: '$vline' — the gate acts only inside that section, so however this line renders, the gate cannot act on it. An open violation belongs under the 'Fidelity violations' heading; a record or mention ABOUT a violation writes its kind without brackets (e.g. 'fixed: contradiction — …'); archived history belongs in an HTML comment with its closing '-->' on its own line"
+          prob REVIEW-KIND-OUTSIDE "$d review.md: a violation kind in brackets sits outside the 'Fidelity violations' section: '$vline' — the gate acts only inside that section, so however this line renders, the gate cannot act on it. An open violation belongs under the 'Fidelity violations' heading; a record or mention ABOUT a violation writes its kind without brackets (e.g. 'fixed: contradiction — …'); archived history belongs in an HTML comment with its closing '-->' on its own line"
         done < <(fid_mark "$DOCUMENTS/$d/review.md" | grep -E '^O' | LC_ALL=C awk -v kf="$vkfold" -v mode=p "$kindscan" || true)
         # A line that TRIED to be a violation entry but failed is told to fix itself, not binned as
         # prose. is_noise is still the sole judge of what an entry IS; this loop looks only at lines
@@ -1365,11 +1407,11 @@ EOF
           for vk in $vklist; do case "$vfold" in *"$vk"*) vhit=1 ;; esac; done
           [ -n "$vhit" ] || continue
           case "$vline" in
-            "#"*) prob "$d review.md: '$vline' starts with '#', so the gate reads it as a heading and drops it — a numbered entry is invisible to the check even though markdown renders it as body text. Start the entry with '- ' instead" ;;
+            "#"*) prob REVIEW-KIND-SHAPE "$d review.md: '$vline' starts with '#', so the gate reads it as a heading and drops it — a numbered entry is invisible to the check even though markdown renders it as body text. Start the entry with '- ' instead" ;;
             # A `-->`-opened line lands here with an EXACT kind — the problem is the arrow, not the
             # kind: the gate reads it as a comment closer, so the entry after it is invisible.
-            "-->"*) prob "$d review.md: '$vline' starts with '-->', so the gate reads it as a comment closer and drops the whole line — the entry after the arrow is invisible however correct its kind is. Remove the stray arrow, or if it closes a real comment above, put it on its own line and start the entry on the next" ;;
-            *) prob "$d review.md: '[$vslot]' is not an exact violation kind — the gate acts only on an exact one of $vkinds (lowercase, no extra spaces, ONE kind per entry). Written like this the line reads as an untouched template and is silently ignored; fix the kind" ;;
+            "-->"*) prob REVIEW-KIND-SHAPE "$d review.md: '$vline' starts with '-->', so the gate reads it as a comment closer and drops the whole line — the entry after the arrow is invisible however correct its kind is. Remove the stray arrow, or if it closes a real comment above, put it on its own line and start the entry on the next" ;;
+            *) prob REVIEW-KIND-UNKNOWN "$d review.md: '[$vslot]' is not an exact violation kind — the gate acts only on an exact one of $vkinds (lowercase, no extra spaces, ONE kind per entry). Written like this the line reads as an untouched template and is silently ignored; fix the kind" ;;
           esac
         done < <(fid_mark "$DOCUMENTS/$d/review.md" | sed -n 's/^I	//p' | grep -F '[' || true)
         # A comment that swallows kind-bearing entries and is closed by a MID-LINE arrow is named.
@@ -1390,7 +1432,7 @@ EOF
                  printf '%s\n' "$vrest" | LC_ALL=C awk -v kf="$vkfold" -v mode=t "$kindscan" && vcnt=$((vcnt+1)) ;;
                esac ;;
             C) [ -n "$vrest" ] && [ "$vcnt" -gt 0 ] &&
-                 prob "$d review.md: a comment swallows $vcnt violation-shaped entr(ies) and its closing '-->' is followed by '$vrest' on the same line — if that arrow is prose that accidentally closed a forgotten '<!--', close the comment where it was meant to end; if the archive is deliberate, put the closing '-->' on its own line"
+                 prob REVIEW-COMMENT-SWALLOWS "$d review.md: a comment swallows $vcnt violation-shaped entr(ies) and its closing '-->' is followed by '$vrest' on the same line — if that arrow is prose that accidentally closed a forgotten '<!--', close the comment where it was meant to end; if the archive is deliberate, put the closing '-->' on its own line"
                vcnt=0 ;;
           esac
         done < <(awk '
@@ -1430,20 +1472,20 @@ EOF
     if [ -n "$consecrated" ]; then
       N_CONSEC=$((N_CONSEC+1))
       if [ ! -f "$DOCUMENTS/$d/review.md" ]; then
-        prob "$d has $consecrated but no review.md — the fidelity gate has no record of ever running on it. Run review before consecrating"
+        prob GATE-NO-REVIEW "$d has $consecrated but no review.md — the fidelity gate has no record of ever running on it. Run review before consecrating"
       elif [ "$(dup_section "$DOCUMENTS/$d/review.md" "Fidelity violations" 0)" -eq 0 ]; then
         #   4. A heading the reader cannot find. `fid_body` returns nothing both when the section is
         #      EMPTY (good) and when the title does not match — the gate read the second as the first.
         #      A suffix, trailing colon, numbering prefix, NBSP, or indent each did it. Absence of a
         #      readable heading is now the same failure as absence of the file: silence, not a pass.
-        prob "$d has $consecrated but no 'Fidelity violations' heading the gate can read in review.md — the section title must match exactly (any heading level, no suffix, no numbering, no trailing space). A title the reader cannot find is silence, not a pass"
+        prob GATE-NO-HEADING "$d has $consecrated but no 'Fidelity violations' heading the gate can read in review.md — the section title must match exactly (any heading level, no suffix, no numbering, no trailing space). A title the reader cannot find is silence, not a pass"
       else
         N_GATED=$((N_GATED+1))
         # The FIRST counted entry is named in the message, or a line the writer did not think of as
         # an entry blocks the document with no thread back to the line that did it.
         while IFS= read -r line; do
           is_noise "$line" && continue
-          prob "$d has $consecrated but review.md 'Fidelity violations' is non-empty → consecrated through an open gate. First entry the gate sees: '$line'. Repair each violation by its kind (refine), re-run review until the section is empty — or remove $consecrated until the gate is clean; a violation is never edited away in review.md itself"
+          prob GATE-OPEN "$d has $consecrated but review.md 'Fidelity violations' is non-empty → consecrated through an open gate. First entry the gate sees: '$line'. Repair each violation by its kind (refine), re-run review until the section is empty — or remove $consecrated until the gate is clean; a violation is never edited away in review.md itself"
           break
         done < <(fid_body "$DOCUMENTS/$d/review.md")
       fi
@@ -1456,10 +1498,10 @@ EOF
         if [ -n "$rdg_" ]; then
           N_RSEAL=$((N_RSEAL+1))
           findg_=$(artifact_digest "$(doc_final_path "$d")")
-          [ "$findg_" = "$rdg_" ] || prob "$d $consecrated is not the bytes the clean review reviewed (reviewed_digest mismatch) — something changed after the seal; re-review, then re-consecrate. Nobody reviewed the bytes that are about to ship"
+          [ "$findg_" = "$rdg_" ] || prob GATE-FINAL-DIGEST "$d $consecrated is not the bytes the clean review reviewed (reviewed_digest mismatch) — something changed after the seal; re-review, then re-consecrate. Nobody reviewed the bytes that are about to ship"
           rcx_=$(fm "$DOCUMENTS/$d/review.md" review_context_digest); rcx_=${rcx_#sha256:}
           if [ -n "$rcx_" ] && [ "$(context_digest "$d")" != "$rcx_" ]; then
-            prob "$d review context changed after the seal (a cited truth, its source material, config or schema moved) — the clean review no longer describes this mine; re-review"
+            prob GATE-CONTEXT-CHANGED "$d review context changed after the seal (a cited truth, its source material, config or schema moved) — the clean review no longer describes this mine; re-review"
           fi
         else
           N_RLEGACY=$((N_RLEGACY+1))
@@ -1475,12 +1517,12 @@ EOF
   # own record. Accepted entries are decisions and never block.
   if [ "$N_CONSEC" -gt 0 ] && [ "$(cfgval completeness)" = "required" ]; then
     if [ ! -f "$ROOT/gaps.md" ]; then
-      prob "completeness is 'required' and a consecrated output exists, but there is no gaps.md — the completeness register never ran. Run the weavedoc-gaps skill (fill-or-accept) before consecrating, or set fidelity.completeness: off to drop the warranty"
+      prob COMP-NO-REGISTER "completeness is 'required' and a consecrated output exists, but there is no gaps.md — the completeness register never ran. Run the weavedoc-gaps skill (fill-or-accept) before consecrating, or set fidelity.completeness: off to drop the warranty"
     else
       local nopen_
       nopen_=$(nocomment < "$ROOT/gaps.md" | section_body - "Open" | countlines '^[[:space:]]*- ')
       [ "${nopen_:-0}" -eq 0 ] && nopen_=$(nocomment < "$ROOT/gaps.md" | section_body2 - "Open" | countlines '^[[:space:]]*- ')
-      [ "${nopen_:-0}" -gt 0 ] && prob "completeness is 'required' but gaps.md holds ${nopen_} open gap(s) next to a consecrated output — fill each (question → user-answer material → map) or move it to Accepted with a reason; under 'required' an open gap is a violation, not a note"
+      [ "${nopen_:-0}" -gt 0 ] && prob COMP-OPEN-GAPS "completeness is 'required' but gaps.md holds ${nopen_} open gap(s) next to a consecrated output — fill each (question → user-answer material → map) or move it to Accepted with a reason; under 'required' an open gap is a violation, not a note"
     fi
   fi
 
@@ -1496,14 +1538,14 @@ EOF
   if [ -f "$TRUTHS/verify.md" ]; then
     for k in $(pipes "${SCH[verify.fm.required]}"); do
       v=$(fm "$TRUTHS/verify.md" "$k")
-      [ -n "$v" ] || { prob "truths/verify.md  frontmatter '$k' missing"; continue; }
-      case "$k" in verified_at) is_date "$v" || prob "truths/verify.md  verified_at '$v' is not a date (YYYY-MM-DD, zero-padded, real month and day) — a field the format calls a date and nobody reads as one is a field that can say anything" ;; esac
+      [ -n "$v" ] || { prob FM-MISSING "truths/verify.md  frontmatter '$k' missing"; continue; }
+      case "$k" in verified_at) is_date "$v" || prob DATE-INVALID "truths/verify.md  verified_at '$v' is not a date (YYYY-MM-DD, zero-padded, real month and day) — a field the format calls a date and nobody reads as one is a field that can say anything" ;; esac
     done
     v=$(fm "$TRUTHS/verify.md" status)
-    [ -z "$v" ] || in_list "$v" "${SCH[verify.fm.enum.status]}" || prob "truths/verify.md  status '$v' invalid → use ${SCH[verify.fm.enum.status]}"
+    [ -z "$v" ] || in_list "$v" "${SCH[verify.fm.enum.status]}" || prob VERIFY-ENUM "truths/verify.md  status '$v' invalid → use ${SCH[verify.fm.enum.status]}"
     while IFS= read -r k; do
       nocomment < "$TRUTHS/verify.md" | grep -qE "^#{1,2}[[:space:]]+${k}[[:space:]]*\$" ||
-        prob "truths/verify.md  required section '$k' missing (verify.sections)"
+        prob VERIFY-SECTION "truths/verify.md  required section '$k' missing (verify.sections)"
     done < <(pipes "${SCH[verify.sections]}")
   fi
 
@@ -1513,42 +1555,42 @@ EOF
   while IFS= read -r hqf; do check_hq_tags "$hqf"; done < <(hq_files)
 
   # --- config enums ---
-  v=$(cfgval completeness); [ -z "$v" ] || in_list "$v" "${SCH[config.enum.completeness]}" || prob "config fidelity.completeness '$v' invalid"
-  v=$(cfgval detection);    [ -z "$v" ] || in_list "$v" "${SCH[config.enum.detection]}" || prob "config conflicts.detection '$v' invalid"
-  v=$(cfgval attribution);  [ -z "$v" ] || in_list "$v" "${SCH[config.enum.attribution]}" || prob "config conflicts.attribution '$v' invalid"
+  v=$(cfgval completeness); [ -z "$v" ] || in_list "$v" "${SCH[config.enum.completeness]}" || prob CFG-ENUM "config fidelity.completeness '$v' invalid"
+  v=$(cfgval detection);    [ -z "$v" ] || in_list "$v" "${SCH[config.enum.detection]}" || prob CFG-ENUM "config conflicts.detection '$v' invalid"
+  v=$(cfgval attribution);  [ -z "$v" ] || in_list "$v" "${SCH[config.enum.attribution]}" || prob CFG-ENUM "config conflicts.attribution '$v' invalid"
 
   # --- schema version negotiation (WD-MIG-002) + full config contract (WD-CFG-001) ---
   local pv cv sv sect ck
   sv=$(schema_ver)
   pv=$(fm "$PROJECT" version); cv=$(cfgval version)
   case "$pv" in
-    ''|*[!0-9]*) prob "project.md version '$pv' is not an integer — the schema version field is the negotiation handle" ;;
-    *) [ "$pv" -gt "$sv" ] && prob "project.md declares schema version $pv, newer than this runtime supports (≤$sv) — upgrade the runtime bundle, never guess at a future format" ;;
+    ''|*[!0-9]*) prob VER-NOT-INT "project.md version '$pv' is not an integer — the schema version field is the negotiation handle" ;;
+    *) [ "$pv" -gt "$sv" ] && prob VER-FUTURE "project.md declares schema version $pv, newer than this runtime supports (≤$sv) — upgrade the runtime bundle, never guess at a future format" ;;
   esac
-  case "$cv" in ''|*[!0-9]*) prob "config version '$cv' is not an integer" ;; esac
+  case "$cv" in ''|*[!0-9]*) prob VER-NOT-INT "config version '$cv' is not an integer" ;; esac
   if [ -n "$pv" ] && [ -n "$cv" ] && [ "$pv" != "$cv" ]; then
-    prob "project.md version ($pv) and config.yaml version ($cv) disagree — two records of one fact must agree; upgrade stamps both"
+    prob VER-DISAGREE "project.md version ($pv) and config.yaml version ($cv) disagree — two records of one fact must agree; upgrade stamps both"
   fi
   SCHEMA_V1=0; { [ "$pv" = "1" ] || [ "$cv" = "1" ]; } && SCHEMA_V1=1
   for sect in verify review; do
     v=$(cfg2 "$sect" strength)
     [ -z "$v" ] || in_list "$v" "${SCH[config.strength.range]}" \
-      || prob "config $sect.strength '$v' invalid → one of ${SCH[config.strength.range]}"
+      || prob CFG-RANGE "config $sect.strength '$v' invalid → one of ${SCH[config.strength.range]}"
     v=$(cfg2 "$sect" max_rounds)
-    case "$v" in "") ;; 0|*[!0-9]*) prob "config $sect.max_rounds '$v' must be a positive integer — 'exceeded → escalate' needs a ceiling that can be exceeded" ;; esac
+    case "$v" in "") ;; 0|*[!0-9]*) prob CFG-RANGE "config $sect.max_rounds '$v' must be a positive integer — 'exceeded → escalate' needs a ceiling that can be exceeded" ;; esac
     v=$(cfg2 "$sect" scale)
     [ -z "$v" ] || in_list "$v" "${SCH[config.enum.scale]}" \
-      || prob "config $sect.scale '$v' invalid → ${SCH[config.enum.scale]}"
+      || prob CFG-ENUM "config $sect.scale '$v' invalid → ${SCH[config.enum.scale]}"
     for ck in $(pipes "${SCH[config.repeat.scales]}"); do
       v=$(cfg2 "$sect" "$ck")
-      case "$v" in "") ;; *[!0-9]*) prob "config $sect.repeat.$ck '$v' must be a non-negative integer (clean rounds in a row)" ;; esac
+      case "$v" in "") ;; *[!0-9]*) prob CFG-RANGE "config $sect.repeat.$ck '$v' must be a non-negative integer (clean rounds in a row)" ;; esac
     done
   done
   # Unknown top-level keys: a NAMED warning, never a failure — extension vs typo is not
   # machine-decidable, but silence would let a typo'd knob read as configured.
   while IFS= read -r ck; do
     in_list "$ck" "${SCH[config.toplevel]}" \
-      || echo "  warning: unknown config key '$ck' in .weavedoc/config.yaml — known top-level keys: ${SCH[config.toplevel]}"
+      || warn CFG-UNKNOWN-KEY "unknown config key '$ck' in .weavedoc/config.yaml — known top-level keys: ${SCH[config.toplevel]}"
   done < <(awk '/^[A-Za-z_][A-Za-z0-9_]*:/ { s=$0; sub(/:.*/, "", s); print s }' "$CONFIG" 2>/dev/null)
 
   # Printed on both outcomes and before the verdict, so the verdict is never read without it.
@@ -1561,6 +1603,18 @@ EOF
   [ "$N_TOMB" -gt 0 ]     && sealpart="$sealpart · $N_TOMB tombstone"
   [ "$N_UNCHK" -gt 0 ]    && sealpart="$sealpart ← $N_UNCHK NOT checked"
   [ "$N_GATED" -lt "$N_CONSEC" ] && gatenote=" ← $((N_CONSEC - N_GATED)) NOT gate-checked"
+  if [ "$WD_JSON" = 1 ]; then
+    # The machine contract (WD-CLI-002): stdout carries ONLY the JSON object; codes are the
+    # stable surface, messages are presentation; exit code semantics unchanged (0 pass · 1 fail).
+    local jresult="pass"; [ "$PROBLEMS" -gt 0 ] && jresult="fail"
+    printf '{"output_schema_version":1,"command":"validate","bundle":"%s","schema_version":%s,"result":"%s","problems":%s,' \
+      "$(json_esc "$(cat "$ROOT/.weavedoc/VERSION" 2>/dev/null)")" "$(schema_ver)" "$jresult" "$PROBLEMS"
+    printf '"examined":{"materials":%s,"truths":%s,"sealed":%s,"seal_failed":%s,"tombstones":%s,"not_checked":%s,"documents":%s,"consecrated":%s,"gate_checked":%s,"review_seals_bound":%s,"review_seals_legacy":%s},' \
+      "$N_MAT" "$N_TRUTH" "$N_SEALED" "$N_SEALFAIL" "$N_TOMB" "$N_UNCHK" "$N_DOC" "$N_CONSEC" "$N_GATED" "$N_RSEAL" "$N_RLEGACY"
+    printf '"schema_v1_mine":%s,"diagnostics":%s,"warnings":%s}\n' \
+      "$([ "${SCHEMA_V1:-0}" = 1 ] && echo true || echo false)" "$(json_diag_array "$DIAGS")" "$(json_diag_array "$WARNS")"
+    [ "$PROBLEMS" -eq 0 ] && return 0 || return 1
+  fi
   echo "  examined: materials $N_MAT · truths $N_TRUTH ($sealpart) · documents $N_DOC ($N_CONSEC consecrated, $N_GATED gate-checked$gatenote)"
   # Review seals are counted out loud whenever anything is consecrated: a legacy (digest-less)
   # review next to a final is real history that binds no bytes — visible, never silently equal
@@ -2891,7 +2945,7 @@ cmd_scope() {
 # flag is a typo'd intention, and a tool that ignores it does something other than what was asked.
 usage2() { echo "usage: $1" >&2; exit 2; }
 case "${1:-}" in
-  validate) shift; [ $# -eq 0 ] || usage2 "weavedoc validate";  cmd_validate ;;
+  validate) shift; [ "${1:-}" = "--json" ] && { WD_JSON=1; shift; }; [ $# -eq 0 ] || usage2 "weavedoc validate [--json]"; cmd_validate ;;
   impact)   shift; [ $# -eq 1 ] || usage2 "weavedoc impact <material-id>"; cmd_impact "$1" ;;
   status)   shift; [ $# -eq 0 ] || usage2 "weavedoc status";   cmd_status ;;
   scope)    shift; [ $# -eq 0 ] || usage2 "weavedoc scope";    cmd_scope ;;

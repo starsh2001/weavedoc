@@ -1992,6 +1992,39 @@ e2e_open_queue_consecrates() {
   vrun validate;       expect_pass
 }
 
+# ---- WD-CLI-002 (Phase 5 unit 11a): stable diagnostic codes + validate --json ----
+acct_json_validate_clean() {
+  vrun validate --json
+  expect_pass
+  expect_has '"result":"pass"'
+  expect_has '"output_schema_version":1'
+  expect_has '"diagnostics":[]'
+}
+acct_json_validate_diag() {
+  # The machine surface: exit 1, result fail, and the STABLE code — the message may be reworded,
+  # the code may not.
+  vrun seal-review d1 draft
+  printf 'x\n' >> "$W/documents/d1/final.md"
+  vrun validate --json
+  [ "$RC" -eq 1 ] || bad "expected exit 1, got $RC"
+  expect_has '"result":"fail"'
+  expect_has '"code":"GATE-FINAL-DIGEST"'
+}
+acct_diag_code_human() {
+  # Human output carries the same code in brackets — citable, greppable, stable.
+  printf 'x\n' >> "$W/truths/t001.md"
+  vrun validate
+  expect_block "[SEAL-QUOTE-MISSING]"
+}
+meta_uncoded_ratchet() {
+  # Every SHELL prob site carries a code; the two matches allowed are emit_probs' router lines.
+  # awk-emitted diagnostics are wave 11b — this ratchet keeps the shell side at zero meanwhile.
+  local n
+  n=$(grep -E '\bprob "' "$REPO/.weavedoc/bin/weavedoc" | grep -cvE '\$code|\$line' || true)
+  OUT="uncoded shell prob sites: ${n:-?}"; RC=0
+  if [ "${n:-1}" -eq 0 ]; then ok; else bad "shell prob sites without a code: $n (the ratchet allows zero)"; fi
+}
+
 meta_doc_sync() {
   # Docs and code agree, checked mechanically (Phase 5): dispatch ↔ README ↔ bin header, and
   # VERSION ↔ CHANGELOG's newest entry. Green only while all four surfaces say one thing.

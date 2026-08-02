@@ -4,6 +4,16 @@
 
 ---
 
+## 2026-08-02.15
+
+**진단이 계약이 됩니다 — 안정 diagnostic code + `validate --json` (WD-CLI-002/QA-003, 단위 11a).**
+
+- **코드 체계**: `AREA-SLUG`(예: `GATE-FINAL-DIGEST`, `SEAL-QUOTE-MISSING`, `VER-DISAGREE`) — **코드가 계약이고 영문 산문은 표현**입니다. 사람 출력엔 `[CODE]` 프리픽스(인용·grep 가능), 이번 웨이브로 shell 측 진단 71/73곳 코드화(잔여 2는 라우터 내부 = 실질 0). `meta_uncoded_ratchet`이 shell 측 0을 고정 — 코드 없는 prob는 이제 suite가 거부합니다.
+- **`validate --json`**: stdout에 JSON 객체만 — `output_schema_version:1`, bundle, schema_version, result, problems, `examined`(seal/tombstone/gate/review-seal 카운트 전부), `diagnostics:[{code,message}]`, `warnings`. exit 규약 불변(0 pass · 1 fail). config unknown-key 경고도 `warn()` 수집기로 승격(`CFG-UNKNOWN-KEY`).
+- awk 벌크 경로(truths·coverage awk)는 `emit_probs` 라우터로 합류 — 대표 진단 `SEAL-QUOTE-MISSING`은 1차에 포함, 나머지 awk 내부 타입과 scope/version/upgrade의 `--json`, FORMATS 코드표는 **단위 11b**로 명시 잔여.
+
+검증: json 2 · ratchet 1 · human-code 1 · **gate 88/88**(프리픽스가 기존 단언 무손상) 로컬 · 전수는 CI.
+
 ## 2026-08-02.14
 
 **document half의 E2E 척추 (WD-E2E-001).** `e2e_` 카테고리 신설 — 개별 판정이 아니라 **시퀀스**를 검증합니다: 문서 하나가 plan → draft → clean review → seal → consecrate를 실제 명령 흐름으로 통과하고, 관절마다 단언이 붙습니다.
