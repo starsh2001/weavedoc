@@ -633,7 +633,7 @@ macOS 기본 Bash 3.2/BSD 도구를 지원하지 않는다면 preflight가 명�
 | WD-MIG-001~002 | `acct_upgrade_apply_golden`(golden+idempotent+legacy 분리), `acct_upgrade_dryrun_readonly`, `acct_upgrade_rollback`, `block_upgrade_apply_collision`, `block_schema_future_version`, `acct_schema_v1_notice` | Phase 3 — 구현·통과 2026-08-02 (digest 소급 승격은 §11대로 재검증=attest 경로만) |
 | WD-ARC/PERF/IO | 성능: 실광산 −78.7% 실측(케이스 아닌 [perf-baseline.md](tests/baseline/perf-baseline.md) 기록) · IO: `acct_retag_rollback`, `block_retag_outside_root`, `acct_retag_symlink_guard`, reindex staged+atomic · `reproducible_build`는 manifest 2회 재현이 CI에서 상시 수행 | Phase 4 — 완료 2026-08-02 (모듈 분리+단일 파일 빌드는 보류 — 아래 상태 참조) |
 | WD-CFG/CLI | config contract → `block_config_*`, `acct_config_unknown_key_warned` (Phase 3에서 조기 구현·통과 2026-08-02) · `cli_argument_contract`, `json_contract` | Phase 4~5 |
-| WD-E2E-001 | `e2e_single`, `e2e_multi`, `e2e_stale_recovery` | Phase 5 |
+| WD-E2E-001 | `e2e_single_document`, `e2e_multi_document`, `e2e_stale_context_recovery`, `e2e_block_repair_{contradiction,unsupported,missing_required}`, `e2e_user_answer_chain`, `e2e_open_queue_consecrates` | Phase 5 — 기계적 척추 구현·통과 2026-08-02 (스킬 주도 실전 1회는 별도 잔여) |
 
 ## 8. 마이그레이션 안전 원칙
 

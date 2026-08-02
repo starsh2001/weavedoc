@@ -4,6 +4,20 @@
 
 ---
 
+## 2026-08-02.14
+
+**document half의 E2E 척추 (WD-E2E-001).** `e2e_` 카테고리 신설 — 개별 판정이 아니라 **시퀀스**를 검증합니다: 문서 하나가 plan → draft → clean review → seal → consecrate를 실제 명령 흐름으로 통과하고, 관절마다 단언이 붙습니다.
+
+- `e2e_single_document` / `e2e_multi_document` — 단일 파일과 draft/ 트리 각각 탄생부터 봉인된 validate까지.
+- `e2e_stale_context_recovery` — 봉헌된 초록 → 인용 truth의 claim 변경 → hard red("review no longer describes this mine") → 재-seal → 다시 초록. 신선도의 왕복 전체.
+- `e2e_block_repair_{contradiction,unsupported,missing-required}` — 세 kind 각각: gate가 이름으로 거부 → **거부가 final을 남기지 않음을 단언** → 수리 → 재-seal → 봉헌.
+- `e2e_user_answer_chain` — ask 루프의 산출물 사슬(사용자 답변 → user-answer material → truth → 인용)이 통째로 validate·consecrate를 통과.
+- `e2e_open_queue_consecrates` — 2026-08-01 재정을 시퀀스로 고정: 열린 Human queue는 기계의 봉헌을 막지 않는다(고지·go-ahead는 스킬의 의무, 한 층 위).
+
+이 케이스들이 커버하지 **못하는** 것도 명시합니다: AI가 무엇을 쓸지 결정하는 절반 — 스킬 주도 실전 1회는 남은 과제로 플랜에 기록.
+
+검증: e2e 8/8 첫 실행 GREEN · 전수는 CI.
+
 ## 2026-08-02.13
 
 **Phase 5 개시 — preflight와 "문서≠코드"의 기계 검사.**

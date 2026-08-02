@@ -1893,6 +1893,105 @@ pass_plan_external_labeled() {
   vrun validate; expect_pass
 }
 
+# ---- WD-E2E-001 (Phase 5): the document half's mechanical spine, end to end ----
+# e2e_* cases are SEQUENCES: each drives a document through the real command flow (seal →
+# consecrate → gate digests → staleness → recovery) and asserts at every joint. What they cannot
+# cover is the AI half — a skill deciding what to write; that first real run stays on the plan.
+mkdoc2() { # a second document, born unconsecrated: plan + draft citing t001, clean review
+  mkdir -p "$W/documents/d2"
+  printf -- '---\ndoc_id: d2\ndoc_type: report\ntone: 담백\nstatus: planned\ncontinues: []\ncited_truths: [t001]\nscope_tags: [위약]\n---\n\n# 개요\n' > "$W/documents/d2/plan.md"
+  printf -- '# 개요\n\n위약금은 계약금액의 10%%다. <!-- t:t001 -->\n' > "$W/documents/d2/draft.md"
+  printf -- '---\nround: 1\n---\n\n# Fidelity violations\n\n# Findings\n\n# Adjudications\n\n# Human queue\n' > "$W/documents/d2/review.md"
+}
+e2e_single_document() {
+  # plan → draft → clean review → seal → consecrate → sealed validate. Every joint asserted.
+  mkdoc2
+  vrun seal-review d2 draft;  expect_has "reviewed_digest"
+  vrun consecrate d2;         expect_pass; expect_has "full validation: 1 run"
+  OUT=$(cat "$W/documents/d2/final.md"); RC=0
+  expect_has "위약금은 계약금액의 10%다"
+  vrun validate;              expect_pass
+  expect_has "review seals: 1 digest-bound · 1 legacy-unbound"
+}
+e2e_multi_document() {
+  # The same spine with a draft/ tree — the manifest digest carries the whole flow.
+  mkdoc2
+  rm "$W/documents/d2/draft.md"
+  mkdir -p "$W/documents/d2/draft"
+  printf -- '# 1장\n\n위약금은 계약금액의 10%%다. <!-- t:t001 -->\n' > "$W/documents/d2/draft/01.md"
+  printf -- '# 2장\n\n끝.\n' > "$W/documents/d2/draft/02.md"
+  vrun seal-review d2 draft
+  vrun consecrate d2;  expect_pass
+  [ -d "$W/documents/d2/final" ] || bad "final/ directory was not created"
+  vrun validate;       expect_pass
+}
+e2e_stale_context_recovery() {
+  # Consecrated green → a cited truth's claim moves → hard red (the review no longer describes
+  # this mine) → re-review re-seals → green again. The full staleness round trip.
+  mkdoc2
+  vrun seal-review d2 draft
+  vrun consecrate d2;  expect_pass
+  sed -i 's/^claim: "위약금은 계약금액의 10%다"$/claim: "위약금은 계약금액의 12%다"/' "$W/truths/t001.md"
+  vrun validate;       expect_block "review context changed"
+  vrun seal-review d2 draft
+  vrun validate;       expect_pass
+}
+e2e_block_repair_contradiction() {
+  # The gate refuses a violation by name; repairing the review (the violation resolved and the
+  # section emptied) reopens the road to final. Same flow for each kind below.
+  mkdoc2
+  sed -i '/^# Fidelity violations$/a \\n- [contradiction] 1장 — t001과 모순' "$W/documents/d2/review.md"
+  vrun seal-review d2 draft
+  vrun consecrate d2;  expect_block "open gate"
+  [ -e "$W/documents/d2/final.md" ] && bad "a refused consecration left a final behind"
+  sed -i '/- \[contradiction\] 1장 — t001과 모순/d' "$W/documents/d2/review.md"
+  vrun seal-review d2 draft
+  vrun consecrate d2;  expect_pass
+}
+e2e_block_repair_unsupported() {
+  mkdoc2
+  sed -i '/^# Fidelity violations$/a \\n- [unsupported] 2장 — 근거 없음' "$W/documents/d2/review.md"
+  vrun seal-review d2 draft
+  vrun consecrate d2;  expect_block "open gate"
+  sed -i '/- \[unsupported\] 2장 — 근거 없음/d' "$W/documents/d2/review.md"
+  vrun seal-review d2 draft
+  vrun consecrate d2;  expect_pass
+}
+e2e_block_repair_missing_required() {
+  mkdoc2
+  sed -i '/^# Fidelity violations$/a \\n- [missing-required] 위약 조항 누락' "$W/documents/d2/review.md"
+  vrun seal-review d2 draft
+  vrun consecrate d2;  expect_block "open gate"
+  sed -i '/- \[missing-required\] 위약 조항 누락/d' "$W/documents/d2/review.md"
+  vrun seal-review d2 draft
+  vrun consecrate d2;  expect_pass
+}
+e2e_user_answer_chain() {
+  # The ask loop's artifact chain: a user answer becomes a material, the material grounds a
+  # truth, the truth is cited — and the whole chain validates and consecrates.
+  mkdir -p "$W/materials/m002"
+  printf -- '---\nid: m002\ntitle: 사용자 답변 — 지연 배상\norigin: user-answer\nrole: 계약서\ntopics: [지연]\nformat: md\nsource_path: inbox/answer.md\nadded: 2026-07-02\nstatus: converted\nsummary: 지연 배상 한도에 대한 사용자 답변.\n---\n\n지연 배상 한도는 계약금액의 20%%다.\n' > "$W/materials/m002/converted.md"
+  printf '| m002 | 사용자 답변 — 지연 배상 | 계약서 | converted |\n' >> "$W/catalog.md"
+  printf -- '---\nid: t002\nclaim: "지연 배상 한도는 계약금액의 20%%다"\nsource: m002\ntags: [지연]\nstatus: ok\nprovenance: stated\n---\n\n지연 배상 한도는 계약금액의 20%%다.\n' > "$W/truths/t002.md"
+  ( cd "$W" && bash .weavedoc/bin/weavedoc reindex >/dev/null 2>&1 )
+  mkdoc2
+  sed -i 's/^cited_truths: \[t001\]$/cited_truths: [t001, t002]/' "$W/documents/d2/plan.md"
+  printf -- '\n지연 배상 한도는 계약금액의 20%%다. <!-- t:t002 -->\n' >> "$W/documents/d2/draft.md"
+  vrun seal-review d2 draft
+  vrun consecrate d2;  expect_pass
+  vrun validate;       expect_pass
+}
+e2e_open_queue_consecrates() {
+  # Ruled 2026-08-01 and pinned here as a sequence: an open Human-queue entry does NOT block the
+  # machine's consecration — listing it and getting the go-ahead is the SKILL's duty, one level
+  # up. The only blocking membrane is the fidelity gate.
+  mkdoc2
+  printf -- '\n- [open] [user-only] 1장 — 표현 수위 판단\n' >> "$W/documents/d2/review.md"
+  vrun seal-review d2 draft
+  vrun consecrate d2;  expect_pass
+  vrun validate;       expect_pass
+}
+
 meta_doc_sync() {
   # Docs and code agree, checked mechanically (Phase 5): dispatch ↔ README ↔ bin header, and
   # VERSION ↔ CHANGELOG's newest entry. Green only while all four surfaces say one thing.
@@ -2076,7 +2175,7 @@ fi
 # `meta_` is in the selector because it was NOT, and the guard added in 2026-08-01.2 as the
 # structural answer to three rounds of duplicate-judge criticals sat unselected while the suite
 # printed a clean total. A case that cannot be selected is a case that does not exist.
-CASES=$(declare -F | awk '{print $3}' | grep -E '^(block|pass|acct|meta)_' | LC_ALL=C sort)
+CASES=$(declare -F | awk '{print $3}' | grep -E '^(block|pass|acct|meta|e2e)_' | LC_ALL=C sort)
 if [ -n "$FILTER" ]; then CASES=$(printf '%s\n' "$CASES" | grep -F "$FILTER" || true); fi
 [ -z "$CASES" ] && { echo "no cases match [$FILTER]"; exit 2; }
 
