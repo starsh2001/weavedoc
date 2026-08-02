@@ -19,3 +19,15 @@
 | c11_v2_sib1 | gate가 `##` 레벨, `# Findings` 선행 | `block_gate_level2` (선행 순서만 다름) | 폐기(중복) — 순서 변형이 필요하면 그때 추가 |
 
 요약: **명백 중복 7** (c1·c2·c3·c5·c6·c7·c10), **확인 필요 3** (c4·c8·c9 — c9가 고유 후보), **순서 변형 1** (c11). "확인"은 해당 형태를 실제 fixture로 만들어 현재 검사기의 판정을 회귀 케이스로 고정하는 것을 뜻한다.
+
+## Phase 2 처분 (2026-08-02) — 완결
+
+세 "확인 필요" 형태를 실제 fixture로 만들어 라이브 판정을 확인하고 회귀 케이스로 고정했다:
+
+| 실험 | 라이브 판정 | 고정한 케이스 |
+|---|---|---|
+| c4 | block — "consecrated through an open gate" (## 형제가 gate를 무르게 하지 않음) | `block_gate_fid_c4_sib2_open` |
+| c8 | block — zone rule ("outside the 'Fidelity violations' section") | `block_gate_fid_c8_ambiguous_tier` |
+| c9 | block — open gate (절 부재는 우회가 되지 않음) | `block_gate_fid_c9_lonely` |
+
+중복 7건과 순서 변형 c11은 위 표의 근거로 **폐기**. `tests/fidtest.sh` 파일 자체도 제거 — side-by-side 두-reader 비교라는 존재 이유가 `meta_single_judges`의 단일 judge 고정으로 소멸했고, 남아 있던 가치(11개 입력 형태)는 전부 회귀 suite로 흡수되었다.
