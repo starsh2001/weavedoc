@@ -1,14 +1,16 @@
 name: ci
 
 # Phase 2 (IMPROVEMENT_PLAN WD-QA-001~003): the same suite on PRs, pushes and tags.
-# Ubuntu + Windows Git Bash are required; macOS runs non-blocking until the support claim is
-# either promoted to required or retracted together with its docs (§7.2 policy).
+# Cost profile (private-repo Actions minutes: Windows ×2, macOS ×10, and the suite is ~35min on
+# Windows): Ubuntu runs on every trigger; Windows + macOS run on tags and manual dispatch only.
+# macOS stays non-blocking until the support claim is promoted to required or retracted (§7.2).
 
 on:
   push:
     branches: ["main", "improve/**"]
     tags: ["v*"]
   pull_request:
+  workflow_dispatch:
 
 jobs:
   lint:
@@ -25,13 +27,45 @@ jobs:
           sudo apt-get update -q && sudo apt-get install -y -q shellcheck
           shellcheck --severity=error .weavedoc/bin/weavedoc tests/regress.sh tests/make-manifest.sh
 
-  regression:
+  regression-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: run the regression suite
+        run: bash tests/regress.sh
+      - name: executed-case artifact (§7.3 — the case ID list, not just a PASS count)
+        if: always()
+        run: |
+          key_dir=$(ls -d "${TMPDIR:-/tmp}"/wd-reg-* 2>/dev/null | head -1) || true
+          mkdir -p ci-artifact
+          { echo "commit: $GITHUB_SHA"
+            echo "bundle: $(cat .weavedoc/VERSION)"
+            echo "os: $(uname -sr)"
+            echo "bash: $BASH_VERSION"
+            echo "awk: $(awk --version 2>/dev/null | head -1)"
+            echo "sed: $(sed --version 2>/dev/null | head -1)"
+          } > ci-artifact/env.txt
+          [ -n "$key_dir" ] && ls "$key_dir/res" > ci-artifact/executed-cases.txt || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: regression-ubuntu
+          path: ci-artifact/
+      - name: clean worktree after tests (Phase 2 completion condition)
+        run: |
+          status=$(git status --porcelain)
+          if [ -n "$status" ]; then
+            echo "worktree not clean after the suite:"; echo "$status"; exit 1
+          fi
+
+  # Windows is the primary user environment but costs 2x minutes and ~35min wall per sweep;
+  # macOS costs 10x. Both run where they matter contractually — tags — and on demand.
+  regression-full:
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/')
     strategy:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-latest
-            required: true
           - os: windows-latest
             required: true
           - os: macos-latest
@@ -53,7 +87,7 @@ jobs:
           echo "/opt/homebrew/opt/coreutils/libexec/gnubin" >> "$GITHUB_PATH"
       - name: run the regression suite
         run: bash tests/regress.sh
-      - name: executed-case artifact (§7.3 — the case ID list, not just a PASS count)
+      - name: executed-case artifact (§7.3)
         if: always()
         run: |
           key_dir=$(ls -d "${TMPDIR:-/tmp}"/wd-reg-* 2>/dev/null | head -1) || true
@@ -62,8 +96,6 @@ jobs:
             echo "bundle: $(cat .weavedoc/VERSION)"
             echo "os: $(uname -sr)"
             echo "bash: $BASH_VERSION"
-            echo "awk: $(awk --version 2>/dev/null | head -1)"
-            echo "sed: $(sed --version 2>/dev/null | head -1)"
           } > ci-artifact/env.txt
           [ -n "$key_dir" ] && ls "$key_dir/res" > ci-artifact/executed-cases.txt || true
       - uses: actions/upload-artifact@v4
@@ -71,7 +103,7 @@ jobs:
         with:
           name: regression-${{ matrix.os }}
           path: ci-artifact/
-      - name: clean worktree after tests (Phase 2 completion condition)
+      - name: clean worktree after tests
         run: |
           status=$(git status --porcelain)
           if [ -n "$status" ]; then
