@@ -63,19 +63,39 @@ cfg() { # $1=key $2=default -> a paths: value, resolved relative to ROOT
   [ -z "$v" ] && v="$2"
   case "$v" in /*) echo "$v" ;; *) echo "$ROOT/$v" ;; esac
 }
-cfgval() { # $1=key -> raw value (no path resolution); first indented-or-not match
-  grep -E "^[[:space:]]*$1:[[:space:]]" "$CONFIG" 2>/dev/null | head -1 \
-    | sed -E "s/^[[:space:]]*$1:[[:space:]]*//; s/[[:space:]]*#.*$//; s/[[:space:]]*$//"
+# The config is read ONCE (WD-PERF-001): cfgval was grep+head+sed and cfg2 an awk, both inside
+# `$(…)`, and validate asks ~19 questions of a 30-line file — 38 forks at ~190ms. One pass fills
+# two views: CFGFLAT (first match anywhere, what cfgval means) and CFG (section.key, what cfg2
+# means). Value rules unchanged: a trailing YAML comment is stripped outside quotes, and a key
+# whose colon has no value is absent, exactly as the old grep required.
+declare -A CFG CFGFLAT
+CFG_LOADED=""
+cfg_load() {
+  [ -n "$CFG_LOADED" ] && return 0
+  CFG_LOADED=1
+  [ -f "$CONFIG" ] || return 0
+  local line t sec="" k v
+  while IFS= read -r line || [ -n "$line" ]; do
+    line=${line%$'\r'}
+    t=${line#"${line%%[![:space:]]*}"}                 # ltrim
+    case "$t" in ''|'#'*) continue ;; *:*) ;; *) continue ;; esac
+    k=${t%%:*}; v=${t#*:}
+    case "$k" in ''|*[!A-Za-z0-9_.-]*) continue ;; esac
+    v=${v#"${v%%[![:space:]]*}"}                       # ltrim value
+    case "$v" in '"'*) ;; *) v=${v%%[[:space:]]#*} ;; esac   # strip trailing comment outside quotes
+    v=${v%"${v##*[![:space:]]}"}                       # rtrim
+    if [ "$t" = "$line" ]; then sec=$k; else [ -n "$sec" ] && [ -n "${CFG[$sec.$k]+x}" ] || CFG[$sec.$k]=$v; fi
+    [ -n "$v" ] && { [ -n "${CFGFLAT[$k]+x}" ] || CFGFLAT[$k]=$v; }
+  done < "$CONFIG"
+  return 0
 }
+cfgval() { cfg_load; printf '%s\n' "${CFGFLAT[$1]-}"; }
 cfg2() { # $1=top-level section $2=key -> the value inside that section ONLY (WD-CFG-001).
   # cfgval is first-match across the whole file and can never see review.strength behind
   # verify.strength — the section walls are what make the two knobs two knobs.
-  awk -v sec="$1" -v key="$2" '
-    /^[A-Za-z_][A-Za-z0-9_]*:/ { insec = (index($0, sec ":") == 1) ? 1 : 0; next }
-    insec && $0 ~ ("^[[:space:]]+" key "[[:space:]]*:") {
-      sub("^[[:space:]]+" key "[[:space:]]*:[[:space:]]*", "")
-      if ($0 !~ /^"/) sub(/[[:space:]]*#.*$/, "")
-      sub(/[[:space:]]*$/, ""); print; exit }' "$CONFIG" 2>/dev/null
+  # Answered from the one-pass cache; nested levels (repeat's per-scale map) sit under their
+  # section exactly as the old indented-key match put them.
+  cfg_load; printf '%s\n' "${CFG[$1.$2]-}"
 }
 rp() { ( cd "$1" >/dev/null 2>&1 && pwd -P ); }   # real path; empty when it does not exist
 # Two spellings of one folder are one folder. String-comparing `paths` read `./materials` and an
@@ -237,8 +257,47 @@ dup_section() { # $1=file $2=header $3=level(1|2|0=any) $4=raw? (non-empty: do N
   esac
   # The raw view (skip nocomment) exists for one caller: "the file has this section" vs "the reader
   # can see it". Same pattern, two views at one call site — two functions would drift.
-  if [ -n "${4:-}" ]; then grep -cE "$pat$2[[:space:]]*\$" "$1" 2>/dev/null || true
-  else nocomment < "$1" 2>/dev/null | grep -cE "$pat$2[[:space:]]*\$" 2>/dev/null || true; fi
+  # Both views are cached per file and counted in-shell (WD-PERF-001): callers ask this ~10 times
+  # per document, and each ask used to be a nocomment + a grep. The comment stripper still runs —
+  # once per file — because its state machine is the thing fid_body agrees with.
+  local body
+  if [ -n "${4:-}" ]; then file_raw "$1"; else file_stripped "$1"; fi
+  body=$REPLY
+  count_headings "$body" "$2" "${3:-2}"
+  printf '%s\n' "$REPLY"
+}
+declare -A FILERAW FILESTRIP
+file_raw() { # $1=file -> contents in REPLY, no fork (read builtin, cached)
+  local f="$1" c="" l
+  if [ -z "${FILERAW[$f]+x}" ]; then
+    if [ -f "$f" ]; then while IFS= read -r l || [ -n "$l" ]; do c+="$l"$'\n'; done < "$f"; fi
+    FILERAW[$f]=$c
+  fi
+  REPLY=${FILERAW[$f]}
+}
+file_stripped() { # $1=file -> comment-stripped contents in REPLY (one nocomment per file, cached)
+  local f="$1"
+  [ -n "${FILESTRIP[$f]+x}" ] || FILESTRIP[$f]=$(nocomment < "$f" 2>/dev/null)
+  REPLY=${FILESTRIP[$f]}
+}
+count_headings() { # $1=body $2=exact heading text $3=level(1|2|0=any) -> count in REPLY
+  local want="$2" lv="$3" n=0 l hashes rest
+  while IFS= read -r l; do
+    l=${l%$'\r'}
+    case "$l" in '#'*) ;; *) continue ;; esac
+    hashes=""; rest=$l
+    while [ "${rest:0:1}" = "#" ]; do hashes+="#"; rest=${rest:1}; done
+    case "$rest" in [[:space:]]*) ;; *) continue ;; esac
+    rest=${rest#"${rest%%[![:space:]]*}"}; rest=${rest%"${rest##*[![:space:]]}"}
+    [ "$rest" = "$want" ] || continue
+    case "$lv" in
+      1) [ "$hashes" = "#" ] || continue ;;
+      0) [ ${#hashes} -le 6 ] || continue ;;
+      *) [ "$hashes" = "##" ] || continue ;;
+    esac
+    n=$((n+1))
+  done <<< "$1"
+  REPLY=$n
 }
 comment_balanced() { # $1=file -> 0 if the file does not END inside a comment
   # Runs `nocomment`'s own state machine rather than counting delimiters. Counting was not a
@@ -334,11 +393,16 @@ check_hq_tags() { # $1=file holding a "## Human queue" section
     # Leading whitespace allowed, matching the counters in status/audit — an indented entry that
     # one side counts and the other skips breaks "open total == sum of the three buckets".
     case "$hqline" in *"- ["*) ;; *) continue ;; esac
-    printf '%s' "$hqline" | grep -qE '^[[:space:]]*- \[' || continue
-    hqs=$(printf '%s' "$hqline" | sed -nE 's/^[[:space:]]*- \[([^]]*)\].*/\1/p')
+    # Three forks per queue entry (grep + two seds) became parameter expansion — same two
+    # bracket slots, read left to right.
+    local hqt=${hqline#"${hqline%%[![:space:]]*}"} hqr
+    case "$hqt" in '- ['*) ;; *) continue ;; esac
+    hqr=${hqt#- \[}; hqs=${hqr%%\]*}
+    case "$hqr" in *\]*) ;; *) hqs="" ;; esac
     in_list "$hqs" "${SCH[humanqueue.enum.state]}" || continue
     [ "$hqs" = "open" ] || continue
-    hqo=$(printf '%s' "$hqline" | sed -nE 's/^[[:space:]]*- \[[^]]*\][[:space:]]*\[([^]]*)\].*/\1/p')
+    hqo=""; hqr=${hqr#*\]}; hqr=${hqr#"${hqr%%[![:space:]]*}"}
+    case "$hqr" in '['*) hqo=${hqr#\[}; case "$hqo" in *\]*) hqo=${hqo%%\]*} ;; *) hqo="" ;; esac ;; esac
     hqw=$(printf '%s' "$hqline" | sed -E 's/^[[:space:]]*- \[[^]]*\][[:space:]]*//; s/[[:space:]]*—.*$//')
     in_list "$hqo" "${SCH[humanqueue.enum.ownership]}" \
       || prob "$rel  Human queue '[$hqs]' entry has no valid ownership tag → add [user-only|recommended|machine]: $hqw"
@@ -352,7 +416,7 @@ hq_body() { # $1=file -> the Human queue body, whichever heading level the file 
   # the other" step is unnecessary. Reading only the first hid every later round's entries from
   # the status counter and from check_hq_tags simultaneously — `human queue: 0` and `✓ all checks
   # passed` over a queue holding open, untagged entries.
-  nocomment < "$1" | section_all - "Human queue"
+  file_stripped "$1"; section_all - "Human queue" <<< "$REPLY"
 }
 fid_body() { # $1=file -> the 'Fidelity violations' body, ended by a SIBLING section, not by a sub-heading
   # A thin wrapper over fid_mark (the boundary judge): its I-marked lines minus their headings. The
@@ -367,7 +431,8 @@ fid_mark() { # $1=file -> EVERY nocomment line, prefixed I<TAB> (inside the viol
   # single walk, so "inside" and "outside" can't drift into a third state. Headings inside are I (the
   # near-miss guidance speaks to them); the heading that ENDS the section, and all after it, is O.
   local sib; sib=$(pipes "${SCH[review.sections]}" | grep -vx 'Fidelity violations' | tr '\n' '|' | sed 's/|$//')
-  nocomment < "$1" | awk -v sib="$sib" '
+  file_stripped "$1"
+  awk -v sib="$sib" <<< "$REPLY" '
     function hlev(s){ if(match(s,/^#+/)) return RLENGTH; return 0 }
     function htext(s,   t){ t=s; sub(/^#+[[:space:]]+/,"",t); sub(/[[:space:]]+$/,"",t); return t }
     { L[NR]=$0 }
