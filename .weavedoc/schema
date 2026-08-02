@@ -45,7 +45,8 @@ plan.fm.required: doc_id|doc_type|tone|status
 plan.fm.optional: continues|cited_truths|scope_tags|audience|publication_labels
 plan.fm.enum.status: planned|drafting|reviewing|done|stale
 project.fm.required: version|language|roles
-review.fm.optional: round|consecutive_passes
+review.fm.optional: round|consecutive_passes|reviewed_kind|reviewed_digest|review_context_digest
+review.enum.reviewed_kind: draft|final
 review.enum.kind: contradiction|unsupported|missing-required
 # review.sections is READ but its EXISTENCE is not enforced, and the split is deliberate. fid_body
 # reads the list to know which headings END the violations section: a heading that names a sibling

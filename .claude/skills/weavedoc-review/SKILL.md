@@ -65,6 +65,7 @@ Fidelity violations **always block regardless of strength** — they are not adv
 - Round clean at the `strength` bar → `consecutive_passes` + 1.
 - Round has a blocking advisory finding → back to **0**, never decremented.
 - Record it in `review.md` next to the round number, after **every** round, so a cold session resumes the loop rather than restarting it.
+- After **every** round, run `bash .weavedoc/bin/weavedoc seal-review <doc-id> draft` — it pins the exact bytes and context this round reviewed (`reviewed_digest` + `review_context_digest`, computed by the tool, never by hand). Refine's edits will then show as a digest mismatch until the next round re-seals; that mismatch is precisely the staleness signal `consecrate` and `validate` obey.
 - Count short of `repeat` → run another **fresh cold** panel (§2, new subagents, same adjudications) even though this round was clean. Reusing the panel measures reviewer fatigue, not the document.
 
 This lane is advisory, so the count never blocks `final.md` — the fidelity gate does that, and it is a separate mechanism. What the count decides is when `refine` may stop looping.

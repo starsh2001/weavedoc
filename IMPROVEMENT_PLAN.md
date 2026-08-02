@@ -626,7 +626,7 @@ macOS 기본 Bash 3.2/BSD 도구를 지원하지 않는다면 preflight가 명�
 | 요구사항 | 핵심 테스트 ID | 구현 단계 |
 |---|---|---|
 | WD-COR-001 | `acct_scope_used_unverified`, `acct_scope_verified_evidence_only` | Phase 1 — 구현·통과 2026-08-02 |
-| WD-COR-002 | `gate_final_digest_single`, `gate_final_digest_multi`, `gate_context_digest`, `gate_candidate_validate_once`, `gate_candidate_failure_preserves_final` | Phase 1 |
+| WD-COR-002 | `block_gate_final_digest_single`, `block_gate_tree_{content,added,removed,renamed}`, `block_gate_context_{truth,source,config}_changed`, `pass_gate_context_survives_used_stamp`, `pass_consecrate_promotes`, `acct_consecrate_failure_preserves_final`, `block_consecrate_{stale_draft,unsealed,open_gate}`, `pass_gate_{seal_and_match,tree_seal_match,legacy_review_unbound}` | Phase 1 — 구현·통과 2026-08-02 |
 | WD-COR-003 | `acct_scope_material_digest_stale`, `acct_scope_truth_digest_stale`, `acct_scope_legacy_unbound`, `acct_legacy_reverify_binds_digest` (+`acct_scope_bound_verified`, `acct_scope_lifecycle_not_stale`, `acct_scope_failed_recorded`, `acct_scope_retracted_truth_excluded`, `pass_attest_validate_clean`, `block_attest_bad_target`) | Phase 1 — 구현·통과 2026-08-02 |
 | WD-COR-004 | `completeness_required_blocks`, `completeness_off_discloses` | Phase 1 |
 | WD-QA-001~003 | `clean_clone_regression`, `parallel_isolation`, `resume_cache_key` | Phase 2 |
