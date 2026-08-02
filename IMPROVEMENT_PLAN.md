@@ -1,6 +1,6 @@
 # WeaveDoc 통합 개선 계획
 
-> 상태: 실행 중 — §11 전 항목 결정 완료(2026-08-02), Phase 0 진행  
+> 상태: 실행 중 — §11 전 항목 결정 완료(2026-08-02) · Phase 0 완료(2026-08-02, `tests/` 이관 + 182/182 독립 재실행 + baseline 고정) · 다음: Phase 1  
 > 비교 기준: `v0.1.0` (`ff0b726`, runtime `2026-07-27.7`) → 현재 HEAD `7c199e6` (`v0.2.0` tag 이후 2개 commit, `git describe: v0.2.0-2-g7c199e6`, runtime `2026-08-02.2`)  
 > 목적: 현재판의 fidelity 강점을 보존하면서 정확성, 마이그레이션, 테스트, 성능, 배포 계약을 제품 수준으로 끌어올린다.
 
@@ -172,7 +172,7 @@ suite는 고정 `$TMPDIR/wd-reg`를 사용한다. 동시 실행과 중단된 wor
 
 #### WD-QA-003 — 테스트 편중과 느슨한 assertion
 
-현재 suite는 `validate`와 gate에 집중되어 있고 `impact`, `gaps`, `version`, `lang`, `locale` 및 10개 skill의 E2E 증거가 부족하다. block 테스트도 기대 문자열 하나만 있으면 예상하지 못한 추가 오류가 있어도 PASS가 될 수 있다.
+현재 suite는 `validate`와 gate에 집중되어 있고 `impact`, `gaps`, `version`, `lang`, `locale` 및 9개 skill의 E2E 증거가 부족하다. block 테스트도 기대 문자열 하나만 있으면 예상하지 못한 추가 오류가 있어도 PASS가 될 수 있다.
 
 **해결 방향**
 
