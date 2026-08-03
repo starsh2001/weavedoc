@@ -21,7 +21,7 @@ Windows Git Bash에서 `validate` 1회 ≈ 40초라 전체 sweep은 수십 분 �
 
 ## CI
 
-[.github/workflows/ci.yml](../.github/workflows/ci.yml) — push(main·improve/**)·PR·tag에서: `bash -n` + ShellCheck(오류 등급), Ubuntu·Windows(required)/macOS(non-blocking — **best-effort 결정 2026-08-03**, 알려진 4건은 census index-parsing 계열로 macOS 셸 확보 후 해결) matrix에서 전체 suite, §7.3 계약대로 실행 케이스 ID·환경을 artifact로 게시, 종료 후 clean worktree 확인, bundle manifest 2회 재현 검증.
+[.github/workflows/ci.yml](../.github/workflows/ci.yml) — push(main·improve/**)·PR·tag에서: `bash -n` + ShellCheck(오류 등급), Ubuntu·Windows·macOS(**전부 required** — macOS는 census 4건이 v0.3.4에서 해소되어 2026-08-04 승격) matrix에서 전체 suite, §7.3 계약대로 실행 케이스 ID·환경을 artifact로 게시, 종료 후 clean worktree 확인, bundle manifest 2회 재현 검증.
 
 ## baseline/ 산출물
 
