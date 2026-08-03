@@ -1367,6 +1367,32 @@ cmd_validate() {
         FNR==1 { emit(); fn=FILENAME; opened=($0 ~ /^---[[:space:]]*$/); closed=0; infm=opened; next }
         infm && /^---[[:space:]]*$/ { closed=1; infm=0 }
         END { emit() }' "${tffiles_[@]}")
+      # D3 (decided 2026-08-04): an unquoted resolution.reason holding a comma that opens no new
+      # key is exactly where a strict YAML parser truncates the value and scatters the rest as
+      # ghost keys — weavedoc's own readers (grep/awk) never noticed, so the break surfaced only
+      # in external consumers (eclypse t245: a correction note fell below the cut line). WARN,
+      # never block: deployed mines must stay green while map quotes new writes; the block
+      # promotion is a schema-3 candidate (§11).
+      while IFS= read -r tb; do
+        [ -n "$tb" ] || continue
+        warn RES-REASON-UNQUOTED "truths/$tb.md  resolution.reason is unquoted and holds a comma that opens no new key — a strict YAML parser truncates the value there; write reason: \"…\" (map quotes it since v0.3.4)"
+      done < <(awk '
+        FNR==1 { infm = ($0 ~ /^---[[:space:]]*$/); fn=FILENAME; next }
+        !infm { next }
+        /^---[[:space:]]*$/ { infm=0; next }
+        /^resolution[[:space:]]*:/ {
+          r = $0
+          if (r !~ /reason[[:space:]]*:/) next
+          sub(/.*reason[[:space:]]*:[[:space:]]*/, "", r)
+          if (r ~ /^"/) next
+          sub(/[[:space:]]*}[[:space:]]*$/, "", r)
+          n = split(r, seg, /,/)
+          if (n <= 1) next
+          for (i = 2; i <= n; i++)
+            if (seg[i] !~ /^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*[[:space:]]*:/) {
+              m = split(fn, p, /[\/\\]/); b = p[m]; sub(/\.md$/, "", b); print b; break
+            }
+        }' "${tffiles_[@]}")
     fi
   fi
 
@@ -2627,14 +2653,20 @@ cmd_pull() {
   local rec
   rec=$(awk '
     function val(   s){ s=$0; sub(/^[^:]*:[[:space:]]*/,"",s); if(s !~ /^"/){ sub(/[[:space:]]+#.*$/,"",s); if(s ~ /^#/) s="" } sub(/[[:space:]]*$/,"",s); sub(/^"/,"",s); sub(/"$/,"",s); gsub(/\001/," ",s); return s }
-    function flush(){ if(tid!="") printf "%s\x01%s\x01%s\x01%s\x01%s\x01%s\x01%s\x01%s\x01%s\x01%s\n", tid, st, cl, src, asof, prov, cw, res, asm, bd1 }
+    function flush(){ if(tid!="") {
+        # A table-bodied truth previewed as its header row alone (field report D2): a reviewer
+        # decided "the mine has no runtime lengths" while every length sat in the table body.
+        # Say it is a table and how big; the trailer already points at the full file.
+        if (bd1 ~ /^\|/ && tbl > 1) bd1 = bd1 " — 표 " tbl "행, 전문은 truths/" tid ".md"
+        printf "%s\x01%s\x01%s\x01%s\x01%s\x01%s\x01%s\x01%s\x01%s\x01%s\n", tid, st, cl, src, asof, prov, cw, res, asm, bd1 } }
     FNR==1 { flush(); n=split(FILENAME,pp,"/"); fn=pp[n]; sub(/\.md$/,"",fn); tid=fn
-             st="";cl="";src="";asof="";prov="";cw="";res="";asm="";bd1=""; infm=($0 ~ /^---[[:space:]]*$/); next }
+             st="";cl="";src="";asof="";prov="";cw="";res="";asm="";bd1=""; tbl=0; infm=($0 ~ /^---[[:space:]]*$/); next }
     infm && /^---[[:space:]]*$/ { infm=0; next }
     # The first body line too, because the CLAIM is all pull has shown and the claim is the one field
     # nothing verifies (validate seals the BODY, not the claim). Printing them together puts what the
     # machine warranted next to what it did not — the claim stays a paraphrase, uncheckable by design.
     !infm && bd1=="" && $0 ~ /[^[:space:]]/ { bd1=$0; sub(/^[[:space:]]+/,"",bd1); gsub(/\001/," ",bd1) }
+    !infm && bd1 ~ /^\|/ && $0 ~ /^[[:space:]]*\|/ { tbl++ }
     infm && /^status[[:space:]]*:/        { st=val() }
     infm && /^claim[[:space:]]*:/         { cl=val() }
     infm && /^source[[:space:]]*:/        { src=val() }

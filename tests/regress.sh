@@ -142,6 +142,35 @@ mkscale() { # deterministic 8-material · 60-truth mine — the scale where spaw
   printf -- '---\nstatus: passed\nround: 1\nverified_at: 2026-07-30\n---\n\n## Verified units\n\n## Adjudications\n\n## Human queue\n' > "$W/truths/verify.md"
   ( cd "$W" && bash .weavedoc/bin/weavedoc reindex >/dev/null 2>&1 ) || bad "mkscale: reindex failed"
 }
+acct_res_reason_comma_warns() {
+  # D3 (field report, decided 2026-08-04): an unquoted reason holding a comma that opens no new
+  # key is exactly where a strict YAML parser truncates the value (eclypse t245's correction
+  # note fell below the cut). Warn-first, never blocking — deployed mines must not go red.
+  sed -i '/^provenance: stated$/a resolution: {type: attribute, decided_by: user, decision_kind: supplied, reason: 양쪽 병기, 정정 부기 포함}' "$W/truths/t001.md"
+  vrun validate
+  expect_pass
+  expect_has "[RES-REASON-UNQUOTED]"
+}
+acct_res_reason_quoted_silent() {
+  # The compliant shape: quoted reason with commas inside — no warning (guard against
+  # over-warning the format we are steering everyone toward).
+  sed -i '/^provenance: stated$/a resolution: {type: attribute, decided_by: user, decision_kind: supplied, reason: "양쪽 병기, 정정 부기 포함"}' "$W/truths/t001.md"
+  vrun validate
+  expect_pass
+  expect_hasnt "[RES-REASON-UNQUOTED]"
+}
+acct_pull_table_preview_counts() {
+  # D2 (field report): a table-bodied truth previewed as its header row alone — a reviewer
+  # decided "the mine has no runtime lengths" while every length sat in the table body. The
+  # preview now says it is a table and how big.
+  printf -- '---\nid: t002\nclaim: "수록곡 길이 표"\nsource: m001\ntags: [위약]\nstatus: ok\nprovenance: stated\n---\n\n| # | 곡 | 길이 |\n|---|---|---|\n| 1 | 서곡 | 3:10 |\n| 2 | 종곡 | 4:02 |\n' > "$W/truths/t002.md"
+  printf '\n- 표: t002\n' >> "$W/truths/coverage.md"
+  printf -- '- added: t002 (2026-07-30)\n' >> "$W/truths/changelog.md"
+  vrun reindex
+  vrun pull 수록곡
+  expect_has "표 4행"
+  expect_has "| # | 곡 | 길이 |"
+}
 mkplanstage() { # m002 (stage: plan) + t002 derived from it, with as_of — the label-bearing shape
   mkdir -p "$W/materials/m002"
   printf -- '---\nid: m002\ntitle: 기획서\norigin: file\nrole: 계약서\ntopics: [기획]\nformat: md\nsource_path: inbox/plan.md\nadded: 2026-07-01\nstatus: converted\nstage: plan\nsummary: 계획 단계 자료.\n---\n\n# 기획서\n\n6곡 앨범을 계획한다.\n' > "$W/materials/m002/converted.md"

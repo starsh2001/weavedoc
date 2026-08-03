@@ -75,7 +75,7 @@ Frontmatter:
   - `decided_by` — enum: `machine` | `user`.
   - `decision_kind` — optional enum, refines `decided_by: user`: `supplied` (the user provided the value) | `ratified` (the user accepted a machine-originated proposal). `ratified` resolutions join the priority re-verify set. **Standing precedence (lazy `authority`) is `ratified`** (ruled 2026-08-01): there the machine originates the *mechanism* (it offers the role ranking) and the user originates the *ranking*, while the winning value itself is neither supplied nor proposed by anyone — so `supplied` is false, and the choice is not decoration: `ratified` puts the resolution in the priority re-verify set, which is right, because a rule the user set once now decides conflicts they never see.
   - `scope` — optional list naming **exactly which fields** were displaced (partial supersede of a record truth, e.g. `[키, 나이]`). The index shows the `[discarded]` marker; the scope detail lives in the truth file, telling readers which fields of the record remain valid. Prefer avoiding the need entirely: extract attribute tables **row by row** so one wrong cell never buries five valid ones.
-  - `reason` — free text explanation (project language).
+  - `reason` — free text explanation (project language), **always double-quoted** (decided 2026-08-04, D3): inside a flow mapping an unquoted comma is an entry separator, so a strict YAML parser truncates the value at the first comma and scatters the rest as ghost keys — on a real mine a correction note fell below the cut line and a YAML consumer saw only the stale sentence it corrected. `map` writes the quotes; `validate` warns (`RES-REASON-UNQUOTED`, non-blocking for now — block promotion is a schema-3 candidate, plan §11) when an unquoted `reason` holds a comma that does not open a new `key:`. Avoid double quotes inside the text (use 『』 or rephrase).
 - `superseded` — on a **winner**: the list of truth ids it has beaten (`[t003, t005]`). `resolution` is a single object holding one decision, so a truth that wins twice had nowhere to record the second — the mine would say one truth lost and nobody won, and the only workaround was burying the id in free-text `reason`. Maintained by hand alongside the loser's `resolution`; `validate` checks that every id listed here resolves.
 - `conflict_with` — present only when `status` is `conflict`. List of truth ids this truth conflicts with.
 
@@ -83,9 +83,9 @@ Complete `resolution` examples (copy the shape, don't re-derive it):
 
 ```yaml
 # user picked between two sources
-resolution: {type: pick, winner: t184, decided_by: user, decision_kind: supplied, reason: 실제 발매 순서는 스크린샷(m005) 기준}
+resolution: {type: pick, winner: t184, decided_by: user, decision_kind: supplied, reason: "실제 발매 순서는 스크린샷(m005) 기준"}
 # a correction material superseded specific fields of a record truth
-resolution: {type: value, winner: [m011, m013], decided_by: user, decision_kind: supplied, scope: [키, 나이], reason: 키 165→171(t197)·나이→페이즈별 병기(t204). 본명·포지션·컬러·이니셜은 유효}
+resolution: {type: value, winner: [m011, m013], decided_by: user, decision_kind: supplied, scope: [키, 나이], reason: "키 165→171(t197)·나이→페이즈별 병기(t204). 본명·포지션·컬러·이니셜은 유효"}
 ```
 
 Body: verbatim quote from the source material pinning the exact claim — **copy-pasted, never paraphrased** (`validate` substring-checks it against the source). For **full-text artifact truths** (가사 전문, 계약 조항, 코드 스니펫 — content whose exact wording is itself the fact), the body is the complete artifact text and the claim states what it is.
@@ -297,6 +297,7 @@ Every problem and warning the checker emits carries a **stable code**. The code 
 | `PROJ-MISSING` | `project.md` absent (run `weavedoc init`) |
 | `PROV-DERIVED-REFS` | `provenance: derived` without `derived_from` |
 | `PROV-ENUM` | truth `provenance` outside its enum |
+| `RES-REASON-UNQUOTED` | warning: unquoted `resolution.reason` holds a comma a strict YAML parser truncates at |
 | `REQTAG-EMPTY` | a `required_tags` tag has no live truths |
 | `RESOLUTION-ENUM` | resolution `type`/`decision_kind`/`decided_by` outside its enum |
 | `RESOLUTION-NO-DECIDER` | a user-resolved resolution with no `decided_by` |
