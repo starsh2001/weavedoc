@@ -10,7 +10,7 @@ bash .weavedoc/bin/weavedoc upgrade --dry-run   # 전체 계획, 0 write
 bash .weavedoc/bin/weavedoc upgrade --apply     # staged 적용 + 사후 full validation + 실패 시 자동 rollback
 ```
 
-`--check`/`--dry-run`은 마이그레이션이 필요하면 exit 1(스크립트용 신호), 이미 최신이면 "nothing to do"에 exit 0. `--apply`는 두 번 실행하면 두 번째는 0 change입니다(멱등).
+`--check`/`--dry-run`은 마이그레이션이 필요하면 exit 1(스크립트용 신호), 이미 최신이면 "nothing to do"에 exit 0. `--apply`는 두 번 실행하면 두 번째는 0 change입니다(멱등). version 레코드 행렬은 닫혀 있습니다(v0.3.3): 각 레코드는 `1` 또는 현재 schema(`2`)만 허용 — 그 외 값(미래 버전, 오타)은 거부합니다. v0.3.1이 남긴 출처 없는 m-id 행이 있어도 재개된 apply가 올바른 출처 행을 정상적으로 만듭니다(레인별 coverage).
 
 ## 무엇이 바뀌나
 
