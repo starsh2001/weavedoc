@@ -558,10 +558,12 @@ ledger_file() { # -> the sidecar's filename; schema key first, code default seco
 schema_ver() { # -> the schema version this runtime targets; same degrade rule as ledger_file
   local s; s=${SCH[schema.version]}; printf '%s' "${s:-2}"
 }
-ledger_rows() { # -> "id<TAB>digest<TAB>verdict" per unit; LAST row per id wins (append-only file)
+ledger_rows() { # -> "id<TAB>digest<TAB>verdict<TAB>standard" per unit; LAST row per id wins.
+  # The standard column rides along for the origin rule (v0.3.2): a legacy-unbound m row counts
+  # as material evidence only when its standard names the material origin token.
   local lf="$TRUTHS/$(ledger_file)"
   [ -f "$lf" ] || return 0
-  awk -F'\t' '/^#/ { next } NF>=3 { d[$1]=$2; v[$1]=$3 } END { for (i in d) print i "\t" d[i] "\t" v[i] }' "$lf" \
+  awk -F'\t' '/^#/ { next } NF>=3 { d[$1]=$2; v[$1]=$3; s[$1]=$5 } END { for (i in d) print i "\t" d[i] "\t" v[i] "\t" s[i] }' "$lf" \
     | LC_ALL=C sort
 }
 artifact_digest() { # $1 = file OR directory -> sha256. THE spelling of "which bytes were reviewed".
@@ -2735,11 +2737,25 @@ scan_upgrade() { # -> kind<TAB>display, one v1→v2 migration item per line. Rea
   # no sidecar twin is the LEGAL legacy-unbound state (preserved, re-verified by risk) — not
   # pending work, or "nothing to do" would be unreachable for any mine with history.
   if [ "$pv" = "1" ] || [ "$cv" = "1" ]; then
-    local vids scov miss
-    vids=$(scan_verified_units | sed -n 's/^V\t//p' | LC_ALL=C sort -u)
+    # Two lanes, two sources (v0.3.2): t-ids come from the markdown Verified units — that ledger
+    # is the TRUTHS lane. An m-id mention there is extraction scope, not a conversion verdict
+    # (WD-COR-001); the material lane's v1 record is the material's own `status: verified`, and
+    # minting m rows from the mention demoted mandatory debt into non-blocking legacy backlog.
+    local vids scov miss mfmv_ mm_ mmiss_
+    vids=$(scan_verified_units | sed -n 's/^V\t//p' | grep -E '^t[0-9]' | LC_ALL=C sort -u || true)
     scov=$(ledger_rows | cut -f1 | LC_ALL=C sort -u)
     miss=$(comm -23 <(printf '%s\n' "$vids" | grep . || true) <(printf '%s\n' "$scov" | grep . || true))
-    [ -n "$miss" ] && printf 'ledger\t%s markdown-verified unit(s) → verify-ledger.tsv rows verdict=legacy-unbound (digest NOT back-stamped — §11 decision)\n' "$(printf '%s' "$miss" | grep -c .)"
+    [ -n "$miss" ] && printf 'ledger\t%s markdown-verified truth unit(s) → verify-ledger.tsv rows verdict=legacy-unbound origin=%s (digest NOT back-stamped — §11 decision)\n' \
+      "$(printf '%s' "$miss" | grep -c .)" "${SCH[verify.ledger.origin.truths]:-v1-truths-ledger}"
+    mfmv_=""
+    while IFS= read -r mm_; do
+      [ -f "$MATERIALS/$mm_/converted.md" ] || continue
+      fmv "$MATERIALS/$mm_/converted.md" status
+      [ "$REPLY" = "verified" ] && mfmv_="$mfmv_$mm_"$'\n'
+    done < <(material_ids)
+    mmiss_=$(comm -23 <(printf '%s' "$mfmv_" | grep . | LC_ALL=C sort -u || true) <(printf '%s\n' "$scov" | grep . || true))
+    [ -n "$mmiss_" ] && printf 'ledger\t%s material(s) with v1 status: verified → verify-ledger.tsv rows verdict=legacy-unbound origin=%s\n' \
+      "$(printf '%s' "$mmiss_" | grep -c .)" "${SCH[verify.ledger.origin.material]:-v1-material-frontmatter}"
   fi
   return 0
 }
@@ -2952,17 +2968,31 @@ upgrade_apply() { # the staged, rollback-safe v1 → v2 transaction (§8 safety 
   cmd_reindex >/dev/null 2>&1
 
   # -- 6. materialize digest-less verified history as legacy-unbound sidecar rows — preserved,
-  # -- never back-stamped with a digest the verification never computed (§11 decision).
-  local vids scov miss lf
-  vids=$(scan_verified_units | sed -n 's/^V\t//p' | LC_ALL=C sort -u)
+  # -- never back-stamped with a digest the verification never computed (§11 decision). Two
+  # -- lanes, two sources (v0.3.2): t-ids from the markdown Verified units (the truths lane —
+  # -- an m-id mention there is extraction scope, not a conversion verdict, WD-COR-001), and
+  # -- materials from their OWN `status: verified`. Each row records its origin in the standard
+  # -- column, which is what lets scope tell a correct mint from a pre-0.3.2 cross-lane one.
+  local vids scov miss lf mfmv_ mm_ mmiss_
+  vids=$(scan_verified_units | sed -n 's/^V\t//p' | grep -E '^t[0-9]' | LC_ALL=C sort -u || true)
   scov=$(ledger_rows | cut -f1 | LC_ALL=C sort -u)
   miss=$(comm -23 <(printf '%s\n' "$vids" | grep . || true) <(printf '%s\n' "$scov" | grep . || true))
-  if [ -n "$miss" ]; then
+  mfmv_=""
+  while IFS= read -r mm_; do
+    [ -f "$MATERIALS/$mm_/converted.md" ] || continue
+    fmv "$MATERIALS/$mm_/converted.md" status
+    [ "$REPLY" = "verified" ] && mfmv_="$mfmv_$mm_"$'\n'
+  done < <(material_ids)
+  mmiss_=$(comm -23 <(printf '%s' "$mfmv_" | grep . | LC_ALL=C sort -u || true) <(printf '%s\n' "$scov" | grep . || true))
+  if [ -n "$miss" ] || [ -n "$mmiss_" ]; then
     lf="$TRUTHS/$(ledger_file)"
     if [ -f "$lf" ]; then bkup "${TRUTHS#"$ROOT"/}/$(ledger_file)"; else crtd "${TRUTHS#"$ROOT"/}/$(ledger_file)"; fi
     { [ -f "$lf" ] && cat "$lf" \
         || printf '# machine-owned verification ledger — append-only; LAST row per id wins. Written by `weavedoc attest`.\n# id\tsha256\tverdict\tround\tstandard\tdate\n'
-      printf '%s\n' "$miss" | awk -v d="$today" '{ printf "%s\t-\tlegacy-unbound\t-\t-\t%s\n", $1, d }'
+      printf '%s\n' "$miss" | grep . | awk -v d="$today" -v o="${SCH[verify.ledger.origin.truths]:-v1-truths-ledger}" \
+        '{ printf "%s\t-\tlegacy-unbound\t-\t%s\t%s\n", $1, o, d }'
+      printf '%s\n' "$mmiss_" | grep . | awk -v d="$today" -v o="${SCH[verify.ledger.origin.material]:-v1-material-frontmatter}" \
+        '{ printf "%s\t-\tlegacy-unbound\t-\t%s\t%s\n", $1, o, d }'
     } > "$lf.tmp" && mv "$lf.tmp" "$lf"
   fi
 
@@ -3067,15 +3097,27 @@ cmd_scope() {
   # ---- materials: population = converted.md holders minus tombstones. Evidence precedence:
   # sidecar row (digest decides bound/stale, verdict decides failed) > v1 `status: verified`
   # (legacy-unbound: real history, binds no bytes) > nothing (unverified).
-  local m mstat row dg vd cur
+  local m mstat row dg vd std
   local n_mconv=0 n_mbound=0 n_mlegacy=0 n_mstale=0 n_mfail=0 n_munver=0 n_mused=0
-  local munver="" mstale="" mfail="" mlegacy=""
+  local munver="" mstale="" mfail="" mlegacy="" m_originless="" cur
   while IFS= read -r m; do
     [ -f "$MATERIALS/$m/converted.md" ] || continue
     mstat=$(fm "$MATERIALS/$m/converted.md" status)
     [ "$mstat" = "retracted" ] && continue
     n_mconv=$((n_mconv+1))
-    row=$(printf '%s\n' "$ledger" | awk -F'\t' -v id="$m" '$1==id { print $2 "\t" $3; exit }')
+    row=$(printf '%s\n' "$ledger" | awk -F'\t' -v id="$m" '$1==id { print $2 "\t" $3 "\t" $4; exit }')
+    if [ -n "$row" ]; then
+      std=$(printf '%s' "$row" | cut -f3)
+      if [ "$(printf '%s' "$row" | cut -f2)" = "legacy-unbound" ] \
+         && [ "$std" != "${SCH[verify.ledger.origin.material]:-v1-material-frontmatter}" ]; then
+        # A pre-0.3.2 migration minted material rows from the TRUTHS-lane markdown ledger — an
+        # m-id mention there is extraction scope, not a conversion verdict (WD-COR-001). Such a
+        # row is not material evidence: the material falls back to its own frontmatter (owed
+        # again when that says nothing), and the ignored row is SHOWN, never absorbed.
+        m_originless="$m_originless $m"
+        row=""
+      fi
+    fi
     if [ -n "$row" ]; then
       dg=$(printf '%s' "$row" | cut -f1); vd=$(printf '%s' "$row" | cut -f2)
       if [ "$vd" = "failed" ]; then n_mfail=$((n_mfail+1)); mfail="$mfail $m"
@@ -3166,8 +3208,8 @@ cmd_scope() {
     jarr() { local out="" x; for x in $1; do out+="${out:+,}\"$(json_esc "$x")\""; done; printf '[%s]' "$out"; }
     printf '{"output_schema_version":1,"command":"scope","bundle":"%s","schema_version":%s,' \
       "$(json_esc "$(cat "$ROOT/.weavedoc/VERSION" 2>/dev/null)")" "$(schema_ver)"
-    printf '"materials":{"converted":%s,"verified_bound":%s,"legacy_unbound":%s,"stale":%s,"failed":%s,"unverified":%s,"used_but_unverified":%s,"owed":%s},' \
-      "$n_mconv" "$n_mbound" "$n_mlegacy" "$n_mstale" "$n_mfail" "$n_munver" "$n_mused" "$(jarr "$munver $mstale $mfail")"
+    printf '"materials":{"converted":%s,"verified_bound":%s,"legacy_unbound":%s,"stale":%s,"failed":%s,"unverified":%s,"used_but_unverified":%s,"originless_rows_ignored":%s,"owed":%s},' \
+      "$n_mconv" "$n_mbound" "$n_mlegacy" "$n_mstale" "$n_mfail" "$n_munver" "$n_mused" "$(jarr "$m_originless")" "$(jarr "$munver $mstale $mfail")"
     printf '"truths":{"live":%s,"verified_bound":%s,"legacy_unbound":%s,"stale":%s,"failed":%s,"unverified":%s,"tombstones":%s,"owed":%s},' \
       "$n_t" "$n_tbound" "$n_tlegacy" "$n_tstale" "$n_tfail" "$n_tunver" "$n_tomb" \
       "$(jarr "$(printf '%s %s %s' "$tunver" "$tstale" "$tfail" | tr '\n' ' ')")"
@@ -3187,6 +3229,10 @@ cmd_scope() {
     [ -n "$mstale" ]  && printf '    → stale: %s\n'  "$(printf '%s\n' $mstale  | LC_ALL=C sort -u | compress_ids)"
     [ -n "$mfail" ]   && printf '    → failed: %s\n' "$(printf '%s\n' $mfail   | LC_ALL=C sort -u | compress_ids)"
     [ -n "$mlegacy" ] && printf '    → legacy-unbound: %s\n' "$(printf '%s\n' $mlegacy | LC_ALL=C sort -u | compress_ids)"
+    # SHOWN, never absorbed: an ignored row that vanished silently would look identical to a
+    # ledger that never held it, and nobody would know a mine migrated by ≤0.3.1 needs re-verify.
+    [ -n "$m_originless" ] && printf '    (%s pre-0.3.2 m-id ledger row(s) ignored — origin-less legacy rows are truths-lane history, not material evidence; each material reads from its own status instead: %s)\n' \
+      "$(printf '%s\n' $m_originless | grep -c . || true)" "$(printf '%s\n' $m_originless | LC_ALL=C sort -u | compress_ids)"
   fi
   if [ "$n_t" -gt 0 ] || [ "$n_tomb" -gt 0 ]; then
     printf '  truths     %s live · %s verified (digest-bound) · %s legacy-unbound · %s stale · %s failed · %s unverified   (source: truths/%s + ## Verified units)\n' \

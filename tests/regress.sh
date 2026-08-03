@@ -2163,6 +2163,46 @@ block_consecrate_dual_final() {
   OUT=$(cat "$W/documents/d1/final/01.md"); RC=0
   expect_has "보존되어야 할 디렉터리 산출물"
 }
+acct_upgrade_mid_not_material_evidence() {
+  # WD-COR-001 held through migration: the pristine Verified units row names m001, but that
+  # ledger is the TRUTHS lane (extraction scope) — the conversion verdict lives only in the
+  # material's own frontmatter, and m001 here says `status: converted`. The 0.3.1 migration
+  # minted a legacy row from the mention anyway, demoting mandatory verification debt into
+  # non-blocking legacy backlog. Post-apply, m001 must still be OWED.
+  vrun upgrade --apply
+  expect_pass
+  vrun scope
+  expect_has "materials  1 converted · 0 verified (digest-bound) · 0 legacy-unbound"
+  expect_has "1 unverified"
+  vrun validate; expect_pass
+}
+acct_upgrade_material_fm_verified_migrates() {
+  # The correct material source: v1 `status: verified` IS conversion history, and it must gain
+  # a ledger row (with its origin recorded) or a later `used` stamp erases the evidence.
+  sed -i 's/^status: converted$/status: verified/' "$W/materials/m001/converted.md"
+  vrun upgrade --apply
+  expect_pass
+  OUT=$(cat "$W/truths/verify-ledger.tsv"); RC=0
+  expect_has "v1-material-frontmatter"
+  vrun scope
+  expect_has "materials  1 converted · 0 verified (digest-bound) · 1 legacy-unbound"
+}
+acct_scope_originless_mid_row_ignored() {
+  # A 0.3.1-migrated mine already carries origin-less m-id legacy rows — the runtime corrects
+  # them fail-safe: not material evidence (the material falls back to its own status and is
+  # owed again), and SHOWN, never silently absorbed.
+  printf 'm001\t-\tlegacy-unbound\t-\t-\t2026-08-01\n' > "$W/truths/verify-ledger.tsv"
+  vrun scope
+  expect_has "1 unverified"
+  expect_has "pre-0.3.2"
+}
+acct_scope_tid_originless_grandfathered() {
+  # t-id rows keep accepting `-`: the truths lane was always the right lane, so every 0.3.1 t
+  # row is correct history. The asymmetry is the fix, not an accident.
+  printf 't001\t-\tlegacy-unbound\t-\t-\t2026-08-01\n' > "$W/truths/verify-ledger.tsv"
+  vrun scope
+  expect_has "truths     1 live · 0 verified (digest-bound) · 1 legacy-unbound"
+}
 block_validate_inflight_marker() {
   # .consecrate.inflight is the durable trace of a consecration that is running or died hard
   # (SIGKILL/power — no trap runs). While it exists the final slot may hold an unvalidated

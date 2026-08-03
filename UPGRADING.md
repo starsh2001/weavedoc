@@ -21,8 +21,17 @@ bash .weavedoc/bin/weavedoc upgrade --apply     # staged 적용 + 사후 full va
 | verify.md 절 | Human queue·Adjudications 부재 가능 | 빈 절 보강 |
 | review 이력 | gate 밖 `[kind]` 괄호 기록 | 괄호 제거(record form) — **열린 violation이 아니었는지 확인하라고 계획에 표시됩니다** |
 | config `repeat` | scalar (`repeat: 1`) | scale map (skip 0 · light/standard는 기존 값 · full은 +1) |
-| 검증 이력 | markdown 행뿐 | `verify-ledger.tsv`에 `legacy-unbound` 행으로 실체화 — **digest는 소급 날인하지 않습니다**(§11 결정): 이력은 보존되고, digest-bound는 재검증(attest)으로만 얻습니다 |
+| 검증 이력 | markdown 행뿐 | `verify-ledger.tsv`에 `legacy-unbound` 행으로 실체화 — **digest는 소급 날인하지 않습니다**(§11 결정): 이력은 보존되고, digest-bound는 재검증(attest)으로만 얻습니다. **두 레인, 두 출처**(v0.3.2): truth 행은 `## Verified units`에서, material 행은 자료 자신의 `status: verified`에서 — Verified units의 m-id 언급은 추출 검증의 범위 표시일 뿐 변환 판정이 아닙니다(WD-COR-001). 각 행은 출처 토큰(`v1-truths-ledger` / `v1-material-frontmatter`)을 standard 열에 기록합니다 |
+| review frontmatter 없음 | v0.1 review는 fm 블록이 없을 수 있음 | `review_legacy` marker를 담은 fm 블록을 새로 prepend — 이런 광산도 마이그레이션됩니다 |
 | 버전 스탬프 | `version: 1` ×2 | `project.md`·`config.yaml` 모두 `version: 2` |
+
+## v0.3.1로 이미 마이그레이션한 광산
+
+v0.3.1의 migration은 m-id 행을 잘못된 레인(truths ledger의 언급)에서 만들었습니다. schema 2 광산은 upgrade를 다시 탈 수 없으므로 **런타임이 fail-safe로 교정합니다**: 출처 토큰이 없는 m-id `legacy-unbound` 행은 material 검증 증거로 인정되지 않고(scope가 무시 사실을 표시), 해당 자료는 자신의 frontmatter로 돌아갑니다 — `status: verified`면 그대로 legacy, 아니면 다시 부채(owed)입니다.
+
+- **영향 판별**: `awk -F'\t' '$1 ~ /^m/ && $3 == "legacy-unbound" && $5 == "-"' truths/verify-ledger.tsv` — 나오는 행이 영향 대상입니다. `weavedoc scope`도 같은 목록을 `pre-0.3.2 m-id ledger row(s) ignored` 줄로 보여줍니다.
+- **교정**: 해당 자료를 verify 스킬로 재검증하면 `attest`가 새 행을 append하고 last-row-wins로 자연히 이깁니다. 별도의 행 삭제·수정은 필요 없습니다(장부는 append-only).
+- t-id의 출처 없는(`-`) 행은 그대로 유효합니다 — truths 레인은 처음부터 옳은 레인이었습니다.
 
 ## 건드리지 않는 것
 
