@@ -2158,6 +2158,44 @@ pass_completeness_comment_in_open() {
   printf '# Open\n\n<!-- 2026-08-01 감사에서 정리 — 남은 항목 없음 -->\n\n# Accepted\n' > "$W/gaps.md"
   vrun validate; expect_pass
 }
+block_completeness_indented_prose_gap() {
+  # A whole gap written INDENTED, with no bullet above it: the continuation tolerance read it as
+  # a continuation of nothing and the register passed. Continuations are legal only AFTER a
+  # bullet — an indented line with no open entry above is prose the counter cannot see.
+  req_completeness
+  printf '# Open\n\n  대금 조항 자료가 부족함 — 들여쓴 산문\n\n# Accepted\n' > "$W/gaps.md"
+  vrun validate; expect_block "[COMP-MALFORMED]"
+}
+block_completeness_placeholder_kind_gap() {
+  # countlines' KNOWN LIMIT became load-bearing under `required`: a REAL gap whose kind slot
+  # kept placeholder brackets (`- [<reference>] …`) was dropped by the placeholder filter and
+  # counted zero. The remainder decides (same ruling as review entries): filled prose = entry.
+  req_completeness
+  printf -- '- [<reference>] t001 — 근거 조항이 정의되지 않음 — 제3조가 언급만 됨\n' > "$W/.gapline"
+  printf '# Open\n\n%s\n\n# Accepted\n' "$(cat "$W/.gapline")" > "$W/gaps.md"; rm -f "$W/.gapline"
+  vrun validate; expect_block "[COMP-OPEN-GAPS]"
+}
+pass_completeness_template_stub_open() {
+  # The untouched template line stays noise: every slot is still a placeholder, so a freshly
+  # initialised register must not read as one open gap.
+  req_completeness
+  printf '# Open\n\n- [{kind}] {where} — {what is missing} — {evidence}\n\n# Accepted\n' > "$W/gaps.md"
+  vrun validate; expect_pass
+}
+block_completeness_unterminated_comment() {
+  # An unclosed '<!--' blanks everything after it before the counter reads a line — gaps hidden
+  # behind it vanished. The same comment_balanced rule review.md already has.
+  req_completeness
+  printf '# Open\n\n<!-- 정리 중\n- [declared] m001 — 대금 조항 미완성 — "미정"\n\n# Accepted\n' > "$W/gaps.md"
+  vrun validate; expect_block "[COMP-MALFORMED]"
+}
+block_completeness_missing_accepted() {
+  # The register format is two sections; a file without '# Accepted' is not the register the
+  # gaps skill writes — fail-closed like the missing-Open case.
+  req_completeness
+  printf '# Open\n' > "$W/gaps.md"
+  vrun validate; expect_block "[COMP-MALFORMED]"
+}
 acct_upgrade_fmless_review() {
   # A genuine v0.1 review may carry NO frontmatter block at all. The migration scan promised a
   # review_legacy marker its apply could not insert (the awk keyed on an opening '---'), so
