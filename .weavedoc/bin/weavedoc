@@ -1210,12 +1210,12 @@ cmd_validate() {
   # --- the closed enum. A typo'd 'verifed' once fell through the classifier into a digest
   # --- compare and counted as digest-bound verified — the exact substring-trap class the
   # --- markdown ledger already guards against, missed one door over.
-  local lfv_ lline_ lid_ ldg_ lvd_
+  local lfv_ lline_ lid_ ldg_ lvd_ lrd_ lst_ ldt_ lex_
   lfv_="$TRUTHS/$(ledger_file)"
   if [ -f "$lfv_" ]; then
     while IFS= read -r lline_; do
       case "$lline_" in ''|'#'*) continue ;; esac
-      IFS=$'\t' read -r lid_ ldg_ lvd_ _ <<< "$lline_"
+      IFS=$'\t' read -r lid_ ldg_ lvd_ lrd_ lst_ ldt_ lex_ <<< "$lline_"
       if [ -z "${lvd_:-}" ]; then
         prob LEDGER-MALFORMED "truths/$(ledger_file)  row has fewer than three tab-separated columns: '$lline_' — id·sha256·verdict is the minimum; an unparseable row covers nothing and blocks"
         continue
@@ -1224,6 +1224,25 @@ cmd_validate() {
       case "$lvd_" in verified|failed|legacy-unbound) ;; *)
         prob LEDGER-VERDICT "truths/$(ledger_file)  row for '$lid_' carries unknown verdict '$lvd_' — the enum is verified|failed|legacy-unbound and an unknown word must never count as any of them" ;;
       esac
+      # The row FORMAT is fail-closed too (v0.3.2): attest writes exactly six columns, so any
+      # deviation is a hand edit — and a garbage digest or date wears the shape of evidence
+      # while binding nothing.
+      if [ -z "${ldt_:-}" ]; then
+        prob LEDGER-MALFORMED "truths/$(ledger_file)  row for '$lid_' has fewer than six tab-separated columns — id·sha256·verdict·round·standard·date; attest writes all six"
+        continue
+      fi
+      [ -n "${lex_:-}" ] && prob LEDGER-MALFORMED "truths/$(ledger_file)  row for '$lid_' has more than six tab-separated columns"
+      case "$ldg_" in
+        -) ;;
+        *) printf '%s' "$ldg_" | grep -qE '^[0-9a-f]{64}$' \
+             || prob LEDGER-MALFORMED "truths/$(ledger_file)  row for '$lid_' digest column '$ldg_' is neither a 64-hex sha256 nor '-'" ;;
+      esac
+      case "$lrd_" in
+        -) ;;
+        ''|*[!0-9]*) prob LEDGER-MALFORMED "truths/$(ledger_file)  row for '$lid_' round column '$lrd_' must be a positive integer or '-'" ;;
+      esac
+      [ -n "${lst_:-}" ] || prob LEDGER-MALFORMED "truths/$(ledger_file)  row for '$lid_' standard column is empty — attest records the standard met; migration records the origin token"
+      is_date "$ldt_" || prob LEDGER-MALFORMED "truths/$(ledger_file)  row for '$lid_' date column '$ldt_' is not a date (YYYY-MM-DD, zero-padded, real month and day)"
     done < "$lfv_"
   fi
 

@@ -269,7 +269,7 @@ Every problem and warning the checker emits carries a **stable code**. The code 
 | `GATE-OPEN` | consecrated through a non-empty `Fidelity violations` section |
 | `GATE-SEAL-MARKER` | a seal and the `review_legacy` marker coexist on one review |
 | `HQ-UNTAGGED` | Human-queue entry without a valid ownership tag |
-| `LEDGER-MALFORMED` | a verify-ledger row the reader cannot parse (columns or id) |
+| `LEDGER-MALFORMED` | a verify-ledger row the reader cannot parse (columns, id, digest, round, standard or date) |
 | `LEDGER-VERDICT` | a verify-ledger row carries a verdict outside verified|failed|legacy-unbound |
 | `IDX-MISSING` | `truths/index.md` or `tree.md` absent (run `reindex`) |
 | `IDX-SYNC` | index and truth files disagree (run `reindex`) |

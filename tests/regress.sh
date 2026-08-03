@@ -100,7 +100,11 @@ mk_v2() { # promote the workspace to a schema-2 mine with a sealed review — th
   # cases which edit truths/materials are not all staled by a seal they never asked for.
   sed -i 's/^version: 1$/version: 2/' "$W/project.md"
   sed -i 's/^version: 1/version: 2/' "$W/.weavedoc/config.yaml"
-  ( cd "$W" && bash .weavedoc/bin/weavedoc seal-review d1 draft >/dev/null 2>&1 ) || true
+  # The suite is not `set -e`: a silent seal-review failure here would hand every v2 case an
+  # UNSEALED mine, and the strip_seal block cases would then pass for the wrong reason (never
+  # sealed is observably identical to stripped). A helper failure is a case failure, loudly.
+  ( cd "$W" && bash .weavedoc/bin/weavedoc seal-review d1 draft >/dev/null 2>&1 ) \
+    || bad "mk_v2: seal-review failed — the case would assert against an unsealed mine"
 }
 REV() { review4 "$W" "$@"; }
 
@@ -2030,6 +2034,25 @@ block_gate_v2_context_seal_stripped() {
   printf '\n제12조 신설.\n' >> "$W/materials/m001/converted.md"
   vrun validate; expect_block "[GATE-UNSEALED]"
 }
+pass_gate_v2_sealed_clean() {
+  # The v2 happy path pinned from the pass side: a properly sealed schema-2 mine validates
+  # clean and counts its seal digest-bound — the block cases above only prove rejection.
+  mk_v2
+  vrun validate; expect_pass
+  expect_has "1 digest-bound"
+}
+pass_consecrate_v2_e2e() {
+  # The v2 consecration spine: sealed draft → consecrate → one full validation → promoted, no
+  # transaction residue, and the sealed validate stays green afterwards.
+  mk_v2
+  vrun consecrate d1
+  expect_pass
+  expect_has "full validation: 1 run"
+  [ -e "$W/documents/d1/.consecrate.inflight" ] && bad "in-flight marker left behind"
+  [ -e "$W/documents/d1/.final.bak" ] && bad "backup left behind"
+  vrun validate; expect_pass
+  expect_has "1 digest-bound"
+}
 block_gate_v2_seal_next_to_marker() {
   # A full seal and the migration marker on ONE review: seal-review removes the marker when a
   # real round seals, so coexistence is tamper (a hand-added marker parked as a future demotion
@@ -2162,6 +2185,23 @@ block_consecrate_dual_final() {
   expect_has "위약금은 계약금액의 10%다"
   OUT=$(cat "$W/documents/d1/final/01.md"); RC=0
   expect_has "보존되어야 할 디렉터리 산출물"
+}
+block_ledger_short_row() {
+  # attest writes all six columns; a three-column row is a hand edit the reader cannot trust.
+  # It used to pass (the check stopped at "at least id·digest·verdict").
+  printf 't001\tabc\tverified\n' > "$W/truths/verify-ledger.tsv"
+  vrun validate; expect_block "[LEDGER-MALFORMED]"
+}
+block_ledger_bad_digest() {
+  # A digest column that is neither 64-hex nor '-' binds nothing — scope would read it as
+  # "stale" (fail-safe), but validate must name the malformation instead of letting a garbage
+  # hash wear the shape of evidence.
+  printf 't001\tnotahash\tverified\t2\tstandard\t2026-08-01\n' > "$W/truths/verify-ledger.tsv"
+  vrun validate; expect_block "[LEDGER-MALFORMED]"
+}
+block_ledger_bad_date() {
+  printf 't001\t-\tlegacy-unbound\t-\t-\t2026-13-99\n' > "$W/truths/verify-ledger.tsv"
+  vrun validate; expect_block "[LEDGER-MALFORMED]"
 }
 acct_upgrade_mid_not_material_evidence() {
   # WD-COR-001 held through migration: the pristine Verified units row names m001, but that
