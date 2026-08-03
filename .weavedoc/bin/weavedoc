@@ -1516,6 +1516,15 @@ EOF
       # bytes. Ambiguity is not a shape the gate reads around — it blocks.
       prob GATE-DUAL-FINAL "$d has both final.md and final/ — only one can be the consecrated output and only one was digest-checked; remove the one that is not the reviewed artifact"
     fi
+    # In-flight consecration artifacts are mine-level red flags (v0.3.2): the marker means the
+    # final slot may hold an unvalidated candidate, the backup means the only original sits
+    # aside. Traps cannot run on SIGKILL/power loss — the on-disk artifact is the detector. The
+    # one legal exemption is consecrate's own in-process validate for exactly this doc
+    # (WD_CONSEC_DOC is dynamically scoped, never exported).
+    if [ "${WD_CONSEC_DOC:-}" != "$d" ]; then
+      [ -e "$DOCUMENTS/$d/.consecrate.inflight" ] && prob CONSEC-INTERRUPTED "$d has .consecrate.inflight — a consecration is running or died here (a hard kill leaves no other trace); if nothing is running, the final slot may hold an unvalidated candidate byte-identical to the reviewed draft: remove final and the marker, then re-run consecrate"
+      [ -e "$DOCUMENTS/$d/.final.bak" ] && prob CONSEC-INTERRUPTED "$d has .final.bak — an interrupted consecration left the only original here; restore it over final (or remove it if the current final is known good), then re-run consecrate"
+    fi
     if [ -n "$consecrated" ]; then
       N_CONSEC=$((N_CONSEC+1))
       if [ ! -f "$DOCUMENTS/$d/review.md" ]; then
@@ -2547,6 +2556,13 @@ cmd_consecrate() { # consecrate <doc-id> — stage candidate, verify seals, ONE 
     echo "consecrate: interrupted consecration detected — $DOCUMENTS/$d/.final.bak exists, so the current final may be an unvalidated candidate. Restore the backup over final (or remove it if the current final is known good), then re-run. Nothing was touched."
     return 1
   fi
+  if [ -e "$DOCUMENTS/$d/.consecrate.inflight" ]; then
+    # The marker without a backup is the FIRST-consecration crash (nothing existed to back up):
+    # the final slot may hold an unvalidated candidate — byte-identical to the reviewed draft,
+    # so removing final + marker and re-running loses nothing.
+    echo "consecrate: interrupted consecration detected — $DOCUMENTS/$d/.consecrate.inflight exists, so a consecration is running or died here. If nothing is running: the final slot may hold an unvalidated candidate (byte-identical to the reviewed draft); remove final and the marker, then re-run. Nothing was touched."
+    return 1
+  fi
   # Two finals at once: doc_final_path resolves the directory, so proceeding would back up ONLY
   # final/ and then overwrite final.md with the candidate — no backup — and the post-swap
   # validation would see a mine where the dual state had vanished. Both prior artifacts were
@@ -2580,30 +2596,58 @@ cmd_consecrate() { # consecrate <doc-id> — stage candidate, verify seals, ONE 
     nowcx=$(context_digest "$d")
     [ "$nowcx" = "$rcx" ] || { echo "consecrate: review context changed (cited truth, source material, config or schema) — the clean review no longer describes this mine; re-review"; return 2; }
   fi
-  # 5. Stage the candidate on the same filesystem, verify the copy, swap, validate ONCE.
-  local isdir=0 cand fin oldfin="" bak="$DOCUMENTS/$d/.final.bak"
+  # 5. Stage the candidate on the same filesystem, verify the copy, mark, swap, validate ONCE.
+  local isdir=0 cand fin oldfin="" bak="$DOCUMENTS/$d/.final.bak" mark="$DOCUMENTS/$d/.consecrate.inflight"
   [ -d "$art" ] && isdir=1
-  if [ $isdir -eq 1 ]; then cand="$DOCUMENTS/$d/.candidate.final"; rm -rf "$cand"; cp -r "$art" "$cand"
-  else cand="$DOCUMENTS/$d/.candidate.final.md"; cp "$art" "$cand"; fi
+  if [ $isdir -eq 1 ]; then cand="$DOCUMENTS/$d/.candidate.final"; rm -rf "$cand"
+    cp -r "$art" "$cand" || { rm -rf "$cand"; echo "consecrate: cannot stage the candidate copy — nothing promoted"; return 1; }
+  else cand="$DOCUMENTS/$d/.candidate.final.md"
+    cp "$art" "$cand" || { rm -f "$cand"; echo "consecrate: cannot stage the candidate copy — nothing promoted"; return 1; }
+  fi
   [ "$(artifact_digest "$cand")" = "$rdg" ] \
     || { rm -rf "$cand"; echo "consecrate: candidate copy does not match the reviewed digest — copy failed; nothing promoted"; return 1; }
   oldfin=$(doc_final_path "$d") || oldfin=""
-  if [ -n "$oldfin" ]; then mv "$oldfin" "$bak"; fi
   if [ $isdir -eq 1 ]; then fin="$DOCUMENTS/$d/final"; else fin="$DOCUMENTS/$d/final.md"; fi
-  mv "$cand" "$fin"
-  # The validation window is the one moment an unvalidated candidate sits in the final slot —
-  # an interrupt here restores the original instead of leaving the swap half-done.
+  # The durable in-flight marker precedes the FIRST final mutation and is removed LAST (v0.3.2):
+  # a first-ever consecration has no .final.bak, so a hard kill (SIGKILL, power) used to leave
+  # an unvalidated candidate at final with NO trace — indistinguishable on disk from a
+  # successful run. validate (CONSEC-INTERRUPTED) and consecrate both refuse while the marker or
+  # the backup exists; traps cover INT/TERM, the marker covers what no trap can.
+  printf 'started: %s\ndoc: %s\n' "$(date +%F)" "$d" > "$mark" \
+    || { rm -rf "$cand"; echo "consecrate: cannot write the in-flight marker — nothing promoted"; return 1; }
+  # stage guards the abort: for a single-file doc, $oldfin and $fin are the SAME path, so an
+  # abort firing before the aside-move must not `rm` the final it is trying to protect.
+  local stage="staged"
   consec_abort() {
     trap - INT TERM
-    rm -rf "$fin" 2>/dev/null
+    [ "$stage" = "placed" ] && rm -rf "$fin" 2>/dev/null
     [ -n "$oldfin" ] && [ -e "$bak" ] && mv "$bak" "$oldfin" 2>/dev/null
+    rm -rf "$cand" 2>/dev/null
+    rm -f "$mark" 2>/dev/null
     echo "consecrate: interrupted — candidate removed, original final restored" >&2
     exit 130
   }
   trap consec_abort INT TERM
+  if [ -n "$oldfin" ]; then
+    mv "$oldfin" "$bak" || { trap - INT TERM; rm -rf "$cand"; rm -f "$mark"
+      echo "consecrate: cannot move the current final aside — nothing promoted"; return 1; }
+  fi
+  stage="moved"
+  mv "$cand" "$fin" || { trap - INT TERM
+    [ -n "$oldfin" ] && [ -e "$bak" ] && mv "$bak" "$oldfin"
+    rm -rf "$cand"; rm -f "$mark"
+    echo "consecrate: cannot place the candidate at final — original restored, nothing promoted"; return 1; }
+  stage="placed"
+  # The validation window: the one moment an unvalidated candidate sits in the final slot. The
+  # in-process validate skips THIS doc's in-flight artifacts (WD_CONSEC_DOC is dynamically
+  # scoped, never exported — no other process and no other doc is exempt).
+  local WD_CONSEC_DOC="$d"
   if cmd_validate; then
     trap - INT TERM
-    [ -n "$oldfin" ] && rm -rf "$bak"
+    if [ -n "$oldfin" ]; then
+      rm -rf "$bak" || echo "consecrate: warning — could not remove ${bak#"$ROOT"/}; validate blocks while it remains, remove it by hand"
+    fi
+    rm -f "$mark"
     echo "consecrate: $d consecrated — full validation: 1 run, clean. The reviewed draft IS the final, byte for byte."
     [ "$(cfgval completeness)" != "required" ] \
       && echo "  note: completeness is off — undetected omissions are outside this document's warranty (fidelity.completeness)"
@@ -2612,6 +2656,7 @@ cmd_consecrate() { # consecrate <doc-id> — stage candidate, verify seals, ONE 
     trap - INT TERM
     rm -rf "$fin"
     [ -n "$oldfin" ] && mv "$bak" "$oldfin"
+    rm -f "$mark"
     echo "consecrate: full validation FAILED after staging — candidate rejected, original final preserved untouched. Fix the problems above and re-run."
     return 1
   fi

@@ -2163,6 +2163,40 @@ block_consecrate_dual_final() {
   OUT=$(cat "$W/documents/d1/final/01.md"); RC=0
   expect_has "보존되어야 할 디렉터리 산출물"
 }
+block_validate_inflight_marker() {
+  # .consecrate.inflight is the durable trace of a consecration that is running or died hard
+  # (SIGKILL/power — no trap runs). While it exists the final slot may hold an unvalidated
+  # candidate, and a plain validate must say so instead of green-lighting the mine.
+  printf 'started: 2026-08-03\ndoc: d1\n' > "$W/documents/d1/.consecrate.inflight"
+  vrun validate; expect_block "[CONSEC-INTERRUPTED]"
+}
+block_validate_leftover_bak() {
+  # .final.bak holds the ONLY original after a mid-validate death. validate used to pass right
+  # over it — the mine looked healthy while a transaction sat half-done.
+  printf 'x\n' > "$W/documents/d1/.final.bak"
+  vrun validate; expect_block "[CONSEC-INTERRUPTED]"
+}
+block_consecrate_marker_detected() {
+  # A first-ever consecration killed hard leaves marker + candidate and NO backup (nothing
+  # existed to back up). Re-running must refuse on the marker alone.
+  ( cd "$W" && bash .weavedoc/bin/weavedoc seal-review d1 draft >/dev/null 2>&1 )
+  printf 'started: 2026-08-03\ndoc: d1\n' > "$W/documents/d1/.consecrate.inflight"
+  vrun consecrate d1
+  expect_block "interrupted"
+  [ -e "$W/documents/d1/.consecrate.inflight" ] || bad "refusal removed the marker it refused on"
+}
+acct_consecrate_no_residue() {
+  # The clean path leaves nothing behind: final promoted, no marker, no backup — the artifacts
+  # exist only while the transaction is genuinely open.
+  rm -f "$W/documents/d1/final.md"
+  ( cd "$W" && bash .weavedoc/bin/weavedoc seal-review d1 draft >/dev/null 2>&1 )
+  vrun consecrate d1
+  expect_pass
+  [ -f "$W/documents/d1/final.md" ] || bad "final.md was not created"
+  [ -e "$W/documents/d1/.consecrate.inflight" ] && bad "in-flight marker left behind"
+  [ -e "$W/documents/d1/.final.bak" ] && bad "backup left behind"
+  ok
+}
 block_upgrade_incomplete_passes() {
   # `passes 1/2` is a run that stopped short. It must not gain a verdict, and apply must not
   # stamp schema 2 over it — unfinished verification stays visible debt, and idempotence holds.
