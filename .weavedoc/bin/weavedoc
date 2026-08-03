@@ -558,13 +558,43 @@ ledger_file() { # -> the sidecar's filename; schema key first, code default seco
 schema_ver() { # -> the schema version this runtime targets; same degrade rule as ledger_file
   local s; s=${SCH[schema.version]}; printf '%s' "${s:-2}"
 }
-ledger_rows() { # -> "id<TAB>digest<TAB>verdict<TAB>standard" per unit; LAST row per id wins.
+# ONE structural row filter for the verification sidecar (v0.3.3): the same six-column format
+# validate enforces decides what EVERY reader consumes — scope once read any ≥3-column row while
+# validate demanded six, so a truncated attest row counted digest-bound in one command and
+# blocked the mine in the other. Verdict WORDS are deliberately not judged here (scope
+# quarantines unknown verdicts visibly); structure is. The calendar mirrors is_date.
+LEDGER_ROW_AWK='
+  function realdate(s,  a, y, m, dd, ml) {
+    if (s !~ /^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]$/) return 0
+    split(s, a, "-"); y = a[1] + 0; m = a[2] + 0; dd = a[3] + 0
+    if (m < 1 || m > 12 || dd < 1) return 0
+    ml = substr("312831303130313130313031", (m-1)*2 + 1, 2) + 0
+    if (m == 2 && (y % 4 == 0 && (y % 100 != 0 || y % 400 == 0))) ml = 29
+    return dd <= ml
+  }
+  function rowok() {
+    return (NF == 6 && ($2 == "-" || $2 ~ /^[0-9a-f]{64}$/) \
+            && ($4 == "-" || $4 ~ /^[0-9]+$/) && $5 != "" && realdate($6))
+  }'
+ledger_rows() { # -> "id<TAB>digest<TAB>verdict<TAB>standard" per unit; LAST VALID row per id wins.
   # The standard column rides along for the origin rule (v0.3.2): a legacy-unbound m row counts
   # as material evidence only when its standard names the material origin token.
   local lf="$TRUTHS/$(ledger_file)"
   [ -f "$lf" ] || return 0
-  awk -F'\t' '/^#/ { next } NF>=3 { d[$1]=$2; v[$1]=$3; s[$1]=$5 } END { for (i in d) print i "\t" d[i] "\t" v[i] "\t" s[i] }' "$lf" \
+  awk -F'\t' "$LEDGER_ROW_AWK"'
+    /^#/ { next }
+    !rowok() { next }
+    { d[$1]=$2; v[$1]=$3; s[$1]=$5 }
+    END { for (i in d) print i "\t" d[i] "\t" v[i] "\t" s[i] }' "$lf" \
     | LC_ALL=C sort
+}
+ledger_rows_badstruct() { # -> ids of rows the strict filter rejects — SHOWN by scope, never absorbed
+  local lf="$TRUTHS/$(ledger_file)"
+  [ -f "$lf" ] || return 0
+  awk -F'\t' "$LEDGER_ROW_AWK"'
+    /^#/ { next }
+    /^[ \t]*$/ { next }
+    !rowok() { print $1 }' "$lf" | LC_ALL=C sort -u
 }
 artifact_digest() { # $1 = file OR directory -> sha256. THE spelling of "which bytes were reviewed".
   # Directory: `relpath\0sha256\n` manifest, relpaths LC_ALL=C ascending, manifest re-hashed —
@@ -3168,8 +3198,9 @@ cmd_attest() { # attest <verified|failed> <round> <standard> <id...> — the ver
   return 0
 }
 cmd_scope() {
-  local ledger ledger_bad
+  local ledger ledger_bad ledger_sbad
   ledger=$(ledger_rows)
+  ledger_sbad=$(ledger_rows_badstruct | tr '\n' ' ')
   # Unknown verdicts are quarantined BEFORE classification — they cover nothing and are named;
   # letting them fall through to the digest compare is how a typo once counted as verified.
   ledger_bad=$(printf '%s\n' "$ledger" | awk -F'\t' 'NF >= 3 && $3 != "verified" && $3 != "failed" && $3 != "legacy-unbound" { print $1 " (" $3 ")" }')
@@ -3344,6 +3375,12 @@ cmd_scope() {
   if [ -n "$ledger_bad" ]; then
     printf '  ledger: row(s) with unknown verdicts — they cover nothing [LEDGER-VERDICT]: %s\n' \
       "$(printf '%s' "$ledger_bad" | tr '\n' ' ')"
+  fi
+  if [ -n "${ledger_sbad% }" ]; then
+    # The shared strict filter dropped these before classification — shown here so a truncated
+    # or hand-mangled row reads as "covers nothing" in scope AND blocks in validate, never one
+    # without the other (v0.3.3: two parsers on one ledger was the drift class itself).
+    printf '  ledger: structurally malformed row(s) — they cover nothing [LEDGER-MALFORMED]: %s\n' "$ledger_sbad"
   fi
   local owed=$((n_munver + n_mstale + n_mfail + n_tunver + n_tstale + n_tfail))
   if [ "$owed" -eq 0 ] && [ $((n_mlegacy + n_tlegacy)) -gt 0 ]; then

@@ -2224,6 +2224,17 @@ block_consecrate_dual_final() {
   OUT=$(cat "$W/documents/d1/final/01.md"); RC=0
   expect_has "보존되어야 할 디렉터리 산출물"
 }
+acct_scope_short_row_covers_nothing() {
+  # scope read any ≥3-column row while validate demanded six — a truncated attest row counted
+  # digest-bound verified in scope while validate blocked the mine (two parsers, one ledger).
+  # The strict row filter is shared now: a structurally malformed row covers nothing ANYWHERE,
+  # and scope names it instead of silently absorbing it.
+  vrun attest verified 2 standard t001
+  sed -i -E 's/^(t001\t[0-9a-f]{64}\tverified)\t.*$/\1/' "$W/truths/verify-ledger.tsv"
+  vrun scope
+  expect_has "0 verified (digest-bound)"
+  expect_has "[LEDGER-MALFORMED]"
+}
 block_ledger_short_row() {
   # attest writes all six columns; a three-column row is a hand edit the reader cannot trust.
   # It used to pass (the check stopped at "at least id·digest·verdict").
