@@ -4,7 +4,24 @@
 
 ---
 
-## 2026-08-03.1
+## 2026-08-03.2
+
+**v0.3.3 — 3차 cold review: 새 안전장치 자체의 구멍을 닫습니다.** 이번 P0 4건 중 2건이 v0.3.2에서 추가한 보호장치의 결함이었습니다(지난 라운드가 v0.3.1 메커니즘의 수명주기를 지적했던 것과 같은 클래스가 한 층 아래에서 반복). 전부 재현 케이스 선행으로 수리했습니다.
+
+- **gaps 잔존 fail-open 4종 (P0-1)** — ① 들여쓴 산문 전체가 "연속행"으로 통과하던 것 → 연속행은 **bullet 뒤에서만** 합법(상태 기반 스캔), ② placeholder 대괄호를 남긴 **진짜** gap(`- [<reference>] …` + 내용)이 노이즈 필터에 걸려 0으로 세이던 것 → **remainder decides**(review 항목과 같은 재정), ③ 미종결 `<!--` 뒤에 숨은 gap → `comment_balanced`를 gaps.md에도 적용, ④ `# Accepted` 부재 → 두 절 모두 필수. countlines의 KNOWN LIMIT이 `required` 아래서 load-bearing이 된 사례입니다.
+- **환경변수 주입 (P0-2)** — consecrate의 validate 예외를 **함수 인자**로 교체. bash가 시작 시 환경변수를 셸 변수로 승계하므로 `WD_CONSEC_DOC=d1 weavedoc validate`가 외부에서 예외를 자작할 수 있었습니다("동적 스코프라 export 안 된다"는 나가는 방향만 본 판단). dispatch가 validate 인자를 거부하므로 CLI 경로로는 닿지 않습니다.
+- **INT 창 (P0-3)** — `mv cand fin` 직후~`stage="placed"` 사이 INT면 candidate가 남고 marker만 지워져 **미검증 final이 green**. stage 승급을 각 변경 **앞**으로 옮기고, abort·모든 실패 분기는 **복원 postcondition을 확인한 뒤에만** marker를 삭제합니다(복원 미완 → marker 유지 → validate 차단). marker 생성은 noclobber 배타(동시 실행 race), doc-id는 경로 조각 거부(consecrate·seal-review), 복구 안내는 **compare-first**(swap 전 crash면 final 자리가 원본이라 "final 삭제"는 틀린 지시), fsync 없음을 문구에 명시.
+- **ledger 파서 이원화 (P0-4)** — scope는 3열 이상이면 읽고 validate는 6열을 요구해, 절단된 attest 행이 scope에서 digest-bound로 세이면서 validate는 차단했습니다. `LEDGER_ROW_AWK` 하나로 통일(6열·digest·round·standard·실달력 날짜), 거부된 행은 scope가 **표시 후 무시**.
+- **재개 migration lane 분리** — v0.3.1이 남긴 출처 없는 m-id 행이 coverage에 잡혀 올바른 `v1-material-frontmatter` 행 생성을 막던 것 → material 레인 coverage는 출처 토큰(또는 실제 verdict)만 인정. scan·apply 양쪽.
+- **`^---` 오인** — `---note`가 느슨한 사전검사를 통과해 **seal을 쓰지 않고 성공 메시지**를 내던 것 → 정확히 `---`만. migration 6b도 동일하게 조여, `---note` review는 prepend 경로로 가 마이그레이션 가능 상태를 유지합니다.
+- **version 행렬 닫힘** — `version: banana`가 숫자 검사를 건너뛰어 "already at schema 2" exit 0이던 것 → 각 레코드는 1 또는 현재 schema만, 그 외 거부.
+- **draft 단계 구조 불변식** — tuple 완전성·kind enum·marker 공존은 final 없이도 검사(같은 변조가 한 라운드 먼저 보임). digest/context **강제**와 seal 카운트는 consecrated 옆에 유지 — 라운드 사이 draft 편집은 refine의 정상 흐름이라 하드 블록하면 안 됩니다.
+- **로스터 3키** — `review.enum.reviewed_kind`, `verify.ledger.origin.{material,truths}`. sch_load가 파일 전체를 읽어 동작에는 영향 없었지만, 선언-사용 드리프트는 로스터가 존재하는 이유 그 자체입니다.
+- 문서: FORMATS(register 문법·consecrate 계약·단일 ledger 파서·구조 불변식 단계 독립)·UPGRADING(version 행렬·lane 재개)·PLAN 상태 블록 구조 정리(`git diff --check v0.3.2..HEAD` 통과).
+
+검증: `bash -n` 통과 · 회귀 **323/323**(신규 13, 전부 red 확인 후 수리) · doccheck ✓ · `git diff --check` ✓(범위 검사 포함) · manifest 2회 동일.
+
+
 
 **v0.3.2 — 2차 cold review의 P0 3건과 고우선 잔여를 전부 닫습니다 (8단계 합의안, 실패 케이스 선행).** v0.3.1 리뷰가 정확히 지적한 대로, 이번 구멍의 두 개는 v0.3.1이 만든 메커니즘 자체의 수명주기였습니다 — `review_legacy`는 도입됐지만 닫히지 않았고, dual-final은 validate에만 막혀 있었습니다.
 
