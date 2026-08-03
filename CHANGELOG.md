@@ -4,6 +4,21 @@
 
 ---
 
+## 2026-08-02.17
+
+**v0.3.1 — cold review가 연 게이트를 닫습니다.** v0.3.0 직후의 외부 cold review가 핵심 보증을 우회하는 false-green 6종을 실증했고, 전부 실물 확인 후 수리했습니다. 리뷰가 이 도구의 방법론을 이 도구에 적용한 결과이며, 그 지적이 옳았습니다.
+
+- **review seal 강제 (P0-1)** — v2 광산에서 seal 필드를 지운 review+final은 이제 `GATE-UNSEALED`로 차단됩니다. 절반만 지운 것(context digest만 삭제)도 동일. **v1 광산만이 legacy**이고, v2의 부재는 변조입니다. 수리 중 실서열 버그도 자체 발견: SCHEMA_V1 플래그가 문서 검사 *이후*에 계산되어 진짜 v1 광산까지 차단됐던 것 — 플래그를 validate 서두로 이동.
+- **인용 파싱 (P0-1b)** — `cited_truths: ["t001"]`의 따옴표가 context manifest에서 해당 truth를 조용히 누락시키던 것을 listfield 파싱으로 수리.
+- **dual-final (P0-1c)** — `final.md`와 `final/`이 동시에 존재하면 `GATE-DUAL-FINAL` 차단(하나만 digest 검사되던 구멍).
+- **consecrate 중단 안전 (P0-2)** — 잔존 `.final.bak` 감지 시 **거부**(기존엔 재실행이 유일한 원본 복구점을 삭제), 검증 창에 INT/TERM trap을 걸어 중단 시 candidate 제거+원본 복원. swap→validate→promote 순서 자체는 §5.3 설계 그대로 유지.
+- **completeness fail-closed (P0-3)** — Open 절 없는 gaps.md(빈 파일 포함)는 `COMP-MALFORMED` 차단: 형식 없는 레지스터는 "돈 적 없는 워런티"와 같은 규칙.
+- **migration 판정·충돌 (P0-4·5)** — `passes 1/2`는 **미완의 증거**로 verdict를 얻지 못하고, verdict-manual 행이 남아 있으면 apply가 **스탬프 전에 전체 거부**(멱등성 보존: 미완 이력이 부채에서 사라지는 일 없음). `t01.md`+`t1.md`가 같은 t001로 정규화되는 쌍충돌을 적용 전 검출.
+- **ledger fail-closed (P0-6)** — 사이드카 verdict가 닫힌 enum(verified|failed|legacy-unbound) 밖이면 validate가 `LEDGER-VERDICT`로 차단하고 scope는 분류 전에 격리("cover nothing"으로 이름 찍음). `verifed` 오타가 digest 비교로 흘러 bound로 세어지던 fail-open의 종결.
+- **로케일 결정론 (macOS 5건의 원인)** — UTF-8 로케일에선 NBSP가 `[[:space:]]`에 들어가 같은 바이트가 머신마다 다른 판정 경로를 탔습니다. bin 전역 `LC_ALL=C` 핀으로 바이트 의미론을 고정 — 프로젝트 언어 산문은 불투명 바이트로 통과, 패턴은 전부 ASCII. macOS 검증은 CI dispatch로.
+
+검증: 로컬 전수 283/283 + doc-sync 1(VERSION 확정 후 단독 PASS) = 284 GREEN · 신규 케이스 10종 · 자체 발견 결함 3(SCHEMA_V1 순서 · v2 봉인↔migration 충돌→review_legacy 마커 · 캐시가 쓰기-후-재검증 오염→validate 진입 시 리셋) · 통합 판정은 CI Ubuntu 전수 + dispatch full matrix(macOS NBSP 수리 검증 포함).
+
 ## 2026-08-02.16
 
 **진단 계약 완성 + 나머지 `--json` (단위 11b) · raw source 고지 (WD-SEC-001).**

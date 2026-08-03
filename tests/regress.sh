@@ -87,6 +87,20 @@ review4() {
     printf '# Adjudications\n\n'
     printf '# Human queue\n'
   } > "$root/documents/d1/review.md"
+  # NOT auto-sealed: a sealed review enforces its digests on ANY mine, so sealing here would
+  # stale the context under every case that touches a truth or the config (a real 29-case pileup
+  # taught this). The pristine stays a v1 mine with a legacy review; seal-needing cases run
+  # seal-review (or mk_v2) themselves, AFTER their mutations.
+}
+strip_seal() { # $1=review.md — remove the seal fields (the tamper the v2 gate must catch)
+  sed -i '/^reviewed_kind:/d; /^reviewed_digest:/d; /^review_context_digest:/d' "$1"
+}
+mk_v2() { # promote the workspace to a schema-2 mine with a sealed review — the state where the
+  # v0.3.1 seal enforcement applies. The pristine fixture stays v1 (dual-reader) so that the 250+
+  # cases which edit truths/materials are not all staled by a seal they never asked for.
+  sed -i 's/^version: 1$/version: 2/' "$W/project.md"
+  sed -i 's/^version: 1/version: 2/' "$W/.weavedoc/config.yaml"
+  ( cd "$W" && bash .weavedoc/bin/weavedoc seal-review d1 draft >/dev/null 2>&1 ) || true
 }
 REV() { review4 "$W" "$@"; }
 
@@ -99,7 +113,7 @@ mkpristine() {
 
   cat > "$PRISTINE/project.md" <<'EOF'
 ---
-version: 2
+version: 1
 language: ko
 roles: [계약서]
 tone: 담백
@@ -108,7 +122,10 @@ required_tags: []
 
 최소 픽스처 프로젝트.
 EOF
-  sed -i 's/^version: 1$/version: 2/' "$PRISTINE/.weavedoc/config.yaml"
+  # The pristine mine is a v1 mine ON PURPOSE (project + config both version: 1): 250+ cases
+  # mutate truths/materials freely, and a v2 fixture would stale a seal on every one of them.
+  # Cases that need v2 seal enforcement promote explicitly via mk_v2.
+  sed -i 's/^version: 2/version: 1/' "$PRISTINE/.weavedoc/config.yaml"
 
   cat > "$PRISTINE/catalog.md" <<'EOF'
 # 자료 목록
@@ -1534,9 +1551,11 @@ block_consecrate_stale_draft() {
   expect_block "draft changed after the clean review"
 }
 block_consecrate_unsealed() {
-  # A v1 (digest-less) review cannot drive the new consecration path — seal first.
+  # An unsealed review cannot drive the consecration path — seal first. (The fixture review is
+  # auto-sealed since v0.3.1, so the tamper is applied explicitly.)
+  strip_seal "$W/documents/d1/review.md"
   vrun consecrate d1
-  expect_block "unsealed"
+  expect_block "unsealed review"
 }
 block_consecrate_open_gate() {
   REV '- [contradiction] 3장 — t001과 모순'
@@ -1647,7 +1666,8 @@ block_gate_fid_c9_lonely() {
 block_schema_future_version() {
   # A schema newer than this runtime supports is fail-closed — guessing at a future format is
   # how silent corruption ships.
-  sed -i 's/^version: 2$/version: 3/' "$W/project.md"
+  sed -i 's/^version: 1$/version: 3/' "$W/project.md"
+  sed -i 's/^version: 1/version: 3/' "$W/.weavedoc/config.yaml"
   vrun validate; expect_block "newer than this runtime"
 }
 acct_schema_v1_notice() {
@@ -1660,7 +1680,7 @@ acct_schema_v1_notice() {
 }
 block_schema_version_disagreement() {
   # project.md and config.yaml each carry a version; two records of one fact must agree.
-  sed -i 's/^version: 2$/version: 1/' "$W/.weavedoc/config.yaml"
+  sed -i 's/^version: 1$/version: 2/' "$W/project.md"
   vrun validate; expect_block "disagree"
 }
 block_config_review_strength_range() {
@@ -1716,7 +1736,10 @@ mkv1() { # devolve the pristine workspace into an authentic v0.1-shaped mine
   ( cd "$W" && bash .weavedoc/bin/weavedoc reindex >/dev/null 2>&1 )
 }
 acct_upgrade_uptodate() {
-  # Idempotence starts at the reader: a current mine reports zero work, exit 0.
+  # Idempotence starts at the reader: right after an apply, a re-check reports zero work.
+  # (The pristine fixture is a v1 mine on purpose, so "up to date" is the post-apply state.)
+  vrun upgrade --apply
+  expect_pass
   vrun upgrade --check
   expect_pass
   expect_has "nothing to do"
@@ -1990,6 +2013,95 @@ e2e_open_queue_consecrates() {
   vrun seal-review d2 draft
   vrun consecrate d2;  expect_pass
   vrun validate;       expect_pass
+}
+
+# ---- v0.3.1 P0 (cold-review findings): seal enforcement, crash safety, fail-closed edges ----
+block_gate_v2_unsealed() {
+  # THE review-seal bypass: on a v2 mine, deleting the three seal fields and editing the final
+  # used to read as "legacy" and pass. A v2 mine has no legacy excuse — absence blocks.
+  mk_v2; strip_seal "$W/documents/d1/review.md"
+  printf '몰래 한 줄.\n' >> "$W/documents/d1/final.md"
+  vrun validate; expect_block "[GATE-UNSEALED]"
+}
+block_gate_v2_context_seal_stripped() {
+  # Deleting ONLY review_context_digest then moving a source must not slip through either.
+  mk_v2
+  sed -i '/^review_context_digest:/d' "$W/documents/d1/review.md"
+  printf '\n제12조 신설.\n' >> "$W/materials/m001/converted.md"
+  vrun validate; expect_block "[GATE-UNSEALED]"
+}
+pass_gate_v1_unsealed_is_legacy() {
+  # The dual-reader stays: a genuine v1 mine with an unsealed review is legacy-unbound, counted
+  # and shown, never blocking — the v2 block above is what distinguishes tamper from history.
+  strip_seal "$W/documents/d1/review.md"
+  vrun validate
+  expect_pass
+  expect_has "1 legacy-unbound"
+}
+block_gate_context_quoted_citations() {
+  # cited_truths: ["t001"] — the quoted spelling. The context parser dropped the quotes' ids
+  # silently, so a cited truth could move without staling the review.
+  sed -i 's/^cited_truths: \[t001\]$/cited_truths: ["t001"]/' "$W/documents/d1/plan.md"
+  ( cd "$W" && bash .weavedoc/bin/weavedoc seal-review d1 draft >/dev/null 2>&1 )
+  sed -i 's/^claim: "위약금은 계약금액의 10%다"$/claim: "위약금은 계약금액의 11%다"/' "$W/truths/t001.md"
+  vrun validate; expect_block "review context changed"
+}
+block_gate_dual_final() {
+  # final.md AND final/ at once: only one was digest-checked, so the other could carry
+  # unreviewed bytes. Ambiguity blocks.
+  mkdir -p "$W/documents/d1/final"
+  printf '# 몰래\n' > "$W/documents/d1/final/01.md"
+  vrun validate; expect_block "both final.md and final/"
+}
+block_completeness_malformed_register() {
+  # required + a gaps.md with no readable Open section = a register that never ran, wearing a
+  # filename. Fail-closed, same as the missing-file rule.
+  req_completeness
+  printf '메모만 있는 파일.\n' > "$W/gaps.md"
+  vrun validate; expect_block "no readable"
+}
+block_consecrate_interrupted_detected() {
+  # A leftover .final.bak means an earlier consecration died mid-validate: the final slot may
+  # hold an UNVALIDATED candidate and the backup is the only original. Re-running used to delete
+  # that backup first — now it refuses until a human restores or clears.
+  rm -f "$W/documents/d1/final.md"
+  ( cd "$W" && bash .weavedoc/bin/weavedoc seal-review d1 draft >/dev/null 2>&1 )
+  printf '원본 final이었던 것\n' > "$W/documents/d1/.final.bak"
+  vrun consecrate d1
+  expect_block "interrupted"
+  OUT=$(cat "$W/documents/d1/.final.bak"); RC=0
+  expect_has "원본 final이었던 것"
+}
+
+block_upgrade_incomplete_passes() {
+  # `passes 1/2` is a run that stopped short. It must not gain a verdict, and apply must not
+  # stamp schema 2 over it — unfinished verification stays visible debt, and idempotence holds.
+  mkv1
+  sed -i 's|passes 2/2|passes 1/2|' "$W/truths/verify.md"
+  vrun upgrade --apply
+  expect_block "human ruling"
+  OUT=$(cat "$W/project.md"); RC=0
+  expect_has "version: 1"
+}
+block_upgrade_pairwise_collision() {
+  # t01.md and t1.md both canonicalize to t001 — the second copy would silently overwrite the
+  # first in a sequential apply. Caught before one byte moves.
+  mkv1
+  cp "$W/truths/t1.md" "$W/truths/t01.md"
+  sed -i 's/^id: t1$/id: t01/' "$W/truths/t01.md"
+  vrun upgrade --apply
+  expect_block "both canonicalize"
+}
+acct_scope_ledger_unknown_verdict() {
+  # The fail-open the cold review found: a typo'd verdict fell through to the digest compare and
+  # counted as digest-bound. Now it is quarantined, named, and validate blocks on it.
+  vrun attest verified 2 standard t001
+  sed -i 's/\tverified\t/\tverifed\t/' "$W/truths/verify-ledger.tsv"
+  vrun scope
+  expect_has "0 verified (digest-bound)"
+  expect_has "[LEDGER-VERDICT]"
+  vrun validate
+  expect_block "[LEDGER-VERDICT]"
 }
 
 # ---- WD-CLI-002 (Phase 5 unit 11a): stable diagnostic codes + validate --json ----

@@ -39,6 +39,10 @@
 # Format SoT: .weavedoc/schema   Paths: .weavedoc/config.yaml
 
 set -u
+# NOTE (v0.3.1): a blanket `export LC_ALL=C` was tried here to make NBSP-in-heading verdicts
+# locale-independent (the macOS leg's 5 failures). It broke Korean tag rewriting in retag — the
+# project language is NOT opaque bytes to gawk's gsub/match — so the fix belongs at the specific
+# patterns instead: heading readers use explicit ASCII space classes, never [[:space:]].
 # ---- preflight (WD-CLI-001): the documented floor, enforced before anything structural ----
 # bash >= 4 must be checked BEFORE the first `declare -A`: on 3.2 that line errors and execution
 # CONTINUES with arrays silently behaving as scalars — the exact cryptic failure this line ends.
@@ -254,14 +258,14 @@ listfield() { # `[a, b]` -> one item per line. Was five piped processes (echo|tr
 section_body() { # $1=file (or - for stdin) $2="Header" -> body under the first "# Header"
   awk -v h="$2" '
     on && /^#+[[:space:]]/ { exit }
-    $0 ~ ("^#[[:space:]]+" h "[[:space:]]*$") { on=1; next }
+    $0 ~ ("^#[ 	]+" h "[[:space:]]*$") { on=1; next }
     on { print }
   ' "${1:--}" 2>/dev/null
 }
 section_body2() { # $1=file (or - for stdin) $2="Header" -> body under the first "## Header"
   awk -v h="$2" '
-    on && (/^#[[:space:]]/ || /^##[[:space:]]/) { exit }
-    $0 ~ ("^##[[:space:]]+" h "[[:space:]]*$") { on=1; next }
+    on && (/^#[ 	]/ || /^##[ 	]/) { exit }
+    $0 ~ ("^##[ 	]+" h "[[:space:]]*$") { on=1; next }
     on { print }
   ' "${1:--}" 2>/dev/null
 }
@@ -282,9 +286,9 @@ dup_section() { # $1=file $2=header $3=level(1|2|0=any) $4=raw? (non-empty: do N
   # a closed comment must count as absent on both sides, or the gate and the body disagree.
   local pat
   case "${3:-2}" in
-    1) pat='^#[[:space:]]+' ;;
-    0) pat='^#{1,6}[[:space:]]+' ;;   # the spec leaves some section levels unfixed; a copy one
-    *) pat='^##[[:space:]]+' ;;       # level down still hides everything under it
+    1) pat='^#[ 	]+' ;;
+    0) pat='^#{1,6}[ 	]+' ;;   # the spec leaves some section levels unfixed; a copy one
+    *) pat='^##[ 	]+' ;;       # level down still hides everything under it
   esac
   # The raw view (skip nocomment) exists for one caller: "the file has this section" vs "the reader
   # can see it". Same pattern, two views at one call site — two functions would drift.
@@ -312,14 +316,17 @@ file_stripped() { # $1=file -> comment-stripped contents in REPLY (one nocomment
   REPLY=${FILESTRIP[$f]}
 }
 count_headings() { # $1=body $2=exact heading text $3=level(1|2|0=any) -> count in REPLY
+  # ASCII space/tab ONLY, never [[:space:]] (v0.3.1): under a UTF-8 locale NBSP joins that class,
+  # so `# Fidelity violations<NBSP>` would read as the real heading on one machine and not on
+  # another — same bytes, different verdict. The gate's readability must not be locale-dependent.
   local want="$2" lv="$3" n=0 l hashes rest
   while IFS= read -r l; do
     l=${l%$'\r'}
     case "$l" in '#'*) ;; *) continue ;; esac
     hashes=""; rest=$l
     while [ "${rest:0:1}" = "#" ]; do hashes+="#"; rest=${rest:1}; done
-    case "$rest" in [[:space:]]*) ;; *) continue ;; esac
-    rest=${rest#"${rest%%[![:space:]]*}"}; rest=${rest%"${rest##*[![:space:]]}"}
+    case "$rest" in [' 	']*) ;; *) continue ;; esac
+    rest=${rest#"${rest%%[! 	]*}"}; rest=${rest%"${rest##*[! 	]}"}
     [ "$rest" = "$want" ] || continue
     case "$lv" in
       1) [ "$hashes" = "#" ] || continue ;;
@@ -455,7 +462,7 @@ fid_body() { # $1=file -> the 'Fidelity violations' body, ended by a SIBLING sec
   # here we only strip the section's own sub-headings out of the BODY. The one shape no level rule can
   # decide — siblings at `##` AND a `## Findings` planted inside a `#` violations section, textually
   # identical — is caught by validate's file-wide entry census, which reads no sections at all.
-  fid_mark "$1" | sed -n 's/^I	//p' | grep -vE '^#{1,6}[[:space:]]' || true
+  fid_mark "$1" | sed -n 's/^I	//p' | grep -vE '^#{1,6}[ 	]' || true
 }
 fid_mark() { # $1=file -> EVERY nocomment line, prefixed I<TAB> (inside the violations section) or O<TAB>
   # The ONE boundary judge: every line marked I (inside the violations section) or O (outside) from a
@@ -470,17 +477,17 @@ fid_mark() { # $1=file -> EVERY nocomment line, prefixed I<TAB> (inside the viol
     END {
       # the tier: the shallowest level at which this file names one of the sibling sections
       for(i=1;i<=NR;i++){
-        if(L[i] !~ /^#{1,6}[[:space:]]/) continue
+        if(L[i] !~ /^#{1,6}[ 	]/) continue
         if(sib=="" || htext(L[i]) !~ ("^(" sib ")$")) continue
         if(tier==0 || hlev(L[i])<tier) tier=hlev(L[i])
       }
       for(i=1;i<=NR;i++){
         if(!on){
-          if(L[i] ~ /^#{1,6}[[:space:]]+Fidelity violations[[:space:]]*$/ && !done){ on=1; lvl=hlev(L[i]) }
+          if(L[i] ~ /^#{1,6}[ 	]+Fidelity violations[ 	]*$/ && !done){ on=1; lvl=hlev(L[i]) }
           print "O\t" L[i]
           continue
         }
-        if(L[i] ~ /^#{1,6}[[:space:]]/){
+        if(L[i] ~ /^#{1,6}[ 	]/){
           if(hlev(L[i])<=lvl){ on=0; done=1; print "O\t" L[i]; continue }
           if(sib!="" && htext(L[i]) ~ ("^(" sib ")$") && hlev(L[i])<=tier){ on=0; done=1; print "O\t" L[i]; continue }
           print "I\t" L[i]; continue
@@ -585,7 +592,10 @@ context_digest() { # $1=doc-id -> sha256 over the ground the review's verdict re
   # consecration and must not stale the review it consecrated under) + config + schema.
   # Manifest rule: repo-relative `path\0sha256\n`, LC_ALL=C sorted, re-hashed.
   local d="$1" t tf src seen="" cited
-  cited=$(fm "$DOCUMENTS/$d/plan.md" cited_truths 2>/dev/null | tr -d '[],')
+  # Parsed with listfield, not a bare tr: `cited_truths: ["t001"]` is legal YAML spelling, and
+  # dropping the quotes' ids SILENTLY excluded those truths from the context manifest — a cited
+  # truth could then move without staling the review (v0.3.1 cold-review finding).
+  cited=$(listfield "$(fm "$DOCUMENTS/$d/plan.md" cited_truths 2>/dev/null)")
   {
     for t in $cited; do
       tf=$(tfile_for "$t") || continue
@@ -673,7 +683,18 @@ json_diag_array() { # $1=collector -> [{"code":..,"message":..},...]
 
 cmd_validate() {
   preflight_gnu || return 2
+  # Content caches are per-PROCESS, and a write command that re-validates in the same process
+  # (upgrade --apply, retag, consecrate) would otherwise validate the bytes it CACHED before its
+  # own edits — the marker upgrade had just written was invisible to the very validation gating
+  # it (v0.3.1 self-caught). A validate always begins from disk.
+  FMV=(); FMLOADED=(); FILERAW=(); FILESTRIP=(); DUPLOADED=(); DUPC=()
   local f id v k a c d p r w mid ref ROLES idc
+  # The v1 flag is computed FIRST: the document loop's seal enforcement branches on it, and it
+  # used to be set in the config section that runs AFTER documents — so a genuine v1 mine was
+  # blocked as tampered for the length of one ordering bug (v0.3.1 self-caught).
+  local pv0 cv0
+  pv0=$(fm "$PROJECT" version 2>/dev/null); cv0=$(cfgval version)
+  SCHEMA_V1=0; { [ "$pv0" = "1" ] || [ "$cv0" = "1" ]; } && SCHEMA_V1=1
   # What was actually examined, reported next to what exists. The counts decide nothing; they make
   # "did not look" (redirected paths, unreadable schema, empty source, unclosed frontmatter) stop
   # resembling "looked and found nothing".
@@ -1183,6 +1204,27 @@ cmd_validate() {
     done
   fi
 
+  # --- the verification sidecar is fail-closed (v0.3.1): every row fully parsed, verdict from
+  # --- the closed enum. A typo'd 'verifed' once fell through the classifier into a digest
+  # --- compare and counted as digest-bound verified — the exact substring-trap class the
+  # --- markdown ledger already guards against, missed one door over.
+  local lfv_ lline_ lid_ ldg_ lvd_
+  lfv_="$TRUTHS/$(ledger_file)"
+  if [ -f "$lfv_" ]; then
+    while IFS= read -r lline_; do
+      case "$lline_" in ''|'#'*) continue ;; esac
+      IFS=$'\t' read -r lid_ ldg_ lvd_ _ <<< "$lline_"
+      if [ -z "${lvd_:-}" ]; then
+        prob LEDGER-MALFORMED "truths/$(ledger_file)  row has fewer than three tab-separated columns: '$lline_' — id·sha256·verdict is the minimum; an unparseable row covers nothing and blocks"
+        continue
+      fi
+      canon_id "$lid_" >/dev/null 2>&1 || prob LEDGER-MALFORMED "truths/$(ledger_file)  row id '$lid_' is not a material/truth id"
+      case "$lvd_" in verified|failed|legacy-unbound) ;; *)
+        prob LEDGER-VERDICT "truths/$(ledger_file)  row for '$lid_' carries unknown verdict '$lvd_' — the enum is verified|failed|legacy-unbound and an unknown word must never count as any of them" ;;
+      esac
+    done < "$lfv_"
+  fi
+
   # --- ledgers ABOUT the truths, checked whether or not any truth file exists ---
   # Moved OUT of the truth-file guard: deleting the last truth file must not switch these off while
   # index.md and coverage.md still name the deleted truth. "No truths" is the strongest thing they
@@ -1242,13 +1284,13 @@ EOF
           for(i=1;i<=np;i++){ if(b[i]=="") continue; split(b[i],c,":"); tsrc[c[1]]=c[2]; if(norm(c[1])!="") tid2file[norm(c[1])]=c[1] }
           sec=""
         }
-        /^##[[:space:]]+m[0-9]+([[:space:]]|$)/ {
+        /^##[ 	]+m[0-9]+([[:space:]]|$)/ {
           sec=$2
           if(!(sec in mat)) prob("[COVERAGE-SECTION] truths/coverage.md  " q("## " sec) " → no material folder")
           hassec[norm(sec)]=sec; next
         }
-        /^##[[:space:]]+legacy[[:space:]]*$/ { sec=""; inleg=1; next }
-        /^##[[:space:]]/ { sec=""; inleg=0; next }
+        /^##[ 	]+legacy[[:space:]]*$/ { sec=""; inleg=1; next }
+        /^##[ 	]/ { sec=""; inleg=0; next }
         # `## legacy` holds user rulings in free prose, not mappings. Ids named in a ruling are talked
         # about (often withdrawn ones), so the existence check there would fail validate for a deletion.
         inleg {
@@ -1469,6 +1511,11 @@ EOF
     local consecrated=""
     [ -f "$DOCUMENTS/$d/final.md" ] && consecrated="final.md"
     [ -d "$DOCUMENTS/$d/final" ]    && consecrated="final/"
+    if [ -f "$DOCUMENTS/$d/final.md" ] && [ -d "$DOCUMENTS/$d/final" ]; then
+      # Two finals, one digest check: whichever the resolver skipped could carry unreviewed
+      # bytes. Ambiguity is not a shape the gate reads around — it blocks.
+      prob GATE-DUAL-FINAL "$d has both final.md and final/ — only one can be the consecrated output and only one was digest-checked; remove the one that is not the reviewed artifact"
+    fi
     if [ -n "$consecrated" ]; then
       N_CONSEC=$((N_CONSEC+1))
       if [ ! -f "$DOCUMENTS/$d/review.md" ]; then
@@ -1500,11 +1547,23 @@ EOF
           findg_=$(artifact_digest "$(doc_final_path "$d")")
           [ "$findg_" = "$rdg_" ] || prob GATE-FINAL-DIGEST "$d $consecrated is not the bytes the clean review reviewed (reviewed_digest mismatch) — something changed after the seal; re-review, then re-consecrate. Nobody reviewed the bytes that are about to ship"
           rcx_=$(fm "$DOCUMENTS/$d/review.md" review_context_digest); rcx_=${rcx_#sha256:}
-          if [ -n "$rcx_" ] && [ "$(context_digest "$d")" != "$rcx_" ]; then
+          if [ -z "$rcx_" ]; then
+            # Half a seal is no seal: stripping ONLY the context digest used to disable exactly
+            # the staleness check while the bytes check kept the green light credible.
+            [ "${SCHEMA_V1:-0}" = "1" ] || prob GATE-UNSEALED "$d review carries reviewed_digest but no review_context_digest — a partial seal on a schema-2 mine reads as tampering, not history; re-run seal-review after a clean round"
+          elif [ "$(context_digest "$d")" != "$rcx_" ]; then
             prob GATE-CONTEXT-CHANGED "$d review context changed after the seal (a cited truth, its source material, config or schema moved) — the clean review no longer describes this mine; re-review"
           fi
-        else
+        elif [ "${SCHEMA_V1:-0}" = "1" ] || { fmv "$DOCUMENTS/$d/review.md" review_legacy; [ -n "$REPLY" ]; }; then
+          # Two legitimate digest-less states: a v1 mine (dual-reader), and a v2 mine whose
+          # review carries the migration's audit marker (`review_legacy: <date>` — upgrade wrote
+          # it, naming this review as v1 history). Tamper strips seals but leaves no marker.
           N_RLEGACY=$((N_RLEGACY+1))
+        else
+          # THE review-seal bypass (v0.3.1): on a v2 mine an unsealed review next to a final is
+          # not legacy — v1 is the only legacy there is, and this mine declares version: 2. The
+          # review skill seals after every round, so absence here is tamper or hand-writing.
+          prob GATE-UNSEALED "$d $consecrated stands next to an UNSEALED review on a schema-2 mine — run seal-review after the clean round; deleting the seal fields must never reopen the gate (a genuine v1 mine reads as legacy-unbound instead)"
         fi
       fi
     fi
@@ -1518,6 +1577,10 @@ EOF
   if [ "$N_CONSEC" -gt 0 ] && [ "$(cfgval completeness)" = "required" ]; then
     if [ ! -f "$ROOT/gaps.md" ]; then
       prob COMP-NO-REGISTER "completeness is 'required' and a consecrated output exists, but there is no gaps.md — the completeness register never ran. Run the weavedoc-gaps skill (fill-or-accept) before consecrating, or set fidelity.completeness: off to drop the warranty"
+    elif [ "$(dup_section "$ROOT/gaps.md" "Open" 0)" -eq 0 ]; then
+      # A register with no readable Open section is a register that never ran, wearing a
+      # filename — an empty or heading-less gaps.md must not read as "zero open gaps".
+      prob COMP-MALFORMED "completeness is 'required' but gaps.md has no readable '# Open' section — the register format is '# Open' / '# Accepted' (weavedoc-gaps writes it); a file without them proves nothing and blocks like a missing one"
     else
       local nopen_
       nopen_=$(nocomment < "$ROOT/gaps.md" | section_body - "Open" | countlines '^[[:space:]]*- ')
@@ -1544,7 +1607,7 @@ EOF
     v=$(fm "$TRUTHS/verify.md" status)
     [ -z "$v" ] || in_list "$v" "${SCH[verify.fm.enum.status]}" || prob VERIFY-ENUM "truths/verify.md  status '$v' invalid → use ${SCH[verify.fm.enum.status]}"
     while IFS= read -r k; do
-      nocomment < "$TRUTHS/verify.md" | grep -qE "^#{1,2}[[:space:]]+${k}[[:space:]]*\$" ||
+      nocomment < "$TRUTHS/verify.md" | grep -qE "^#{1,2}[ 	]+${k}[ 	]*\$" ||
         prob VERIFY-SECTION "truths/verify.md  required section '$k' missing (verify.sections)"
     done < <(pipes "${SCH[verify.sections]}")
   fi
@@ -1571,7 +1634,7 @@ EOF
   if [ -n "$pv" ] && [ -n "$cv" ] && [ "$pv" != "$cv" ]; then
     prob VER-DISAGREE "project.md version ($pv) and config.yaml version ($cv) disagree — two records of one fact must agree; upgrade stamps both"
   fi
-  SCHEMA_V1=0; { [ "$pv" = "1" ] || [ "$cv" = "1" ]; } && SCHEMA_V1=1
+  # (flag already computed at the top of cmd_validate — see pv0/cv0)
   for sect in verify review; do
     v=$(cfg2 "$sect" strength)
     [ -z "$v" ] || in_list "$v" "${SCH[config.strength.range]}" \
@@ -1836,8 +1899,8 @@ cmd_census() {
     local cid cidc covseen=""
     n_cov=0
     for cid in $(nocomment < "$TRUTHS/coverage.md" | awk '
-                   /^##[[:space:]]+m[0-9]+([[:space:]]|$)/ { if(sec!="" && has) print sec; sec=$2; has=0; next }
-                   /^##[[:space:]]/ { if(sec!="" && has) print sec; sec=""; next }
+                   /^##[ 	]+m[0-9]+([[:space:]]|$)/ { if(sec!="" && has) print sec; sec=$2; has=0; next }
+                   /^##[ 	]/ { if(sec!="" && has) print sec; sec=""; next }
                    sec!="" && NF>0 { has=1 }
                    END { if(sec!="" && has) print sec }'); do
       cidc=$(canon_id "$cid") || cidc=$cid
@@ -1898,7 +1961,7 @@ cmd_census() {
   # Complain only when bullets were present and NONE parsed — use `n_legparsed`, not `n_legacy`
   # (which is also 0 when every bullet parsed then named a retracted material).
   if [ -f "$TRUTHS/coverage.md" ] && [ "$n_legparsed" -eq 0 ] \
-     && grep -qiE '^##[[:space:]]+legacy' "$TRUTHS/coverage.md" \
+     && grep -qiE '^##[ 	]+legacy' "$TRUTHS/coverage.md" \
      && [ "$(nocomment < "$TRUTHS/coverage.md" | section_all - "legacy" | countlines '^[[:space:]]*- ')" -gt 0 ]; then
     echo "  ✗ truths/coverage.md '## legacy' has bullets, but none begins with an m-id — no exemption was applied (format: '- m001 — <ruling>')"
   fi
@@ -2437,6 +2500,13 @@ cmd_consecrate() { # consecrate <doc-id> — stage candidate, verify seals, ONE 
   [ -n "$d" ] || { echo "usage: weavedoc consecrate <doc-id>"; return 2; }
   local rev="$DOCUMENTS/$d/review.md"
   [ -f "$rev" ] || { echo "consecrate: no review.md for '$d' — run review first"; return 2; }
+  # A leftover backup means an earlier consecration died mid-validate: the final slot may hold
+  # an UNVALIDATED candidate and .final.bak is the only original. This run must not delete that
+  # backup (the old code did) — a human decides: restore the backup over final, or remove it.
+  if [ -e "$DOCUMENTS/$d/.final.bak" ]; then
+    echo "consecrate: interrupted consecration detected — $DOCUMENTS/$d/.final.bak exists, so the current final may be an unvalidated candidate. Restore the backup over final (or remove it if the current final is known good), then re-run. Nothing was touched."
+    return 1
+  fi
   # 1. The gate must be empty — the same reader validate uses, or the two could disagree.
   local line
   while IFS= read -r line; do
@@ -2469,16 +2539,28 @@ cmd_consecrate() { # consecrate <doc-id> — stage candidate, verify seals, ONE 
   [ "$(artifact_digest "$cand")" = "$rdg" ] \
     || { rm -rf "$cand"; echo "consecrate: candidate copy does not match the reviewed digest — copy failed; nothing promoted"; return 1; }
   oldfin=$(doc_final_path "$d") || oldfin=""
-  if [ -n "$oldfin" ]; then rm -rf "$bak"; mv "$oldfin" "$bak"; fi
+  if [ -n "$oldfin" ]; then mv "$oldfin" "$bak"; fi
   if [ $isdir -eq 1 ]; then fin="$DOCUMENTS/$d/final"; else fin="$DOCUMENTS/$d/final.md"; fi
   mv "$cand" "$fin"
+  # The validation window is the one moment an unvalidated candidate sits in the final slot —
+  # an interrupt here restores the original instead of leaving the swap half-done.
+  consec_abort() {
+    trap - INT TERM
+    rm -rf "$fin" 2>/dev/null
+    [ -n "$oldfin" ] && [ -e "$bak" ] && mv "$bak" "$oldfin" 2>/dev/null
+    echo "consecrate: interrupted — candidate removed, original final restored" >&2
+    exit 130
+  }
+  trap consec_abort INT TERM
   if cmd_validate; then
+    trap - INT TERM
     [ -n "$oldfin" ] && rm -rf "$bak"
     echo "consecrate: $d consecrated — full validation: 1 run, clean. The reviewed draft IS the final, byte for byte."
     [ "$(cfgval completeness)" != "required" ] \
       && echo "  note: completeness is off — undetected omissions are outside this document's warranty (fidelity.completeness)"
     return 0
   else
+    trap - INT TERM
     rm -rf "$fin"
     [ -n "$oldfin" ] && mv "$bak" "$oldfin"
     echo "consecrate: full validation FAILED after staging — candidate rejected, original final preserved untouched. Fix the problems above and re-run."
@@ -2513,17 +2595,33 @@ scan_upgrade() { # -> kind<TAB>display, one v1→v2 migration item per line. Rea
           if (line !~ /[mt][0-9]/) next
           v=line; gsub(/[[:space:]|*.-]+$/, "", v)
           if (tolower(v) ~ ("(^|[^a-z_])" vd "$")) next
-          if (line ~ /passes[[:space:]]*[0-9]+\/[0-9]+/)
+          # Success evidence means COMPLETE evidence: `passes 1/2` is a run that stopped short,
+          # and stamping it verified would erase unfinished work from the debt (v0.3.1 finding).
+          ok2 = 0
+          if (match(line, /passes[[:space:]]*[0-9]+\/[0-9]+/)) {
+            pn = substr(line, RSTART, RLENGTH)
+            sub(/passes[[:space:]]*/, "", pn); split(pn, ab, "/")
+            if (ab[1] + 0 == ab[2] + 0 && ab[2] + 0 > 0) ok2 = 1
+          }
+          if (ok2)
             print "verdict\tVerified units row gains its trailing verdict word: " line
           else
-            print "verdict-manual\trow names units but shows no success evidence — review by hand: " line }'
+            print "verdict-manual\trow names units but shows no COMPLETE success evidence (passes N/N with N=N) — review by hand: " line }'
     while IFS= read -r b; do
-      nocomment < "$TRUTHS/verify.md" | grep -qE "^#{1,2}[[:space:]]+${b}[[:space:]]*\$" \
+      nocomment < "$TRUTHS/verify.md" | grep -qE "^#{1,2}[ 	]+${b}[ 	]*\$" \
         || printf 'verify-section\ttruths/verify.md gains an empty section: ## %s\n' "$b"
     done < <(pipes "${SCH[verify.sections]}")
   fi
   grep -qE '^[[:space:]]+repeat:[[:space:]]*[0-9]' "$CONFIG" 2>/dev/null \
     && printf 'repeat\tconfig scalar repeat → per-scale map (skip 0 · light/standard keep the scalar · full is one stricter)\n'
+  # v1 reviews are digest-less by definition; on schema 2 they need the audit marker or the
+  # unsealed-review block would refuse the very mine the migration just produced.
+  for d in $(doc_ids); do
+    f="$DOCUMENTS/$d/review.md"; [ -f "$f" ] || continue
+    fmv "$f" reviewed_digest;  [ -n "$REPLY" ] && continue
+    fmv "$f" review_legacy;    [ -n "$REPLY" ] && continue
+    printf 'review-legacy\tdocuments/%s/review.md → marked review_legacy (v1 history, digest-less; new rounds seal via seal-review)\n' "$d"
+  done
   for d in $(doc_ids); do
     f="$DOCUMENTS/$d/review.md"; [ -f "$f" ] || continue
     n=$(nocomment < "$f" | awk '
@@ -2628,20 +2726,37 @@ upgrade_apply() { # the staged, rollback-safe v1 → v2 transaction (§8 safety 
     done
   }
 
-  # -- precheck (§8 principle 3): every rename target must be free BEFORE one byte moves.
-  local b c d f pairs=""
+  # -- precheck (§8 principle 3): every rename target must be free BEFORE one byte moves — free
+  # -- on disk AND free among the other renames: t01 and t1 both canonicalize to t001, and a
+  # -- sequential apply would have the second silently overwrite the first (v0.3.1 finding).
+  local b c d f pairs="" mtargets=" " ttargets=" "
   for d in "$MATERIALS"/*/; do
     [ -d "$d" ] || continue; b=$(basename "$d"); c=$(canon_id "$b") || continue
     [ "$b" = "$c" ] && continue
     [ -e "$MATERIALS/$c" ] && { echo "upgrade: rename collision — materials/$c already exists next to materials/$b; resolve by hand (nothing written)"; return 1; }
+    case "$mtargets" in *" $c "*) echo "upgrade: rename collision — two material folders both canonicalize to $c; resolve by hand (nothing written)"; return 1 ;; esac
+    mtargets="$mtargets$c "
     pairs="$pairs m:$b:$c"
   done
   for f in "$TRUTHS"/t[0-9]*.md; do
     [ -f "$f" ] || continue; b=$(basename "$f" .md); c=$(canon_id "$b") || continue
     [ "$b" = "$c" ] && continue
     [ -e "$TRUTHS/$c.md" ] && { echo "upgrade: rename collision — truths/$c.md already exists next to truths/$b.md; resolve by hand (nothing written)"; return 1; }
+    case "$ttargets" in *" $c "*) echo "upgrade: rename collision — two truth files both canonicalize to $c (e.g. t01.md and t1.md); resolve by hand (nothing written)"; return 1 ;; esac
+    ttargets="$ttargets$c "
     pairs="$pairs t:$b:$c"
   done
+  # -- verdict-manual rows block the WHOLE apply: stamping schema 2 over rows the machine cannot
+  # -- certify would leave --check red forever while apply reports success (broken idempotence),
+  # -- and worse, would move unfinished verification out of sight. Human first, stamp second.
+  local manual
+  manual=$(scan_upgrade | grep '^verdict-manual' || true)
+  if [ -n "$manual" ]; then
+    echo "upgrade: rows in ## Verified units need a human ruling before apply can stamp schema 2 (nothing written):"
+    printf '%s\n' "$manual" | awk -F'\t' '{ print "  - " $2 }'
+    echo "  fix each row (complete the verification, or mark its real verdict), then re-run"
+    return 1
+  fi
   mkdir -p "$bak" || { echo "upgrade: cannot create backup dir $bak"; return 1; }
 
   # -- 1. canonical renames + strict-reference rewrite (prose and changelog history untouched:
@@ -2672,10 +2787,16 @@ upgrade_apply() { # the staged, rollback-safe v1 → v2 transaction (§8 safety 
         if (t !~ /^[[:space:]]*[|-]/ || t ~ /^[[:space:]]*\|[[:space:]|:-]*$/ || t !~ /[mt][0-9]/) { print line; next }
         v=t; gsub(/[[:space:]|*.-]+$/, "", v)
         if (tolower(v) ~ ("(^|[^a-z_])" vd "$")) { print line; next }
-        if (t ~ /passes[[:space:]]*[0-9]+\/[0-9]+/) print line " · " vd; else print line }
+        ok2 = 0
+        if (match(t, /passes[[:space:]]*[0-9]+\/[0-9]+/)) {
+          pn = substr(t, RSTART, RLENGTH)
+          sub(/passes[[:space:]]*/, "", pn); split(pn, ab, "/")
+          if (ab[1] + 0 == ab[2] + 0 && ab[2] + 0 > 0) ok2 = 1
+        }
+        if (ok2) print line " · " vd; else print line }
     ' "$TRUTHS/verify.md" > "$TRUTHS/.verify.tmp" && mv "$TRUTHS/.verify.tmp" "$TRUTHS/verify.md"
     while IFS= read -r b; do
-      nocomment < "$TRUTHS/verify.md" | grep -qE "^#{1,2}[[:space:]]+${b}[[:space:]]*\$" \
+      nocomment < "$TRUTHS/verify.md" | grep -qE "^#{1,2}[ 	]+${b}[ 	]*\$" \
         || printf '\n## %s\n' "$b" >> "$TRUTHS/verify.md"
     done < <(pipes "${SCH[verify.sections]}")
   fi
@@ -2726,6 +2847,20 @@ upgrade_apply() { # the staged, rollback-safe v1 → v2 transaction (§8 safety 
       printf '%s\n' "$miss" | awk -v d="$today" '{ printf "%s\t-\tlegacy-unbound\t-\t-\t%s\n", $1, d }'
     } > "$lf.tmp" && mv "$lf.tmp" "$lf"
   fi
+
+  # -- 6b. digest-less reviews receive the audit marker — the record that says "v1 history",
+  # -- which is what lets the v2 unsealed-review block distinguish history from tamper.
+  for d in $(doc_ids); do
+    f="$DOCUMENTS/$d/review.md"; [ -f "$f" ] || continue
+    fmv "$f" reviewed_digest;  [ -n "$REPLY" ] && continue
+    fmv "$f" review_legacy;    [ -n "$REPLY" ] && continue
+    if head -1 "$f" | grep -q '^---'; then
+      bkup "${DOCUMENTS#"$ROOT"/}/$d/review.md"
+      awk -v dt="$today" '
+        NR==1 && /^---[ \t]*$/ { print; print "review_legacy: " dt "   # v1 review, digest-less by definition — migrated, not tampered"; next }
+        { print }' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+    fi
+  done
 
   # -- 7. version stamps, LAST among the edits: a crashed apply resumes as a v1 rescan.
   bkup project.md; sed -i 's/^version: 1$/version: 2/' "$PROJECT"
@@ -2796,7 +2931,12 @@ cmd_attest() { # attest <verified|failed> <round> <standard> <id...> — the ver
   return 0
 }
 cmd_scope() {
-  local ledger; ledger=$(ledger_rows)
+  local ledger ledger_bad
+  ledger=$(ledger_rows)
+  # Unknown verdicts are quarantined BEFORE classification — they cover nothing and are named;
+  # letting them fall through to the digest compare is how a typo once counted as verified.
+  ledger_bad=$(printf '%s\n' "$ledger" | awk -F'\t' 'NF >= 3 && $3 != "verified" && $3 != "failed" && $3 != "legacy-unbound" { print $1 " (" $3 ")" }')
+  ledger=$(printf '%s\n' "$ledger" | awk -F'\t' '$3 == "verified" || $3 == "failed" || $3 == "legacy-unbound"')
 
   # ---- materials: population = converted.md holders minus tombstones. Evidence precedence:
   # sidecar row (digest decides bound/stale, verdict decides failed) > v1 `status: verified`
@@ -2947,6 +3087,10 @@ cmd_scope() {
     printf '  ledger: %s entry(s) name units but end in no "%s" verdict — they cover nothing; add the verdict or leave the units owed:\n' \
       "$(printf '%s' "$unmarked" | grep -c . || true)" "${SCH[verify.units.verified]}"
     printf '%s\n' "$unmarked" | sed 's/^[[:space:]]*/    /'
+  fi
+  if [ -n "$ledger_bad" ]; then
+    printf '  ledger: row(s) with unknown verdicts — they cover nothing [LEDGER-VERDICT]: %s\n' \
+      "$(printf '%s' "$ledger_bad" | tr '\n' ' ')"
   fi
   local owed=$((n_munver + n_mstale + n_mfail + n_tunver + n_tstale + n_tfail))
   if [ "$owed" -eq 0 ] && [ $((n_mlegacy + n_tlegacy)) -gt 0 ]; then
