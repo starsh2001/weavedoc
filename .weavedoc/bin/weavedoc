@@ -684,6 +684,12 @@ json_diag_array() { # $1=collector -> [{"code":..,"message":..},...]
 }
 
 cmd_validate() {
+  # $1 (optional, internal): doc id whose in-flight consecration artifacts are exempt — passed
+  # ONLY by cmd_consecrate's in-process call. A function argument, not a variable: bash imports
+  # the caller's environment into shell variables, so a variable channel let any external caller
+  # grant themselves the exemption (`WD_CONSEC_DOC=d1 weavedoc validate` — v0.3.3 finding). The
+  # dispatch table rejects arguments to `validate`, so no CLI path reaches this parameter.
+  local consec_ok_="${1:-}"
   preflight_gnu || return 2
   # Content caches are per-PROCESS, and a write command that re-validates in the same process
   # (upgrade --apply, retag, consecrate) would otherwise validate the bytes it CACHED before its
@@ -1539,11 +1545,11 @@ EOF
     fi
     # In-flight consecration artifacts are mine-level red flags (v0.3.2): the marker means the
     # final slot may hold an unvalidated candidate, the backup means the only original sits
-    # aside. Traps cannot run on SIGKILL/power loss — the on-disk artifact is the detector. The
-    # one legal exemption is consecrate's own in-process validate for exactly this doc
-    # (WD_CONSEC_DOC is dynamically scoped, never exported).
-    if [ "${WD_CONSEC_DOC:-}" != "$d" ]; then
-      [ -e "$DOCUMENTS/$d/.consecrate.inflight" ] && prob CONSEC-INTERRUPTED "$d has .consecrate.inflight — a consecration is running or died here (a hard kill leaves no other trace); if nothing is running, the final slot may hold an unvalidated candidate byte-identical to the reviewed draft: remove final and the marker, then re-run consecrate"
+    # aside. Traps cannot run on a hard kill — the on-disk artifact is the detector. The one
+    # legal exemption is consecrate's own in-process validate for exactly this doc, passed as a
+    # function argument (a variable channel was environment-injectable — v0.3.3).
+    if [ "$consec_ok_" != "$d" ]; then
+      [ -e "$DOCUMENTS/$d/.consecrate.inflight" ] && prob CONSEC-INTERRUPTED "$d has .consecrate.inflight — a consecration is running or died here (a hard kill leaves no other trace); if nothing is running, byte-compare final against the reviewed draft BEFORE deciding: identical → it is the staged candidate (safe to remove); different → it is your original (keep it; the crash came before the swap); absent with .final.bak present → restore the backup. Then delete the marker and re-run consecrate"
       [ -e "$DOCUMENTS/$d/.final.bak" ] && prob CONSEC-INTERRUPTED "$d has .final.bak — an interrupted consecration left the only original here; restore it over final (or remove it if the current final is known good), then re-run consecrate"
     fi
     if [ -n "$consecrated" ]; then
@@ -2566,6 +2572,7 @@ cmd_seal_review() { # seal-review <doc-id> [draft|final] — pin what the clean 
   # (strip the seal later and the review read as legacy again, reopening the gate).
   local d="${1:-}" kind="${2:-draft}"
   [ -n "$d" ] || { echo "usage: weavedoc seal-review <doc-id> [draft|final]"; return 2; }
+  case "$d" in *[/\\]*|.|..) echo "seal-review: '$d' is not a document id (ids are plain folder names under documents/)"; return 2 ;; esac
   case "$kind" in draft|final) ;; *) echo "seal-review: kind '$kind' must be draft|final"; return 2 ;; esac
   local rev="$DOCUMENTS/$d/review.md"
   [ -f "$rev" ] || { echo "seal-review: no review.md for '$d' — run review first"; return 2; }
@@ -2595,6 +2602,9 @@ cmd_consecrate() { # consecrate <doc-id> — stage candidate, verify seals, ONE 
   # The §5.3 flow, mechanized: the reviewed draft becomes final byte-for-byte or nothing changes.
   local d="${1:-}"
   [ -n "$d" ] || { echo "usage: weavedoc consecrate <doc-id>"; return 2; }
+  # A doc id is a plain folder name under documents/ — a path fragment must be refused before
+  # any filesystem access, or '../x' resolves relative to the tree (v0.3.3).
+  case "$d" in *[/\\]*|.|..) echo "consecrate: '$d' is not a document id (ids are plain folder names under documents/)"; return 2 ;; esac
   local rev="$DOCUMENTS/$d/review.md"
   [ -f "$rev" ] || { echo "consecrate: no review.md for '$d' — run review first"; return 2; }
   # A leftover backup means an earlier consecration died mid-validate: the final slot may hold
@@ -2605,10 +2615,9 @@ cmd_consecrate() { # consecrate <doc-id> — stage candidate, verify seals, ONE 
     return 1
   fi
   if [ -e "$DOCUMENTS/$d/.consecrate.inflight" ]; then
-    # The marker without a backup is the FIRST-consecration crash (nothing existed to back up):
-    # the final slot may hold an unvalidated candidate — byte-identical to the reviewed draft,
-    # so removing final + marker and re-running loses nothing.
-    echo "consecrate: interrupted consecration detected — $DOCUMENTS/$d/.consecrate.inflight exists, so a consecration is running or died here. If nothing is running: the final slot may hold an unvalidated candidate (byte-identical to the reviewed draft); remove final and the marker, then re-run. Nothing was touched."
+    # The recovery guidance says COMPARE FIRST (v0.3.3): a crash BEFORE the swap leaves the
+    # ORIGINAL at final, so "remove final" as a blanket instruction deletes the wrong file.
+    echo "consecrate: interrupted consecration detected — $DOCUMENTS/$d/.consecrate.inflight exists, so a consecration is running or died here. If nothing is running, byte-compare final against the reviewed draft BEFORE deciding: identical → it is the staged candidate (safe to remove); different → it is your original (keep it; the crash came before the swap); absent with .final.bak present → restore the backup. Then delete the marker and re-run. Nothing was touched."
     return 1
   fi
   # Two finals at once: doc_final_path resolves the directory, so proceeding would back up ONLY
@@ -2656,41 +2665,60 @@ cmd_consecrate() { # consecrate <doc-id> — stage candidate, verify seals, ONE 
     || { rm -rf "$cand"; echo "consecrate: candidate copy does not match the reviewed digest — copy failed; nothing promoted"; return 1; }
   oldfin=$(doc_final_path "$d") || oldfin=""
   if [ $isdir -eq 1 ]; then fin="$DOCUMENTS/$d/final"; else fin="$DOCUMENTS/$d/final.md"; fi
-  # The durable in-flight marker precedes the FIRST final mutation and is removed LAST (v0.3.2):
-  # a first-ever consecration has no .final.bak, so a hard kill (SIGKILL, power) used to leave
-  # an unvalidated candidate at final with NO trace — indistinguishable on disk from a
-  # successful run. validate (CONSEC-INTERRUPTED) and consecrate both refuse while the marker or
-  # the backup exists; traps cover INT/TERM, the marker covers what no trap can.
-  printf 'started: %s\ndoc: %s\n' "$(date +%F)" "$d" > "$mark" \
-    || { rm -rf "$cand"; echo "consecrate: cannot write the in-flight marker — nothing promoted"; return 1; }
-  # stage guards the abort: for a single-file doc, $oldfin and $fin are the SAME path, so an
-  # abort firing before the aside-move must not `rm` the final it is trying to protect.
+  # The durable in-flight marker precedes the FIRST final mutation and is removed LAST — and
+  # only behind a VERIFIED postcondition (v0.3.3): a first-ever consecration has no .final.bak,
+  # so a hard kill used to leave an unvalidated candidate at final with NO trace. Creation is
+  # exclusive (noclobber): two concurrent consecrations cannot both hold the transaction. The
+  # marker is written first but not fsynced — power-loss protection is only as good as the
+  # filesystem's ordering; process-level kills are fully covered.
+  if ! ( set -o noclobber; printf 'started: %s\ndoc: %s\n' "$(date +%F)" "$d" > "$mark" ) 2>/dev/null; then
+    rm -rf "$cand"
+    echo "consecrate: cannot create the in-flight marker (it appeared concurrently, or the directory is unwritable) — another consecration may be running; nothing promoted"
+    return 1
+  fi
+  # stage guards the abort — and is promoted BEFORE each mutation it names (v0.3.3): assignment
+  # is not atomic with mv, and an INT landing between `mv cand fin` and a late promotion left
+  # the candidate in place while the abort skipped its removal. For a single-file doc $oldfin
+  # and $fin are the SAME path, so an abort before the aside-move must not rm the original.
   local stage="staged"
   consec_abort() {
     trap - INT TERM
     [ "$stage" = "placed" ] && rm -rf "$fin" 2>/dev/null
     [ -n "$oldfin" ] && [ -e "$bak" ] && mv "$bak" "$oldfin" 2>/dev/null
     rm -rf "$cand" 2>/dev/null
-    rm -f "$mark" 2>/dev/null
-    echo "consecrate: interrupted — candidate removed, original final restored" >&2
+    # The marker leaves ONLY behind a verified postcondition — restore incomplete means the
+    # marker stays and validate blocks until a human resolves it. Fail-closed beats tidy.
+    local ok_=1
+    if [ -n "$oldfin" ]; then { [ -e "$oldfin" ] && [ ! -e "$bak" ]; } || ok_=0
+    else [ -e "$fin" ] && ok_=0; fi
+    if [ "$ok_" = 1 ] && rm -f "$mark" 2>/dev/null; then
+      echo "consecrate: interrupted — candidate removed, original final restored" >&2
+    else
+      echo "consecrate: interrupted — RESTORE INCOMPLETE; the in-flight marker stays and validate blocks until resolved (byte-compare final against the reviewed draft before deciding what to keep)" >&2
+    fi
     exit 130
   }
   trap consec_abort INT TERM
   if [ -n "$oldfin" ]; then
-    mv "$oldfin" "$bak" || { trap - INT TERM; rm -rf "$cand"; rm -f "$mark"
-      echo "consecrate: cannot move the current final aside — nothing promoted"; return 1; }
+    mv "$oldfin" "$bak" || { trap - INT TERM; rm -rf "$cand"
+      if [ -e "$oldfin" ] && [ ! -e "$bak" ]; then rm -f "$mark"; fi
+      echo "consecrate: cannot move the current final aside — nothing promoted$([ -e "$mark" ] && printf '%s' ' (marker kept: state unclear, validate blocks until resolved)')"
+      return 1; }
   fi
-  stage="moved"
-  mv "$cand" "$fin" || { trap - INT TERM
-    [ -n "$oldfin" ] && [ -e "$bak" ] && mv "$bak" "$oldfin"
-    rm -rf "$cand"; rm -f "$mark"
-    echo "consecrate: cannot place the candidate at final — original restored, nothing promoted"; return 1; }
   stage="placed"
+  mv "$cand" "$fin" || { trap - INT TERM
+    [ -n "$oldfin" ] && [ -e "$bak" ] && mv "$bak" "$oldfin" 2>/dev/null
+    rm -rf "$cand"
+    local mvok_=1
+    if [ -n "$oldfin" ]; then { [ -e "$oldfin" ] && [ ! -e "$bak" ]; } || mvok_=0
+    else [ -e "$fin" ] && mvok_=0; fi
+    [ "$mvok_" = 1 ] && rm -f "$mark"
+    echo "consecrate: cannot place the candidate at final — original restored where possible; nothing promoted$([ -e "$mark" ] && printf '%s' ' (marker kept: state unclear, validate blocks until resolved)')"
+    return 1; }
   # The validation window: the one moment an unvalidated candidate sits in the final slot. The
-  # in-process validate skips THIS doc's in-flight artifacts (WD_CONSEC_DOC is dynamically
-  # scoped, never exported — no other process and no other doc is exempt).
-  local WD_CONSEC_DOC="$d"
-  if cmd_validate; then
+  # in-process validate skips THIS doc's in-flight artifacts via a function argument — never a
+  # variable, which the environment can inject (v0.3.3).
+  if cmd_validate "$d"; then
     trap - INT TERM
     if [ -n "$oldfin" ]; then
       rm -rf "$bak" || echo "consecrate: warning — could not remove ${bak#"$ROOT"/}; validate blocks while it remains, remove it by hand"
@@ -2703,9 +2731,16 @@ cmd_consecrate() { # consecrate <doc-id> — stage candidate, verify seals, ONE 
   else
     trap - INT TERM
     rm -rf "$fin"
-    [ -n "$oldfin" ] && mv "$bak" "$oldfin"
-    rm -f "$mark"
-    echo "consecrate: full validation FAILED after staging — candidate rejected, original final preserved untouched. Fix the problems above and re-run."
+    local rok_=1
+    if [ -n "$oldfin" ]; then mv "$bak" "$oldfin" || rok_=0; fi
+    if [ "$rok_" = 1 ]; then
+      rm -f "$mark"
+      echo "consecrate: full validation FAILED after staging — candidate rejected, original final preserved untouched. Fix the problems above and re-run."
+    else
+      # Restore failed: the backup is the only original. The marker stays — a mine whose final
+      # slot is empty while the original sits in .final.bak must not validate green.
+      echo "consecrate: full validation FAILED and the backup could NOT be restored over final — the original is still in ${bak#"$ROOT"/}; restore it by hand. The in-flight marker stays (validate blocks until resolved)."
+    fi
     return 1
   fi
 }

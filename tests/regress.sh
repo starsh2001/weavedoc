@@ -2296,12 +2296,29 @@ block_validate_leftover_bak() {
 }
 block_consecrate_marker_detected() {
   # A first-ever consecration killed hard leaves marker + candidate and NO backup (nothing
-  # existed to back up). Re-running must refuse on the marker alone.
+  # existed to back up). Re-running must refuse on the marker alone — and the recovery guidance
+  # must say COMPARE FIRST: a crash before the swap leaves the ORIGINAL at final, so "remove
+  # final" as a blanket instruction deletes the wrong file (third cold review).
   ( cd "$W" && bash .weavedoc/bin/weavedoc seal-review d1 draft >/dev/null 2>&1 )
   printf 'started: 2026-08-03\ndoc: d1\n' > "$W/documents/d1/.consecrate.inflight"
   vrun consecrate d1
   expect_block "interrupted"
+  expect_has "byte-compare"
   [ -e "$W/documents/d1/.consecrate.inflight" ] || bad "refusal removed the marker it refused on"
+}
+block_validate_env_injection_ignored() {
+  # The exemption channel must be a function argument, not a variable: bash imports the caller's
+  # environment into shell variables, so `WD_CONSEC_DOC=d1 weavedoc validate` handed the
+  # consecrate-only exemption to ANY external caller (third cold review P0-2 — reproduced).
+  printf 'started: 2026-08-03\ndoc: d1\n' > "$W/documents/d1/.consecrate.inflight"
+  OUT=$( ( cd "$W" && WD_CONSEC_DOC=d1 $TO bash .weavedoc/bin/weavedoc validate ) 2>&1 ); RC=$?
+  expect_block "[CONSEC-INTERRUPTED]"
+}
+block_consecrate_bad_docid() {
+  # A doc id is a plain folder name under documents/ — path fragments must be refused before any
+  # filesystem access, not resolved relative to the tree.
+  vrun consecrate ../d1
+  expect_block "not a document id"
 }
 acct_consecrate_no_residue() {
   # The clean path leaves nothing behind: final promoted, no marker, no backup — the artifacts
