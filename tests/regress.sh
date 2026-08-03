@@ -142,6 +142,22 @@ mkscale() { # deterministic 8-material · 60-truth mine — the scale where spaw
   printf -- '---\nstatus: passed\nround: 1\nverified_at: 2026-07-30\n---\n\n## Verified units\n\n## Adjudications\n\n## Human queue\n' > "$W/truths/verify.md"
   ( cd "$W" && bash .weavedoc/bin/weavedoc reindex >/dev/null 2>&1 ) || bad "mkscale: reindex failed"
 }
+pass_locale_emoji_claim() {
+  # gawk 5.0's multibyte machinery misread emoji-bearing claim lines under UTF-8 locales: five
+  # valid truths on a real mine reported FM-MISSING under ko_KR.UTF-8 while passing under C —
+  # the verdict depended on which locale the shell happened to inherit (v0.3.4 latent, found by
+  # a session-locale change). Content-parsing awks are byte-pinned (LC_ALL=C) now; the same
+  # mine must validate identically under both locales. A missing ko_KR locale degrades to C
+  # behaviour, so the case cannot false-fail where the locale is not generated.
+  printf -- '---\nid: t002\nclaim: "품질 심사 — 🔴 즉시 수정, 🟡 확인 필요, 🟢 통과"\nsource: m001\ntags: [위약]\nstatus: ok\nprovenance: stated\n---\n\n제7조 위약금은 계약금액의 10%%로 한다.\n' > "$W/truths/t002.md"
+  printf -- '\n- 심사: t002\n' >> "$W/truths/coverage.md"
+  printf -- '- added: t002 (2026-07-30)\n' >> "$W/truths/changelog.md"
+  ( cd "$W" && bash .weavedoc/bin/weavedoc reindex >/dev/null 2>&1 )
+  OUT=$( ( cd "$W" && LC_ALL= LANG=ko_KR.UTF-8 $TO bash .weavedoc/bin/weavedoc validate ) 2>&1 ); RC=$?
+  expect_pass
+  OUT=$( ( cd "$W" && LC_ALL=C $TO bash .weavedoc/bin/weavedoc validate ) 2>&1 ); RC=$?
+  expect_pass
+}
 acct_res_reason_comma_warns() {
   # D3 (field report, decided 2026-08-04): an unquoted reason holding a comma that opens no new
   # key is exactly where a strict YAML parser truncates the value (eclypse t245's correction

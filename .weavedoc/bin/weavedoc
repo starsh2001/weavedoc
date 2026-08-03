@@ -242,7 +242,7 @@ fm_load() { # $1=file -> parse its frontmatter into FMV once
   while IFS= read -r line; do
     k=${line%%$'\037'*}; v=${line#*$'\037'}
     [ -n "${FMV[$f$'\037'$k]+x}" ] || FMV[$f$'\037'$k]=$v
-  done < <(awk "$FM_KV_AWK"'
+  done < <(LC_ALL=C awk "$FM_KV_AWK"'
     NR==1 { if ($0 ~ /^---[[:space:]]*$/) infm=1; next }
     infm && /^---[[:space:]]*$/ { exit }
     infm && /^[A-Za-z_][A-Za-z0-9_-]*[[:space:]]*:/ { emitkv() }
@@ -268,7 +268,7 @@ fm_preload() { # $@=files -> ONE awk fills the frontmatter cache for every file 
          k=${line%%$'\037'*}; v=${line#*$'\037'}
          [ -n "${FMV[$cur$'\037'$k]+x}" ] || FMV[$cur$'\037'$k]=$v ;;
     esac
-  done < <(awk "$FM_KV_AWK"'
+  done < <(LC_ALL=C awk "$FM_KV_AWK"'
     FNR==1 { infm = ($0 ~ /^---[[:space:]]*$/); printf "\036%s\n", FILENAME; next }
     !infm { next }
     /^---[[:space:]]*$/ { infm=0; next }
@@ -496,25 +496,41 @@ check_hq_tags() { # $1=file holding a "## Human queue" section
   # job, not a hard failure — a spec change must not break a mine verified under the old shape.
   # Only `open` needs ownership: it drives the confirmation split; a `ruled` entry is closed and
   # nothing reads its ownership, so requiring one there would be enforcement with no consumer.
-  local hqline hqs hqo hqw rel="${1#$ROOT/}"
-  while IFS= read -r hqline; do
-    # Leading whitespace allowed, matching the counters in status/audit — an indented entry that
-    # one side counts and the other skips breaks "open total == sum of the three buckets".
-    case "$hqline" in *"- ["*) ;; *) continue ;; esac
-    # Three forks per queue entry (grep + two seds) became parameter expansion — same two
-    # bracket slots, read left to right.
-    local hqt=${hqline#"${hqline%%[![:space:]]*}"} hqr
-    case "$hqt" in '- ['*) ;; *) continue ;; esac
-    hqr=${hqt#- \[}; hqs=${hqr%%\]*}
-    case "$hqr" in *\]*) ;; *) hqs="" ;; esac
-    in_list "$hqs" "${SCH[humanqueue.enum.state]}" || continue
-    [ "$hqs" = "open" ] || continue
-    hqo=""; hqr=${hqr#*\]}; hqr=${hqr#"${hqr%%[![:space:]]*}"}
-    case "$hqr" in '['*) hqo=${hqr#\[}; case "$hqo" in *\]*) hqo=${hqo%%\]*} ;; *) hqo="" ;; esac ;; esac
-    hqw=$(printf '%s' "$hqline" | sed -E 's/^[[:space:]]*- \[[^]]*\][[:space:]]*//; s/[[:space:]]*—.*$//')
-    in_list "$hqo" "${SCH[humanqueue.enum.ownership]}" \
-      || prob HQ-UNTAGGED "$rel  Human queue '[$hqs]' entry has no valid ownership tag → add [user-only|recommended|machine]: $hqw"
-  done < <(hq_body "$1")
+  # The entry walk lives in ONE awk (P1-2): the bash line loop over a history-heavy queue plus
+  # a sed per open entry was a visible block of validate's tail. Semantics unchanged — same
+  # section reader rules as hq_body (every matching section, either level, [[:space:]] classes),
+  # same two bracket slots read left to right, only untagged OPEN entries emitted.
+  local rel="${1#$ROOT/}" hqw
+  file_stripped "$1"
+  while IFS= read -r hqw; do
+    [ -n "$hqw" ] || continue
+    prob HQ-UNTAGGED "$rel  Human queue '[open]' entry has no valid ownership tag → add [user-only|recommended|machine]: $hqw"
+  done < <(WVST="${SCH[humanqueue.enum.state]}" WVOW="${SCH[humanqueue.enum.ownership]}" LC_ALL=C awk '
+    function lev(s) { if (match(s, /^#+/)) return RLENGTH; return 0 }
+    BEGIN {
+      ns = split(ENVIRON["WVST"], sa, "|"); for (i = 1; i <= ns; i++) if (sa[i] != "") states[sa[i]] = 1
+      no = split(ENVIRON["WVOW"], oa, "|"); for (i = 1; i <= no; i++) if (oa[i] != "") owns[oa[i]] = 1
+    }
+    { if ($0 ~ /^#+[[:space:]]+Human queue[[:space:]]*$/) { on = 1; lv = lev($0); next }
+      if (on && $0 ~ /^#+[[:space:]]/ && lev($0) <= lv) { on = 0 }
+      if (!on) next
+      line = $0
+      sub(/^[[:space:]]+/, "", line)
+      if (line !~ /^- \[/) next
+      s = line; sub(/^- \[/, "", s)
+      if (index(s, "]") == 0) next
+      st = substr(s, 1, index(s, "]") - 1)
+      if (!(st in states)) next
+      if (st != "open") next
+      rest = substr(s, index(s, "]") + 1)
+      sub(/^[[:space:]]+/, "", rest)
+      ow = ""
+      if (rest ~ /^\[/) { r2 = substr(rest, 2); if (index(r2, "]") > 0) ow = substr(r2, 1, index(r2, "]") - 1) }
+      if (ow in owns) next
+      what = line
+      sub(/^[[:space:]]*- \[[^]]*\][[:space:]]*/, "", what); sub(/[[:space:]]*—.*$/, "", what)
+      print what
+    }' <<< "$REPLY")
 }
 hq_body() { # $1=file -> the Human queue body, whichever heading level the file uses
   # verify.md is `##`-sectioned, review.md is `#`-sectioned. The spec added the section to both
@@ -654,7 +670,7 @@ ledger_rows() { # -> "id<TAB>digest<TAB>verdict<TAB>standard" per unit; LAST VAL
   # as material evidence only when its standard names the material origin token.
   local lf="$TRUTHS/$(ledger_file)"
   [ -f "$lf" ] || return 0
-  awk -F'\t' "$LEDGER_ROW_AWK"'
+  LC_ALL=C awk -F'\t' "$LEDGER_ROW_AWK"'
     /^#/ { next }
     !rowok() { next }
     { d[$1]=$2; v[$1]=$3; s[$1]=$5 }
@@ -664,7 +680,7 @@ ledger_rows() { # -> "id<TAB>digest<TAB>verdict<TAB>standard" per unit; LAST VAL
 ledger_rows_badstruct() { # -> ids of rows the strict filter rejects — SHOWN by scope, never absorbed
   local lf="$TRUTHS/$(ledger_file)"
   [ -f "$lf" ] || return 0
-  awk -F'\t' "$LEDGER_ROW_AWK"'
+  LC_ALL=C awk -F'\t' "$LEDGER_ROW_AWK"'
     /^#/ { next }
     /^[ \t]*$/ { next }
     !rowok() { print $1 }' "$lf" | LC_ALL=C sort -u
@@ -882,7 +898,7 @@ cmd_validate() {
   local -A MATFM=()
   local mfmid_ mfmst_
   while IFS=$'\t' read -r mfmid_ mfmst_; do [ -n "$mfmid_" ] && MATFM[$mfmid_]=$mfmst_; done < <(
-    awk 'function emit(  n,p) { if (fn == "") return; n=split(fn, p, /[\/\\]/); print p[n-1] "\t" (closed ? "closed" : (opened ? "unclosed" : "nofm")) }
+    LC_ALL=C awk 'function emit(  n,p) { if (fn == "") return; n=split(fn, p, /[\/\\]/); print p[n-1] "\t" (closed ? "closed" : (opened ? "unclosed" : "nofm")) }
          FNR==1 { emit(); fn=FILENAME; opened=($0 ~ /^---[[:space:]]*$/); closed=0; infm=opened; next }
          infm && /^---[[:space:]]*$/ { closed=1; infm=0 }
          END { emit() }' "$MATERIALS"/*/converted.md 2>/dev/null)
@@ -1013,7 +1029,15 @@ cmd_validate() {
               | sed -E 's/^t0*([0-9]+)$/t\1/' | LC_ALL=C sort -u | tr '\n' ' ')
     # The schema is the SoT — READ, not paraphrased into awk. Hardcoding these enums here once made
     # "edit the schema, behaviour follows" false: editing it changed nothing and warned of nothing.
-    qout=$(WD_REQTAGS="$reqtags" awk -v matids="$matlist" -v retids="$retlist" -v mroot="$MATERIALS" -v remids="$remlist" -v resids="$reslist" -v Q="'"       -v treq="${SCH[truth.fm.required]//|/ }"       -v tstenum="${SCH[truth.fm.enum.status]//|/ }"       -v tprenum="${SCH[truth.fm.enum.provenance]//|/ }"       -v rtypes="${SCH[truth.fm.resolution.type]//|/ }"       -v rkinds="${SCH[truth.fm.resolution.decision_kind]//|/ }"       -v rby="${SCH[truth.fm.resolution.decided_by]//|/ }"       -v ph="${SCH[fm.placeholder]}" '
+    # LC_ALL=C — BYTE semantics, deliberately (v0.3.4 finding): under a UTF-8 locale, gawk 5.0
+    # misread SOME emoji-bearing claim lines in the multi-file run (the same line matches in
+    # isolation — a multibyte dfa defect class), and five perfectly valid truths on a real mine
+    # reported FM-MISSING under ko_KR.UTF-8 while passing under C. Every pattern here is ASCII
+    # and Korean content only flows through byte-equality, so byte semantics are exact — and the
+    # verdict stops depending on which locale the shell happened to inherit. The same pin goes on
+    # every content-parsing awk; retag's rewrite awk stays UNPINNED (documented: C broke its
+    # Korean gsub).
+    qout=$(WD_REQTAGS="$reqtags" LC_ALL=C awk -v matids="$matlist" -v retids="$retlist" -v mroot="$MATERIALS" -v remids="$remlist" -v resids="$reslist" -v Q="'"       -v treq="${SCH[truth.fm.required]//|/ }"       -v tstenum="${SCH[truth.fm.enum.status]//|/ }"       -v tprenum="${SCH[truth.fm.enum.provenance]//|/ }"       -v rtypes="${SCH[truth.fm.resolution.type]//|/ }"       -v rkinds="${SCH[truth.fm.resolution.decision_kind]//|/ }"       -v rby="${SCH[truth.fm.resolution.decided_by]//|/ }"       -v ph="${SCH[fm.placeholder]}" '
       function val(   s){ s=$0; sub(/^[^:]*:[[:space:]]*/,"",s); if(s !~ /^"/){ sub(/[[:space:]]+#.*$/,"",s); if(s ~ /^#/) s="" } sub(/[[:space:]]*$/,"",s); sub(/^"/,"",s); sub(/"$/,"",s); return s }
       function q(s){ return Q s Q }
       # Whitespace-collapsed so the seal does not fail on spacing. [[:space:]] covers the newline, so
@@ -1360,7 +1384,7 @@ cmd_validate() {
             nofm="$nofm $tb"
             prob TRUTH-NO-FM "$TRUTHS/$tb.md  no frontmatter (line 1 must be '---') — this file is not read as a truth at all, so every check on it silently passes and no index entry can ever be generated for it" ;;
         esac
-      done < <(awk '
+      done < <(LC_ALL=C awk '
         function emit(  n, p, b) { if (fn == "") return
           n = split(fn, p, /[\/\\]/); b = p[n]; sub(/\.md$/, "", b)
           print b "\t" (closed ? "closed" : (opened ? "unclosed" : "nofm")) }
@@ -1376,7 +1400,7 @@ cmd_validate() {
       while IFS= read -r tb; do
         [ -n "$tb" ] || continue
         warn RES-REASON-UNQUOTED "truths/$tb.md  resolution.reason is unquoted and holds a comma that opens no new key — a strict YAML parser truncates the value there; write reason: \"…\" (map quotes it since v0.3.4)"
-      done < <(awk '
+      done < <(LC_ALL=C awk '
         FNR==1 { infm = ($0 ~ /^---[[:space:]]*$/); fn=FILENAME; next }
         !infm { next }
         /^---[[:space:]]*$/ { infm=0; next }
@@ -1481,17 +1505,16 @@ EOF
     # Floor: every section resolves to a material, every mentioned id exists, every truth from a
     # *sectioned* material appears in it. Materials with no section are legal (legacy).
     if [ -f "$TRUTHS/coverage.md" ]; then
-      local tsrcpairs="" cout cn
-      # The glob is handed to awk only when it matches: an unexpanded pattern reached awk as a literal
-      # filename and died mid-run — the exact state this cross-check must survive.
-      if ls "$TRUTHS"/t[0-9]*.md >/dev/null 2>&1; then
-      tsrcpairs=$(awk '
-        FNR==1 { n=split(FILENAME,pp,"/"); fn=pp[n]; sub(/\.md$/,"",fn); tid=fn; infm=($0 ~ /^---[[:space:]]*$/); next }
-        infm && /^---[[:space:]]*$/ { infm=0; nextfile }
-        infm && /^source[[:space:]]*:/ { s=$0; sub(/^source[[:space:]]*:[[:space:]]*/,"",s); if(s !~ /^"/) sub(/[[:space:]]+#.*$/,"",s); sub(/[[:space:]]*$/,"",s); sub(/^"/,"",s); sub(/"$/,"",s);  printf "%s:%s ", tid, s; nextfile }
-      ' "$TRUTHS"/t[0-9]*.md)
-      fi
-      cout=$(awk -v matids="$matlist" -v pairs="$tsrcpairs" -v Q="'" '
+      local tsrcpairs="" cout cn tspf_ tspb_
+      # (id, source) pairs from the frontmatter cache (v0.3.4 P1-2): a dedicated awk used to
+      # RE-READ every truth file for one field the batch preload already parsed. Same value
+      # rules — fmv is the one reader.
+      for tspf_ in "${tffiles_[@]}"; do
+        tspb_=${tspf_##*/}; tspb_=${tspb_%.md}
+        fmv "$tspf_" source
+        [ -n "$REPLY" ] && tsrcpairs+="$tspb_:$REPLY "
+      done
+      cout=$(LC_ALL=C awk -v matids="$matlist" -v pairs="$tsrcpairs" -v Q="'" '
         function q(s){ return Q s Q }
         function prob(m){ print "  " m; probs++ }
         # References stay lenient (FORMATS pins the FOLDER spelling only), so every id used as a KEY is
@@ -1922,20 +1945,23 @@ EOF
     done
     fmv "$TRUTHS/verify.md" status; v=$REPLY
     [ -z "$v" ] || in_list "$v" "${SCH[verify.fm.enum.status]}" || prob VERIFY-ENUM "truths/verify.md  status '$v' invalid → use ${SCH[verify.fm.enum.status]}"
-    # Sections counted from the cached comment-stripped view (v0.3.4): the nocomment|grep pair
-    # here was two spawns per required section. Same reader (count_headings), same levels (1|2).
-    # Line-wise iteration, NOT `for k in $REPLY`: section names hold spaces ("Verified units"),
-    # and word-splitting broke each into per-word ghost sections (v0.3.4 self-caught).
-    local vbody_ vc1_ vc2_
+    # ONE awk answers every required section at once (P1-2): count_headings walks the whole
+    # file in bash per (section, level) — eight full passes over a history-heavy verify.md.
+    # Names ride ENVIRON (they hold spaces); emission keeps the declared section order.
+    local vbody_ vsecs_ vmiss_
     file_stripped "$TRUTHS/verify.md"; vbody_=$REPLY
-    pipes "${SCH[verify.sections]}" >/dev/null
+    pipes "${SCH[verify.sections]}" >/dev/null; vsecs_=$REPLY
+    vmiss_=$(WVSECS="$vsecs_" LC_ALL=C awk '
+      BEGIN { n = split(ENVIRON["WVSECS"], s, "\n"); for (i = 1; i <= n; i++) if (s[i] != "") want[s[i]] = 1 }
+      /^##?[ \t]/ {
+        h = $0; sub(/^##?[ \t]+/, "", h); sub(/[ \t\r]*$/, "", h)
+        if (h in want) delete want[h]
+      }
+      END { for (i = 1; i <= n; i++) if (s[i] != "" && (s[i] in want)) print s[i] }' <<< "$vbody_")
     while IFS= read -r k; do
       [ -n "$k" ] || continue
-      count_headings "$vbody_" "$k" 1; vc1_=$REPLY
-      count_headings "$vbody_" "$k" 2; vc2_=$REPLY
-      [ $((vc1_ + vc2_)) -gt 0 ] ||
-        prob VERIFY-SECTION "truths/verify.md  required section '$k' missing (verify.sections)"
-    done <<< "$REPLY"
+      prob VERIFY-SECTION "truths/verify.md  required section '$k' missing (verify.sections)"
+    done <<< "$vmiss_"
   fi
 
   # --- Human queue ownership tags (truths/verify.md AND documents/*/review.md) ---
@@ -2377,7 +2403,7 @@ cmd_reindex() {
   [ -n "${2:-}" ] && { echo "usage: weavedoc reindex [--check]" >&2; return 2; }
   [ "${1:-}" = "--check" ] && check=1
   if ! ls "$TRUTHS"/t[0-9]*.md >/dev/null 2>&1; then echo "no truths to index"; return 0; fi
-  rec=$(awk '
+  rec=$(LC_ALL=C awk '
     # Strip \x01 on the way in too: the writer sanitises, but a hand-written file can still hold
     # one, and "the separator cannot occur in the text" is only true if something removes it.
     function val(   s){ s=$0; sub(/^[^:]*:[[:space:]]*/,"",s); if(s !~ /^"/){ sub(/[[:space:]]+#.*$/,"",s); if(s ~ /^#/) s="" } sub(/[[:space:]]*$/,"",s); sub(/^"/,"",s); sub(/"$/,"",s); gsub(/\001/," ",s); return s }
@@ -2633,11 +2659,11 @@ cmd_pull() {
   # Labels are OUTPUT, not search text (D1 follow-through): the match runs on the line with its
   # ` ··<labels>` tail stripped, or pulling a word that occurs only in label prose ("evidence",
   # "PLAN") would hit every labeled truth in the mine.
-  ids=$(WVTERM="$term" awk 'BEGIN{ t=tolower(ENVIRON["WVTERM"]) }
+  ids=$(WVTERM="$term" LC_ALL=C awk 'BEGIN{ t=tolower(ENVIRON["WVTERM"]) }
         { hay=$0; sub(/ ··.*$/, "", hay); if (index(tolower(hay), t)) print }' \
         "$TRUTHS/index.md" | grep -oE '^- t[0-9]+' | sed 's/^- //')
   if [ -z "$ids" ]; then
-    ids=$(WVTERM="$term" awk 'BEGIN{ t=tolower(ENVIRON["WVTERM"]) }
+    ids=$(WVTERM="$term" LC_ALL=C awk 'BEGIN{ t=tolower(ENVIRON["WVTERM"]) }
         index(tolower($0), t){ if(!(FILENAME in seen)){ seen[FILENAME]=1; print FILENAME } }' \
         "$TRUTHS"/t[0-9]*.md 2>/dev/null | sed -E 's/.*[\/\\](t[0-9]+)\.md$/\1/')
     [ -n "$ids" ] && echo "(no claim/tag match — body-text matches below)"
@@ -2651,7 +2677,7 @@ cmd_pull() {
   [ "$n" -gt 60 ] && echo "($n matches — narrow the term if this is noise)"
   # one awk pass extracts the fields of all hit files (per-file fm spawns are the MSYS trap)
   local rec
-  rec=$(awk '
+  rec=$(LC_ALL=C awk '
     function val(   s){ s=$0; sub(/^[^:]*:[[:space:]]*/,"",s); if(s !~ /^"/){ sub(/[[:space:]]+#.*$/,"",s); if(s ~ /^#/) s="" } sub(/[[:space:]]*$/,"",s); sub(/^"/,"",s); sub(/"$/,"",s); gsub(/\001/," ",s); return s }
     function flush(){ if(tid!="") {
         # A table-bodied truth previewed as its header row alone (field report D2): a reviewer
@@ -2795,8 +2821,8 @@ scan_verified_units() { # -> "V<TAB><id>" per covered id · "U<TAB><line>" per e
   # Normalised first so every awk bracket below stays pure ASCII (a multibyte dash inside `[...]`
   # reads as a range endpoint). `·` becomes a space — it only ever separates ids (`t194·t195`).
   nocomment < "$TRUTHS/verify.md" | section_all - "Verified units" \
-    | sed 's/–/-/g; s/—/-/g; s/·/ /g' \
-    | awk -v mark="${SCH[verify.units.verified]}" '
+    | LC_ALL=C sed 's/–/-/g; s/—/-/g; s/·/ /g' \
+    | LC_ALL=C awk -v mark="${SCH[verify.units.verified]}" '
     function pad(pp, nn) { return sprintf("%s%03d", pp, nn+0) }
     BEGIN { if (mark == "") mark = "verified"; mark = tolower(mark) }
     {
@@ -3036,8 +3062,8 @@ scan_upgrade() { # -> kind<TAB>display, one v1→v2 migration item per line. Rea
   if [ -f "$TRUTHS/verify.md" ]; then
     # Verdictless rows: success-shaped (passes N/N) gain the verdict word; anything else is named
     # for human review — the machine never certifies what the ledger did not.
-    nocomment < "$TRUTHS/verify.md" | section_all - "Verified units" | sed 's/·/ /g' \
-      | awk -v vd="${SCH[verify.units.verified]}" '
+    nocomment < "$TRUTHS/verify.md" | section_all - "Verified units" | LC_ALL=C sed 's/·/ /g' \
+      | LC_ALL=C awk -v vd="${SCH[verify.units.verified]}" '
         BEGIN { if (vd == "") vd = "verified" }
         { line=$0
           if (line !~ /^[[:space:]]*[|-]/) next
