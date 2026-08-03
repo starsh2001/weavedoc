@@ -33,6 +33,10 @@ v0.3.1의 migration은 m-id 행을 잘못된 레인(truths ledger의 언급)에�
 - **교정**: 해당 자료를 verify 스킬로 재검증하면 `attest`가 새 행을 append하고 last-row-wins로 자연히 이깁니다. 별도의 행 삭제·수정은 필요 없습니다(장부는 append-only).
 - t-id의 출처 없는(`-`) 행은 그대로 유효합니다 — truths 레인은 처음부터 옳은 레인이었습니다.
 
+## index/tree 라벨 (v0.3.4)
+
+`index.md`/`tree.md`가 `pull`과 같은 소비자 라벨(as_of · DERIVED · ADOPTED · PLAN-STAGE · RETRACTED SOURCE)을 ` ··` 구분자 뒤에 싣습니다. 기존 광산은 **`reindex` 1회**로 라벨이 나타납니다 — 그 전까지는 `reindex --check`가 DIFFERS를 보고할 뿐 validate는 막지 않습니다.
+
 ## 건드리지 않는 것
 
 - **산문과 consecrated 출력**(draft/final 본문) — 바이트 불변. 옛 철자 참조는 관대한 해소가 계속 읽습니다.

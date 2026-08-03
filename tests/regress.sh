@@ -116,24 +116,24 @@ mkscale() { # deterministic 8-material · 60-truth mine — the scale where spaw
   rm -rf "$W/materials" "$W/truths" "$W/documents"
   mkdir -p "$W/materials" "$W/truths" "$W/documents"
   printf '# 자료 목록\n\n| id | 제목 | 역할 | 상태 |\n|---|---|---|---|\n' > "$W/catalog.md"
-  for mi in $(seq 1 "$M"); do
-    mid=$(printf 'm%03d' "$mi")
+  for (( mi=1; mi<=M; mi++ )); do
+    printf -v mid 'm%03d' "$mi"
     mkdir -p "$W/materials/$mid"
     { printf -- '---\nid: %s\ntitle: 계약서 %d\norigin: file\nrole: 계약서\ntopics: [스케일]\nformat: md\nsource_path: inbox/c%d.md\nadded: 2026-07-01\nstatus: converted\nsummary: 스케일 픽스처 자료 %d.\n---\n\n# 계약서 %d\n\n' "$mid" "$mi" "$mi" "$mi" "$mi"
-      for line in $(seq 1 40); do printf '제%d조 자료%d의 조항 %d은 유효하다.\n' "$line" "$mi" "$line"; done
+      for (( line=1; line<=40; line++ )); do printf '제%d조 자료%d의 조항 %d은 유효하다.\n' "$line" "$mi" "$line"; done
     } > "$W/materials/$mid/converted.md"
     printf '| %s | 계약서 %d | 계약서 | converted |\n' "$mid" "$mi" >> "$W/catalog.md"
   done
   printf '# Coverage\n\n' > "$W/truths/coverage.md"
-  for mi in $(seq 1 "$M"); do
+  for (( mi=1; mi<=M; mi++ )); do
     printf '## m%03d\n\n' "$mi" >> "$W/truths/coverage.md"
-    for ti in $(seq "$mi" "$M" "$T"); do printf -- '- 조항 %d: t%03d\n' "$(( (ti - 1) / M + 1 ))" "$ti" >> "$W/truths/coverage.md"; done
+    for (( ti=mi; ti<=T; ti+=M )); do printf -- '- 조항 %d: t%03d\n' "$(( (ti - 1) / M + 1 ))" "$ti" >> "$W/truths/coverage.md"; done
     printf '\n' >> "$W/truths/coverage.md"
   done
   printf '# 변경 로그\n\n' > "$W/truths/changelog.md"
-  for ti in $(seq 1 "$T"); do
-    tid=$(printf 't%03d' "$ti")
-    mi=$(( (ti - 1) % M + 1 )); mid=$(printf 'm%03d' "$mi")
+  for (( ti=1; ti<=T; ti++ )); do
+    printf -v tid 't%03d' "$ti"
+    mi=$(( (ti - 1) % M + 1 )); printf -v mid 'm%03d' "$mi"
     line=$(( (ti - 1) / M + 1 ))
     printf -- '---\nid: %s\nclaim: "자료%d의 조항 %d이 유효하다"\nsource: %s\nlocation: "제%d조"\ntags: [스케일, 조항%d]\nstatus: ok\nprovenance: stated\n---\n\n제%d조 자료%d의 조항 %d은 유효하다.\n' \
       "$tid" "$mi" "$line" "$mid" "$line" "$line" "$line" "$mi" "$line" > "$W/truths/$tid.md"
@@ -141,6 +141,63 @@ mkscale() { # deterministic 8-material · 60-truth mine — the scale where spaw
   done
   printf -- '---\nstatus: passed\nround: 1\nverified_at: 2026-07-30\n---\n\n## Verified units\n\n## Adjudications\n\n## Human queue\n' > "$W/truths/verify.md"
   ( cd "$W" && bash .weavedoc/bin/weavedoc reindex >/dev/null 2>&1 ) || bad "mkscale: reindex failed"
+}
+mkplanstage() { # m002 (stage: plan) + t002 derived from it, with as_of — the label-bearing shape
+  mkdir -p "$W/materials/m002"
+  printf -- '---\nid: m002\ntitle: 기획서\norigin: file\nrole: 계약서\ntopics: [기획]\nformat: md\nsource_path: inbox/plan.md\nadded: 2026-07-01\nstatus: converted\nstage: plan\nsummary: 계획 단계 자료.\n---\n\n# 기획서\n\n6곡 앨범을 계획한다.\n' > "$W/materials/m002/converted.md"
+  printf '| m002 | 기획서 | 계약서 | converted |\n' >> "$W/catalog.md"
+  printf -- '---\nid: t002\nclaim: "앨범은 6곡으로 계획되었다"\nsource: m002\ntags: [음악]\nstatus: ok\nprovenance: derived\nderived_from: [m002]\nassumptions: [발매 전 변경 가능]\nas_of: 2026-07-01\n---\n\n6곡 앨범을 계획한다.\n' > "$W/truths/t002.md"
+  printf '\n## m002\n\n- 계획: t002\n' >> "$W/truths/coverage.md"
+  printf -- '- added: t002 (2026-07-30)\n' >> "$W/truths/changelog.md"
+}
+acct_tree_carries_labels() {
+  # D1 (field report): pull attached PLAN-STAGE/as_of/DERIVED while index.md/tree.md carried
+  # only the status marker — the consumer's fact depended on which entry path they took. A
+  # reviewer browsing tree.md read a plan-stage album spec as a release fact.
+  mkplanstage
+  vrun reindex; expect_pass
+  OUT=$(cat "$W/truths/tree.md"); RC=0
+  expect_has "PLAN-STAGE"
+  expect_has "as_of: 2026-07-01"
+  OUT=$(cat "$W/truths/index.md"); RC=0
+  expect_has "PLAN-STAGE"
+  vrun validate; expect_pass
+}
+acct_pull_index_labels_agree() {
+  # The acceptance rule: one truth, one label set — pull and the index surfaces say the same
+  # thing. And the labels are OUTPUT, not search text: pulling a word that appears only inside
+  # label prose must not hit every labeled truth.
+  mkplanstage
+  vrun reindex
+  vrun pull 앨범
+  expect_has "[PLAN-STAGE SOURCE — never evidence of use]"
+  expect_has "(as_of: 2026-07-01)"
+  vrun pull evidence
+  expect_has "no matches"
+}
+acct_pull_partial_discard_labels() {
+  # D4 (field report): the discarded branch dropped $lab and [$src] — on a PARTIAL discard
+  # (resolution.scope) the surviving half is exactly the content that needs its labels, and it
+  # printed unlabeled (eclypse t040, an open Human-queue item since 2026-08-01).
+  mkplanstage
+  sed -i 's/^status: ok$/status: discarded/' "$W/truths/t002.md"
+  sed -i '/^as_of:/a resolution: {type: value, winner: t001, scope: [곡수], decided_by: user, decision_kind: supplied, reason: "곡수만 정정"}' "$W/truths/t002.md"
+  vrun reindex
+  vrun pull 앨범
+  expect_has "scope [곡수]"
+  expect_has "PLAN-STAGE"
+  expect_has "[m002]"
+}
+acct_pull_full_discard_unchanged() {
+  # Full discard (no scope): the protocol says follow the successor — the row stays terse and
+  # label-free, exactly as before (the guard against relabeling what should stay quiet).
+  mkplanstage
+  sed -i 's/^status: ok$/status: discarded/' "$W/truths/t002.md"
+  sed -i '/^as_of:/a resolution: {type: value, winner: t001, decided_by: user, decision_kind: supplied, reason: "전체 대체"}' "$W/truths/t002.md"
+  vrun reindex
+  vrun pull 앨범
+  expect_has "DISCARDED → t001"
+  expect_hasnt "PLAN-STAGE"
 }
 acct_scale_snapshot() {
   # Field-report P1 contract, mechanized: the fold must produce the SAME verdicts at scale.

@@ -469,6 +469,26 @@ doc_ids() {
 }
 mstatus()      { [ -f "$MATERIALS/$1/converted.md" ] && fm "$MATERIALS/$1/converted.md" status; }
 mtitle()       { [ -f "$MATERIALS/$1/converted.md" ] && fm "$MATERIALS/$1/converted.md" title; }
+truth_labels() { # $1=as_of $2=provenance $3=assumptions $4=source-stage $5=source-status -> REPLY
+  # THE one spelling of every consumer-facing label (field report D1): pull attached
+  # PLAN-STAGE/as_of/DERIVED/ADOPTED while index/tree carried none, so the fact a consumer
+  # received depended on which entry path they took. Both writers call this; label text is
+  # written inline nowhere else, or the two surfaces drift apart again.
+  local lab=""
+  [ -n "$1" ] && lab="$lab (as_of: $1)"
+  case "$2" in
+    derived)
+      # Absent is not `[]`: FORMATS gives the EMPTY LIST a meaning ("uses stated facts only"),
+      # so a missing `assumptions` must not render as that positive declaration.
+      if [ -n "$3" ] && [ "$3" != "[]" ]; then lab="$lab [DERIVED — assumes $3]"
+      elif [ "$3" = "[]" ]; then lab="$lab [DERIVED — declares no unstated assumptions]"
+      else lab="$lab [DERIVED — assumptions NOT DECLARED; open the file before reuse]"; fi ;;
+    adopted) lab="$lab [ADOPTED — machine-proposed, user-accepted]" ;;
+  esac
+  [ "$4" = "plan" ] && lab="$lab [PLAN-STAGE SOURCE — never evidence of use]"
+  [ "$5" = "retracted" ] && lab="$lab [RETRACTED SOURCE]"
+  REPLY=$lab
+}
 catalog_ids()  { awk -F'|' '/^[[:space:]]*\|/ { gsub(/[[:space:]]/,"",$2); if ($2 ~ /^m[0-9]+$/) print $2 }' "$CATALOG" 2>/dev/null; }
 
 check_hq_tags() { # $1=file holding a "## Human queue" section
@@ -2335,38 +2355,71 @@ cmd_reindex() {
     # Strip \x01 on the way in too: the writer sanitises, but a hand-written file can still hold
     # one, and "the separator cannot occur in the text" is only true if something removes it.
     function val(   s){ s=$0; sub(/^[^:]*:[[:space:]]*/,"",s); if(s !~ /^"/){ sub(/[[:space:]]+#.*$/,"",s); if(s ~ /^#/) s="" } sub(/[[:space:]]*$/,"",s); sub(/^"/,"",s); sub(/"$/,"",s); gsub(/\001/," ",s); return s }
-    FNR==1 { infm=($0 ~ /^---[[:space:]]*$/); id=claim=src=st=tg="" ; next }
+    FNR==1 { infm=($0 ~ /^---[[:space:]]*$/); id=claim=src=st=tg=ao=pv=am="" ; next }
     # \x01, not \t: a TAB inside a hand-written `claim:` used to shift every field right, so
     # index.md printed the source as a tag and tree.md grew a `## ok` section while the real tag
     # vanished — and reindex --check called the result "in sync". \x01 cannot occur in the text.
-    infm && /^---[[:space:]]*$/ { infm=0; print id "\x01" claim "\x01" src "\x01" st "\x01" tg; nextfile }
-    infm && /^id[[:space:]]*:/     { id=val() }
-    infm && /^claim[[:space:]]*:/  { claim=val() }
-    infm && /^source[[:space:]]*:/ { src=val() }
-    infm && /^status[[:space:]]*:/ { st=val() }
-    infm && /^tags[[:space:]]*:/   { tg=val(); gsub(/[]["]/,"",tg) }
+    infm && /^---[[:space:]]*$/ { infm=0; print id "\x01" claim "\x01" src "\x01" st "\x01" tg "\x01" ao "\x01" pv "\x01" am; nextfile }
+    infm && /^id[[:space:]]*:/          { id=val() }
+    infm && /^claim[[:space:]]*:/       { claim=val() }
+    infm && /^source[[:space:]]*:/      { src=val() }
+    infm && /^status[[:space:]]*:/      { st=val() }
+    infm && /^tags[[:space:]]*:/        { tg=val(); gsub(/[]["]/,"",tg) }
+    infm && /^as_of[[:space:]]*:/       { ao=val() }
+    infm && /^provenance[[:space:]]*:/  { pv=val() }
+    infm && /^assumptions[[:space:]]*:/ { am=val() }
   ' "$TRUTHS"/t[0-9]*.md)
+  # Labels ride the index surfaces too (field report D1): the SAME truth_labels call pull makes,
+  # so both entry paths show one fact. Material stage/status come from the batch fm cache; the
+  # lines are BUILT in shell so the label text has exactly one spelling — porting truth_labels
+  # into awk would be the second copy that drifts.
+  local -A rmstage_=() rmstat_=() rtcnt_=()
+  local -a rmpre_=() rtarr_=()
+  local rmf_ rmb_ rid_ rcl_ rsrc_ rst_ rtg_ rao_ rpv_ ram_ rlab_ rline_ rtag_ rsfx_ rp_ rms_ rmss_ rpairs_=""
+  for rmf_ in "$MATERIALS"/*/converted.md; do [ -f "$rmf_" ] && rmpre_+=("$rmf_"); done
+  if [ "${#rmpre_[@]}" -gt 0 ]; then
+    fm_preload "${rmpre_[@]}"
+    for rmf_ in "${rmpre_[@]}"; do
+      rmb_=${rmf_%/converted.md}; rmb_=${rmb_##*/}
+      fmv "$rmf_" stage;  rmstage_[$rmb_]=$REPLY
+      fmv "$rmf_" status; rmstat_[$rmb_]=$REPLY
+    done
+  fi
   tmpi=$(mktemp); tmpt=$(mktemp)
   {
     echo "# truths/index.md — 진실 색인 (generated, 수정 금지)"
     echo ""
-    printf '%s\n' "$rec" | awk -F'\x01' '{
-      line="- " $1 ": " $2 " [" $3 "] — [" $5 "]"
-      if($4!="" && $4!="ok") line=line " [" $4 "]"
-      print line }'
+    while IFS=$'\x01' read -r rid_ rcl_ rsrc_ rst_ rtg_ rao_ rpv_ ram_; do
+      [ -n "$rid_" ] || continue
+      # ` ·· ` opens the label tail — pull strips it before matching, so the guard here keeps a
+      # claim that happens to contain the separator from truncating its own searchable text.
+      rcl_=${rcl_//··/· ·}; rtg_=${rtg_//··/· ·}
+      rms_=""; rmss_=""
+      [ -n "$rsrc_" ] && { rms_=${rmstage_[$rsrc_]:-}; rmss_=${rmstat_[$rsrc_]:-}; }
+      truth_labels "$rao_" "$rpv_" "$ram_" "$rms_" "$rmss_"; rlab_=$REPLY
+      rline_="- $rid_: $rcl_ [$rsrc_] — [$rtg_]"
+      [ -n "$rst_" ] && [ "$rst_" != "ok" ] && rline_="$rline_ [$rst_]"
+      [ -n "$rlab_" ] && rline_="$rline_ ··$rlab_"
+      printf '%s\n' "$rline_"
+      # tree pairs in the same pass: tag sections in LC_ALL=C sorted order (ASCII first, then
+      # Korean — the standing convention); within a section, truths keep id order via a counter.
+      rsfx_=""
+      [ -n "$rst_" ] && [ "$rst_" != "ok" ] && rsfx_=" [$rst_]"
+      [ -n "$rlab_" ] && rsfx_="$rsfx_ ··$rlab_"
+      IFS=',' read -ra rtarr_ <<< "$rtg_"
+      for rtag_ in "${rtarr_[@]}"; do
+        rtag_=${rtag_#"${rtag_%%[![:space:]]*}"}; rtag_=${rtag_%"${rtag_##*[![:space:]]}"}
+        [ -n "$rtag_" ] || continue
+        rtcnt_[$rtag_]=$(( ${rtcnt_[$rtag_]:-0} + 1 ))
+        printf -v rp_ '%s\x01%06d\x01- %s: %s%s' "$rtag_" "${rtcnt_[$rtag_]}" "$rid_" "$rcl_" "$rsfx_"
+        rpairs_+="$rp_"$'\n'
+      done
+    done <<< "$rec"
   } > "$tmpi"
   {
     echo "# truths/tree.md — 태그별 진실 (generated, 수정 금지)"
     echo ""
-    # tag sections in LC_ALL=C sorted order (ASCII tags first, then Korean — the standing convention);
-    # within a section, truths keep id order. One line per (tag, truth) → sort → regroup.
-    printf '%s\n' "$rec" | awk -F'\x01' '{
-      n=split($5, a, ",")
-      for(i=1;i<=n;i++){
-        t=a[i]; gsub(/^[[:space:]]+|[[:space:]]+$/,"",t); if(t=="") continue
-        sfx=($4!="" && $4!="ok") ? " [" $4 "]" : ""
-        printf "%s\x01%06d\x01- %s: %s%s\n", t, ++cnt[t], $1, $2, sfx
-      }}' \
+    printf '%s' "$rpairs_" \
     | LC_ALL=C sort -t $'\x01' -k1,1 -k2,2 \
     | awk -F'\x01' '{ if($1!=prev){ if(NR>1) print ""; print "## " $1; prev=$1 } print $3 }'
   } > "$tmpt"
@@ -2551,7 +2604,11 @@ cmd_pull() {
   # multibyte input. awk tolower() folds ASCII only, leaving Korean bytes untouched. Term via
   # ENVIRON (not -v) so backslashes are not escape-processed.
   local ids id
-  ids=$(WVTERM="$term" awk 'BEGIN{ t=tolower(ENVIRON["WVTERM"]) } index(tolower($0), t){ print }' \
+  # Labels are OUTPUT, not search text (D1 follow-through): the match runs on the line with its
+  # ` ··<labels>` tail stripped, or pulling a word that occurs only in label prose ("evidence",
+  # "PLAN") would hit every labeled truth in the mine.
+  ids=$(WVTERM="$term" awk 'BEGIN{ t=tolower(ENVIRON["WVTERM"]) }
+        { hay=$0; sub(/ ··.*$/, "", hay); if (index(tolower(hay), t)) print }' \
         "$TRUTHS/index.md" | grep -oE '^- t[0-9]+' | sed 's/^- //')
   if [ -z "$ids" ]; then
     ids=$(WVTERM="$term" awk 'BEGIN{ t=tolower(ENVIRON["WVTERM"]) }
@@ -2602,37 +2659,37 @@ cmd_pull() {
         fmv "$MATERIALS/$src/converted.md" stage;  mstage[$src]=$REPLY
       else mstat[$src]=""; mstage[$src]=""; fi
     fi
-    lab=""
-    [ -n "$asof" ] && lab="$lab (as_of: $asof)"
-    case "$prov" in
-      derived)
-        # Absent is not `[]`: FORMATS gives the EMPTY LIST a meaning ("uses stated facts only"), so a
-        # missing `assumptions` must not render as that positive declaration — it means nobody checked.
-        if [ -n "$asm" ] && [ "$asm" != "[]" ]; then lab="$lab [DERIVED — assumes $asm]"
-        elif [ "$asm" = "[]" ]; then lab="$lab [DERIVED — declares no unstated assumptions]"
-        else lab="$lab [DERIVED — assumptions NOT DECLARED; open the file before reuse]"; fi ;;
-      adopted) lab="$lab [ADOPTED — machine-proposed, user-accepted]";;
-    esac
     # Guarded: a truth with no `source:` gives an empty subscript, which bash reports as
     # "bad array subscript" on stderr — noise on an otherwise correct result.
     if [ -n "$src" ]; then
-      [ "${mstage[$src]:-}" = "plan" ] && lab="$lab [PLAN-STAGE SOURCE — never evidence of use]"
-      [ "${mstat[$src]:-}" = "retracted" ] && lab="$lab [RETRACTED SOURCE]"
+      truth_labels "$asof" "$prov" "$asm" "${mstage[$src]:-}" "${mstat[$src]:-}"
+    else
+      truth_labels "$asof" "$prov" "$asm" "" ""
     fi
+    lab=$REPLY
     case "$st" in
       discarded|resolved)
         # "resolved" = pre-rename legacy value (validate flags it); winner-self is legacy too. Both
         # still rendered usable so a mid-migration mine reads correctly.
-        w=$(printf '%s' "$res" | grep -oE 'winner[[:space:]]*:[[:space:]]*(\[[^]]*\]|[^,}]+)' | sed -E 's/winner[[:space:]]*:[[:space:]]*//')
+        w=""; [[ "$res" =~ winner[[:space:]]*:[[:space:]]*(\[[^]]*\]|[^,\}]+) ]] && w=${BASH_REMATCH[1]}
         # Key spelling must allow a space before the colon here too (`scope : [금액]`), or a reader
         # following READ.md is told a PARTIAL supersede was total — the opposite fact.
-        sc=$(printf '%s' "$res" | grep -oE 'scope[[:space:]]*:[[:space:]]*\[[^]]*\]' | sed -E 's/scope[[:space:]]*:[[:space:]]*//')
-        if [ -n "$w" ] && printf '%s' "$w" | grep -qE "(^|[^0-9A-Za-z])${id}([^0-9]|$)"; then
+        sc=""; [[ "$res" =~ scope[[:space:]]*:[[:space:]]*(\[[^]]*\]) ]] && sc=${BASH_REMATCH[1]}
+        if [ -n "$w" ] && [[ "$w" =~ (^|[^0-9A-Za-z])${id}([^0-9]|$) ]]; then
           printf '%s  [WON ITS CONFLICT — usable; legacy stamp, set status: ok] %s [%s]%s\n' "$id" "$cl" "$src" "$lab"
           [ -n "$bd1" ] && printf '      ↳ sealed: %s\n' "$bd1"
           n_live=$((n_live+1))
+        elif [ -n "$sc" ]; then
+          # PARTIAL discard (field report D4): READ.md rule 2 sends the reader to the SURVIVING
+          # half of this very row — which therefore needs its source and labels exactly like a
+          # live row. The old printf dropped $lab and [$src] here alone, so the half a consumer
+          # may use printed with no as_of, no DERIVED, no PLAN-STAGE (eclypse t040).
+          printf '%s  [DISCARDED → %s · scope %s] %s [%s]%s\n' "$id" "${w:-?}" "$sc" "$cl" "$src" "$lab"
+          n_res=$((n_res+1))
         else
-          printf '%s  [DISCARDED → %s%s] %s\n' "$id" "${w:-?}" "${sc:+ · scope $sc}" "$cl"
+          # FULL discard: the protocol says follow the successor — nothing here is for use, so
+          # the row stays terse and label-free on purpose.
+          printf '%s  [DISCARDED → %s] %s\n' "$id" "${w:-?}" "$cl"
           n_res=$((n_res+1))
         fi;;
       conflict)
