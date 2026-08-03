@@ -3,7 +3,8 @@ name: ci
 # Phase 2 (IMPROVEMENT_PLAN WD-QA-001~003): the same suite on PRs, pushes and tags.
 # Cost profile (private-repo Actions minutes: Windows ×2, macOS ×10, and the suite is ~35min on
 # Windows): Ubuntu runs on every trigger; Windows + macOS run on tags and manual dispatch only.
-# macOS stays non-blocking until the support claim is promoted to required or retracted (§7.2).
+# macOS is best-effort BY DECISION (2026-08-03, plan §11): non-blocking, 4 known index-parsing
+# case failures recorded; required promotion is re-tabled if the census quartet is resolved.
 
 on:
   push:

@@ -420,11 +420,10 @@ Markdown 자유 형식을 계속 지원해야 한다면 동일 데이터를 mach
 ### 5.3 Review·final
 
 ```yaml
-reviewed_artifact: draft
+# 구현 확정 필드(v0.3.1~): seal은 3필드 tuple — seal-review가 쓰고 validate가 all-or-none으로 읽는다
+reviewed_kind: draft
 reviewed_digest: sha256:...
 review_context_digest: sha256:...
-reviewed_at: 2026-08-02
-gate_verdict: clean
 ```
 
 최종화 순서는 다음과 같다.
@@ -498,7 +497,7 @@ Phase 1의 새 verification/review 필드와 Phase 3의 upgrade 도구 사이에
 - 병렬·중단·재실행이 다른 run을 오염시키지 않는다.
 - 모든 CLI 명령에 최소 smoke coverage가 있다.
 - 테스트 종료 뒤 worktree가 깨끗하다.
-- README가 macOS 지원을 계속 주장하면 macOS job을 release 전 required로 승격한다. 그렇지 않으면 지원 문구와 matrix를 함께 제거한다.
+- ~~README가 macOS 지원을 계속 주장하면 macOS job을 release 전 required로 승격한다. 그렇지 않으면 지원 문구와 matrix를 함께 제거한다.~~ → 결정 2026-08-03(§11): macOS는 **best-effort** — README·WORKFLOW·tests/README·CI가 같은 문구를 쓰고, matrix는 non-blocking 유지. census 4건 해결 시 required 승격을 재상정한다.
 
 ### Phase 3 — schema v2와 migration
 
@@ -610,9 +609,9 @@ Phase 1의 새 verification/review 필드와 Phase 3의 upgrade 도구 사이에
 |---|---|---|---|
 | Ubuntu | Bash 5 + GNU awk/sed | 기준 기능·성능 | required |
 | Windows | Git Bash | 주 사용자 성능·경로·CRLF | required |
-| macOS | 설치된 Bash 5 + GNU awk/sed | 문서화된 지원 환경 검증 | 처음에는 non-blocking, 지원 문구 유지 시 release 전 required |
+| macOS | 설치된 Bash 5 + GNU awk/sed | 문서화된 지원 환경 검증 | **best-effort로 결정**(2026-08-03, §11): non-blocking 유지, 알려진 4건(census index-parsing 계열)은 macOS 셸 확보 후 해결 — 해결 시 required 승격 재상정 |
 
-macOS 기본 Bash 3.2/BSD 도구를 지원하지 않는다면 preflight가 명확한 설치 안내와 non-zero exit를 반환해야 한다. macOS required 승격 대신 지원을 철회할 경우 README·WORKFLOW·release matrix를 같은 변경에서 정정한다.
+macOS 기본 Bash 3.2/BSD 도구를 지원하지 않는다면 preflight가 명확한 설치 안내와 non-zero exit를 반환해야 한다. macOS는 **best-effort**로 결정됐다(2026-08-03, §11): 지원 문구는 유지하되 "best-effort — 알려진 4건"으로 정직하게 표기하고, matrix는 non-blocking을 유지하며, census 4건이 해결되면 required 승격을 재상정한다 — 승격이든 철회든 README·WORKFLOW·tests/README·release matrix를 같은 변경에서 정정한다.
 
 ### 7.3 테스트 결과 계약
 
@@ -662,7 +661,7 @@ macOS 기본 Bash 3.2/BSD 도구를 지원하지 않는다면 preflight가 명�
 - [ ] legacy digest migration이 blind stamp 없이 이력을 보존하고 bound/unbound 부채를 분리
 - [ ] single-file document E2E 통과
 - [ ] multi-file document E2E 통과
-- [ ] Linux·Windows·지원 macOS matrix 통과
+- [ ] Linux·Windows matrix 통과 (macOS는 best-effort — §11 결정 2026-08-03: non-blocking, 알려진 4건 기록)
 - [ ] `bash -n`·ShellCheck 통과
 - [ ] test run 뒤 clean worktree 확인
 - [ ] write failure injection에서 partial state 없음
@@ -718,6 +717,9 @@ macOS 기본 Bash 3.2/BSD 도구를 지원하지 않는다면 preflight가 명�
 | JSON 호환 정책 | versioned schema + additive minor change | command별 독립 schema는 유연하지만 소비자 복잡도 증가 | 결정 2026-08-02 |
 | completeness final 정책 | `required`일 때 unresolved blocking gap 차단 | 모든 gap 차단은 advisory/semantic 영역까지 과도하게 봉쇄할 수 있음 | 결정 2026-08-02 |
 | raw source VCS 정책 | 현재 `track` 유지 + init 명시 경고 | `ignore` 옵션은 privacy에 유리하지만 audit·backup 보증 약화 | 결정 2026-08-02 |
+| macOS 지원 범위 | **best-effort**: 지원 문구 유지 + "알려진 4건" 정직 표기, matrix는 non-blocking | required 승격은 census 4건(index-parsing 계열)을 못 풀면 release를 영구 차단하고, 철회는 실사용 가능한 환경(Bash 5 + GNU 설치)을 버림 | 결정 2026-08-03 — **되돌림 조건**: census 4건 해결 시 required 승격 재상정 |
+| ledger 출처 토큰 | legacy-unbound 행의 standard 열에 origin 기록, m-id는 material origin일 때만 증거(비대칭: t-id `-`는 grandfather) | 별도 열 추가는 6열 계약을 깨고, 무출처 유지는 이미 배포된 v0.3.1 오이관을 교정 불가로 남김 | 결정 2026-08-03 |
+| consecrate 내구 marker | `.consecrate.inflight`를 첫 write 전 생성·최후 삭제, validate도 fail-closed(예외는 동적 스코프 doc 한정) | trap-only는 SIGKILL/전원에 무력, candidate-aware validate 전면 재설계는 v0.3.2 범위 초과(이연) | 결정 2026-08-03 |
 
 결정 기록에는 날짜, 결정자, 선택, 기각한 대안, migration 영향, 되돌림 조건을 남긴다.
 
