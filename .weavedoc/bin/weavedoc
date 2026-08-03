@@ -175,10 +175,10 @@ config.repeat.scales config.strength.range config.toplevel fm.placeholder humanq
 humanqueue.enum.state material.fm.enum.origin material.fm.enum.stage material.fm.enum.status
 material.fm.required material.fm.required_when.research plan.fm.enum.status plan.fm.required
 plan.fm.enum.audience
-project.fm.required review.enum.kind review.sections schema.version truth.fm.enum.provenance
+project.fm.required review.enum.kind review.enum.reviewed_kind review.sections schema.version truth.fm.enum.provenance
 truth.fm.enum.status truth.fm.required truth.fm.resolution.decided_by
 truth.fm.resolution.decision_kind truth.fm.resolution.type verify.fm.enum.status verify.fm.required
-verify.ledger.file verify.ledger.verdicts verify.sections verify.units.verified"
+verify.ledger.file verify.ledger.origin.material verify.ledger.origin.truths verify.ledger.verdicts verify.sections verify.units.verified"
 sch_load
 pipes() { echo "$1" | tr '|' '\n'; }
 is_placeholder() { # $1=value -> 0 when it is an untouched template placeholder
@@ -558,13 +558,43 @@ ledger_file() { # -> the sidecar's filename; schema key first, code default seco
 schema_ver() { # -> the schema version this runtime targets; same degrade rule as ledger_file
   local s; s=${SCH[schema.version]}; printf '%s' "${s:-2}"
 }
-ledger_rows() { # -> "id<TAB>digest<TAB>verdict<TAB>standard" per unit; LAST row per id wins.
+# ONE structural row filter for the verification sidecar (v0.3.3): the same six-column format
+# validate enforces decides what EVERY reader consumes — scope once read any ≥3-column row while
+# validate demanded six, so a truncated attest row counted digest-bound in one command and
+# blocked the mine in the other. Verdict WORDS are deliberately not judged here (scope
+# quarantines unknown verdicts visibly); structure is. The calendar mirrors is_date.
+LEDGER_ROW_AWK='
+  function realdate(s,  a, y, m, dd, ml) {
+    if (s !~ /^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]$/) return 0
+    split(s, a, "-"); y = a[1] + 0; m = a[2] + 0; dd = a[3] + 0
+    if (m < 1 || m > 12 || dd < 1) return 0
+    ml = substr("312831303130313130313031", (m-1)*2 + 1, 2) + 0
+    if (m == 2 && (y % 4 == 0 && (y % 100 != 0 || y % 400 == 0))) ml = 29
+    return dd <= ml
+  }
+  function rowok() {
+    return (NF == 6 && ($2 == "-" || $2 ~ /^[0-9a-f]{64}$/) \
+            && ($4 == "-" || $4 ~ /^[0-9]+$/) && $5 != "" && realdate($6))
+  }'
+ledger_rows() { # -> "id<TAB>digest<TAB>verdict<TAB>standard" per unit; LAST VALID row per id wins.
   # The standard column rides along for the origin rule (v0.3.2): a legacy-unbound m row counts
   # as material evidence only when its standard names the material origin token.
   local lf="$TRUTHS/$(ledger_file)"
   [ -f "$lf" ] || return 0
-  awk -F'\t' '/^#/ { next } NF>=3 { d[$1]=$2; v[$1]=$3; s[$1]=$5 } END { for (i in d) print i "\t" d[i] "\t" v[i] "\t" s[i] }' "$lf" \
+  awk -F'\t' "$LEDGER_ROW_AWK"'
+    /^#/ { next }
+    !rowok() { next }
+    { d[$1]=$2; v[$1]=$3; s[$1]=$5 }
+    END { for (i in d) print i "\t" d[i] "\t" v[i] "\t" s[i] }' "$lf" \
     | LC_ALL=C sort
+}
+ledger_rows_badstruct() { # -> ids of rows the strict filter rejects — SHOWN by scope, never absorbed
+  local lf="$TRUTHS/$(ledger_file)"
+  [ -f "$lf" ] || return 0
+  awk -F'\t' "$LEDGER_ROW_AWK"'
+    /^#/ { next }
+    /^[ \t]*$/ { next }
+    !rowok() { print $1 }' "$lf" | LC_ALL=C sort -u
 }
 artifact_digest() { # $1 = file OR directory -> sha256. THE spelling of "which bytes were reviewed".
   # Directory: `relpath\0sha256\n` manifest, relpaths LC_ALL=C ascending, manifest re-hashed —
@@ -684,6 +714,12 @@ json_diag_array() { # $1=collector -> [{"code":..,"message":..},...]
 }
 
 cmd_validate() {
+  # $1 (optional, internal): doc id whose in-flight consecration artifacts are exempt — passed
+  # ONLY by cmd_consecrate's in-process call. A function argument, not a variable: bash imports
+  # the caller's environment into shell variables, so a variable channel let any external caller
+  # grant themselves the exemption (`WD_CONSEC_DOC=d1 weavedoc validate` — v0.3.3 finding). The
+  # dispatch table rejects arguments to `validate`, so no CLI path reaches this parameter.
+  local consec_ok_="${1:-}"
   preflight_gnu || return 2
   # Content caches are per-PROCESS, and a write command that re-validates in the same process
   # (upgrade --apply, retag, consecrate) would otherwise validate the bytes it CACHED before its
@@ -1539,11 +1575,11 @@ EOF
     fi
     # In-flight consecration artifacts are mine-level red flags (v0.3.2): the marker means the
     # final slot may hold an unvalidated candidate, the backup means the only original sits
-    # aside. Traps cannot run on SIGKILL/power loss — the on-disk artifact is the detector. The
-    # one legal exemption is consecrate's own in-process validate for exactly this doc
-    # (WD_CONSEC_DOC is dynamically scoped, never exported).
-    if [ "${WD_CONSEC_DOC:-}" != "$d" ]; then
-      [ -e "$DOCUMENTS/$d/.consecrate.inflight" ] && prob CONSEC-INTERRUPTED "$d has .consecrate.inflight — a consecration is running or died here (a hard kill leaves no other trace); if nothing is running, the final slot may hold an unvalidated candidate byte-identical to the reviewed draft: remove final and the marker, then re-run consecrate"
+    # aside. Traps cannot run on a hard kill — the on-disk artifact is the detector. The one
+    # legal exemption is consecrate's own in-process validate for exactly this doc, passed as a
+    # function argument (a variable channel was environment-injectable — v0.3.3).
+    if [ "$consec_ok_" != "$d" ]; then
+      [ -e "$DOCUMENTS/$d/.consecrate.inflight" ] && prob CONSEC-INTERRUPTED "$d has .consecrate.inflight — a consecration is running or died here (a hard kill leaves no other trace); if nothing is running, byte-compare final against the reviewed draft BEFORE deciding: identical → it is the staged candidate (safe to remove); different → it is your original (keep it; the crash came before the swap); absent with .final.bak present → restore the backup. Then delete the marker and re-run consecrate"
       [ -e "$DOCUMENTS/$d/.final.bak" ] && prob CONSEC-INTERRUPTED "$d has .final.bak — an interrupted consecration left the only original here; restore it over final (or remove it if the current final is known good), then re-run consecrate"
     fi
     if [ -n "$consecrated" ]; then
@@ -1569,7 +1605,13 @@ EOF
       # v2 review binding (WD-COR-002): a sealed review pins bytes + context. Presence of the
       # field activates enforcement; absence is legacy-unbound — counted, shown, never blocking
       # until schema v2 (migration train).
-      if [ -f "$DOCUMENTS/$d/review.md" ]; then
+    fi
+    # Hoisted out of the consecrated guard (v0.3.3): structural seal invariants hold for ANY
+    # review — a draft-stage partial tuple or marker-next-to-seal is the same tamper shape one
+    # consecration earlier. Byte/context ENFORCEMENT and the seal counts stay next to a
+    # consecrated output, where the gate's verdict actually ships (a draft edited between
+    # rounds under an old seal is the normal refine loop, not a violation).
+    if [ -f "$DOCUMENTS/$d/review.md" ]; then
         # The seal is a TUPLE (v0.3.2): reviewed_kind + reviewed_digest + review_context_digest,
         # all or none. Any strict subset is a partial seal — each missing field disables exactly
         # one check while the others keep the green light credible — and reads as tampering on a
@@ -1581,12 +1623,14 @@ EOF
         rcx_=$(fm "$DOCUMENTS/$d/review.md" review_context_digest); rcx_=${rcx_#sha256:}
         fmv "$DOCUMENTS/$d/review.md" review_legacy; mkr_=$REPLY
         if [ -n "$rdg_" ]; then
-          N_RSEAL=$((N_RSEAL+1))
-          findg_=$(artifact_digest "$(doc_final_path "$d")")
-          [ "$findg_" = "$rdg_" ] || prob GATE-FINAL-DIGEST "$d $consecrated is not the bytes the clean review reviewed (reviewed_digest mismatch) — something changed after the seal; re-review, then re-consecrate. Nobody reviewed the bytes that are about to ship"
+          if [ -n "$consecrated" ]; then
+            N_RSEAL=$((N_RSEAL+1))
+            findg_=$(artifact_digest "$(doc_final_path "$d")")
+            [ "$findg_" = "$rdg_" ] || prob GATE-FINAL-DIGEST "$d $consecrated is not the bytes the clean review reviewed (reviewed_digest mismatch) — something changed after the seal; re-review, then re-consecrate. Nobody reviewed the bytes that are about to ship"
+          fi
           if [ -z "$rcx_" ]; then
             [ "${SCHEMA_V1:-0}" = "1" ] || prob GATE-UNSEALED "$d review carries reviewed_digest but no review_context_digest — a partial seal on a schema-2 mine reads as tampering, not history; re-run seal-review after a clean round"
-          elif [ "$(context_digest "$d")" != "$rcx_" ]; then
+          elif [ -n "$consecrated" ] && [ "$(context_digest "$d")" != "$rcx_" ]; then
             prob GATE-CONTEXT-CHANGED "$d review context changed after the seal (a cited truth, its source material, config or schema moved) — the clean review no longer describes this mine; re-review"
           fi
           if [ -z "$rk_" ]; then
@@ -1600,10 +1644,14 @@ EOF
           # dual-reader tolerance holds (counted legacy); on v2 stray members block — and the
           # marker does not rescue them, or a partial seal plus a marker would demote to legacy.
           if [ "${SCHEMA_V1:-0}" = "1" ]; then
-            N_RLEGACY=$((N_RLEGACY+1))
+            [ -n "$consecrated" ] && N_RLEGACY=$((N_RLEGACY+1))
           else
             prob GATE-UNSEALED "$d review carries seal field(s) without reviewed_digest — a partial seal on a schema-2 mine reads as tampering, not history; re-run seal-review after a clean round (the seal is a tuple: kind + digest + context, all or none)"
           fi
+        elif [ -z "$consecrated" ]; then
+          # No seal fields, no final: an unsealed draft-stage review is the normal mid-flow
+          # state — nothing to count, nothing to block.
+          :
         elif [ "${SCHEMA_V1:-0}" = "1" ] || [ -n "$mkr_" ]; then
           # Two legitimate digest-less states: a v1 mine (dual-reader), and a v2 mine whose
           # review carries the migration's audit marker (`review_legacy: <date>` — upgrade wrote
@@ -1615,7 +1663,6 @@ EOF
           # review skill seals after every round, so absence here is tamper or hand-writing.
           prob GATE-UNSEALED "$d $consecrated stands next to an UNSEALED review on a schema-2 mine — run seal-review after the clean round; deleting the seal fields must never reopen the gate (a genuine v1 mine reads as legacy-unbound instead)"
         fi
-      fi
     fi
   done < <(doc_ids)
 
@@ -1627,30 +1674,57 @@ EOF
   if [ "$N_CONSEC" -gt 0 ] && [ "$(cfgval completeness)" = "required" ]; then
     if [ ! -f "$ROOT/gaps.md" ]; then
       prob COMP-NO-REGISTER "completeness is 'required' and a consecrated output exists, but there is no gaps.md — the completeness register never ran. Run the weavedoc-gaps skill (fill-or-accept) before consecrating, or set fidelity.completeness: off to drop the warranty"
+    elif ! comment_balanced "$ROOT/gaps.md"; then
+      # The same rule review.md has: an unclosed '<!--' blanks everything after it BEFORE any
+      # reader sees a line, so gaps hidden behind it would vanish into a clean register.
+      prob COMP-MALFORMED "completeness is 'required' but gaps.md ends inside an unterminated '<!--' — everything after it is invisible to the counter, so gaps behind it would read as zero; close the comment"
     elif [ "$(dup_section "$ROOT/gaps.md" "Open" 0)" -eq 0 ]; then
       # A register with no readable Open section is a register that never ran, wearing a
       # filename — an empty or heading-less gaps.md must not read as "zero open gaps".
       prob COMP-MALFORMED "completeness is 'required' but gaps.md has no readable '# Open' section — the register format is '# Open' / '# Accepted' (weavedoc-gaps writes it); a file without them proves nothing and blocks like a missing one"
+    elif [ "$(dup_section "$ROOT/gaps.md" "Accepted" 0)" -eq 0 ]; then
+      # Two sections, both required: a one-section file is not the register the gaps skill
+      # writes, and fill-or-accept has nowhere legal to record an acceptance.
+      prob COMP-MALFORMED "completeness is 'required' but gaps.md has no readable '# Accepted' section — the register format is '# Open' / '# Accepted' (weavedoc-gaps writes both); a one-section file blocks like a malformed register"
     elif [ "$(dup_section "$ROOT/gaps.md" "Open" 0)" -gt 1 ] || [ "$(dup_section "$ROOT/gaps.md" "Accepted" 0)" -gt 1 ]; then
       # A duplicated register section splits the ledger: a single-section counter reads only the
       # first copy, so entries under the second were invisible — an empty first Open next to a
       # populated second one read as "zero open gaps" (v0.3.2 finding).
       prob COMP-MALFORMED "completeness is 'required' but gaps.md repeats a register section heading — exactly one '# Open' and one '# Accepted'; entries under a duplicated section are invisible to a single-section reader, so the copy blocks like a missing register"
     else
-      # The register grammar is fail-closed under 'required' (v0.3.2): entries are '- ' bullets,
-      # indented lines are continuations, comments are history. A real gap written as PROSE
-      # counts as zero in a bullet counter — grammar the machine cannot count must block, not
-      # read as a clean register.
-      local nopen_ badline_
-      badline_=$(nocomment < "$ROOT/gaps.md" | section_all - "Open" | awk '
-        /^[[:space:]]*$/ { next }
-        /^[[:space:]]*- / { next }
-        /^[[:space:]]/ { next }
-        { print; exit }')
+      # STATE-BASED entry scan (v0.3.3): a continuation is legal only AFTER a bullet — an
+      # indented line with no open entry above is prose the counter cannot see, not a
+      # continuation of nothing. And the placeholder filter judges the REMAINDER (the same
+      # ruling review entries follow): a real gap that kept placeholder brackets in its kind
+      # slot is an ENTRY; only a line that is placeholders throughout stays template noise.
+      local nopen_=0 badline_="" inb_=0 gl_ grest_ grem_ gnoise_
+      while IFS= read -r gl_; do
+        gl_=${gl_%$'\r'}
+        case "$gl_" in
+          *[!' '$'\t']*) ;;
+          *) inb_=0; continue ;;
+        esac
+        grest_=${gl_#"${gl_%%[!' '$'\t']*}"}
+        case "$grest_" in
+          '- '*)
+            inb_=1
+            gnoise_=0
+            case "$grest_" in
+              '- [<'*|'- [{'*)
+                grem_=${grest_#*]}
+                grem_=$(printf '%s' "$grem_" | sed -E 's/\{[^{}]*\}//g; s/<[^<>]*>//g; s/[][(){}<>—:·,.-]+//g; s/[ \t]+//g')
+                [ -z "$grem_" ] && gnoise_=1 ;;
+            esac
+            [ "$gnoise_" = 1 ] || nopen_=$((nopen_+1))
+            ;;
+          *)
+            if [ "$grest_" = "$gl_" ] || [ "$inb_" != 1 ]; then badline_="$gl_"; break; fi
+            ;;
+        esac
+      done < <(nocomment < "$ROOT/gaps.md" | section_all - "Open")
       if [ -n "$badline_" ]; then
-        prob COMP-MALFORMED "completeness is 'required' but gaps.md '# Open' holds a line the register grammar cannot read: '$badline_' — entries are '- [<kind>] …' bullets (indented continuation lines and HTML comments are fine); a gap recorded as prose is a gap no counter sees, so it blocks like a malformed register"
+        prob COMP-MALFORMED "completeness is 'required' but gaps.md '# Open' holds a line the register grammar cannot read: '$badline_' — entries are '- [<kind>] …' bullets; an indented line is a continuation ONLY under a bullet, and prose anywhere is a gap no counter sees, so it blocks like a malformed register"
       else
-        nopen_=$(nocomment < "$ROOT/gaps.md" | section_all - "Open" | countlines '^[[:space:]]*- ')
         [ "${nopen_:-0}" -gt 0 ] && prob COMP-OPEN-GAPS "completeness is 'required' but gaps.md holds ${nopen_} open gap(s) next to a consecrated output — fill each (question → user-answer material → map) or move it to Accepted with a reason; under 'required' an open gap is a violation, not a note"
       fi
     fi
@@ -2539,10 +2613,11 @@ cmd_seal_review() { # seal-review <doc-id> [draft|final] — pin what the clean 
   # (strip the seal later and the review read as legacy again, reopening the gate).
   local d="${1:-}" kind="${2:-draft}"
   [ -n "$d" ] || { echo "usage: weavedoc seal-review <doc-id> [draft|final]"; return 2; }
+  case "$d" in *[/\\]*|.|..) echo "seal-review: '$d' is not a document id (ids are plain folder names under documents/)"; return 2 ;; esac
   case "$kind" in draft|final) ;; *) echo "seal-review: kind '$kind' must be draft|final"; return 2 ;; esac
   local rev="$DOCUMENTS/$d/review.md"
   [ -f "$rev" ] || { echo "seal-review: no review.md for '$d' — run review first"; return 2; }
-  head -1 "$rev" | grep -q '^---' || { echo "seal-review: review.md has no frontmatter block to seal into"; return 2; }
+  head -1 "$rev" | grep -q '^---[ 	]*$' || { echo "seal-review: review.md has no frontmatter block to seal into (line 1 must be exactly '---') — nothing sealed"; return 2; }
   local art adg cdg
   if [ "$kind" = draft ]; then art=$(doc_draft_path "$d") || { echo "seal-review: no draft for '$d'"; return 2; }
   else art=$(doc_final_path "$d") || { echo "seal-review: no final for '$d'"; return 2; }; fi
@@ -2568,6 +2643,9 @@ cmd_consecrate() { # consecrate <doc-id> — stage candidate, verify seals, ONE 
   # The §5.3 flow, mechanized: the reviewed draft becomes final byte-for-byte or nothing changes.
   local d="${1:-}"
   [ -n "$d" ] || { echo "usage: weavedoc consecrate <doc-id>"; return 2; }
+  # A doc id is a plain folder name under documents/ — a path fragment must be refused before
+  # any filesystem access, or '../x' resolves relative to the tree (v0.3.3).
+  case "$d" in *[/\\]*|.|..) echo "consecrate: '$d' is not a document id (ids are plain folder names under documents/)"; return 2 ;; esac
   local rev="$DOCUMENTS/$d/review.md"
   [ -f "$rev" ] || { echo "consecrate: no review.md for '$d' — run review first"; return 2; }
   # A leftover backup means an earlier consecration died mid-validate: the final slot may hold
@@ -2578,10 +2656,9 @@ cmd_consecrate() { # consecrate <doc-id> — stage candidate, verify seals, ONE 
     return 1
   fi
   if [ -e "$DOCUMENTS/$d/.consecrate.inflight" ]; then
-    # The marker without a backup is the FIRST-consecration crash (nothing existed to back up):
-    # the final slot may hold an unvalidated candidate — byte-identical to the reviewed draft,
-    # so removing final + marker and re-running loses nothing.
-    echo "consecrate: interrupted consecration detected — $DOCUMENTS/$d/.consecrate.inflight exists, so a consecration is running or died here. If nothing is running: the final slot may hold an unvalidated candidate (byte-identical to the reviewed draft); remove final and the marker, then re-run. Nothing was touched."
+    # The recovery guidance says COMPARE FIRST (v0.3.3): a crash BEFORE the swap leaves the
+    # ORIGINAL at final, so "remove final" as a blanket instruction deletes the wrong file.
+    echo "consecrate: interrupted consecration detected — $DOCUMENTS/$d/.consecrate.inflight exists, so a consecration is running or died here. If nothing is running, byte-compare final against the reviewed draft BEFORE deciding: identical → it is the staged candidate (safe to remove); different → it is your original (keep it; the crash came before the swap); absent with .final.bak present → restore the backup. Then delete the marker and re-run. Nothing was touched."
     return 1
   fi
   # Two finals at once: doc_final_path resolves the directory, so proceeding would back up ONLY
@@ -2629,41 +2706,60 @@ cmd_consecrate() { # consecrate <doc-id> — stage candidate, verify seals, ONE 
     || { rm -rf "$cand"; echo "consecrate: candidate copy does not match the reviewed digest — copy failed; nothing promoted"; return 1; }
   oldfin=$(doc_final_path "$d") || oldfin=""
   if [ $isdir -eq 1 ]; then fin="$DOCUMENTS/$d/final"; else fin="$DOCUMENTS/$d/final.md"; fi
-  # The durable in-flight marker precedes the FIRST final mutation and is removed LAST (v0.3.2):
-  # a first-ever consecration has no .final.bak, so a hard kill (SIGKILL, power) used to leave
-  # an unvalidated candidate at final with NO trace — indistinguishable on disk from a
-  # successful run. validate (CONSEC-INTERRUPTED) and consecrate both refuse while the marker or
-  # the backup exists; traps cover INT/TERM, the marker covers what no trap can.
-  printf 'started: %s\ndoc: %s\n' "$(date +%F)" "$d" > "$mark" \
-    || { rm -rf "$cand"; echo "consecrate: cannot write the in-flight marker — nothing promoted"; return 1; }
-  # stage guards the abort: for a single-file doc, $oldfin and $fin are the SAME path, so an
-  # abort firing before the aside-move must not `rm` the final it is trying to protect.
+  # The durable in-flight marker precedes the FIRST final mutation and is removed LAST — and
+  # only behind a VERIFIED postcondition (v0.3.3): a first-ever consecration has no .final.bak,
+  # so a hard kill used to leave an unvalidated candidate at final with NO trace. Creation is
+  # exclusive (noclobber): two concurrent consecrations cannot both hold the transaction. The
+  # marker is written first but not fsynced — power-loss protection is only as good as the
+  # filesystem's ordering; process-level kills are fully covered.
+  if ! ( set -o noclobber; printf 'started: %s\ndoc: %s\n' "$(date +%F)" "$d" > "$mark" ) 2>/dev/null; then
+    rm -rf "$cand"
+    echo "consecrate: cannot create the in-flight marker (it appeared concurrently, or the directory is unwritable) — another consecration may be running; nothing promoted"
+    return 1
+  fi
+  # stage guards the abort — and is promoted BEFORE each mutation it names (v0.3.3): assignment
+  # is not atomic with mv, and an INT landing between `mv cand fin` and a late promotion left
+  # the candidate in place while the abort skipped its removal. For a single-file doc $oldfin
+  # and $fin are the SAME path, so an abort before the aside-move must not rm the original.
   local stage="staged"
   consec_abort() {
     trap - INT TERM
     [ "$stage" = "placed" ] && rm -rf "$fin" 2>/dev/null
     [ -n "$oldfin" ] && [ -e "$bak" ] && mv "$bak" "$oldfin" 2>/dev/null
     rm -rf "$cand" 2>/dev/null
-    rm -f "$mark" 2>/dev/null
-    echo "consecrate: interrupted — candidate removed, original final restored" >&2
+    # The marker leaves ONLY behind a verified postcondition — restore incomplete means the
+    # marker stays and validate blocks until a human resolves it. Fail-closed beats tidy.
+    local ok_=1
+    if [ -n "$oldfin" ]; then { [ -e "$oldfin" ] && [ ! -e "$bak" ]; } || ok_=0
+    else [ -e "$fin" ] && ok_=0; fi
+    if [ "$ok_" = 1 ] && rm -f "$mark" 2>/dev/null; then
+      echo "consecrate: interrupted — candidate removed, original final restored" >&2
+    else
+      echo "consecrate: interrupted — RESTORE INCOMPLETE; the in-flight marker stays and validate blocks until resolved (byte-compare final against the reviewed draft before deciding what to keep)" >&2
+    fi
     exit 130
   }
   trap consec_abort INT TERM
   if [ -n "$oldfin" ]; then
-    mv "$oldfin" "$bak" || { trap - INT TERM; rm -rf "$cand"; rm -f "$mark"
-      echo "consecrate: cannot move the current final aside — nothing promoted"; return 1; }
+    mv "$oldfin" "$bak" || { trap - INT TERM; rm -rf "$cand"
+      if [ -e "$oldfin" ] && [ ! -e "$bak" ]; then rm -f "$mark"; fi
+      echo "consecrate: cannot move the current final aside — nothing promoted$([ -e "$mark" ] && printf '%s' ' (marker kept: state unclear, validate blocks until resolved)')"
+      return 1; }
   fi
-  stage="moved"
-  mv "$cand" "$fin" || { trap - INT TERM
-    [ -n "$oldfin" ] && [ -e "$bak" ] && mv "$bak" "$oldfin"
-    rm -rf "$cand"; rm -f "$mark"
-    echo "consecrate: cannot place the candidate at final — original restored, nothing promoted"; return 1; }
   stage="placed"
+  mv "$cand" "$fin" || { trap - INT TERM
+    [ -n "$oldfin" ] && [ -e "$bak" ] && mv "$bak" "$oldfin" 2>/dev/null
+    rm -rf "$cand"
+    local mvok_=1
+    if [ -n "$oldfin" ]; then { [ -e "$oldfin" ] && [ ! -e "$bak" ]; } || mvok_=0
+    else [ -e "$fin" ] && mvok_=0; fi
+    [ "$mvok_" = 1 ] && rm -f "$mark"
+    echo "consecrate: cannot place the candidate at final — original restored where possible; nothing promoted$([ -e "$mark" ] && printf '%s' ' (marker kept: state unclear, validate blocks until resolved)')"
+    return 1; }
   # The validation window: the one moment an unvalidated candidate sits in the final slot. The
-  # in-process validate skips THIS doc's in-flight artifacts (WD_CONSEC_DOC is dynamically
-  # scoped, never exported — no other process and no other doc is exempt).
-  local WD_CONSEC_DOC="$d"
-  if cmd_validate; then
+  # in-process validate skips THIS doc's in-flight artifacts via a function argument — never a
+  # variable, which the environment can inject (v0.3.3).
+  if cmd_validate "$d"; then
     trap - INT TERM
     if [ -n "$oldfin" ]; then
       rm -rf "$bak" || echo "consecrate: warning — could not remove ${bak#"$ROOT"/}; validate blocks while it remains, remove it by hand"
@@ -2676,9 +2772,16 @@ cmd_consecrate() { # consecrate <doc-id> — stage candidate, verify seals, ONE 
   else
     trap - INT TERM
     rm -rf "$fin"
-    [ -n "$oldfin" ] && mv "$bak" "$oldfin"
-    rm -f "$mark"
-    echo "consecrate: full validation FAILED after staging — candidate rejected, original final preserved untouched. Fix the problems above and re-run."
+    local rok_=1
+    if [ -n "$oldfin" ]; then mv "$bak" "$oldfin" || rok_=0; fi
+    if [ "$rok_" = 1 ]; then
+      rm -f "$mark"
+      echo "consecrate: full validation FAILED after staging — candidate rejected, original final preserved untouched. Fix the problems above and re-run."
+    else
+      # Restore failed: the backup is the only original. The marker stays — a mine whose final
+      # slot is empty while the original sits in .final.bak must not validate green.
+      echo "consecrate: full validation FAILED and the backup could NOT be restored over final — the original is still in ${bak#"$ROOT"/}; restore it by hand. The in-flight marker stays (validate blocks until resolved)."
+    fi
     return 1
   fi
 }
@@ -2760,7 +2863,7 @@ scan_upgrade() { # -> kind<TAB>display, one v1→v2 migration item per line. Rea
     # is the TRUTHS lane. An m-id mention there is extraction scope, not a conversion verdict
     # (WD-COR-001); the material lane's v1 record is the material's own `status: verified`, and
     # minting m rows from the mention demoted mandatory debt into non-blocking legacy backlog.
-    local vids scov miss mfmv_ mm_ mmiss_
+    local vids scov miss mfmv_ mm_ mmiss_ mcov_
     vids=$(scan_verified_units | sed -n 's/^V\t//p' | grep -E '^t[0-9]' | LC_ALL=C sort -u || true)
     scov=$(ledger_rows | cut -f1 | LC_ALL=C sort -u)
     miss=$(comm -23 <(printf '%s\n' "$vids" | grep . || true) <(printf '%s\n' "$scov" | grep . || true))
@@ -2772,7 +2875,12 @@ scan_upgrade() { # -> kind<TAB>display, one v1→v2 migration item per line. Rea
       fmv "$MATERIALS/$mm_/converted.md" status
       [ "$REPLY" = "verified" ] && mfmv_="$mfmv_$mm_"$'\n'
     done < <(material_ids)
-    mmiss_=$(comm -23 <(printf '%s' "$mfmv_" | grep . | LC_ALL=C sort -u || true) <(printf '%s\n' "$scov" | grep . || true))
+    # Material-lane coverage is origin-aware (v0.3.3): an origin-less m legacy row (a ≤0.3.1
+    # mint) is NOT material evidence, so it must not block the correct row on a resumed
+    # migration — only a real verdict or the material origin token covers this lane.
+    mcov_=$(ledger_rows | awk -F'\t' -v tok="${SCH[verify.ledger.origin.material]:-v1-material-frontmatter}" \
+      '$1 ~ /^m/ && ($3 != "legacy-unbound" || $4 == tok) { print $1 }' | LC_ALL=C sort -u)
+    mmiss_=$(comm -23 <(printf '%s' "$mfmv_" | grep . | LC_ALL=C sort -u || true) <(printf '%s\n' "$mcov_" | grep . || true))
     [ -n "$mmiss_" ] && printf 'ledger\t%s material(s) with v1 status: verified → verify-ledger.tsv rows verdict=legacy-unbound origin=%s\n' \
       "$(printf '%s' "$mmiss_" | grep -c .)" "${SCH[verify.ledger.origin.material]:-v1-material-frontmatter}"
   fi
@@ -2796,17 +2904,28 @@ cmd_upgrade() { # upgrade [--check|--dry-run|--apply] [--from 0.1] — v1 mine �
   # running them on a v2 mine was the seal-laundering path (strip the seals, run --apply, and the
   # review_legacy marker stamped tamper as history). A mine NEWER than this runtime is
   # fail-closed, mirroring validate: guessing at a future format is how corruption ships.
-  local pv_ cv_ v_
-  pv_=$(fm "$PROJECT" version 2>/dev/null); cv_=$(cfgval version)
+  # The version matrix is CLOSED (v0.3.3): each record is 1 or the current schema, nothing
+  # else — `version: banana` used to skip the numeric future-check and read as "already at
+  # schema 2" with exit 0, a success report over a mine this migration cannot even classify.
+  local pv_ cv_ v_ sv_
+  pv_=$(fm "$PROJECT" version 2>/dev/null); cv_=$(cfgval version); sv_=$(schema_ver)
   for v_ in "$pv_" "$cv_"; do
-    case "$v_" in ''|*[!0-9]*) continue ;; esac
-    if [ "$v_" -gt "$(schema_ver)" ]; then
-      echo "upgrade: this mine declares schema $v_, newer than this runtime (schema $(schema_ver)) — refusing to touch a format this code cannot read; use a newer runtime"
-      return 2
-    fi
+    case "$v_" in
+      1|"$sv_") ;;
+      ''|*[!0-9]*)
+        echo "upgrade: version record '${v_:-<missing>}' is not a version this migration understands — a v1 mine says 1, a current mine says $sv_; fix the version: fields in project.md/config.yaml first"
+        return 2 ;;
+      *)
+        if [ "$v_" -gt "$sv_" ]; then
+          echo "upgrade: this mine declares schema $v_, newer than this runtime (schema $sv_) — refusing to touch a format this code cannot read; use a newer runtime"
+        else
+          echo "upgrade: version record '$v_' is not a version this migration understands — supported records are 1 and $sv_"
+        fi
+        return 2 ;;
+    esac
   done
   if [ "$pv_" != "1" ] && [ "$cv_" != "1" ]; then
-    echo "upgrade: nothing to do — the mine is already at schema $(schema_ver)"
+    echo "upgrade: nothing to do — the mine is already at schema $sv_"
     return 0
   fi
   local items n
@@ -2992,7 +3111,7 @@ upgrade_apply() { # the staged, rollback-safe v1 → v2 transaction (§8 safety 
   # -- an m-id mention there is extraction scope, not a conversion verdict, WD-COR-001), and
   # -- materials from their OWN `status: verified`. Each row records its origin in the standard
   # -- column, which is what lets scope tell a correct mint from a pre-0.3.2 cross-lane one.
-  local vids scov miss lf mfmv_ mm_ mmiss_
+  local vids scov miss lf mfmv_ mm_ mmiss_ mcov_
   vids=$(scan_verified_units | sed -n 's/^V\t//p' | grep -E '^t[0-9]' | LC_ALL=C sort -u || true)
   scov=$(ledger_rows | cut -f1 | LC_ALL=C sort -u)
   miss=$(comm -23 <(printf '%s\n' "$vids" | grep . || true) <(printf '%s\n' "$scov" | grep . || true))
@@ -3002,7 +3121,11 @@ upgrade_apply() { # the staged, rollback-safe v1 → v2 transaction (§8 safety 
     fmv "$MATERIALS/$mm_/converted.md" status
     [ "$REPLY" = "verified" ] && mfmv_="$mfmv_$mm_"$'\n'
   done < <(material_ids)
-  mmiss_=$(comm -23 <(printf '%s' "$mfmv_" | grep . | LC_ALL=C sort -u || true) <(printf '%s\n' "$scov" | grep . || true))
+  # Material-lane coverage is origin-aware (v0.3.3) — same rule as the scan: an origin-less m
+  # legacy row (a ≤0.3.1 mint) must not block the correct row on a resumed migration.
+  mcov_=$(ledger_rows | awk -F'\t' -v tok="${SCH[verify.ledger.origin.material]:-v1-material-frontmatter}" \
+    '$1 ~ /^m/ && ($3 != "legacy-unbound" || $4 == tok) { print $1 }' | LC_ALL=C sort -u)
+  mmiss_=$(comm -23 <(printf '%s' "$mfmv_" | grep . | LC_ALL=C sort -u || true) <(printf '%s\n' "$mcov_" | grep . || true))
   if [ -n "$miss" ] || [ -n "$mmiss_" ]; then
     lf="$TRUTHS/$(ledger_file)"
     if [ -f "$lf" ]; then bkup "${TRUTHS#"$ROOT"/}/$(ledger_file)"; else crtd "${TRUTHS#"$ROOT"/}/$(ledger_file)"; fi
@@ -3021,7 +3144,7 @@ upgrade_apply() { # the staged, rollback-safe v1 → v2 transaction (§8 safety 
     f="$DOCUMENTS/$d/review.md"; [ -f "$f" ] || continue
     fmv "$f" reviewed_digest;  [ -n "$REPLY" ] && continue
     fmv "$f" review_legacy;    [ -n "$REPLY" ] && continue
-    if head -1 "$f" | grep -q '^---'; then
+    if head -1 "$f" | grep -q '^---[ 	]*$'; then
       bkup "${DOCUMENTS#"$ROOT"/}/$d/review.md"
       awk -v dt="$today" '
         NR==1 && /^---[ \t]*$/ { print; print "review_legacy: " dt "   # v1 review, digest-less by definition — migrated, not tampered"; next }
@@ -3106,8 +3229,9 @@ cmd_attest() { # attest <verified|failed> <round> <standard> <id...> — the ver
   return 0
 }
 cmd_scope() {
-  local ledger ledger_bad
+  local ledger ledger_bad ledger_sbad
   ledger=$(ledger_rows)
+  ledger_sbad=$(ledger_rows_badstruct | tr '\n' ' ')
   # Unknown verdicts are quarantined BEFORE classification — they cover nothing and are named;
   # letting them fall through to the digest compare is how a typo once counted as verified.
   ledger_bad=$(printf '%s\n' "$ledger" | awk -F'\t' 'NF >= 3 && $3 != "verified" && $3 != "failed" && $3 != "legacy-unbound" { print $1 " (" $3 ")" }')
@@ -3282,6 +3406,12 @@ cmd_scope() {
   if [ -n "$ledger_bad" ]; then
     printf '  ledger: row(s) with unknown verdicts — they cover nothing [LEDGER-VERDICT]: %s\n' \
       "$(printf '%s' "$ledger_bad" | tr '\n' ' ')"
+  fi
+  if [ -n "${ledger_sbad% }" ]; then
+    # The shared strict filter dropped these before classification — shown here so a truncated
+    # or hand-mangled row reads as "covers nothing" in scope AND blocks in validate, never one
+    # without the other (v0.3.3: two parsers on one ledger was the drift class itself).
+    printf '  ledger: structurally malformed row(s) — they cover nothing [LEDGER-MALFORMED]: %s\n' "$ledger_sbad"
   fi
   local owed=$((n_munver + n_mstale + n_mfail + n_tunver + n_tstale + n_tfail))
   if [ "$owed" -eq 0 ] && [ $((n_mlegacy + n_tlegacy)) -gt 0 ]; then

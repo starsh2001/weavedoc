@@ -2158,6 +2158,44 @@ pass_completeness_comment_in_open() {
   printf '# Open\n\n<!-- 2026-08-01 감사에서 정리 — 남은 항목 없음 -->\n\n# Accepted\n' > "$W/gaps.md"
   vrun validate; expect_pass
 }
+block_completeness_indented_prose_gap() {
+  # A whole gap written INDENTED, with no bullet above it: the continuation tolerance read it as
+  # a continuation of nothing and the register passed. Continuations are legal only AFTER a
+  # bullet — an indented line with no open entry above is prose the counter cannot see.
+  req_completeness
+  printf '# Open\n\n  대금 조항 자료가 부족함 — 들여쓴 산문\n\n# Accepted\n' > "$W/gaps.md"
+  vrun validate; expect_block "[COMP-MALFORMED]"
+}
+block_completeness_placeholder_kind_gap() {
+  # countlines' KNOWN LIMIT became load-bearing under `required`: a REAL gap whose kind slot
+  # kept placeholder brackets (`- [<reference>] …`) was dropped by the placeholder filter and
+  # counted zero. The remainder decides (same ruling as review entries): filled prose = entry.
+  req_completeness
+  printf -- '- [<reference>] t001 — 근거 조항이 정의되지 않음 — 제3조가 언급만 됨\n' > "$W/.gapline"
+  printf '# Open\n\n%s\n\n# Accepted\n' "$(cat "$W/.gapline")" > "$W/gaps.md"; rm -f "$W/.gapline"
+  vrun validate; expect_block "[COMP-OPEN-GAPS]"
+}
+pass_completeness_template_stub_open() {
+  # The untouched template line stays noise: every slot is still a placeholder, so a freshly
+  # initialised register must not read as one open gap.
+  req_completeness
+  printf '# Open\n\n- [{kind}] {where} — {what is missing} — {evidence}\n\n# Accepted\n' > "$W/gaps.md"
+  vrun validate; expect_pass
+}
+block_completeness_unterminated_comment() {
+  # An unclosed '<!--' blanks everything after it before the counter reads a line — gaps hidden
+  # behind it vanished. The same comment_balanced rule review.md already has.
+  req_completeness
+  printf '# Open\n\n<!-- 정리 중\n- [declared] m001 — 대금 조항 미완성 — "미정"\n\n# Accepted\n' > "$W/gaps.md"
+  vrun validate; expect_block "[COMP-MALFORMED]"
+}
+block_completeness_missing_accepted() {
+  # The register format is two sections; a file without '# Accepted' is not the register the
+  # gaps skill writes — fail-closed like the missing-Open case.
+  req_completeness
+  printf '# Open\n' > "$W/gaps.md"
+  vrun validate; expect_block "[COMP-MALFORMED]"
+}
 acct_upgrade_fmless_review() {
   # A genuine v0.1 review may carry NO frontmatter block at all. The migration scan promised a
   # review_legacy marker its apply could not insert (the awk keyed on an opening '---'), so
@@ -2185,6 +2223,17 @@ block_consecrate_dual_final() {
   expect_has "위약금은 계약금액의 10%다"
   OUT=$(cat "$W/documents/d1/final/01.md"); RC=0
   expect_has "보존되어야 할 디렉터리 산출물"
+}
+acct_scope_short_row_covers_nothing() {
+  # scope read any ≥3-column row while validate demanded six — a truncated attest row counted
+  # digest-bound verified in scope while validate blocked the mine (two parsers, one ledger).
+  # The strict row filter is shared now: a structurally malformed row covers nothing ANYWHERE,
+  # and scope names it instead of silently absorbing it.
+  vrun attest verified 2 standard t001
+  sed -i -E 's/^(t001\t[0-9a-f]{64}\tverified)\t.*$/\1/' "$W/truths/verify-ledger.tsv"
+  vrun scope
+  expect_has "0 verified (digest-bound)"
+  expect_has "[LEDGER-MALFORMED]"
 }
 block_ledger_short_row() {
   # attest writes all six columns; a three-column row is a hand edit the reader cannot trust.
@@ -2227,6 +2276,51 @@ acct_upgrade_material_fm_verified_migrates() {
   vrun scope
   expect_has "materials  1 converted · 0 verified (digest-bound) · 1 legacy-unbound"
 }
+acct_upgrade_resume_after_031_rows() {
+  # Resuming a migration that a 0.3.1 runtime started: the origin-less m-id row it left behind
+  # sat in the coverage set and blocked the CORRECT material-origin row from ever being minted.
+  # Coverage is per-lane now — an m row covers the material lane only when it is valid material
+  # evidence (origin token or a real verdict).
+  sed -i 's/^status: converted$/status: verified/' "$W/materials/m001/converted.md"
+  printf 'm001\t-\tlegacy-unbound\t-\t-\t2026-08-01\n' > "$W/truths/verify-ledger.tsv"
+  vrun upgrade --apply
+  expect_pass
+  OUT=$(cat "$W/truths/verify-ledger.tsv"); RC=0
+  expect_has "v1-material-frontmatter"
+}
+block_sealreview_dashnote_fm() {
+  # `---note` satisfied the loose `^---` precheck while the strict awk never entered the
+  # frontmatter — seal-review printed digests and a success line WITHOUT writing a seal.
+  sed -i '1s/^---$/---note/' "$W/documents/d1/review.md"
+  vrun seal-review d1 draft
+  expect_block "no frontmatter"
+}
+block_upgrade_garbage_version() {
+  # `version: banana` skipped the numeric future-check and read as "already at schema 2" with
+  # exit 0. The matrix is closed: a record is 1 or the current schema, anything else refuses.
+  sed -i 's/^version: 1$/version: banana/' "$W/project.md"
+  sed -i 's/^version: 1/version: banana/' "$W/.weavedoc/config.yaml"
+  vrun upgrade --check
+  expect_block "not a version this migration understands"
+}
+block_gate_draft_partial_tuple() {
+  # Structural seal invariants hold for ANY review, not only next to a final: a draft-stage
+  # review with a partial tuple is the same tamper shape one consecration earlier.
+  mk_v2
+  mkdoc2
+  ( cd "$W" && bash .weavedoc/bin/weavedoc seal-review d2 draft >/dev/null 2>&1 )
+  sed -i '/^reviewed_kind:/d' "$W/documents/d2/review.md"
+  vrun validate; expect_block "[GATE-UNSEALED]"
+}
+block_gate_draft_seal_marker() {
+  # Marker-next-to-seal is tamper at draft stage too — waiting for the consecration to notice
+  # hands the demotion a whole review round to sit undetected.
+  mk_v2
+  mkdoc2
+  ( cd "$W" && bash .weavedoc/bin/weavedoc seal-review d2 draft >/dev/null 2>&1 )
+  sed -i '1a review_legacy: 2026-01-01' "$W/documents/d2/review.md"
+  vrun validate; expect_block "[GATE-SEAL-MARKER]"
+}
 acct_scope_originless_mid_row_ignored() {
   # A 0.3.1-migrated mine already carries origin-less m-id legacy rows — the runtime corrects
   # them fail-safe: not material evidence (the material falls back to its own status and is
@@ -2258,12 +2352,29 @@ block_validate_leftover_bak() {
 }
 block_consecrate_marker_detected() {
   # A first-ever consecration killed hard leaves marker + candidate and NO backup (nothing
-  # existed to back up). Re-running must refuse on the marker alone.
+  # existed to back up). Re-running must refuse on the marker alone — and the recovery guidance
+  # must say COMPARE FIRST: a crash before the swap leaves the ORIGINAL at final, so "remove
+  # final" as a blanket instruction deletes the wrong file (third cold review).
   ( cd "$W" && bash .weavedoc/bin/weavedoc seal-review d1 draft >/dev/null 2>&1 )
   printf 'started: 2026-08-03\ndoc: d1\n' > "$W/documents/d1/.consecrate.inflight"
   vrun consecrate d1
   expect_block "interrupted"
+  expect_has "byte-compare"
   [ -e "$W/documents/d1/.consecrate.inflight" ] || bad "refusal removed the marker it refused on"
+}
+block_validate_env_injection_ignored() {
+  # The exemption channel must be a function argument, not a variable: bash imports the caller's
+  # environment into shell variables, so `WD_CONSEC_DOC=d1 weavedoc validate` handed the
+  # consecrate-only exemption to ANY external caller (third cold review P0-2 — reproduced).
+  printf 'started: 2026-08-03\ndoc: d1\n' > "$W/documents/d1/.consecrate.inflight"
+  OUT=$( ( cd "$W" && WD_CONSEC_DOC=d1 $TO bash .weavedoc/bin/weavedoc validate ) 2>&1 ); RC=$?
+  expect_block "[CONSEC-INTERRUPTED]"
+}
+block_consecrate_bad_docid() {
+  # A doc id is a plain folder name under documents/ — path fragments must be refused before any
+  # filesystem access, not resolved relative to the tree.
+  vrun consecrate ../d1
+  expect_block "not a document id"
 }
 acct_consecrate_no_residue() {
   # The clean path leaves nothing behind: final promoted, no marker, no backup — the artifacts
