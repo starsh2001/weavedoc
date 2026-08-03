@@ -19,6 +19,8 @@
 
 검증: 로컬 전수 283/283 + doc-sync 1(VERSION 확정 후 단독 PASS) = 284 GREEN · 신규 케이스 10종 · 자체 발견 결함 3(SCHEMA_V1 순서 · v2 봉인↔migration 충돌→review_legacy 마커 · 캐시가 쓰기-후-재검증 오염→validate 진입 시 리셋) · 통합 판정은 CI Ubuntu 전수 + dispatch full matrix(macOS NBSP 수리 검증 포함).
 
+잔여(기록): macOS 269→280 — NBSP 수리 검증 완료, 남은 4건은 전부 census의 index 파싱 계열(로컬 재현 불가, macOS 셸 필요). §7.2 non-blocking 유지, 승격/철회 결정은 이 4건 해소 후.
+
 ## 2026-08-02.16
 
 **진단 계약 완성 + 나머지 `--json` (단위 11b) · raw source 고지 (WD-SEC-001).**
