@@ -4,7 +4,21 @@
 
 ---
 
-## 2026-08-03.2
+## 2026-08-04.1
+
+**필드 리포트(notes/FIELD-2026-08-03) 5건 전부 반영 — P1 단일 패스 접기(실광산 −79%) + 소비자 조회면 결함 D1~D4.** eclypse 실전 검증 사이클의 T5 소비자 렌즈가 낸 리포트를 §7 순서 그대로: fixture → P1 → D1+D4 → D3(§11 결정 선행) → D2.
+
+- **P1 — validate 155s→32s(실광산 자료30·truth268, 3회 median · −79.4%), 합성 60-truth 47s→8s(−83%).** 항목 수에 비례하던 spawn을 전부 제거: truth당 basename+canon_id+awk 3-fork → 배치 awk 1회 · 재료당 `$(fm)` ~12회 → fmv(REPLY) · 전 파일 frontmatter 일괄 프리로드(`fm_preload`, 값 규칙은 `FM_KV_AWK` 한 벌 공유) · `$(sch)`×34/`$(cfg2)`×14 → 배열 직접 · index↔파일 대조 파이프라인 → bash 맵. **검사 규칙 무변경** — 같은 광산에서 문제 목록·종료 코드·`examined:` 동일. 측정 중 실물 결함 둘: `pipes()` 이중 정의(echo|tr판이 fork-free판을 몇 달간 덮고 있었음), v0.3.2 ledger digest 검사의 행당 printf|grep(246행×2fork≈15s — 자기 회귀).
+- **D1 — index.md/tree.md가 `pull`과 같은 소비자 라벨을 싣는다**: `truth_labels()` 공유 함수 하나(둘째 사본 금지), ` ··` 구분자 뒤 라벨, `pull`은 매칭 전에 라벨 꼬리를 벗김(라벨 산문은 출력이지 검색어가 아님 — "evidence"를 pull하면 전 라벨 truth가 잡히는 것 방지). 진입 경로에 따라 소비자가 받는 사실이 달라지던 결함 종결(계획본 앨범 스펙이 tree.md에서 발매 사실로 읽힌 실사례). 기존 광산은 `reindex` 1회로 라벨 획득.
+- **D4 — 부분 폐기(resolution.scope) 행에 `[출처]`+라벨 전체** — READ.md 규칙 2가 소비자를 보내는 바로 그 살아남은 절반이 무라벨로 출력되고 있었음(eclypse t040, 2026-08-01부터 open 항목). 전체 폐기 행은 의도적으로 그대로(후계자를 따라가라는 행).
+- **D3 — `resolution.reason` 인용부호 강제**(§11 결정 2026-08-04): map이 항상 `"…"`로 쓰고, validate는 위험 형태(새 키를 열지 않는 쉼표를 품은 무인용)만 `RES-REASON-UNQUOTED`로 **경고**(비차단 — 배포 광산이 red가 되지 않게; 차단 승격은 schema 3 후보로 §11 기록). eclypse t245의 정정 부기가 YAML 절단선 아래로 사라진 실사고가 동기.
+- **D2 — 표 본문 truth의 `↳ sealed:` 미리보기가 "머리행 — 표 N행, 전문은 truths/id.md"** — 러닝타임이 표 본문에 다 있는데 "광산에 길이 정보가 없다"고 판단한 실사례. 산문 미리보기는 불변.
+- 합성 벤치 fixture **`mkscale`**(자료8·truth60, 전 truth 축자 인용) + `acct_scale_snapshot` — perf-baseline의 "250-truth fixture 추가 예정" 잔여 과제를 닫음.
+- **스윕 실측 기록**: 전체 회귀 331케이스 = 이 머신(MSYS)에서 ~33분 연속 실행(06:52→07:25, 결과 mtime 곡선으로 확인). P1은 스윕을 거의 돕지 못함 — 스윕 케이스의 광산은 1-truth라 항목 비례 최적화의 수혜가 0에 가깝고, 지배 항은 **호출당 고정 floor(3,300줄 파스+고정 파이프 ≈3-5s) × 실명령 ~500회 × MSYS fork 전역 직렬화(-j6가 사실상 직렬)**. 그 직렬화의 물증: 경합 창에서 유일하게 실패한 케이스가 `fork: Resource temporarily unavailable`로 자식이 죽은 pass_locales(한산 후 단독 PASS). 스윕 가속은 P1과 별개 작업(하네스 상주화·케이스 배칭·Windows -j 하향·Linux CI 위임 관행)으로 §10 후보에 기록.
+
+검증: `bash -n` 통과 · 회귀 **331/331**(신규 8, 전부 red 확인 후 구현; pass_locales는 fork 고갈 크래시 후 단독 재실행 PASS) · doccheck ✓ · manifest 2회 동일 · eclypse 사본에서 `examined:` 동일·rc=0 유지.
+
+
 
 **v0.3.3 — 3차 cold review: 새 안전장치 자체의 구멍을 닫습니다.** 이번 P0 4건 중 2건이 v0.3.2에서 추가한 보호장치의 결함이었습니다(지난 라운드가 v0.3.1 메커니즘의 수명주기를 지적했던 것과 같은 클래스가 한 층 아래에서 반복). 전부 재현 케이스 선행으로 수리했습니다.
 
