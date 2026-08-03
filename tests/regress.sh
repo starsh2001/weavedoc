@@ -2105,6 +2105,49 @@ block_consecrate_interrupted_detected() {
   expect_has "원본 final이었던 것"
 }
 
+block_completeness_prose_gap() {
+  # A real gap written as prose under '# Open': the bullet counter reads 0 and the register
+  # passed while holding exactly the debt it exists to surface. Grammar the machine cannot
+  # count is a malformed register, not zero open gaps.
+  req_completeness
+  printf '# Open\n\n대금 조항 정보가 부족함 — bullet이 아닌 산문 기록\n\n# Accepted\n' > "$W/gaps.md"
+  vrun validate; expect_block "[COMP-MALFORMED]"
+}
+block_completeness_dup_open() {
+  # Two '# Open' headings, gaps under the second: the counter read only the first (empty) and
+  # passed. A duplicated register section splits the ledger — blocked as malformed.
+  req_completeness
+  printf '# Open\n\n# Open\n\n- [declared] m001 — 대금 조항 미완성 — "미정" 표기\n\n# Accepted\n' > "$W/gaps.md"
+  vrun validate; expect_block "[COMP-MALFORMED]"
+}
+block_completeness_open_gap_with_continuation() {
+  # An indented continuation line under a bullet is legal grammar — the entry still counts as
+  # ONE open gap (COMP-OPEN-GAPS), and the continuation must not read as malformed prose.
+  req_completeness
+  printf '# Open\n\n- [declared] m001 — 대금 조항 미완성 — "미정" 표기\n  후속: 부속서 2에서 재확인 필요\n\n# Accepted\n' > "$W/gaps.md"
+  vrun validate; expect_block "[COMP-OPEN-GAPS]"
+  expect_hasnt "[COMP-MALFORMED]"
+}
+pass_completeness_comment_in_open() {
+  # HTML comments are audit history, not entries — an Open section holding only a comment is a
+  # clean register (the same nocomment rule every other ledger reader applies).
+  req_completeness
+  printf '# Open\n\n<!-- 2026-08-01 감사에서 정리 — 남은 항목 없음 -->\n\n# Accepted\n' > "$W/gaps.md"
+  vrun validate; expect_pass
+}
+acct_upgrade_fmless_review() {
+  # A genuine v0.1 review may carry NO frontmatter block at all. The migration scan promised a
+  # review_legacy marker its apply could not insert (the awk keyed on an opening '---'), so
+  # post-validate hit GATE-UNSEALED and rolled the whole migration back — such a mine was
+  # permanently unmigratable. Apply now prepends a fresh frontmatter block instead.
+  mkv1
+  printf '# Fidelity violations\n\n# Findings\n\n# Adjudications\n\n# Human queue\n' > "$W/documents/d1/review.md"
+  vrun upgrade --apply
+  expect_pass
+  OUT=$(cat "$W/documents/d1/review.md"); RC=0
+  expect_has "review_legacy"
+  vrun validate; expect_pass
+}
 block_consecrate_dual_final() {
   # final.md AND final/ at once: doc_final_path resolves the directory, so the old code moved
   # final/ aside, overwrote final.md with the candidate (no backup), validated a mine where the

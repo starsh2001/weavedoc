@@ -1601,11 +1601,28 @@ EOF
       # A register with no readable Open section is a register that never ran, wearing a
       # filename — an empty or heading-less gaps.md must not read as "zero open gaps".
       prob COMP-MALFORMED "completeness is 'required' but gaps.md has no readable '# Open' section — the register format is '# Open' / '# Accepted' (weavedoc-gaps writes it); a file without them proves nothing and blocks like a missing one"
+    elif [ "$(dup_section "$ROOT/gaps.md" "Open" 0)" -gt 1 ] || [ "$(dup_section "$ROOT/gaps.md" "Accepted" 0)" -gt 1 ]; then
+      # A duplicated register section splits the ledger: a single-section counter reads only the
+      # first copy, so entries under the second were invisible — an empty first Open next to a
+      # populated second one read as "zero open gaps" (v0.3.2 finding).
+      prob COMP-MALFORMED "completeness is 'required' but gaps.md repeats a register section heading — exactly one '# Open' and one '# Accepted'; entries under a duplicated section are invisible to a single-section reader, so the copy blocks like a missing register"
     else
-      local nopen_
-      nopen_=$(nocomment < "$ROOT/gaps.md" | section_body - "Open" | countlines '^[[:space:]]*- ')
-      [ "${nopen_:-0}" -eq 0 ] && nopen_=$(nocomment < "$ROOT/gaps.md" | section_body2 - "Open" | countlines '^[[:space:]]*- ')
-      [ "${nopen_:-0}" -gt 0 ] && prob COMP-OPEN-GAPS "completeness is 'required' but gaps.md holds ${nopen_} open gap(s) next to a consecrated output — fill each (question → user-answer material → map) or move it to Accepted with a reason; under 'required' an open gap is a violation, not a note"
+      # The register grammar is fail-closed under 'required' (v0.3.2): entries are '- ' bullets,
+      # indented lines are continuations, comments are history. A real gap written as PROSE
+      # counts as zero in a bullet counter — grammar the machine cannot count must block, not
+      # read as a clean register.
+      local nopen_ badline_
+      badline_=$(nocomment < "$ROOT/gaps.md" | section_all - "Open" | awk '
+        /^[[:space:]]*$/ { next }
+        /^[[:space:]]*- / { next }
+        /^[[:space:]]/ { next }
+        { print; exit }')
+      if [ -n "$badline_" ]; then
+        prob COMP-MALFORMED "completeness is 'required' but gaps.md '# Open' holds a line the register grammar cannot read: '$badline_' — entries are '- [<kind>] …' bullets (indented continuation lines and HTML comments are fine); a gap recorded as prose is a gap no counter sees, so it blocks like a malformed register"
+      else
+        nopen_=$(nocomment < "$ROOT/gaps.md" | section_all - "Open" | countlines '^[[:space:]]*- ')
+        [ "${nopen_:-0}" -gt 0 ] && prob COMP-OPEN-GAPS "completeness is 'required' but gaps.md holds ${nopen_} open gap(s) next to a consecrated output — fill each (question → user-answer material → map) or move it to Accepted with a reason; under 'required' an open gap is a violation, not a note"
+      fi
     fi
   fi
 
@@ -2915,6 +2932,14 @@ upgrade_apply() { # the staged, rollback-safe v1 → v2 transaction (§8 safety 
       awk -v dt="$today" '
         NR==1 && /^---[ \t]*$/ { print; print "review_legacy: " dt "   # v1 review, digest-less by definition — migrated, not tampered"; next }
         { print }' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+    else
+      # A genuine v0.1 review may have NO frontmatter block at all. The scan promised a marker
+      # this branch could not insert, so post-validate hit GATE-UNSEALED and rolled the whole
+      # migration back — such a mine was permanently unmigratable (v0.3.2 finding). The marker
+      # gets a fresh block instead.
+      bkup "${DOCUMENTS#"$ROOT"/}/$d/review.md"
+      { printf -- '---\nreview_legacy: %s   # v1 review, digest-less by definition — migrated, not tampered\n---\n\n' "$today"
+        cat "$f"; } > "$f.tmp" && mv "$f.tmp" "$f"
     fi
   done
 
