@@ -4,7 +4,26 @@
 
 ---
 
-## 2026-08-02.17
+## 2026-08-03.1
+
+**v0.3.2 — 2차 cold review의 P0 3건과 고우선 잔여를 전부 닫습니다 (8단계 합의안, 실패 케이스 선행).** v0.3.1 리뷰가 정확히 지적한 대로, 이번 구멍의 두 개는 v0.3.1이 만든 메커니즘 자체의 수명주기였습니다 — `review_legacy`는 도입됐지만 닫히지 않았고, dual-final은 validate에만 막혀 있었습니다.
+
+- **upgrade는 v1 전용 (P0-1)** — version 레코드가 하나라도 1일 때만 실행(OR: 중단된 apply의 재개 보존), schema >2는 fail-closed("newer than this runtime"), v2 광산은 스캔 없이 "nothing to do". seal을 지운 v2 광산에 `--apply`가 `review_legacy`를 찍어 **변조를 이력으로 세탁**하던 경로가 근원 차단 — scan의 review-legacy 항목 자체도 v1 게이트(ledger 이관과 같은 게이트를 이 항목만 안 걸고 있었음).
+- **marker 수명주기 (P0-1b)** — `seal-review`가 봉인 시 `review_legacy`를 **제거**(재봉인된 review는 v1 이력이 아님), marker+seal 공존은 `GATE-SEAL-MARKER`(신규 코드) 차단 — 남겨두면 "나중에 seal만 지우면 legacy로 강등"이 상비됩니다.
+- **seal tuple all-or-none (P0-1c)** — kind/digest/context 중 어느 진부분집합도 v2에서 `GATE-UNSEALED`, `reviewed_kind`는 enum 검사. digest 없는 잔여 필드도 marker로 구제되지 않습니다.
+- **dual-final consecrate 사전 거부 (P0-2)** — 기존 consecrate는 `final/`만 backup하고 `final.md`를 무백업 덮어쓴 뒤, dual 상태가 사라진 광산을 검증하고 성공 경로에서 backup까지 삭제 — **두 기존 산출물 모두 파괴, exit 0**. 이제 첫 write 전에 거부(validate의 `GATE-DUAL-FINAL`과 같은 판독).
+- **gaps 문법 fail-closed (P0-3)** — `required`에서 중복 `# Open`/`# Accepted` heading과 산문 항목은 `COMP-MALFORMED`(빈 첫 Open 뒤 두 번째 Open의 항목이 보이지 않던 것, 산문 gap이 0으로 세이던 것). 들여쓴 연속행·HTML 주석은 문법에 포함. 계수는 section_all(레벨 무관)로.
+- **fm 없는 v0.1 review 마이그레이션** — fm 블록을 새로 prepend. 기존엔 scan이 marker를 약속하고 apply가 못 넣어 post-validate rollback — 그런 광산은 영구 마이그레이션 불가였습니다.
+- **내구 in-flight marker** — `.consecrate.inflight`를 **첫 final 변경 전 생성, 최후 삭제**. 최초 consecration은 `.final.bak`이 없어 hard kill(SIGKILL/전원)이 무검증 candidate를 흔적 없이 final에 남겼습니다 — 성공한 실행과 디스크상 구분 불가. validate가 marker/bak에 `CONSEC-INTERRUPTED`(신규 코드)로 fail-closed(유일한 예외: consecrate 자신의 in-process validate, **동적 스코프 local**로 해당 doc 한정 — export 아님). 모든 cp/mv 명시 검사. trap은 첫 mv 앞 + stage 가드(단일 파일 doc은 `$oldfin`과 `$fin`이 **같은 경로**라, 이동 전 abort가 보호 대상을 지울 뻔한 함정을 구현 중 자체 발견). 보증 문구 정직화: INT/TERM은 자동 복원, hard kill은 감지 후 수동 복원.
+- **이관 축 교정** — t행은 `## Verified units`에서(origin=`v1-truths-ledger`), material행은 자료 자신의 v1 `status: verified`에서(origin=`v1-material-frontmatter`). Verified units의 m-id 언급은 추출 범위이지 변환 판정이 아닌데(WD-COR-001) 0.3.1 migration이 그 계약을 ledger 문에서 다시 열어 **필수 검증 부채를 비차단 legacy로 강등**시켰습니다. scope 판독은 의도된 비대칭: 출처 토큰 없는 m행은 **표시 후 무시**(자료 fm으로 fallback — upgrade를 다시 못 타는 기-이관 광산의 런타임 fail-safe 교정), t행 `-`는 grandfather(truths 레인은 처음부터 옳은 레인). UPGRADING에 영향 판별식과 attest last-row-wins 교정 절차.
+- **ledger 행 형식 fail-closed** — 정확 6열(attest가 항상 6열을 쓰므로 이탈은 손 편집), digest 64-hex|`-`, round 정수|`-`, standard 비어있지 않음(출처 토큰 자리), 실제 날짜 — 전부 `LEDGER-MALFORMED`.
+- **mk_v2 실패 승격 + v2 pass 배터리** — suite는 `set -e`가 아니라 `|| true`의 조용한 실패가 모든 v2 케이스에 unsealed 광산을 건네고 strip_seal 계열을 엉뚱한 이유로 통과시킬 수 있었음 → `bad()` 승격. `pass_gate_v2_sealed_clean` · `pass_consecrate_v2_e2e`로 pass 쪽도 고정.
+- **macOS best-effort 결정 + trust boundary** — §11에 결정 기록(되돌림 조건: census 4건 해결 시 required 승격 재상정), README·WORKFLOW·tests/README·CI·§7.2·§9 한 문구. FORMATS에 신뢰 경계 명문화: 저장소 작성자와 runtime을 신뢰한다 · digest는 변경 결속이지 작성자 인증이 아니다 · **지원 명령은 자동 downgrade 경로를 만들면 안 된다**(v0.3.1 seal 세탁이 정확히 이 클래스).
+- scope `--json` materials에 `originless_rows_ignored` 추가(additive, §11 JSON 정책). 이연 기록: candidate-aware validate 전면 재설계, failed 행의 바이트 변경 시 stale 재라벨.
+
+검증: `bash -n` 통과 · 회귀 **310/310**(신규 26, 전 케이스 red 확인 후 수리) · doccheck ✓ · `git diff --check` ✓ · manifest 2회 동일(아래 커밋에서 확인).
+
+
 
 **v0.3.1 — cold review가 연 게이트를 닫습니다.** v0.3.0 직후의 외부 cold review가 핵심 보증을 우회하는 false-green 6종을 실증했고, 전부 실물 확인 후 수리했습니다. 리뷰가 이 도구의 방법론을 이 도구에 적용한 결과이며, 그 지적이 옳았습니다.
 

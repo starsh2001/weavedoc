@@ -100,7 +100,11 @@ mk_v2() { # promote the workspace to a schema-2 mine with a sealed review — th
   # cases which edit truths/materials are not all staled by a seal they never asked for.
   sed -i 's/^version: 1$/version: 2/' "$W/project.md"
   sed -i 's/^version: 1/version: 2/' "$W/.weavedoc/config.yaml"
-  ( cd "$W" && bash .weavedoc/bin/weavedoc seal-review d1 draft >/dev/null 2>&1 ) || true
+  # The suite is not `set -e`: a silent seal-review failure here would hand every v2 case an
+  # UNSEALED mine, and the strip_seal block cases would then pass for the wrong reason (never
+  # sealed is observably identical to stripped). A helper failure is a case failure, loudly.
+  ( cd "$W" && bash .weavedoc/bin/weavedoc seal-review d1 draft >/dev/null 2>&1 ) \
+    || bad "mk_v2: seal-review failed — the case would assert against an unsealed mine"
 }
 REV() { review4 "$W" "$@"; }
 
@@ -2030,6 +2034,57 @@ block_gate_v2_context_seal_stripped() {
   printf '\n제12조 신설.\n' >> "$W/materials/m001/converted.md"
   vrun validate; expect_block "[GATE-UNSEALED]"
 }
+pass_gate_v2_sealed_clean() {
+  # The v2 happy path pinned from the pass side: a properly sealed schema-2 mine validates
+  # clean and counts its seal digest-bound — the block cases above only prove rejection.
+  mk_v2
+  vrun validate; expect_pass
+  expect_has "1 digest-bound"
+}
+pass_consecrate_v2_e2e() {
+  # The v2 consecration spine: sealed draft → consecrate → one full validation → promoted, no
+  # transaction residue, and the sealed validate stays green afterwards.
+  mk_v2
+  vrun consecrate d1
+  expect_pass
+  expect_has "full validation: 1 run"
+  [ -e "$W/documents/d1/.consecrate.inflight" ] && bad "in-flight marker left behind"
+  [ -e "$W/documents/d1/.final.bak" ] && bad "backup left behind"
+  vrun validate; expect_pass
+  expect_has "1 digest-bound"
+}
+block_gate_v2_seal_next_to_marker() {
+  # A full seal and the migration marker on ONE review: seal-review removes the marker when a
+  # real round seals, so coexistence is tamper (a hand-added marker parked as a future demotion
+  # path — strip the seal later and the review reads as "legacy"). Blocked while the seal stands.
+  mk_v2
+  sed -i '1a review_legacy: 2026-01-01' "$W/documents/d1/review.md"
+  vrun validate; expect_block "[GATE-SEAL-MARKER]"
+}
+pass_seal_review_strips_marker() {
+  # Re-sealing a migrated review ends its legacy status: the marker says "v1 history, digest-less
+  # by definition" and a fresh seal makes that sentence false. seal-review removes it.
+  sed -i 's/^version: 1$/version: 2/' "$W/project.md"
+  sed -i 's/^version: 1/version: 2/' "$W/.weavedoc/config.yaml"
+  sed -i '1a review_legacy: 2026-01-01' "$W/documents/d1/review.md"
+  vrun seal-review d1 draft
+  expect_has "reviewed_digest"
+  OUT=$(cat "$W/documents/d1/review.md"); RC=0
+  expect_hasnt "review_legacy"
+  vrun validate; expect_pass
+}
+block_gate_v2_kind_missing() {
+  # The seal is a TUPLE: deleting only reviewed_kind must read as a partial seal, not as a seal.
+  mk_v2
+  sed -i '/^reviewed_kind:/d' "$W/documents/d1/review.md"
+  vrun validate; expect_block "[GATE-UNSEALED]"
+}
+block_gate_v2_kind_invalid() {
+  # reviewed_kind outside draft|final is a seal validate cannot interpret — malformed, not green.
+  mk_v2
+  sed -i 's/^reviewed_kind: draft$/reviewed_kind: banana/' "$W/documents/d1/review.md"
+  vrun validate; expect_block "[GATE-UNSEALED]"
+}
 pass_gate_v1_unsealed_is_legacy() {
   # The dual-reader stays: a genuine v1 mine with an unsealed review is legacy-unbound, counted
   # and shown, never blocking — the v2 block above is what distinguishes tamper from history.
@@ -2073,6 +2128,155 @@ block_consecrate_interrupted_detected() {
   expect_has "원본 final이었던 것"
 }
 
+block_completeness_prose_gap() {
+  # A real gap written as prose under '# Open': the bullet counter reads 0 and the register
+  # passed while holding exactly the debt it exists to surface. Grammar the machine cannot
+  # count is a malformed register, not zero open gaps.
+  req_completeness
+  printf '# Open\n\n대금 조항 정보가 부족함 — bullet이 아닌 산문 기록\n\n# Accepted\n' > "$W/gaps.md"
+  vrun validate; expect_block "[COMP-MALFORMED]"
+}
+block_completeness_dup_open() {
+  # Two '# Open' headings, gaps under the second: the counter read only the first (empty) and
+  # passed. A duplicated register section splits the ledger — blocked as malformed.
+  req_completeness
+  printf '# Open\n\n# Open\n\n- [declared] m001 — 대금 조항 미완성 — "미정" 표기\n\n# Accepted\n' > "$W/gaps.md"
+  vrun validate; expect_block "[COMP-MALFORMED]"
+}
+block_completeness_open_gap_with_continuation() {
+  # An indented continuation line under a bullet is legal grammar — the entry still counts as
+  # ONE open gap (COMP-OPEN-GAPS), and the continuation must not read as malformed prose.
+  req_completeness
+  printf '# Open\n\n- [declared] m001 — 대금 조항 미완성 — "미정" 표기\n  후속: 부속서 2에서 재확인 필요\n\n# Accepted\n' > "$W/gaps.md"
+  vrun validate; expect_block "[COMP-OPEN-GAPS]"
+  expect_hasnt "[COMP-MALFORMED]"
+}
+pass_completeness_comment_in_open() {
+  # HTML comments are audit history, not entries — an Open section holding only a comment is a
+  # clean register (the same nocomment rule every other ledger reader applies).
+  req_completeness
+  printf '# Open\n\n<!-- 2026-08-01 감사에서 정리 — 남은 항목 없음 -->\n\n# Accepted\n' > "$W/gaps.md"
+  vrun validate; expect_pass
+}
+acct_upgrade_fmless_review() {
+  # A genuine v0.1 review may carry NO frontmatter block at all. The migration scan promised a
+  # review_legacy marker its apply could not insert (the awk keyed on an opening '---'), so
+  # post-validate hit GATE-UNSEALED and rolled the whole migration back — such a mine was
+  # permanently unmigratable. Apply now prepends a fresh frontmatter block instead.
+  mkv1
+  printf '# Fidelity violations\n\n# Findings\n\n# Adjudications\n\n# Human queue\n' > "$W/documents/d1/review.md"
+  vrun upgrade --apply
+  expect_pass
+  OUT=$(cat "$W/documents/d1/review.md"); RC=0
+  expect_has "review_legacy"
+  vrun validate; expect_pass
+}
+block_consecrate_dual_final() {
+  # final.md AND final/ at once: doc_final_path resolves the directory, so the old code moved
+  # final/ aside, overwrote final.md with the candidate (no backup), validated a mine where the
+  # dual state had vanished, then deleted the backup — BOTH prior artifacts destroyed, exit 0.
+  # Consecrate now refuses before its first write, same reading as GATE-DUAL-FINAL.
+  ( cd "$W" && bash .weavedoc/bin/weavedoc seal-review d1 draft >/dev/null 2>&1 )
+  mkdir -p "$W/documents/d1/final"
+  printf '보존되어야 할 디렉터리 산출물\n' > "$W/documents/d1/final/01.md"
+  vrun consecrate d1
+  expect_block "both final.md and final/"
+  OUT=$(cat "$W/documents/d1/final.md"); RC=0
+  expect_has "위약금은 계약금액의 10%다"
+  OUT=$(cat "$W/documents/d1/final/01.md"); RC=0
+  expect_has "보존되어야 할 디렉터리 산출물"
+}
+block_ledger_short_row() {
+  # attest writes all six columns; a three-column row is a hand edit the reader cannot trust.
+  # It used to pass (the check stopped at "at least id·digest·verdict").
+  printf 't001\tabc\tverified\n' > "$W/truths/verify-ledger.tsv"
+  vrun validate; expect_block "[LEDGER-MALFORMED]"
+}
+block_ledger_bad_digest() {
+  # A digest column that is neither 64-hex nor '-' binds nothing — scope would read it as
+  # "stale" (fail-safe), but validate must name the malformation instead of letting a garbage
+  # hash wear the shape of evidence.
+  printf 't001\tnotahash\tverified\t2\tstandard\t2026-08-01\n' > "$W/truths/verify-ledger.tsv"
+  vrun validate; expect_block "[LEDGER-MALFORMED]"
+}
+block_ledger_bad_date() {
+  printf 't001\t-\tlegacy-unbound\t-\t-\t2026-13-99\n' > "$W/truths/verify-ledger.tsv"
+  vrun validate; expect_block "[LEDGER-MALFORMED]"
+}
+acct_upgrade_mid_not_material_evidence() {
+  # WD-COR-001 held through migration: the pristine Verified units row names m001, but that
+  # ledger is the TRUTHS lane (extraction scope) — the conversion verdict lives only in the
+  # material's own frontmatter, and m001 here says `status: converted`. The 0.3.1 migration
+  # minted a legacy row from the mention anyway, demoting mandatory verification debt into
+  # non-blocking legacy backlog. Post-apply, m001 must still be OWED.
+  vrun upgrade --apply
+  expect_pass
+  vrun scope
+  expect_has "materials  1 converted · 0 verified (digest-bound) · 0 legacy-unbound"
+  expect_has "1 unverified"
+  vrun validate; expect_pass
+}
+acct_upgrade_material_fm_verified_migrates() {
+  # The correct material source: v1 `status: verified` IS conversion history, and it must gain
+  # a ledger row (with its origin recorded) or a later `used` stamp erases the evidence.
+  sed -i 's/^status: converted$/status: verified/' "$W/materials/m001/converted.md"
+  vrun upgrade --apply
+  expect_pass
+  OUT=$(cat "$W/truths/verify-ledger.tsv"); RC=0
+  expect_has "v1-material-frontmatter"
+  vrun scope
+  expect_has "materials  1 converted · 0 verified (digest-bound) · 1 legacy-unbound"
+}
+acct_scope_originless_mid_row_ignored() {
+  # A 0.3.1-migrated mine already carries origin-less m-id legacy rows — the runtime corrects
+  # them fail-safe: not material evidence (the material falls back to its own status and is
+  # owed again), and SHOWN, never silently absorbed.
+  printf 'm001\t-\tlegacy-unbound\t-\t-\t2026-08-01\n' > "$W/truths/verify-ledger.tsv"
+  vrun scope
+  expect_has "1 unverified"
+  expect_has "pre-0.3.2"
+}
+acct_scope_tid_originless_grandfathered() {
+  # t-id rows keep accepting `-`: the truths lane was always the right lane, so every 0.3.1 t
+  # row is correct history. The asymmetry is the fix, not an accident.
+  printf 't001\t-\tlegacy-unbound\t-\t-\t2026-08-01\n' > "$W/truths/verify-ledger.tsv"
+  vrun scope
+  expect_has "truths     1 live · 0 verified (digest-bound) · 1 legacy-unbound"
+}
+block_validate_inflight_marker() {
+  # .consecrate.inflight is the durable trace of a consecration that is running or died hard
+  # (SIGKILL/power — no trap runs). While it exists the final slot may hold an unvalidated
+  # candidate, and a plain validate must say so instead of green-lighting the mine.
+  printf 'started: 2026-08-03\ndoc: d1\n' > "$W/documents/d1/.consecrate.inflight"
+  vrun validate; expect_block "[CONSEC-INTERRUPTED]"
+}
+block_validate_leftover_bak() {
+  # .final.bak holds the ONLY original after a mid-validate death. validate used to pass right
+  # over it — the mine looked healthy while a transaction sat half-done.
+  printf 'x\n' > "$W/documents/d1/.final.bak"
+  vrun validate; expect_block "[CONSEC-INTERRUPTED]"
+}
+block_consecrate_marker_detected() {
+  # A first-ever consecration killed hard leaves marker + candidate and NO backup (nothing
+  # existed to back up). Re-running must refuse on the marker alone.
+  ( cd "$W" && bash .weavedoc/bin/weavedoc seal-review d1 draft >/dev/null 2>&1 )
+  printf 'started: 2026-08-03\ndoc: d1\n' > "$W/documents/d1/.consecrate.inflight"
+  vrun consecrate d1
+  expect_block "interrupted"
+  [ -e "$W/documents/d1/.consecrate.inflight" ] || bad "refusal removed the marker it refused on"
+}
+acct_consecrate_no_residue() {
+  # The clean path leaves nothing behind: final promoted, no marker, no backup — the artifacts
+  # exist only while the transaction is genuinely open.
+  rm -f "$W/documents/d1/final.md"
+  ( cd "$W" && bash .weavedoc/bin/weavedoc seal-review d1 draft >/dev/null 2>&1 )
+  vrun consecrate d1
+  expect_pass
+  [ -f "$W/documents/d1/final.md" ] || bad "final.md was not created"
+  [ -e "$W/documents/d1/.consecrate.inflight" ] && bad "in-flight marker left behind"
+  [ -e "$W/documents/d1/.final.bak" ] && bad "backup left behind"
+  ok
+}
 block_upgrade_incomplete_passes() {
   # `passes 1/2` is a run that stopped short. It must not gain a verdict, and apply must not
   # stamp schema 2 over it — unfinished verification stays visible debt, and idempotence holds.
@@ -2091,6 +2295,34 @@ block_upgrade_pairwise_collision() {
   sed -i 's/^id: t1$/id: t01/' "$W/truths/t01.md"
   vrun upgrade --apply
   expect_block "both canonicalize"
+}
+block_upgrade_v2_launder() {
+  # THE v0.3.1 laundering path: strip the seals off a schema-2 mine, run upgrade --apply, and the
+  # migration stamped review_legacy over the tamper — validate then read it as history. Upgrade
+  # is a v1→2 migration and must refuse to touch a mine that is already at schema 2.
+  mk_v2
+  strip_seal "$W/documents/d1/review.md"
+  vrun upgrade --apply
+  expect_has "nothing to do"
+  OUT=$(cat "$W/documents/d1/review.md"); RC=0
+  expect_hasnt "review_legacy"
+  vrun validate; expect_block "[GATE-UNSEALED]"
+}
+block_upgrade_future_schema() {
+  # upgrade on a schema NEWER than this runtime is fail-closed, mirroring validate — "already at
+  # schema 2" over a v3 mine was a reader guessing at a format it cannot read.
+  sed -i 's/^version: 1$/version: 3/' "$W/project.md"
+  sed -i 's/^version: 1/version: 3/' "$W/.weavedoc/config.yaml"
+  vrun upgrade --check
+  expect_block "newer than this runtime"
+}
+pass_upgrade_resume_mixed() {
+  # A crashed apply stamps project before config (stamps are LAST, in that order) — the rescan
+  # of that half-stamped mine must still read as a v1 migration, or a crash is unrecoverable.
+  sed -i 's/^version: 1$/version: 2/' "$W/project.md"
+  vrun upgrade --apply
+  expect_pass
+  vrun validate; expect_pass
 }
 acct_scope_ledger_unknown_verdict() {
   # The fail-open the cold review found: a typo'd verdict fell through to the digest compare and

@@ -76,6 +76,13 @@ verify.ledger.file: verify-ledger.tsv
 # Verdicts ATTESTABLE by `weavedoc attest`. Migration additionally writes `legacy-unbound` rows
 # (digest column `-`) for pre-digest history — readers count those as legacy, never stale/bound.
 verify.ledger.verdicts: verified|failed
+# Origin tokens migration writes into a legacy-unbound row's `standard` column (v0.3.2): they
+# record WHICH v1 record minted the row. `scope` reads them — an m-id legacy row is material
+# evidence ONLY with the material origin (an origin-less m row is a pre-0.3.2 cross-lane mint
+# from the truths ledger: shown, ignored, the material falls back to its own frontmatter).
+# t-id rows accept `-` too: the truths lane was always the right lane, so 0.3.1 rows stay valid.
+verify.ledger.origin.material: v1-material-frontmatter
+verify.ledger.origin.truths: v1-truths-ledger
 # Artifact schema version this runtime reads and writes (WD-MIG-002). A project declares its own
 # in project.md AND config.yaml `version:` — two records of one fact, checked for agreement. A
 # project NEWER than this is fail-closed (guessing at a future format is how corruption ships);
