@@ -175,10 +175,10 @@ config.repeat.scales config.strength.range config.toplevel fm.placeholder humanq
 humanqueue.enum.state material.fm.enum.origin material.fm.enum.stage material.fm.enum.status
 material.fm.required material.fm.required_when.research plan.fm.enum.status plan.fm.required
 plan.fm.enum.audience
-project.fm.required review.enum.kind review.sections schema.version truth.fm.enum.provenance
+project.fm.required review.enum.kind review.enum.reviewed_kind review.sections schema.version truth.fm.enum.provenance
 truth.fm.enum.status truth.fm.required truth.fm.resolution.decided_by
 truth.fm.resolution.decision_kind truth.fm.resolution.type verify.fm.enum.status verify.fm.required
-verify.ledger.file verify.ledger.verdicts verify.sections verify.units.verified"
+verify.ledger.file verify.ledger.origin.material verify.ledger.origin.truths verify.ledger.verdicts verify.sections verify.units.verified"
 sch_load
 pipes() { echo "$1" | tr '|' '\n'; }
 is_placeholder() { # $1=value -> 0 when it is an untouched template placeholder
@@ -1605,7 +1605,13 @@ EOF
       # v2 review binding (WD-COR-002): a sealed review pins bytes + context. Presence of the
       # field activates enforcement; absence is legacy-unbound — counted, shown, never blocking
       # until schema v2 (migration train).
-      if [ -f "$DOCUMENTS/$d/review.md" ]; then
+    fi
+    # Hoisted out of the consecrated guard (v0.3.3): structural seal invariants hold for ANY
+    # review — a draft-stage partial tuple or marker-next-to-seal is the same tamper shape one
+    # consecration earlier. Byte/context ENFORCEMENT and the seal counts stay next to a
+    # consecrated output, where the gate's verdict actually ships (a draft edited between
+    # rounds under an old seal is the normal refine loop, not a violation).
+    if [ -f "$DOCUMENTS/$d/review.md" ]; then
         # The seal is a TUPLE (v0.3.2): reviewed_kind + reviewed_digest + review_context_digest,
         # all or none. Any strict subset is a partial seal — each missing field disables exactly
         # one check while the others keep the green light credible — and reads as tampering on a
@@ -1617,12 +1623,14 @@ EOF
         rcx_=$(fm "$DOCUMENTS/$d/review.md" review_context_digest); rcx_=${rcx_#sha256:}
         fmv "$DOCUMENTS/$d/review.md" review_legacy; mkr_=$REPLY
         if [ -n "$rdg_" ]; then
-          N_RSEAL=$((N_RSEAL+1))
-          findg_=$(artifact_digest "$(doc_final_path "$d")")
-          [ "$findg_" = "$rdg_" ] || prob GATE-FINAL-DIGEST "$d $consecrated is not the bytes the clean review reviewed (reviewed_digest mismatch) — something changed after the seal; re-review, then re-consecrate. Nobody reviewed the bytes that are about to ship"
+          if [ -n "$consecrated" ]; then
+            N_RSEAL=$((N_RSEAL+1))
+            findg_=$(artifact_digest "$(doc_final_path "$d")")
+            [ "$findg_" = "$rdg_" ] || prob GATE-FINAL-DIGEST "$d $consecrated is not the bytes the clean review reviewed (reviewed_digest mismatch) — something changed after the seal; re-review, then re-consecrate. Nobody reviewed the bytes that are about to ship"
+          fi
           if [ -z "$rcx_" ]; then
             [ "${SCHEMA_V1:-0}" = "1" ] || prob GATE-UNSEALED "$d review carries reviewed_digest but no review_context_digest — a partial seal on a schema-2 mine reads as tampering, not history; re-run seal-review after a clean round"
-          elif [ "$(context_digest "$d")" != "$rcx_" ]; then
+          elif [ -n "$consecrated" ] && [ "$(context_digest "$d")" != "$rcx_" ]; then
             prob GATE-CONTEXT-CHANGED "$d review context changed after the seal (a cited truth, its source material, config or schema moved) — the clean review no longer describes this mine; re-review"
           fi
           if [ -z "$rk_" ]; then
@@ -1636,10 +1644,14 @@ EOF
           # dual-reader tolerance holds (counted legacy); on v2 stray members block — and the
           # marker does not rescue them, or a partial seal plus a marker would demote to legacy.
           if [ "${SCHEMA_V1:-0}" = "1" ]; then
-            N_RLEGACY=$((N_RLEGACY+1))
+            [ -n "$consecrated" ] && N_RLEGACY=$((N_RLEGACY+1))
           else
             prob GATE-UNSEALED "$d review carries seal field(s) without reviewed_digest — a partial seal on a schema-2 mine reads as tampering, not history; re-run seal-review after a clean round (the seal is a tuple: kind + digest + context, all or none)"
           fi
+        elif [ -z "$consecrated" ]; then
+          # No seal fields, no final: an unsealed draft-stage review is the normal mid-flow
+          # state — nothing to count, nothing to block.
+          :
         elif [ "${SCHEMA_V1:-0}" = "1" ] || [ -n "$mkr_" ]; then
           # Two legitimate digest-less states: a v1 mine (dual-reader), and a v2 mine whose
           # review carries the migration's audit marker (`review_legacy: <date>` — upgrade wrote
@@ -1651,7 +1663,6 @@ EOF
           # review skill seals after every round, so absence here is tamper or hand-writing.
           prob GATE-UNSEALED "$d $consecrated stands next to an UNSEALED review on a schema-2 mine — run seal-review after the clean round; deleting the seal fields must never reopen the gate (a genuine v1 mine reads as legacy-unbound instead)"
         fi
-      fi
     fi
   done < <(doc_ids)
 
@@ -2606,7 +2617,7 @@ cmd_seal_review() { # seal-review <doc-id> [draft|final] — pin what the clean 
   case "$kind" in draft|final) ;; *) echo "seal-review: kind '$kind' must be draft|final"; return 2 ;; esac
   local rev="$DOCUMENTS/$d/review.md"
   [ -f "$rev" ] || { echo "seal-review: no review.md for '$d' — run review first"; return 2; }
-  head -1 "$rev" | grep -q '^---' || { echo "seal-review: review.md has no frontmatter block to seal into"; return 2; }
+  head -1 "$rev" | grep -q '^---[ 	]*$' || { echo "seal-review: review.md has no frontmatter block to seal into (line 1 must be exactly '---') — nothing sealed"; return 2; }
   local art adg cdg
   if [ "$kind" = draft ]; then art=$(doc_draft_path "$d") || { echo "seal-review: no draft for '$d'"; return 2; }
   else art=$(doc_final_path "$d") || { echo "seal-review: no final for '$d'"; return 2; }; fi
@@ -2852,7 +2863,7 @@ scan_upgrade() { # -> kind<TAB>display, one v1→v2 migration item per line. Rea
     # is the TRUTHS lane. An m-id mention there is extraction scope, not a conversion verdict
     # (WD-COR-001); the material lane's v1 record is the material's own `status: verified`, and
     # minting m rows from the mention demoted mandatory debt into non-blocking legacy backlog.
-    local vids scov miss mfmv_ mm_ mmiss_
+    local vids scov miss mfmv_ mm_ mmiss_ mcov_
     vids=$(scan_verified_units | sed -n 's/^V\t//p' | grep -E '^t[0-9]' | LC_ALL=C sort -u || true)
     scov=$(ledger_rows | cut -f1 | LC_ALL=C sort -u)
     miss=$(comm -23 <(printf '%s\n' "$vids" | grep . || true) <(printf '%s\n' "$scov" | grep . || true))
@@ -2864,7 +2875,12 @@ scan_upgrade() { # -> kind<TAB>display, one v1→v2 migration item per line. Rea
       fmv "$MATERIALS/$mm_/converted.md" status
       [ "$REPLY" = "verified" ] && mfmv_="$mfmv_$mm_"$'\n'
     done < <(material_ids)
-    mmiss_=$(comm -23 <(printf '%s' "$mfmv_" | grep . | LC_ALL=C sort -u || true) <(printf '%s\n' "$scov" | grep . || true))
+    # Material-lane coverage is origin-aware (v0.3.3): an origin-less m legacy row (a ≤0.3.1
+    # mint) is NOT material evidence, so it must not block the correct row on a resumed
+    # migration — only a real verdict or the material origin token covers this lane.
+    mcov_=$(ledger_rows | awk -F'\t' -v tok="${SCH[verify.ledger.origin.material]:-v1-material-frontmatter}" \
+      '$1 ~ /^m/ && ($3 != "legacy-unbound" || $4 == tok) { print $1 }' | LC_ALL=C sort -u)
+    mmiss_=$(comm -23 <(printf '%s' "$mfmv_" | grep . | LC_ALL=C sort -u || true) <(printf '%s\n' "$mcov_" | grep . || true))
     [ -n "$mmiss_" ] && printf 'ledger\t%s material(s) with v1 status: verified → verify-ledger.tsv rows verdict=legacy-unbound origin=%s\n' \
       "$(printf '%s' "$mmiss_" | grep -c .)" "${SCH[verify.ledger.origin.material]:-v1-material-frontmatter}"
   fi
@@ -2888,17 +2904,28 @@ cmd_upgrade() { # upgrade [--check|--dry-run|--apply] [--from 0.1] — v1 mine �
   # running them on a v2 mine was the seal-laundering path (strip the seals, run --apply, and the
   # review_legacy marker stamped tamper as history). A mine NEWER than this runtime is
   # fail-closed, mirroring validate: guessing at a future format is how corruption ships.
-  local pv_ cv_ v_
-  pv_=$(fm "$PROJECT" version 2>/dev/null); cv_=$(cfgval version)
+  # The version matrix is CLOSED (v0.3.3): each record is 1 or the current schema, nothing
+  # else — `version: banana` used to skip the numeric future-check and read as "already at
+  # schema 2" with exit 0, a success report over a mine this migration cannot even classify.
+  local pv_ cv_ v_ sv_
+  pv_=$(fm "$PROJECT" version 2>/dev/null); cv_=$(cfgval version); sv_=$(schema_ver)
   for v_ in "$pv_" "$cv_"; do
-    case "$v_" in ''|*[!0-9]*) continue ;; esac
-    if [ "$v_" -gt "$(schema_ver)" ]; then
-      echo "upgrade: this mine declares schema $v_, newer than this runtime (schema $(schema_ver)) — refusing to touch a format this code cannot read; use a newer runtime"
-      return 2
-    fi
+    case "$v_" in
+      1|"$sv_") ;;
+      ''|*[!0-9]*)
+        echo "upgrade: version record '${v_:-<missing>}' is not a version this migration understands — a v1 mine says 1, a current mine says $sv_; fix the version: fields in project.md/config.yaml first"
+        return 2 ;;
+      *)
+        if [ "$v_" -gt "$sv_" ]; then
+          echo "upgrade: this mine declares schema $v_, newer than this runtime (schema $sv_) — refusing to touch a format this code cannot read; use a newer runtime"
+        else
+          echo "upgrade: version record '$v_' is not a version this migration understands — supported records are 1 and $sv_"
+        fi
+        return 2 ;;
+    esac
   done
   if [ "$pv_" != "1" ] && [ "$cv_" != "1" ]; then
-    echo "upgrade: nothing to do — the mine is already at schema $(schema_ver)"
+    echo "upgrade: nothing to do — the mine is already at schema $sv_"
     return 0
   fi
   local items n
@@ -3084,7 +3111,7 @@ upgrade_apply() { # the staged, rollback-safe v1 → v2 transaction (§8 safety 
   # -- an m-id mention there is extraction scope, not a conversion verdict, WD-COR-001), and
   # -- materials from their OWN `status: verified`. Each row records its origin in the standard
   # -- column, which is what lets scope tell a correct mint from a pre-0.3.2 cross-lane one.
-  local vids scov miss lf mfmv_ mm_ mmiss_
+  local vids scov miss lf mfmv_ mm_ mmiss_ mcov_
   vids=$(scan_verified_units | sed -n 's/^V\t//p' | grep -E '^t[0-9]' | LC_ALL=C sort -u || true)
   scov=$(ledger_rows | cut -f1 | LC_ALL=C sort -u)
   miss=$(comm -23 <(printf '%s\n' "$vids" | grep . || true) <(printf '%s\n' "$scov" | grep . || true))
@@ -3094,7 +3121,11 @@ upgrade_apply() { # the staged, rollback-safe v1 → v2 transaction (§8 safety 
     fmv "$MATERIALS/$mm_/converted.md" status
     [ "$REPLY" = "verified" ] && mfmv_="$mfmv_$mm_"$'\n'
   done < <(material_ids)
-  mmiss_=$(comm -23 <(printf '%s' "$mfmv_" | grep . | LC_ALL=C sort -u || true) <(printf '%s\n' "$scov" | grep . || true))
+  # Material-lane coverage is origin-aware (v0.3.3) — same rule as the scan: an origin-less m
+  # legacy row (a ≤0.3.1 mint) must not block the correct row on a resumed migration.
+  mcov_=$(ledger_rows | awk -F'\t' -v tok="${SCH[verify.ledger.origin.material]:-v1-material-frontmatter}" \
+    '$1 ~ /^m/ && ($3 != "legacy-unbound" || $4 == tok) { print $1 }' | LC_ALL=C sort -u)
+  mmiss_=$(comm -23 <(printf '%s' "$mfmv_" | grep . | LC_ALL=C sort -u || true) <(printf '%s\n' "$mcov_" | grep . || true))
   if [ -n "$miss" ] || [ -n "$mmiss_" ]; then
     lf="$TRUTHS/$(ledger_file)"
     if [ -f "$lf" ]; then bkup "${TRUTHS#"$ROOT"/}/$(ledger_file)"; else crtd "${TRUTHS#"$ROOT"/}/$(ledger_file)"; fi
@@ -3113,7 +3144,7 @@ upgrade_apply() { # the staged, rollback-safe v1 → v2 transaction (§8 safety 
     f="$DOCUMENTS/$d/review.md"; [ -f "$f" ] || continue
     fmv "$f" reviewed_digest;  [ -n "$REPLY" ] && continue
     fmv "$f" review_legacy;    [ -n "$REPLY" ] && continue
-    if head -1 "$f" | grep -q '^---'; then
+    if head -1 "$f" | grep -q '^---[ 	]*$'; then
       bkup "${DOCUMENTS#"$ROOT"/}/$d/review.md"
       awk -v dt="$today" '
         NR==1 && /^---[ \t]*$/ { print; print "review_legacy: " dt "   # v1 review, digest-less by definition — migrated, not tampered"; next }

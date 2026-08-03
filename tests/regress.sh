@@ -2276,6 +2276,51 @@ acct_upgrade_material_fm_verified_migrates() {
   vrun scope
   expect_has "materials  1 converted · 0 verified (digest-bound) · 1 legacy-unbound"
 }
+acct_upgrade_resume_after_031_rows() {
+  # Resuming a migration that a 0.3.1 runtime started: the origin-less m-id row it left behind
+  # sat in the coverage set and blocked the CORRECT material-origin row from ever being minted.
+  # Coverage is per-lane now — an m row covers the material lane only when it is valid material
+  # evidence (origin token or a real verdict).
+  sed -i 's/^status: converted$/status: verified/' "$W/materials/m001/converted.md"
+  printf 'm001\t-\tlegacy-unbound\t-\t-\t2026-08-01\n' > "$W/truths/verify-ledger.tsv"
+  vrun upgrade --apply
+  expect_pass
+  OUT=$(cat "$W/truths/verify-ledger.tsv"); RC=0
+  expect_has "v1-material-frontmatter"
+}
+block_sealreview_dashnote_fm() {
+  # `---note` satisfied the loose `^---` precheck while the strict awk never entered the
+  # frontmatter — seal-review printed digests and a success line WITHOUT writing a seal.
+  sed -i '1s/^---$/---note/' "$W/documents/d1/review.md"
+  vrun seal-review d1 draft
+  expect_block "no frontmatter"
+}
+block_upgrade_garbage_version() {
+  # `version: banana` skipped the numeric future-check and read as "already at schema 2" with
+  # exit 0. The matrix is closed: a record is 1 or the current schema, anything else refuses.
+  sed -i 's/^version: 1$/version: banana/' "$W/project.md"
+  sed -i 's/^version: 1/version: banana/' "$W/.weavedoc/config.yaml"
+  vrun upgrade --check
+  expect_block "not a version this migration understands"
+}
+block_gate_draft_partial_tuple() {
+  # Structural seal invariants hold for ANY review, not only next to a final: a draft-stage
+  # review with a partial tuple is the same tamper shape one consecration earlier.
+  mk_v2
+  mkdoc2
+  ( cd "$W" && bash .weavedoc/bin/weavedoc seal-review d2 draft >/dev/null 2>&1 )
+  sed -i '/^reviewed_kind:/d' "$W/documents/d2/review.md"
+  vrun validate; expect_block "[GATE-UNSEALED]"
+}
+block_gate_draft_seal_marker() {
+  # Marker-next-to-seal is tamper at draft stage too — waiting for the consecration to notice
+  # hands the demotion a whole review round to sit undetected.
+  mk_v2
+  mkdoc2
+  ( cd "$W" && bash .weavedoc/bin/weavedoc seal-review d2 draft >/dev/null 2>&1 )
+  sed -i '1a review_legacy: 2026-01-01' "$W/documents/d2/review.md"
+  vrun validate; expect_block "[GATE-SEAL-MARKER]"
+}
 acct_scope_originless_mid_row_ignored() {
   # A 0.3.1-migrated mine already carries origin-less m-id legacy rows — the runtime corrects
   # them fail-safe: not material evidence (the material falls back to its own status and is
