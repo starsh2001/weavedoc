@@ -2030,6 +2030,38 @@ block_gate_v2_context_seal_stripped() {
   printf '\n제12조 신설.\n' >> "$W/materials/m001/converted.md"
   vrun validate; expect_block "[GATE-UNSEALED]"
 }
+block_gate_v2_seal_next_to_marker() {
+  # A full seal and the migration marker on ONE review: seal-review removes the marker when a
+  # real round seals, so coexistence is tamper (a hand-added marker parked as a future demotion
+  # path — strip the seal later and the review reads as "legacy"). Blocked while the seal stands.
+  mk_v2
+  sed -i '1a review_legacy: 2026-01-01' "$W/documents/d1/review.md"
+  vrun validate; expect_block "[GATE-SEAL-MARKER]"
+}
+pass_seal_review_strips_marker() {
+  # Re-sealing a migrated review ends its legacy status: the marker says "v1 history, digest-less
+  # by definition" and a fresh seal makes that sentence false. seal-review removes it.
+  sed -i 's/^version: 1$/version: 2/' "$W/project.md"
+  sed -i 's/^version: 1/version: 2/' "$W/.weavedoc/config.yaml"
+  sed -i '1a review_legacy: 2026-01-01' "$W/documents/d1/review.md"
+  vrun seal-review d1 draft
+  expect_has "reviewed_digest"
+  OUT=$(cat "$W/documents/d1/review.md"); RC=0
+  expect_hasnt "review_legacy"
+  vrun validate; expect_pass
+}
+block_gate_v2_kind_missing() {
+  # The seal is a TUPLE: deleting only reviewed_kind must read as a partial seal, not as a seal.
+  mk_v2
+  sed -i '/^reviewed_kind:/d' "$W/documents/d1/review.md"
+  vrun validate; expect_block "[GATE-UNSEALED]"
+}
+block_gate_v2_kind_invalid() {
+  # reviewed_kind outside draft|final is a seal validate cannot interpret — malformed, not green.
+  mk_v2
+  sed -i 's/^reviewed_kind: draft$/reviewed_kind: banana/' "$W/documents/d1/review.md"
+  vrun validate; expect_block "[GATE-UNSEALED]"
+}
 pass_gate_v1_unsealed_is_legacy() {
   # The dual-reader stays: a genuine v1 mine with an unsealed review is legacy-unbound, counted
   # and shown, never blocking — the v2 block above is what distinguishes tamper from history.
@@ -2073,6 +2105,21 @@ block_consecrate_interrupted_detected() {
   expect_has "원본 final이었던 것"
 }
 
+block_consecrate_dual_final() {
+  # final.md AND final/ at once: doc_final_path resolves the directory, so the old code moved
+  # final/ aside, overwrote final.md with the candidate (no backup), validated a mine where the
+  # dual state had vanished, then deleted the backup — BOTH prior artifacts destroyed, exit 0.
+  # Consecrate now refuses before its first write, same reading as GATE-DUAL-FINAL.
+  ( cd "$W" && bash .weavedoc/bin/weavedoc seal-review d1 draft >/dev/null 2>&1 )
+  mkdir -p "$W/documents/d1/final"
+  printf '보존되어야 할 디렉터리 산출물\n' > "$W/documents/d1/final/01.md"
+  vrun consecrate d1
+  expect_block "both final.md and final/"
+  OUT=$(cat "$W/documents/d1/final.md"); RC=0
+  expect_has "위약금은 계약금액의 10%다"
+  OUT=$(cat "$W/documents/d1/final/01.md"); RC=0
+  expect_has "보존되어야 할 디렉터리 산출물"
+}
 block_upgrade_incomplete_passes() {
   # `passes 1/2` is a run that stopped short. It must not gain a verdict, and apply must not
   # stamp schema 2 over it — unfinished verification stays visible debt, and idempotence holds.
@@ -2091,6 +2138,34 @@ block_upgrade_pairwise_collision() {
   sed -i 's/^id: t1$/id: t01/' "$W/truths/t01.md"
   vrun upgrade --apply
   expect_block "both canonicalize"
+}
+block_upgrade_v2_launder() {
+  # THE v0.3.1 laundering path: strip the seals off a schema-2 mine, run upgrade --apply, and the
+  # migration stamped review_legacy over the tamper — validate then read it as history. Upgrade
+  # is a v1→2 migration and must refuse to touch a mine that is already at schema 2.
+  mk_v2
+  strip_seal "$W/documents/d1/review.md"
+  vrun upgrade --apply
+  expect_has "nothing to do"
+  OUT=$(cat "$W/documents/d1/review.md"); RC=0
+  expect_hasnt "review_legacy"
+  vrun validate; expect_block "[GATE-UNSEALED]"
+}
+block_upgrade_future_schema() {
+  # upgrade on a schema NEWER than this runtime is fail-closed, mirroring validate — "already at
+  # schema 2" over a v3 mine was a reader guessing at a format it cannot read.
+  sed -i 's/^version: 1$/version: 3/' "$W/project.md"
+  sed -i 's/^version: 1/version: 3/' "$W/.weavedoc/config.yaml"
+  vrun upgrade --check
+  expect_block "newer than this runtime"
+}
+pass_upgrade_resume_mixed() {
+  # A crashed apply stamps project before config (stamps are LAST, in that order) — the rescan
+  # of that half-stamped mine must still read as a v1 migration, or a crash is unrecoverable.
+  sed -i 's/^version: 1$/version: 2/' "$W/project.md"
+  vrun upgrade --apply
+  expect_pass
+  vrun validate; expect_pass
 }
 acct_scope_ledger_unknown_verdict() {
   # The fail-open the cold review found: a typo'd verdict fell through to the digest compare and

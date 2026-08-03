@@ -1540,21 +1540,41 @@ EOF
       # field activates enforcement; absence is legacy-unbound — counted, shown, never blocking
       # until schema v2 (migration train).
       if [ -f "$DOCUMENTS/$d/review.md" ]; then
-        local rdg_ rcx_ findg_
+        # The seal is a TUPLE (v0.3.2): reviewed_kind + reviewed_digest + review_context_digest,
+        # all or none. Any strict subset is a partial seal — each missing field disables exactly
+        # one check while the others keep the green light credible — and reads as tampering on a
+        # schema-2 mine. The migration marker is read HERE too: a marker NEXT TO a seal is a
+        # parked demotion (seal-review removes the marker, so coexistence never occurs honestly).
+        local rk_ rdg_ rcx_ mkr_ findg_
+        rk_=$(fm "$DOCUMENTS/$d/review.md" reviewed_kind)
         rdg_=$(fm "$DOCUMENTS/$d/review.md" reviewed_digest); rdg_=${rdg_#sha256:}
+        rcx_=$(fm "$DOCUMENTS/$d/review.md" review_context_digest); rcx_=${rcx_#sha256:}
+        fmv "$DOCUMENTS/$d/review.md" review_legacy; mkr_=$REPLY
         if [ -n "$rdg_" ]; then
           N_RSEAL=$((N_RSEAL+1))
           findg_=$(artifact_digest "$(doc_final_path "$d")")
           [ "$findg_" = "$rdg_" ] || prob GATE-FINAL-DIGEST "$d $consecrated is not the bytes the clean review reviewed (reviewed_digest mismatch) — something changed after the seal; re-review, then re-consecrate. Nobody reviewed the bytes that are about to ship"
-          rcx_=$(fm "$DOCUMENTS/$d/review.md" review_context_digest); rcx_=${rcx_#sha256:}
           if [ -z "$rcx_" ]; then
-            # Half a seal is no seal: stripping ONLY the context digest used to disable exactly
-            # the staleness check while the bytes check kept the green light credible.
             [ "${SCHEMA_V1:-0}" = "1" ] || prob GATE-UNSEALED "$d review carries reviewed_digest but no review_context_digest — a partial seal on a schema-2 mine reads as tampering, not history; re-run seal-review after a clean round"
           elif [ "$(context_digest "$d")" != "$rcx_" ]; then
             prob GATE-CONTEXT-CHANGED "$d review context changed after the seal (a cited truth, its source material, config or schema moved) — the clean review no longer describes this mine; re-review"
           fi
-        elif [ "${SCHEMA_V1:-0}" = "1" ] || { fmv "$DOCUMENTS/$d/review.md" review_legacy; [ -n "$REPLY" ]; }; then
+          if [ -z "$rk_" ]; then
+            [ "${SCHEMA_V1:-0}" = "1" ] || prob GATE-UNSEALED "$d review carries reviewed_digest but no reviewed_kind — the seal is a tuple (kind + digest + context, all or none) and a missing member reads as tampering on a schema-2 mine; re-run seal-review after a clean round"
+          elif ! in_list "$rk_" "${SCH[review.enum.reviewed_kind]}"; then
+            [ "${SCHEMA_V1:-0}" = "1" ] || prob GATE-UNSEALED "$d review reviewed_kind '$rk_' is not draft|final — a seal validate cannot interpret certifies nothing; re-run seal-review after a clean round"
+          fi
+          [ -n "$mkr_" ] && prob GATE-SEAL-MARKER "$d review carries BOTH a seal and the migration marker review_legacy — the marker means 'v1 history, digest-less by definition' and a sealed review is neither; seal-review removes the marker when a real round seals, so coexistence is a hand-added marker parked to demote this review to legacy once the seal is stripped. Remove review_legacy (the seal is the binding record)"
+        elif [ -n "$rk_" ] || [ -n "$rcx_" ]; then
+          # Seal fields WITHOUT the digest: the other half of the partial-tuple hole. On v1 the
+          # dual-reader tolerance holds (counted legacy); on v2 stray members block — and the
+          # marker does not rescue them, or a partial seal plus a marker would demote to legacy.
+          if [ "${SCHEMA_V1:-0}" = "1" ]; then
+            N_RLEGACY=$((N_RLEGACY+1))
+          else
+            prob GATE-UNSEALED "$d review carries seal field(s) without reviewed_digest — a partial seal on a schema-2 mine reads as tampering, not history; re-run seal-review after a clean round (the seal is a tuple: kind + digest + context, all or none)"
+          fi
+        elif [ "${SCHEMA_V1:-0}" = "1" ] || [ -n "$mkr_" ]; then
           # Two legitimate digest-less states: a v1 mine (dual-reader), and a v2 mine whose
           # review carries the migration's audit marker (`review_legacy: <date>` — upgrade wrote
           # it, naming this review as v1 history). Tamper strips seals but leaves no marker.
@@ -2467,6 +2487,9 @@ cmd_seal_review() { # seal-review <doc-id> [draft|final] — pin what the clean 
   # Writes reviewed_kind + reviewed_digest + review_context_digest into review.md frontmatter.
   # Digests are computed HERE, never by hand — one spelling. The review skill calls this right
   # after finishing a round, while "what the reviewer read" and "what is on disk" are one thing.
+  # A review_legacy marker is REMOVED on seal (v0.3.2): the marker says "v1 history, digest-less
+  # by definition", and a freshly sealed review is neither — leaving it parked a demotion path
+  # (strip the seal later and the review read as legacy again, reopening the gate).
   local d="${1:-}" kind="${2:-draft}"
   [ -n "$d" ] || { echo "usage: weavedoc seal-review <doc-id> [draft|final]"; return 2; }
   case "$kind" in draft|final) ;; *) echo "seal-review: kind '$kind' must be draft|final"; return 2 ;; esac
@@ -2486,7 +2509,7 @@ cmd_seal_review() { # seal-review <doc-id> [draft|final] — pin what the clean 
       print "reviewed_digest: " a
       print "review_context_digest: " c
       infm=0; print; next }
-    infm && /^(reviewed_kind|reviewed_digest|review_context_digest)[[:space:]]*:/ { next }
+    infm && /^(reviewed_kind|reviewed_digest|review_context_digest|review_legacy)[[:space:]]*:/ { next }
     { print }' "$rev" > "$tmp" && mv "$tmp" "$rev" \
     || { rm -f "$tmp" 2>/dev/null; echo "seal-review: write failed"; return 1; }
   printf 'seal-review: %s %s sealed\n  reviewed_digest: sha256:%s\n  review_context_digest: sha256:%s\n' \
@@ -2505,6 +2528,15 @@ cmd_consecrate() { # consecrate <doc-id> — stage candidate, verify seals, ONE 
   # backup (the old code did) — a human decides: restore the backup over final, or remove it.
   if [ -e "$DOCUMENTS/$d/.final.bak" ]; then
     echo "consecrate: interrupted consecration detected — $DOCUMENTS/$d/.final.bak exists, so the current final may be an unvalidated candidate. Restore the backup over final (or remove it if the current final is known good), then re-run. Nothing was touched."
+    return 1
+  fi
+  # Two finals at once: doc_final_path resolves the directory, so proceeding would back up ONLY
+  # final/ and then overwrite final.md with the candidate — no backup — and the post-swap
+  # validation would see a mine where the dual state had vanished. Both prior artifacts were
+  # destroyed on the success path (v0.3.2 finding). Refused before the first write, the same
+  # reading validate blocks as GATE-DUAL-FINAL.
+  if [ -f "$DOCUMENTS/$d/final.md" ] && [ -d "$DOCUMENTS/$d/final" ]; then
+    echo "consecrate: $d has both final.md and final/ — only one can be the consecrated output and consecrate cannot know which to preserve; remove the one that is not the reviewed artifact, then re-run. Nothing was touched."
     return 1
   fi
   # 1. The gate must be empty — the same reader validate uses, or the two could disagree.
@@ -2615,13 +2647,17 @@ scan_upgrade() { # -> kind<TAB>display, one v1→v2 migration item per line. Rea
   grep -qE '^[[:space:]]+repeat:[[:space:]]*[0-9]' "$CONFIG" 2>/dev/null \
     && printf 'repeat\tconfig scalar repeat → per-scale map (skip 0 · light/standard keep the scalar · full is one stricter)\n'
   # v1 reviews are digest-less by definition; on schema 2 they need the audit marker or the
-  # unsealed-review block would refuse the very mine the migration just produced.
-  for d in $(doc_ids); do
-    f="$DOCUMENTS/$d/review.md"; [ -f "$f" ] || continue
-    fmv "$f" reviewed_digest;  [ -n "$REPLY" ] && continue
-    fmv "$f" review_legacy;    [ -n "$REPLY" ] && continue
-    printf 'review-legacy\tdocuments/%s/review.md → marked review_legacy (v1 history, digest-less; new rounds seal via seal-review)\n' "$d"
-  done
+  # unsealed-review block would refuse the very mine the migration just produced. Gated on v1
+  # like the ledger materialization below — cmd_upgrade already refuses v2 mines, but THIS item
+  # is the one that laundered stripped seals into "history" when it ran ungated (v0.3.2).
+  if [ "$pv" = "1" ] || [ "$cv" = "1" ]; then
+    for d in $(doc_ids); do
+      f="$DOCUMENTS/$d/review.md"; [ -f "$f" ] || continue
+      fmv "$f" reviewed_digest;  [ -n "$REPLY" ] && continue
+      fmv "$f" review_legacy;    [ -n "$REPLY" ] && continue
+      printf 'review-legacy\tdocuments/%s/review.md → marked review_legacy (v1 history, digest-less; new rounds seal via seal-review)\n' "$d"
+    done
+  fi
   for d in $(doc_ids); do
     f="$DOCUMENTS/$d/review.md"; [ -f "$f" ] || continue
     n=$(nocomment < "$f" | awk '
@@ -2656,6 +2692,26 @@ cmd_upgrade() { # upgrade [--check|--dry-run|--apply] [--from 0.1] — v1 mine �
     shift
   done
   [ "$from" = "0.1" ] || { echo "upgrade: only --from 0.1 is supported (v1 → schema $(schema_ver))"; return 2; }
+  # upgrade is the v1→2 migration and NOTHING else (v0.3.2): it runs only while at least one
+  # version record still says 1. A crashed apply stamps project before config, so a half-stamped
+  # mine must still read as v1 — requiring BOTH would make a crash unrecoverable. A mine already
+  # at schema 2 gets "nothing to do" WITHOUT scanning: the scan's items are migration writes, and
+  # running them on a v2 mine was the seal-laundering path (strip the seals, run --apply, and the
+  # review_legacy marker stamped tamper as history). A mine NEWER than this runtime is
+  # fail-closed, mirroring validate: guessing at a future format is how corruption ships.
+  local pv_ cv_ v_
+  pv_=$(fm "$PROJECT" version 2>/dev/null); cv_=$(cfgval version)
+  for v_ in "$pv_" "$cv_"; do
+    case "$v_" in ''|*[!0-9]*) continue ;; esac
+    if [ "$v_" -gt "$(schema_ver)" ]; then
+      echo "upgrade: this mine declares schema $v_, newer than this runtime (schema $(schema_ver)) — refusing to touch a format this code cannot read; use a newer runtime"
+      return 2
+    fi
+  done
+  if [ "$pv_" != "1" ] && [ "$cv_" != "1" ]; then
+    echo "upgrade: nothing to do — the mine is already at schema $(schema_ver)"
+    return 0
+  fi
   local items n
   items=$(scan_upgrade)
   n=$(printf '%s' "$items" | grep -c . || true); n=${n:-0}

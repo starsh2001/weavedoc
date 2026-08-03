@@ -266,6 +266,7 @@ Every problem and warning the checker emits carries a **stable code**. The code 
 | `GATE-NO-HEADING` | consecrated output with no readable `Fidelity violations` heading |
 | `GATE-NO-REVIEW` | consecrated output with no `review.md` at all |
 | `GATE-OPEN` | consecrated through a non-empty `Fidelity violations` section |
+| `GATE-SEAL-MARKER` | a seal and the `review_legacy` marker coexist on one review |
 | `HQ-UNTAGGED` | Human-queue entry without a valid ownership tag |
 | `LEDGER-MALFORMED` | a verify-ledger row the reader cannot parse (columns or id) |
 | `LEDGER-VERDICT` | a verify-ledger row carries a verdict outside verified|failed|legacy-unbound |
