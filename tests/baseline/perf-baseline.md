@@ -61,6 +61,22 @@ Phase 4 목표는 −70% (≤11.9s). 남은 분포(문서 1·자료 1 fixture �
 
 합성 fixture는 `tests/regress.sh`의 **`mkscale`**(자료 8 · truth 60, 전 truth가 출처 줄을 축자 인용) + `acct_scale_snapshot` — 위 "250-truth benchmark fixture 추가 예정" 과제를 이것으로 닫는다. 60-truth로도 스폰 회귀는 즉시 보인다: 접기 전 케이스 1개가 ~79s(sys 78s)다.
 
+## P1 접기 후 (2026-08-04) — 항목당 fork 제거
+
+같은 두 축을 같은 방법(3회 median)으로 재측정. 검사 규칙 무변경, 회귀 **324/324**, `examined:` 수치·종료 코드 동일.
+
+| 대상 | before | after | 감소 |
+|---|---:|---:|---:|
+| 합성 fixture `mkscale` (자료 8 · truth 60) | 47s (46·47·47) | **8s** (8·8·8) | **−83.0%** |
+| 실광산 eclypse (자료 30 · truth 268) | 155s (163·152·155) | **32s** (32·31·33) | **−79.4%** |
+| (하한) 같은 광산 awk 1회 프로브 | — | 1.8s | — |
+
+접은 것(전부 "항목 수에 비례하던 spawn"): truth당 `basename`+`canon_id`+fm-미종결 awk 3-fork → **배치 awk 1회** · 재료당 `$(fm)` ~12회 → `fmv`(REPLY) · 전 파일 frontmatter **일괄 프리로드**(`fm_preload`, 값 규칙은 `FM_KV_AWK` 한 벌 공유) · `$(sch)`×34 → `SCH[]` 직접 · `$(cfg2)`×14 → `CFG[]` 직접 · index↔파일 대조의 `ls|sed`+`grep|sed`+`comm`×2 → bash 맵 · `catalog_ids` 재료당 재실행 → 1회 · verify 섹션 `nocomment|grep`×N → 캐시된 `count_headings`.
+
+측정 중 실물 결함 둘을 잡았다: **`pipes()`가 이중 정의**되어 fork-free판을 `echo|tr`판이 덮고 있었고(모든 호출이 3 fork였다), 프로파일 앵커 하나가 존재하지 않는 주석 문자열이라 첫 프로파일이 왜곡돼 있었다 — 두 번째 EPOCHREALTIME 계측에서 드러났다.
+
+남은 32s의 분포(eclypse): truths 대형 awk ~15s(봉인 부분문자열 = 유일한 진짜 계산) · 인터프리터 기동/스크립트 파싱 ~2.4s · 나머지는 고정 파이프라인 수십 회. **항목당 fork는 0이 되었으므로 광산이 커져도 기울기가 완만하다** — 리포트 §2가 절대 속도보다 중요하다고 한 성질이 이것이다.
+
 ## 환경
 
 | 항목 | 값 |

@@ -722,6 +722,8 @@ macOS 기본 Bash 3.2/BSD 도구를 지원하지 않는다면 preflight가 명�
 | macOS 지원 범위 | **best-effort**: 지원 문구 유지 + "알려진 4건" 정직 표기, matrix는 non-blocking | required 승격은 census 4건(index-parsing 계열)을 못 풀면 release를 영구 차단하고, 철회는 실사용 가능한 환경(Bash 5 + GNU 설치)을 버림 | 결정 2026-08-03 — **되돌림 조건**: census 4건 해결 시 required 승격 재상정 |
 | ledger 출처 토큰 | legacy-unbound 행의 standard 열에 origin 기록, m-id는 material origin일 때만 증거(비대칭: t-id `-`는 grandfather) | 별도 열 추가는 6열 계약을 깨고, 무출처 유지는 이미 배포된 v0.3.1 오이관을 교정 불가로 남김 | 결정 2026-08-03 |
 | consecrate 내구 marker | `.consecrate.inflight`를 첫 write 전 생성·최후 삭제, validate도 fail-closed(예외는 동적 스코프 doc 한정) | trap-only는 SIGKILL/전원에 무력, candidate-aware validate 전면 재설계는 v0.3.2 범위 초과(이연) | 결정 2026-08-03 |
+| flow mapping 자유 텍스트 규격 (D3) | **(a) 인용부호 강제** — `map`이 `reason` 값을 항상 `"…"`로 쓰고 validate가 무인용 위험 문자를 잡는다 | (b) `·` 구분자 규약 성문화는 현행 관행이라 파일 변화가 최소지만, 규약은 손으로 쓰는 순간 깨지고 쉼표 외 문자(콜론·중괄호)는 계속 열려 있다. (a)는 flow mapping을 깨는 문자 클래스 전체를 한 번에 닫고 사람이 규약을 외울 필요가 없다 | 결정 2026-08-04 — **되돌림 조건**: 인용 강제가 한글 본문에서 이중 이스케이프 문제를 일으키면 (b)로 재상정 |
+| D3 기존 위반 이행 | **경고로 시작**(비차단 warn) — 신규 쓰기는 map이 즉시 새 규격을 따르고, 기존 위반은 표시만 | 즉시 차단은 eclypse 포함 배포 광산을 다음 validate에서 red로 만들고 수리 전까지 게이트를 막는다. upgrade는 v1→2 전용으로 닫혀 있어(v0.3.2) 자동 재작성 경로가 없으므로 사용자 수리 창이 필요하다 | 결정 2026-08-04 — **되돌림 조건**: 배포 광산들이 정리되면 schema 3에서 차단 승격 재상정 |
 
 결정 기록에는 날짜, 결정자, 선택, 기각한 대안, migration 영향, 되돌림 조건을 남긴다.
 
