@@ -48,7 +48,7 @@ plan.fm.enum.status: planned|drafting|reviewing|done|stale
 # its labels or not at all.
 plan.fm.enum.audience: internal|external
 project.fm.required: version|language|roles
-review.fm.optional: round|consecutive_passes|reviewed_kind|reviewed_digest|review_context_digest
+review.fm.optional: round|consecutive_passes|reviewed_kind|reviewed_digest|review_context_digest|review_legacy
 review.enum.reviewed_kind: draft|final
 review.enum.kind: contradiction|unsupported|missing-required
 # review.sections is READ but its EXISTENCE is not enforced, and the split is deliberate. fid_body
