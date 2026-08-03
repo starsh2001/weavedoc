@@ -107,6 +107,141 @@ mk_v2() { # promote the workspace to a schema-2 mine with a sealed review — th
     || bad "mk_v2: seal-review failed — the case would assert against an unsealed mine"
 }
 REV() { review4 "$W" "$@"; }
+mkscale() { # deterministic 8-material · 60-truth mine — the scale where spawn regressions show.
+  # The minimal fixture's 1-truth loops spawn a few dozen processes and hide an O(N) spawn
+  # regression completely (field report 2026-08-03, P1). Every truth quotes its source line
+  # verbatim so the seal check does real substring work. No documents: the spawn hotspots under
+  # measure are the materials/truths loops, and a doc would only add unrelated gate output.
+  local M=8 T=60 mi ti mid tid line
+  rm -rf "$W/materials" "$W/truths" "$W/documents"
+  mkdir -p "$W/materials" "$W/truths" "$W/documents"
+  printf '# 자료 목록\n\n| id | 제목 | 역할 | 상태 |\n|---|---|---|---|\n' > "$W/catalog.md"
+  for (( mi=1; mi<=M; mi++ )); do
+    printf -v mid 'm%03d' "$mi"
+    mkdir -p "$W/materials/$mid"
+    { printf -- '---\nid: %s\ntitle: 계약서 %d\norigin: file\nrole: 계약서\ntopics: [스케일]\nformat: md\nsource_path: inbox/c%d.md\nadded: 2026-07-01\nstatus: converted\nsummary: 스케일 픽스처 자료 %d.\n---\n\n# 계약서 %d\n\n' "$mid" "$mi" "$mi" "$mi" "$mi"
+      for (( line=1; line<=40; line++ )); do printf '제%d조 자료%d의 조항 %d은 유효하다.\n' "$line" "$mi" "$line"; done
+    } > "$W/materials/$mid/converted.md"
+    printf '| %s | 계약서 %d | 계약서 | converted |\n' "$mid" "$mi" >> "$W/catalog.md"
+  done
+  printf '# Coverage\n\n' > "$W/truths/coverage.md"
+  for (( mi=1; mi<=M; mi++ )); do
+    printf '## m%03d\n\n' "$mi" >> "$W/truths/coverage.md"
+    for (( ti=mi; ti<=T; ti+=M )); do printf -- '- 조항 %d: t%03d\n' "$(( (ti - 1) / M + 1 ))" "$ti" >> "$W/truths/coverage.md"; done
+    printf '\n' >> "$W/truths/coverage.md"
+  done
+  printf '# 변경 로그\n\n' > "$W/truths/changelog.md"
+  for (( ti=1; ti<=T; ti++ )); do
+    printf -v tid 't%03d' "$ti"
+    mi=$(( (ti - 1) % M + 1 )); printf -v mid 'm%03d' "$mi"
+    line=$(( (ti - 1) / M + 1 ))
+    printf -- '---\nid: %s\nclaim: "자료%d의 조항 %d이 유효하다"\nsource: %s\nlocation: "제%d조"\ntags: [스케일, 조항%d]\nstatus: ok\nprovenance: stated\n---\n\n제%d조 자료%d의 조항 %d은 유효하다.\n' \
+      "$tid" "$mi" "$line" "$mid" "$line" "$line" "$line" "$mi" "$line" > "$W/truths/$tid.md"
+    printf -- '- added: %s (2026-07-30)\n' "$tid" >> "$W/truths/changelog.md"
+  done
+  printf -- '---\nstatus: passed\nround: 1\nverified_at: 2026-07-30\n---\n\n## Verified units\n\n## Adjudications\n\n## Human queue\n' > "$W/truths/verify.md"
+  ( cd "$W" && bash .weavedoc/bin/weavedoc reindex >/dev/null 2>&1 ) || bad "mkscale: reindex failed"
+}
+acct_res_reason_comma_warns() {
+  # D3 (field report, decided 2026-08-04): an unquoted reason holding a comma that opens no new
+  # key is exactly where a strict YAML parser truncates the value (Echo t245's correction
+  # note fell below the cut). Warn-first, never blocking — deployed mines must not go red.
+  sed -i '/^provenance: stated$/a resolution: {type: attribute, decided_by: user, decision_kind: supplied, reason: 양쪽 병기, 정정 부기 포함}' "$W/truths/t001.md"
+  vrun validate
+  expect_pass
+  expect_has "[RES-REASON-UNQUOTED]"
+}
+acct_res_reason_quoted_silent() {
+  # The compliant shape: quoted reason with commas inside — no warning (guard against
+  # over-warning the format we are steering everyone toward).
+  sed -i '/^provenance: stated$/a resolution: {type: attribute, decided_by: user, decision_kind: supplied, reason: "양쪽 병기, 정정 부기 포함"}' "$W/truths/t001.md"
+  vrun validate
+  expect_pass
+  expect_hasnt "[RES-REASON-UNQUOTED]"
+}
+acct_pull_table_preview_counts() {
+  # D2 (field report): a table-bodied truth previewed as its header row alone — a reviewer
+  # decided "the mine has no runtime lengths" while every length sat in the table body. The
+  # preview now says it is a table and how big.
+  printf -- '---\nid: t002\nclaim: "수록곡 길이 표"\nsource: m001\ntags: [위약]\nstatus: ok\nprovenance: stated\n---\n\n| # | 곡 | 길이 |\n|---|---|---|\n| 1 | 서곡 | 3:10 |\n| 2 | 종곡 | 4:02 |\n' > "$W/truths/t002.md"
+  printf '\n- 표: t002\n' >> "$W/truths/coverage.md"
+  printf -- '- added: t002 (2026-07-30)\n' >> "$W/truths/changelog.md"
+  vrun reindex
+  vrun pull 수록곡
+  expect_has "표 4행"
+  expect_has "| # | 곡 | 길이 |"
+}
+mkplanstage() { # m002 (stage: plan) + t002 derived from it, with as_of — the label-bearing shape
+  mkdir -p "$W/materials/m002"
+  printf -- '---\nid: m002\ntitle: 기획서\norigin: file\nrole: 계약서\ntopics: [기획]\nformat: md\nsource_path: inbox/plan.md\nadded: 2026-07-01\nstatus: converted\nstage: plan\nsummary: 계획 단계 자료.\n---\n\n# 기획서\n\n6곡 앨범을 계획한다.\n' > "$W/materials/m002/converted.md"
+  printf '| m002 | 기획서 | 계약서 | converted |\n' >> "$W/catalog.md"
+  printf -- '---\nid: t002\nclaim: "앨범은 6곡으로 계획되었다"\nsource: m002\ntags: [음악]\nstatus: ok\nprovenance: derived\nderived_from: [m002]\nassumptions: [발매 전 변경 가능]\nas_of: 2026-07-01\n---\n\n6곡 앨범을 계획한다.\n' > "$W/truths/t002.md"
+  printf '\n## m002\n\n- 계획: t002\n' >> "$W/truths/coverage.md"
+  printf -- '- added: t002 (2026-07-30)\n' >> "$W/truths/changelog.md"
+}
+acct_tree_carries_labels() {
+  # D1 (field report): pull attached PLAN-STAGE/as_of/DERIVED while index.md/tree.md carried
+  # only the status marker — the consumer's fact depended on which entry path they took. A
+  # reviewer browsing tree.md read a plan-stage album spec as a release fact.
+  mkplanstage
+  vrun reindex; expect_pass
+  OUT=$(cat "$W/truths/tree.md"); RC=0
+  expect_has "PLAN-STAGE"
+  expect_has "as_of: 2026-07-01"
+  OUT=$(cat "$W/truths/index.md"); RC=0
+  expect_has "PLAN-STAGE"
+  vrun validate; expect_pass
+}
+acct_pull_index_labels_agree() {
+  # The acceptance rule: one truth, one label set — pull and the index surfaces say the same
+  # thing. And the labels are OUTPUT, not search text: pulling a word that appears only inside
+  # label prose must not hit every labeled truth.
+  mkplanstage
+  vrun reindex
+  vrun pull 앨범
+  expect_has "[PLAN-STAGE SOURCE — never evidence of use]"
+  expect_has "(as_of: 2026-07-01)"
+  vrun pull evidence
+  expect_has "no matches"
+}
+acct_pull_partial_discard_labels() {
+  # D4 (field report): the discarded branch dropped $lab and [$src] — on a PARTIAL discard
+  # (resolution.scope) the surviving half is exactly the content that needs its labels, and it
+  # printed unlabeled (Echo t040, an open Human-queue item since 2026-08-01).
+  mkplanstage
+  sed -i 's/^status: ok$/status: discarded/' "$W/truths/t002.md"
+  sed -i '/^as_of:/a resolution: {type: value, winner: t001, scope: [곡수], decided_by: user, decision_kind: supplied, reason: "곡수만 정정"}' "$W/truths/t002.md"
+  vrun reindex
+  vrun pull 앨범
+  expect_has "scope [곡수]"
+  expect_has "PLAN-STAGE"
+  expect_has "[m002]"
+}
+acct_pull_full_discard_unchanged() {
+  # Full discard (no scope): the protocol says follow the successor — the row stays terse and
+  # label-free, exactly as before (the guard against relabeling what should stay quiet).
+  mkplanstage
+  sed -i 's/^status: ok$/status: discarded/' "$W/truths/t002.md"
+  sed -i '/^as_of:/a resolution: {type: value, winner: t001, decided_by: user, decision_kind: supplied, reason: "전체 대체"}' "$W/truths/t002.md"
+  vrun reindex
+  vrun pull 앨범
+  expect_has "DISCARDED → t001"
+  expect_hasnt "PLAN-STAGE"
+}
+acct_scale_snapshot() {
+  # Field-report P1 contract, mechanized: the fold must produce the SAME verdicts at scale.
+  # Pinned on exact examined/scope tallies — a refactor that drops or double-counts a check
+  # class moves one of these lines.
+  mkscale
+  vrun validate
+  expect_pass
+  expect_has "examined: materials 8 · truths 60 (60 sealed)"
+  vrun scope
+  expect_has "truths     60 live · 0 verified (digest-bound) · 0 legacy-unbound · 0 stale · 0 failed · 60 unverified"
+  vrun pull 조항3
+  expect_pass
+  expect_has "usable"
+}
 
 mkpristine() {
   rm -rf "$PRISTINE" 2>/dev/null
