@@ -47,6 +47,20 @@ Phase 4 목표는 −70% (≤11.9s). 남은 분포(문서 1·자료 1 fixture �
 
 **측정 방법 메모.** `bash -x` 트레이스는 MSYS에서 stderr 쓰기 비용이 커서 결과를 왜곡한다(라인당 ~12ms의 가짜 균등 분포). 블록 경계에 `EPOCHREALTIME`을 찍는 내장 마커가 정확하다 — Phase 4의 진단은 전부 그 방식이다.
 
+## 실광산 재기준선 (2026-08-03) — 필드 리포트 P1 착수 전
+
+`notes/FIELD-2026-08-03-eclypse-defects-and-perf.md`의 단일 패스 접기 작업 전 기준선. eclypse **자료 30 · truth 268**, dev 번들 `2026-08-03.2`(v0.3.3), 같은 방법(연속 3회, 광산 원본에서 읽기 전용 실행).
+
+| run | real |
+|---|---:|
+| 1 | 163s |
+| 2 | 152s |
+| 3 | 155s |
+
+**median = 155s** (배포본 `2026-08-02.17`의 필드 관측치는 149s — 리포트 §2). 같은 광산을 awk 1회로 읽는 프로브(`notes/probe-singlepass.awk`)는 **1.81s** — 실제 계산은 ~2s(봉인 부분문자열)이고 나머지는 전부 스폰이라는 리포트 진단을 재확인.
+
+합성 fixture는 `tests/regress.sh`의 **`mkscale`**(자료 8 · truth 60, 전 truth가 출처 줄을 축자 인용) + `acct_scale_snapshot` — 위 "250-truth benchmark fixture 추가 예정" 과제를 이것으로 닫는다. 60-truth로도 스폰 회귀는 즉시 보인다: 접기 전 케이스 1개가 ~79s(sys 78s)다.
+
 ## 환경
 
 | 항목 | 값 |

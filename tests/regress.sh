@@ -107,6 +107,55 @@ mk_v2() { # promote the workspace to a schema-2 mine with a sealed review — th
     || bad "mk_v2: seal-review failed — the case would assert against an unsealed mine"
 }
 REV() { review4 "$W" "$@"; }
+mkscale() { # deterministic 8-material · 60-truth mine — the scale where spawn regressions show.
+  # The minimal fixture's 1-truth loops spawn a few dozen processes and hide an O(N) spawn
+  # regression completely (field report 2026-08-03, P1). Every truth quotes its source line
+  # verbatim so the seal check does real substring work. No documents: the spawn hotspots under
+  # measure are the materials/truths loops, and a doc would only add unrelated gate output.
+  local M=8 T=60 mi ti mid tid line
+  rm -rf "$W/materials" "$W/truths" "$W/documents"
+  mkdir -p "$W/materials" "$W/truths" "$W/documents"
+  printf '# 자료 목록\n\n| id | 제목 | 역할 | 상태 |\n|---|---|---|---|\n' > "$W/catalog.md"
+  for mi in $(seq 1 "$M"); do
+    mid=$(printf 'm%03d' "$mi")
+    mkdir -p "$W/materials/$mid"
+    { printf -- '---\nid: %s\ntitle: 계약서 %d\norigin: file\nrole: 계약서\ntopics: [스케일]\nformat: md\nsource_path: inbox/c%d.md\nadded: 2026-07-01\nstatus: converted\nsummary: 스케일 픽스처 자료 %d.\n---\n\n# 계약서 %d\n\n' "$mid" "$mi" "$mi" "$mi" "$mi"
+      for line in $(seq 1 40); do printf '제%d조 자료%d의 조항 %d은 유효하다.\n' "$line" "$mi" "$line"; done
+    } > "$W/materials/$mid/converted.md"
+    printf '| %s | 계약서 %d | 계약서 | converted |\n' "$mid" "$mi" >> "$W/catalog.md"
+  done
+  printf '# Coverage\n\n' > "$W/truths/coverage.md"
+  for mi in $(seq 1 "$M"); do
+    printf '## m%03d\n\n' "$mi" >> "$W/truths/coverage.md"
+    for ti in $(seq "$mi" "$M" "$T"); do printf -- '- 조항 %d: t%03d\n' "$(( (ti - 1) / M + 1 ))" "$ti" >> "$W/truths/coverage.md"; done
+    printf '\n' >> "$W/truths/coverage.md"
+  done
+  printf '# 변경 로그\n\n' > "$W/truths/changelog.md"
+  for ti in $(seq 1 "$T"); do
+    tid=$(printf 't%03d' "$ti")
+    mi=$(( (ti - 1) % M + 1 )); mid=$(printf 'm%03d' "$mi")
+    line=$(( (ti - 1) / M + 1 ))
+    printf -- '---\nid: %s\nclaim: "자료%d의 조항 %d이 유효하다"\nsource: %s\nlocation: "제%d조"\ntags: [스케일, 조항%d]\nstatus: ok\nprovenance: stated\n---\n\n제%d조 자료%d의 조항 %d은 유효하다.\n' \
+      "$tid" "$mi" "$line" "$mid" "$line" "$line" "$line" "$mi" "$line" > "$W/truths/$tid.md"
+    printf -- '- added: %s (2026-07-30)\n' "$tid" >> "$W/truths/changelog.md"
+  done
+  printf -- '---\nstatus: passed\nround: 1\nverified_at: 2026-07-30\n---\n\n## Verified units\n\n## Adjudications\n\n## Human queue\n' > "$W/truths/verify.md"
+  ( cd "$W" && bash .weavedoc/bin/weavedoc reindex >/dev/null 2>&1 ) || bad "mkscale: reindex failed"
+}
+acct_scale_snapshot() {
+  # Field-report P1 contract, mechanized: the fold must produce the SAME verdicts at scale.
+  # Pinned on exact examined/scope tallies — a refactor that drops or double-counts a check
+  # class moves one of these lines.
+  mkscale
+  vrun validate
+  expect_pass
+  expect_has "examined: materials 8 · truths 60 (60 sealed)"
+  vrun scope
+  expect_has "truths     60 live · 0 verified (digest-bound) · 0 legacy-unbound · 0 stale · 0 failed · 60 unverified"
+  vrun pull 조항3
+  expect_pass
+  expect_has "usable"
+}
 
 mkpristine() {
   rm -rf "$PRISTINE" 2>/dev/null
