@@ -636,7 +636,15 @@ mat_digest() { # $1 = converted.md -> sha256 of the file MINUS its frontmatter `
   # LC_ALL=C (v0.3.6): this awk decides which bytes go into a DIGEST, over material bodies that are
   # Korean prose. A locale-dependent pass would make the same file hash differently under two
   # shells — every verification verdict downstream rides on this number.
+  # A trailing CR is stripped EXPLICITLY (v0.3.8), because leaving it to the platform meant the
+  # same material digested to two different numbers: MSYS gawk strips CR on read, Linux gawk keeps
+  # it (measured — eclypse m001 gave ebf43fc9… on Windows and 5cf38845… on Linux). A digest is the
+  # spelling of "which bytes were verified", so a git autocrlf checkout on the other OS silently
+  # resurrected the entire verification debt. MSYS's answer is taken as canonical: deployed mines
+  # were digested there, so making it explicit changes no existing number. Must be the FIRST rule —
+  # it rewrites $0 for every rule below, including the fence and `status:` matches.
   LC_ALL=C awk '
+    { sub(/\r$/, "") }
     NR==1 && /^---[[:space:]]*$/  { infm=1; print; next }
     infm && /^---[[:space:]]*$/   { infm=0; print; next }
     infm && /^status[[:space:]]*:/ { next }

@@ -2729,6 +2729,27 @@ pass_upgrade_resume_mixed() {
   expect_pass
   vrun validate; expect_pass
 }
+acct_mat_digest_line_endings_stable() {
+  # A material's digest must not depend on the platform that computed it. mat_digest passes the file
+  # through awk, and MSYS gawk strips CR while Linux gawk keeps it — so the SAME material digested
+  # to two different values depending on where you ran it (measured 2026-08-04: eclypse m001 gives
+  # ebf43fc9… on Windows and 5cf38845… on Linux). A verification is "these bytes were checked"; if
+  # the number moves when the checkout does, a git autocrlf clone silently resurrects the whole
+  # verification debt. Stated as the consequence rather than as a hash constant: re-writing a
+  # verified material with the other line endings must not stale it.
+  vrun attest verified 1 standard m001
+  # Rewritten in bash, not awk or sed: those two are the very tools whose CR handling differs by
+  # platform, so using them to BUILD the fixture would make the case prove nothing on one of them.
+  # bash's read keeps CR and its printf writes bytes, on every platform.
+  { while IFS= read -r l || [ -n "$l" ]; do printf '%s\r\n' "${l%$'\r'}"; done < "$W/materials/m001/converted.md"; } > "$W/m.crlf"
+  mv "$W/m.crlf" "$W/materials/m001/converted.md"
+  # Checked with read for the same reason — MSYS grep reports CR inconsistently.
+  IFS= read -r l0 < "$W/materials/m001/converted.md"
+  case "$l0" in *$'\r') ;; *) bad "fixture did not become CRLF — the case would prove nothing"; return ;; esac
+  vrun scope
+  expect_has "materials  1 converted · 1 verified (digest-bound)"
+  expect_hasnt "→ stale:"
+}
 acct_scope_ledger_unknown_verdict() {
   # The fail-open the cold review found: a typo'd verdict fell through to the digest compare and
   # counted as digest-bound. Now it is quarantined, named, and validate blocks on it.
