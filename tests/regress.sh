@@ -1731,6 +1731,32 @@ acct_consecrate_failure_preserves_final() {
   expect_has "위약금은 계약금액의 10%다"
   expect_hasnt "개정판"
 }
+block_consecrate_validate_fail_final_unremovable() {
+  # FAULT INJECTION (v0.3.6). The abort and mv-failure branches both verify a postcondition before
+  # dropping the in-flight marker; the validate-failure branch did not. It trusted `rm -rf "$fin"`,
+  # and on a FIRST-EVER consecration (no original, so nothing to restore) it removed the marker
+  # without ever looking at the final slot. When the removal fails, the rejected UNVALIDATED
+  # candidate keeps the final name and the one artifact that would have told anyone is gone.
+  rm -f "$W/documents/d1/final.md"                    # first-ever consecration: no original, no backup
+  printf '개정판. <!-- t:t001 -->\n' > "$W/documents/d1/draft.md"
+  vrun seal-review d1 draft
+  rm -f "$W/truths/index.md"                          # fails validate AFTER staging — outside the context manifest
+  mkdir -p "$W.shim"
+  cat > "$W.shim/rm" <<'EOF'
+#!/usr/bin/env bash
+# Fails ONLY for the final slot. Every other rm the transaction needs (candidate, marker) still
+# works, so the branch under test is reached with the rest of the machinery intact.
+for a in "$@"; do case "$a" in */documents/d1/final.md) exit 1 ;; esac; done
+exec /usr/bin/rm "$@"
+EOF
+  chmod +x "$W.shim/rm"
+  OUT=$( ( cd "$W" && PATH="$W.shim:$PATH" $TO bash .weavedoc/bin/weavedoc consecrate d1 ) 2>&1 ); RC=$?
+  [ "$RC" -eq 0 ] && bad "consecrate reported success after the full validation failed"
+  expect_has "UNVALIDATED"
+  # Last, so this message is the one that surfaces: the marker is the whole postcondition.
+  [ -e "$W/documents/d1/.consecrate.inflight" ] \
+    || bad "in-flight marker removed while the final slot still held the rejected candidate"
+}
 pass_gate_tree_seal_match() {
   mktree
   vrun seal-review d1 draft
@@ -2302,6 +2328,53 @@ block_completeness_open_gap_with_continuation() {
   vrun validate; expect_block "[COMP-OPEN-GAPS]"
   expect_hasnt "[COMP-MALFORMED]"
 }
+block_completeness_placeholder_bullet_real_continuation() {
+  # The hole the noise filter left open (v0.3.6): "is this template noise?" was decided per BULLET,
+  # so an entry that kept the shipped placeholder bullet and wrote its real content in the indented
+  # continuation counted as ZERO. The continuation belongs to the ENTRY — the register passed while
+  # holding exactly the debt it exists to surface, which is the shape `required` is bought for.
+  req_completeness
+  cat > "$W/gaps.md" <<'EOF'
+# Open
+
+- [{kind}] {where} — {what's missing} — {evidence/pattern}
+  m001 대금 조항이 "미정"으로 남아 있음
+
+# Accepted
+EOF
+  vrun validate; expect_block "[COMP-OPEN-GAPS]"
+}
+pass_completeness_placeholder_bullet_placeholder_continuation() {
+  # Attacks the FIX, not the bug: a continuation that is itself template text must stay noise. The
+  # entry-level rule judges the REMAINDER with the bullet rule's own spelling — a second, looser
+  # spelling here would block every freshly-initialised multi-line register on a gap that isn't there.
+  req_completeness
+  cat > "$W/gaps.md" <<'EOF'
+# Open
+
+- [{kind}] {where} — {what's missing} — {evidence/pattern}
+  {follow-up} — {as-of}
+
+# Accepted
+EOF
+  vrun validate; expect_pass
+}
+acct_completeness_noise_bullet_counts_once() {
+  # Attacks the FIX from the other side: an entry is ONE gap however many continuations carry its
+  # content. Counting per line would report 2, and the number is the thing a human acts on.
+  req_completeness
+  cat > "$W/gaps.md" <<'EOF'
+# Open
+
+- [{kind}] {where} — {what's missing} — {evidence/pattern}
+  m001 대금 조항이 "미정"으로 남아 있음
+  부속서 2도 아직 확보되지 않음
+
+# Accepted
+EOF
+  vrun validate
+  expect_has "holds 1 open gap(s)"
+}
 pass_completeness_comment_in_open() {
   # HTML comments are audit history, not entries — an Open section holding only a comment is a
   # clean register (the same nocomment rule every other ledger reader applies).
@@ -2596,6 +2669,53 @@ acct_scope_ledger_unknown_verdict() {
   expect_has "[LEDGER-VERDICT]"
   vrun validate
   expect_block "[LEDGER-VERDICT]"
+}
+acct_scope_ledger_unknown_verdict_material() {
+  # The m-lane TWIN of the case above (v0.3.6). The truth lane slices the FILTERED ledger, but the
+  # material lane read a bash map built BEFORE the quarantine — so the very same typo that covered
+  # nothing for a truth counted digest-bound for a material. One quarantine, two lanes, one exempt.
+  vrun attest verified 2 standard m001
+  sed -i 's/\tverified\t/\tverifed\t/' "$W/truths/verify-ledger.tsv"
+  vrun scope
+  expect_has "materials  1 converted · 0 verified (digest-bound) · 0 legacy-unbound · 0 stale · 0 failed · 1 unverified"
+  expect_has "[LEDGER-VERDICT]"
+  vrun validate
+  expect_block "[LEDGER-VERDICT]"
+}
+acct_scope_unknown_verdict_material_never_falls_back() {
+  # Ruled 2026-08-04: quarantine is NOT the same as absence. An unreadable row must not open the
+  # weaker v1 `status: verified` fallback, because that fallback (legacy-unbound) is not counted in
+  # `owed` — so the fallback would let one typo REDUCE what a verify round owes. Unreadable
+  # evidence is no evidence, and no evidence is owed.
+  sed -i 's/^status: converted$/status: verified/' "$W/materials/m001/converted.md"
+  vrun attest verified 2 standard m001
+  sed -i 's/\tverified\t/\tverifed\t/' "$W/truths/verify-ledger.tsv"
+  vrun scope
+  expect_has "materials  1 converted · 0 verified (digest-bound) · 0 legacy-unbound · 0 stale · 0 failed · 1 unverified"
+  expect_has "[LEDGER-VERDICT]"
+}
+acct_scope_unknown_verdict_material_stale_digest() {
+  # The sharpest shape of the same rule, and the one the cold review used to attack the fix: the
+  # material's BYTES demonstrably moved after its last attest. Reading the v1 frontmatter here
+  # reported "nothing unverified" for a material anyone can see has changed. `owed` is monotone in
+  # garbage — an unreadable row can only ever GROW a round, never shrink it.
+  sed -i 's/^status: converted$/status: verified/' "$W/materials/m001/converted.md"
+  vrun attest verified 2 standard m001
+  printf '\n제9조 추가 조항.\n' >> "$W/materials/m001/converted.md"
+  sed -i 's/\tverified\t/\tverifed\t/' "$W/truths/verify-ledger.tsv"
+  vrun scope
+  expect_has "materials  1 converted · 0 verified (digest-bound) · 0 legacy-unbound · 0 stale · 0 failed · 1 unverified"
+  expect_hasnt "→ nothing unverified"
+}
+acct_scope_unknown_verdict_truth_never_falls_back() {
+  # The TRUTH twin — the same rule, the other lane (the asymmetry that started this whole item).
+  # t001 is named in the markdown '## Verified units', so a quarantined sidecar row used to be
+  # rescued into legacy-unbound (not owed) by that mention. It must land owed instead.
+  vrun attest verified 2 standard t001
+  sed -i 's/\tverified\t/\tverifed\t/' "$W/truths/verify-ledger.tsv"
+  vrun scope
+  expect_has "truths     1 live · 0 verified (digest-bound) · 0 legacy-unbound · 0 stale · 0 failed · 1 unverified"
+  expect_has "[LEDGER-VERDICT]"
 }
 
 # ---- WD-CLI-002 (Phase 5 unit 11a): stable diagnostic codes + validate --json ----

@@ -1916,6 +1916,17 @@ EOF
             ;;
           *)
             if [ "$grest_" = "$gl_" ] || [ "$inb_" != 1 ]; then badline_="$gl_"; break; fi
+            # The noise verdict belongs to the ENTRY (bullet + its continuations), never to the
+            # bullet alone (v0.3.6): an entry that kept the shipped placeholder bullet and wrote its
+            # real content in the continuation counted as ZERO, so `required` passed over exactly
+            # the debt it is bought to surface. Judged with the bullet's OWN remainder spelling —
+            # a second, looser one here would be the two-parsers drift class itself. Fail-closed:
+            # content anywhere in the entry makes it an entry. `gnoise_` flips so the entry counts
+            # ONCE however many continuations carry it.
+            if [ "$gnoise_" = 1 ]; then
+              grem_=$(printf '%s' "$grest_" | sed -E 's/\{[^{}]*\}//g; s/<[^<>]*>//g; s/[][(){}<>—:·,.-]+//g; s/[ \t]+//g')
+              [ -n "$grem_" ] && { nopen_=$((nopen_+1)); gnoise_=0; }
+            fi
             ;;
         esac
       done < <(nocomment < "$ROOT/gaps.md" | section_all - "Open")
@@ -3032,13 +3043,24 @@ cmd_consecrate() { # consecrate <doc-id> — stage candidate, verify seals, ONE 
     rm -rf "$fin"
     local rok_=1
     if [ -n "$oldfin" ]; then mv "$bak" "$oldfin" || rok_=0; fi
+    # THE SAME POSTCONDITION the abort and mv-failure branches verify (v0.3.6). This branch trusted
+    # `rm -rf "$fin"` and, with no original to restore, dropped the marker without ever looking at
+    # the final slot — so a removal that failed left the REJECTED, UNVALIDATED candidate sitting at
+    # final with no trace, which is precisely the state the marker exists to make visible. Three
+    # failure branches, one rule: the marker leaves ONLY behind a verified postcondition.
+    if [ -n "$oldfin" ]; then { [ -e "$oldfin" ] && [ ! -e "$bak" ]; } || rok_=0
+    else [ -e "$fin" ] && rok_=0; fi
     if [ "$rok_" = 1 ]; then
       rm -f "$mark"
       echo "consecrate: full validation FAILED after staging — candidate rejected, original final preserved untouched. Fix the problems above and re-run."
-    else
+    elif [ -n "$oldfin" ] && [ -e "$bak" ]; then
       # Restore failed: the backup is the only original. The marker stays — a mine whose final
       # slot is empty while the original sits in .final.bak must not validate green.
       echo "consecrate: full validation FAILED and the backup could NOT be restored over final — the original is still in ${bak#"$ROOT"/}; restore it by hand. The in-flight marker stays (validate blocks until resolved)."
+    else
+      # The rejected candidate could not be cleared. There is no original behind it (or it is
+      # already back), so the danger is the opposite one: UNVALIDATED bytes wearing the final name.
+      echo "consecrate: full validation FAILED and the rejected candidate could NOT be removed from the final slot — ${fin#"$ROOT"/} holds UNVALIDATED bytes that no clean validation ever covered; remove it by hand (byte-compare against the reviewed draft first). The in-flight marker stays (validate blocks until resolved)."
     fi
     return 1
   fi
@@ -3496,12 +3518,28 @@ cmd_scope() {
   local sf_ lrid_ lrrest_
   for sf_ in "$MATERIALS"/*/converted.md; do [ -f "$sf_" ] && spre_+=("$sf_"); done
   [ "${#spre_[@]}" -gt 0 ] && fm_preload "${spre_[@]}"
-  local -A LROW=()
-  while IFS=$'\t' read -r lrid_ lrrest_; do [ -n "$lrid_" ] && LROW[$lrid_]=$lrrest_; done <<< "$ledger"
   # Unknown verdicts are quarantined BEFORE classification — they cover nothing and are named;
   # letting them fall through to the digest compare is how a typo once counted as verified.
   ledger_bad=$(printf '%s\n' "$ledger" | awk -F'\t' 'NF >= 3 && $3 != "verified" && $3 != "failed" && $3 != "legacy-unbound" { print $1 " (" $3 ")" }')
   ledger=$(printf '%s\n' "$ledger" | awk -F'\t' '$3 == "verified" || $3 == "failed" || $3 == "legacy-unbound"')
+  # BUILT FROM THE FILTERED LEDGER — this map must stay BELOW the two lines above (v0.3.6). Built
+  # first, it captured quarantined rows and the material loop read them, while `strows` below
+  # slices the filtered `$ledger`: the same typo covered nothing for a truth and counted
+  # digest-bound for a material. Computation before consumption, and the quarantine IS the
+  # computation. A quarantined row leaves no entry, so the material falls back to its own
+  # frontmatter — the same state as a ledger that never named it.
+  local -A LROW=()
+  while IFS=$'\t' read -r lrid_ lrrest_; do [ -n "$lrid_" ] && LROW[$lrid_]=$lrrest_; done <<< "$ledger"
+  # The quarantined ids, kept as a SET (ruled 2026-08-04). Quarantine is not the same as absence:
+  # a row the machine cannot read must never REDUCE what a round owes, so it does not open the
+  # weaker v1 fallbacks below either. Derived from `ledger_bad` itself — one spelling of "which
+  # rows are unreadable", never a third awk that could drift from the two above.
+  local -A LBAD=(); local bid_ badids=""
+  while IFS= read -r bid_; do
+    [ -n "$bid_" ] || continue
+    bid_=${bid_%% *}
+    LBAD[$bid_]=1; badids="$badids$bid_"$'\n'
+  done <<< "$ledger_bad"
 
   # ---- materials: population = converted.md holders minus tombstones. Evidence precedence:
   # sidecar row (digest decides bound/stale, verdict decides failed) > v1 `status: verified`
@@ -3536,10 +3574,15 @@ cmd_scope() {
         if [ "$cur" = "$dg" ]; then n_mbound=$((n_mbound+1))
         else n_mstale=$((n_mstale+1)); mstale="$mstale $m"; fi
       fi
-    elif [ "$mstat" = "verified" ]; then
+    elif [ -z "${LBAD[$m]-}" ] && [ "$mstat" = "verified" ]; then
       n_mlegacy=$((n_mlegacy+1)); mlegacy="$mlegacy $m"
     else
-      # `used` lands here too — lifecycle, not a verdict (WD-COR-001).
+      # `used` lands here too — lifecycle, not a verdict (WD-COR-001). And so does a material whose
+      # only row was QUARANTINED (ruled 2026-08-04): unreadable evidence is no evidence, and no
+      # evidence is owed. Without the LBAD guard a typo demoted a material whose bytes demonstrably
+      # moved from stale (owed) to legacy-unbound (NOT owed) — one unreadable row shrinking the
+      # round it should have grown. `owed` is monotone in garbage: a row nobody can read never buys
+      # a unit its way out of a verify round.
       n_munver=$((n_munver+1)); munver="$munver $m"
       [ "$mstat" = "used" ] && n_mused=$((n_mused+1))
     fi
@@ -3596,9 +3639,14 @@ cmd_scope() {
   tfail=$(printf '%s\n' "$tclass" | sed -n 's/^F\t//p' | LC_ALL=C sort -u)
 
   # ---- v1 markdown ledger: verified ids not covered by the sidecar are legacy-unbound.
-  local scan vids unmarked tlegacy tunver tghost diskany n_tlegacy n_tunver
+  local scan vids unmarked tlegacy tunver tghost diskany n_tlegacy n_tunver tbad_
   scan=$(scan_verified_units)
   vids=$(printf '%s\n' "$scan" | sed -n 's/^V\t//p' | grep -E '^t[0-9]' | LC_ALL=C sort -u)
+  # The TRUTH twin of the LBAD rule (ruled 2026-08-04): a quarantined row must not be rescued into
+  # legacy-unbound by a markdown `## Verified units` mention. Dropping the id here is the whole fix
+  # — `tlegacy` intersects `vids`, and `tunver` is what falls out of both, so the unit lands owed.
+  tbad_=$(printf '%s' "$badids" | grep -E '^t[0-9]' | LC_ALL=C sort -u || true)
+  [ -n "$tbad_" ] && vids=$(comm -23 <(printf '%s\n' "$vids" | grep . || true) <(printf '%s\n' "$tbad_"))
   unmarked=$(printf '%s\n' "$scan" | sed -n 's/^U\t//p')
   diskany=$(printf '%s\n' "$ondisk" "$tomb" | grep . | LC_ALL=C sort -u)
   tlegacy=$(comm -12 <(printf '%s\n' "$vids") <(printf '%s\n' "$ondisk") | comm -23 - <(printf '%s\n' "$scov"))
