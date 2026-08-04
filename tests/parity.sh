@@ -54,17 +54,27 @@ echo "  node: $NODE_BIN"
 echo "  normalised (declared divergence): the version fingerprint — it hashes the runtime itself"
 echo
 
+# The exit code comes from PIPESTATUS[0], never from `$?` after the assignment (found 2026-08-04,
+# before stage 5 wrote a line). `x=$(cmd | sed)` reports SED's status, so `brc`/`nrc` were both
+# always 0 and the exit-code half of the contract had never once been compared — `impact m999`
+# (rc 2 on both runtimes) printed "rc 0" and passed. For validate that half IS the verdict: 0 is
+# a clean mine and 1 is a blocked one, and the entire suite below rides on which one comes back.
+# The assignment must therefore be its own statement, after the pipeline has run.
 fail=0
 for c in "$@"; do
   # shellcheck disable=SC2086 — commands are given as space-separated argv, on purpose
-  bo=$( ( cd "$MINE" && bash "$REPO/$BASH_BIN" $c ) 2>/dev/null | normalise ); brc=$?
-  no=$( ( cd "$MINE" && node "$REPO/$NODE_BIN" $c ) 2>/dev/null | normalise ); nrc=$?
+  bo=$( ( cd "$MINE" && bash "$REPO/$BASH_BIN" $c; printf '\001%s' "$?" ) 2>/dev/null | normalise )
+  brc=${bo##*$'\001'}; bo=${bo%$'\001'*}
+  no=$( ( cd "$MINE" && node "$REPO/$NODE_BIN" $c; printf '\001%s' "$?" ) 2>/dev/null | normalise )
+  nrc=${no##*$'\001'}; no=${no%$'\001'*}
   if [ "$bo" = "$no" ] && [ "$brc" = "$nrc" ]; then
     printf '  PASS  %-24s (rc %s)\n' "$c" "$brc"
   else
     fail=$((fail+1))
     printf '  DIFF  %-24s (bash rc %s · node rc %s)\n' "$c" "$brc" "$nrc"
-    diff <(printf '%s\n' "$bo") <(printf '%s\n' "$no") | sed 's/^/        /'
+    # printf '%s', not '%s\n': the captured text now keeps its OWN trailing newline (the rc marker
+    # sits after it), so adding one would report a difference in every comparison.
+    diff <(printf '%s' "$bo") <(printf '%s' "$no") | sed 's/^/        /'
   fi
 done
 

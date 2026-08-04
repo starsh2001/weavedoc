@@ -5,7 +5,7 @@
 // are in real data: a comment that is not a comment, a value that keeps its own '#', a key spelled
 // with a dot.
 import { readFileSync, existsSync } from 'node:fs'
-import { fmKey, fmVal, isFmLine, splitLines } from './core.mjs'
+import { fmKey, fmVal, isFence, isFmLine, splitLines } from './core.mjs'
 
 const readOr = (p, fb = '') => { try { return readFileSync(p, 'utf8') } catch { return fb } }
 
@@ -84,8 +84,7 @@ export function cfgPath (configPath, key, dflt, root) {
 // whitespace. A bare "---" comparison once split on a trailing space and disabled a seal.
 export function hasFm (file) {
   if (!existsSync(file)) return false
-  const first = splitLines(readOr(file))[0] ?? ''
-  return first.replace(/[ \t]+$/, '') === '---'
+  return isFence(splitLines(readOr(file))[0] ?? '')
 }
 
 // Parse a file's frontmatter ONCE into key -> value. First spelling of a key wins. Reading stops at
@@ -94,10 +93,10 @@ export function fmLoad (file) {
   const m = new Map()
   const lines = splitLines(readOr(file))
   if (lines.length === 0) return m
-  if (!/^---[ \t]*$/.test(lines[0])) return m
+  if (!isFence(lines[0])) return m
   for (let i = 1; i < lines.length; i++) {
     const line = lines[i]
-    if (/^---[ \t]*$/.test(line)) break
+    if (isFence(line)) break
     if (!isFmLine(line)) continue
     const k = fmKey(line)
     if (!m.has(k)) m.set(k, fmVal(line))

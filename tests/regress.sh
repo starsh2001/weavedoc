@@ -3048,6 +3048,65 @@ acct_materials_redirected() {
   sed -i 's|^  materials: materials$|  materials: materials-moved|' "$W/.weavedoc/config.yaml"
   vrun validate; expect_has "materials 0"
 }
+acct_diag_paths_are_relative() {
+  # Decision ② (2026-08-04), the half that was missed. Diagnostics print PROJECT-RELATIVE paths —
+  # every one of them, not just the truths awk's. An absolute path in a message makes the message
+  # depend on WHERE the mine sits, which is how the same diagnostic reads /d/repo/x under MSYS and
+  # D:/repo/x under a native runtime: one directory, two spellings, and stdout parity broken on
+  # exactly the lines a broken mine prints.
+  #
+  # Deliberately a MINE, not a grep of the source: the first round of this fix hunted by reading and
+  # found "2 kinds" where a broken mine found 4, and this case exists because measuring 345 mines
+  # afterwards found 20 more. So the assertion is on OUTPUT, and the mine is made broken in several
+  # unrelated ways at once — a shell-side material check, a catalog cross-check and a plan check —
+  # so that fixing one family cannot make this go quiet about the others.
+  mkdir -p "$W/materials/m002"                                   # MAT-NO-CONVERTED  (shell, $MATERIALS)
+  printf -- '- t999\n' >> "$W/documents/d1/plan.md"               # (keeps plan.md a file)
+  sed -i 's/^cited_truths: .*/cited_truths: [t001, t999]/' "$W/documents/d1/plan.md"   # PLAN-CITED-DANGLING ($p)
+  vrun validate
+  expect_block "no converted.md"
+  expect_has "materials/m002/"
+  expect_has "documents/d1/plan.md"
+  # THE assertion. `$W` is the mine root; no diagnostic may name it. Checked on the whole output so
+  # a code nobody thought to list is covered too.
+  case "$OUT" in
+    *"$W"*) bad "a diagnostic printed the absolute mine root: $(printf '%s\n' "$OUT" | grep -F "$W" | head -1)" ;;
+    *) ok ;;
+  esac
+}
+acct_diag_order_is_specified() {
+  # The ORDER of the truths pass's diagnostics is part of what this tool promises, not a by-product
+  # of gawk's hash. Nine families come out of `for (k in array)`, and gawk leaves that order
+  # unspecified — measured 2026-08-04, it is not sorted at any real scale, so these five printed as
+  # `status source claim tags id`. Nothing but gawk can reproduce that, and it is not a promise the
+  # tool ever meant to make.
+  #
+  # The mine is a truth carrying NONE of the required fields, which is the ordinary broken state
+  # (not a contrived one) — and the assertion is the whole run of five in one string, so a change to
+  # any single position fails. Asserting each id separately would pass on any permutation.
+  printf -- '---\nnothing: here\n---\n\n제7조 위약금은 계약금액의 10%%로 한다.\n' > "$W/truths/t002.md"
+  vrun validate
+  local seen
+  seen=$(printf '%s\n' "$OUT" | grep -F "[FM-MISSING] truths/t002.md" \
+         | sed -E "s/.*frontmatter '([a-z_]+)' missing.*/\1/" | tr '\n' ' ')
+  seen=${seen% }
+  if [ "$seen" = "claim id source status tags" ]; then ok
+  else bad "truth FM-MISSING order is '$seen', want 'claim id source status tags' (schema order sorted; an unspecified order cannot be ported)"; fi
+}
+acct_impact_paths_are_relative() {
+  # The same rule one door over, and the reason this is a SECOND case: `impact` prints its file
+  # lists DIRECTLY, so the diagnostic-side fix cannot reach them and a case that only ran validate
+  # reported "no absolute paths" while impact was absolute in 326 of the 345 case mines. All three
+  # of its lists are exercised — the id grep, the title grep, and the cited_truths chain — because
+  # they are three separate print sites and fixing one says nothing about the others.
+  vrun impact m001
+  expect_pass
+  expect_has "documents/d1/plan.md"
+  case "$OUT" in
+    *"$W"*) bad "impact printed the absolute mine root: $(printf '%s\n' "$OUT" | grep -F "$W" | head -1)" ;;
+    *) ok ;;
+  esac
+}
 
 # ---------------------------------------------------------------- driver
 

@@ -3,12 +3,16 @@
 // These two files are GENERATED VIEWS: the truth files are the source, and anything hand-edited here
 // is lost on the next run. `--check` is the read-only form that reports drift and writes nothing.
 import { statSync, readdirSync, writeFileSync, unlinkSync } from 'node:fs'
-import { splitLines, truthLabels } from './core.mjs'
+import { isFence, splitLines, truthLabels } from './core.mjs'
 import { join } from './mine.mjs'
 import { fmv } from './read.mjs'
 import { requireInsideRoot, rename, readText, textBuf, U } from './write.mjs'
 import { diffNormal, diffLines } from './diff.mjs'
 
+// Two predicates, and the difference is load-bearing. `exists` is the truth-file population (bash
+// counts that with `ls`, which lists a directory too); `isFile` is a material's converted.md, where
+// a directory of that name really is not a material.
+const exists = p => { try { statSync(p); return true } catch { return false } }
 const isFile = p => { try { return statSync(p).isFile() } catch { return false } }
 const lsOr = d => { try { return readdirSync(d) } catch { return [] } }
 
@@ -43,7 +47,7 @@ function recVal (line) {
   return s.replace(/[ \t]*$/, '').replace(/^"/, '').replace(/"$/, '').replace(/\u0001/g, ' ')
 }
 
-const FENCE = /^---[ \t]*$/
+const FENCE = { test: isFence }   // the ONE fence spelling — core.mjs
 const FIELDS = [
   ['id', /^id[ \t]*:/], ['claim', /^claim[ \t]*:/], ['source', /^source[ \t]*:/],
   ['status', /^status[ \t]*:/], ['tags', /^tags[ \t]*:/], ['as_of', /^as_of[ \t]*:/],
@@ -83,7 +87,16 @@ export function cmdReindex (m, out, errln, argv) {
   if ((argv[1] ?? '') !== '') { errln('usage: weavedoc reindex [--check]'); return 2 }
   const check = a1 === '--check'
 
-  const files = lsOr(m.truths).filter(n => TRUTH_GLOB.test(n) && isFile(join(m.truths, n))).sort(bytewise)
+  // EVERY glob match on disk, including a DIRECTORY wearing a truth filename (fixed 2026-08-04,
+  // caught by tests/parity-corpus.sh). The bash side counts with `ls "$TRUTHS"/t[0-9]*.md`, the same
+  // expression census uses, and a directory is in that list — so bash refuses with
+  //   "N truth file(s) but only M produced a record"  (rc 1)
+  // while an isFile() filter here dropped it from the population, made the counts agree, and
+  // returned 0. That is fail-OPEN on exactly the shape the count exists to catch: a name in the
+  // truth population that no index entry can ever represent. `records()` skips it either way (a
+  // directory reads as no lines, so its line 1 is not the fence), which is what makes the counts
+  // disagree and the refusal fire.
+  const files = lsOr(m.truths).filter(n => TRUTH_GLOB.test(n) && exists(join(m.truths, n))).sort(bytewise)
   if (files.length === 0) { out('no truths to index'); return 0 }
   const recs = records(m.truths, files)
 

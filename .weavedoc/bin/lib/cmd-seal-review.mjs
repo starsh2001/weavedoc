@@ -9,13 +9,13 @@
 // definition", and a freshly sealed review is neither. Leaving it would park a demotion path —
 // strip the seal later and the review reads as legacy again, reopening the gate.
 import { statSync } from 'node:fs'
-import { splitLines } from './core.mjs'
+import { isFence, splitLines } from './core.mjs'
 import { join, contextDigest, docDraftPath, docFinalPath } from './mine.mjs'
 import { artifactDigest } from './verify.mjs'
 import { writeAtomic, readText, textBuf } from './write.mjs'
 
 const isFile = p => { try { return statSync(p).isFile() } catch { return false } }
-const FENCE = /^---[ \t]*$/
+const FENCE = { test: isFence }   // the ONE fence spelling — core.mjs
 const SEALED = /^(reviewed_kind|reviewed_digest|review_context_digest|review_legacy)[ \t]*:/
 
 export function cmdSealReview (m, out, d, kindArg) {

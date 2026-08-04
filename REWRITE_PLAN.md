@@ -161,9 +161,35 @@ printf 'a\r\nb\r\n' | awk '{print}'
 | # | 무엇이 다른가 | 판정 |
 |---|---|---|
 | 1 | `version`의 fingerprint | 런타임 자기 바이트를 해싱하므로 **달라야 정상**. 필드가 제 일을 하는 것 |
-| 2 | ~~광산 루트 표기(절대경로 진단)~~ | **없어졌다** — 위의 상대경로 수정으로 해소 |
+| 2 | ~~광산 루트 표기(절대경로 진단)~~ | **없어졌다 — 두 번 만에.** 위의 상대경로 수정은 truths awk만 고쳤고 셸 쪽 **20종**이 그대로였다(§4a). 5단계 착수 시 345개 케이스 광산 전체에 validate를 돌려 발견했고, `prob`/`warn` 한 곳에서 완성한 뒤 재측정해 0줄을 확인했다 |
 | 3 | **argv의 유효하지 않은 UTF-8 바이트** | 고칠 수 없다. MSYS bash가 네이티브 프로그램을 띄울 때 바이트열을 UTF-16으로 변환하는데, 유효하지 않은 UTF-8은 그 변환에서 손실된다 — 바이트가 Node 주소공간에 **애초에 도달하지 않는다**. bash는 bash·gawk·sha256sum이 전부 MSYS 안이라 바이트를 그대로 옮긴다. 실측: `attest verified 2 $'\xb0\xcb\xc1\xf5' m001` → bash는 `b0cbc1f5`, Node는 `c2b0c38bc381c3b5`를 장부에 쓴다. **영향 범위는 `standard` 열(자유 텍스트) 하나**이고 digest·id·판정에는 닿지 않는다. 계획된 PowerShell 호출 경로에는 유효하지 않은 바이트가 존재할 수 없다. 회귀 케이스 `pass_locale_scope_census_match`는 Node로 green(그 케이스가 고정하는 것은 로케일 독립성이고 Node에는 로케일 의존이 없다) |
 | 4 | **`reindex --check`의 diff 본문에서 hunk 묶는 방식** | 판정에는 닿지 않는다 — `in sync`/`DIFFERS`, 개수 줄, 종료 코드는 항상 일치한다. 동일 길이의 최소 편집 스크립트가 여럿일 때 GNU diff와 다른 쪽을 고를 수 있다. 측정: `tests/diff-parity.sh` 864케이스 중 **97.9% 바이트 일치**(4,064케이스로 넓히면 96.5%), **실광산 index.md·tree.md 케이스는 0건 불일치**. 불일치는 전부 10단어 알파벳으로 같은 줄을 일부러 반복시킨 합성 입력 |
+
+### 4a. 진단 경로 상대화 — 절반만 되어 있었다 (5단계 착수 시 발견, 2026-08-04)
+
+오전의 상대화는 **truths awk만** 고쳤다. 셸 쪽 진단 **20종**(`FM-MISSING`·`MAT-*`·`CAT-*`·`PLAN-*`·`CFG-PATH-*`·`TRUTH-DIR`·`DATE-INVALID`·`PROJ-*`…)은 그대로 절대경로였다.
+
+**왜 안 보였나**: 통과하는 광산은 진단을 한 줄도 찍지 않는다. "실광산 validate 출력의 절대경로 0줄"은 eclypse가 **깨끗해서** 성립한 값이었지, 진단이 상대경로라는 증거가 아니었다.
+
+**어떻게 찾았나**: 345개 케이스가 만드는 광산을 전부 수확해(`WD_REG_WORK=… bash tests/regress.sh` → `$WORK/w/<case>`) 하나하나 validate를 돌리고, 출력에서 광산 루트를 grep했다. 읽어서 세지 않았다 — 오전의 "2종이 아니라 4종"이 정확히 읽어서 센 결과였다.
+
+**어디서 고쳤나**: 구성 지점 ~30군데가 아니라 `prob`/`warn` **한 곳**(`relmsg`). 오전의 수리 항목이 "`relf`는 메시지인 동시에 키"였는데, 완성된 메시지는 아무도 소비하지 않으므로 이 자리에서는 그 클래스가 발생할 수 없다. 철자가 하나라 나중에 추가되는 진단도 자동으로 상대경로가 된다. 알려진 한계와 되돌림 조건은 `IMPROVEMENT_PLAN.md` §11.
+
+회귀 케이스 `acct_diag_paths_are_relative`가 이걸 못 박는다 — 소스 grep이 아니라 **광산**으로, 서로 무관한 세 계열(material·catalog·plan)을 동시에 깨뜨려서, 한 계열을 고치는 것으로 나머지에 대해 조용해질 수 없게.
+
+**그리고 그 케이스도 충분하지 않았다.** 콜드 리뷰가 **모든 읽기 명령**으로 다시 재니 `impact`가 345개 광산 중 **326개**에서 절대경로였다 — 세 목록이 `prob`/`warn`을 거치지 않고 직접 인쇄하므로 `relmsg`가 닿지 않는다. `impact`도 상대화했고 `acct_impact_paths_are_relative`가 세 목록을 각각 못 박는다. **교훈은 측정 범위다**: "validate에 절대경로 0줄"은 "런타임에 절대경로 0줄"이 아니었고, 첫 번째 "0줄"이 틀렸던 것과 정확히 같은 이유로 틀렸다.
+
+### 4b. 진단의 순서 — gawk 해시가 아니라 명세다 (2026-08-04)
+
+truths awk의 진단 9계열이 `for (k in array)`로 나온다. gawk는 그 순서를 **명세하지 않고**, 실측 결과 **어떤 규모에서도 정렬이 아니다**(키 50·300·2000개 전부 NOT sorted). 그래서 필수 필드가 통째로 빠진 truth는 `status source claim tags id` 순으로 인쇄됐다 — gawk의 해시 함수를 구현하지 않는 한 포트가 재현할 수 없는 순서다.
+
+이건 파리티 예외로 선언할 자리가 아니라 **없앨 수 있는 자리**였다. `PROCINFO["sorted_in"]="@ind_str_asc"`(GNU awk는 이미 필수 의존이다)로 순서를 명세했다. 바꾸기 전 블래스트 반경을 재고 바꿨다: 345개 광산 양방향 비교에서 출력이 바뀐 광산 **0개.** 스위트의 무엇도 해시 순서에 기대고 있지 않았고, 그저 명세가 없었을 뿐이다. `acct_diag_order_is_specified`가 다섯 개 전부를 한 문자열로 확인한다(id를 하나씩 보면 어떤 순열이든 통과한다).
+
+참고로 MSYS gawk 5.0.0과 Linux gawk 5.2.1은 이 키 집합에서 **같은** 해시 순서를 냈다 — 즉 지금 플랫폼 간 불일치는 아니었다. 고친 이유는 결함이어서가 아니라 **명세되지 않은 것에 계약이 얹혀 있었기 때문**이다.
+
+### 4c. 플랫폼 차이로 남겨두는 것 — CR 하나짜리 파일
+
+바이트 하나(`\r`)만 든 truth 파일에 대해 **MSYS gawk 5.0.0은 `NR`을 0**으로, **Linux gawk 5.2.1은 1**로 센다. 그래서 `scope`의 live 집계가 Windows bash에서만 다르게 나온다(포트는 Linux 답과 일치). 이식이 만든 차이가 아니라 gawk 쪽 차이이고, 채점 플랫폼이 Linux라 컨테이너 저울은 이걸 볼 수 없다 — 그래서 여기 적어둔다.
 
 ### bash가 깨져 있고 포트가 낫는 자리 — 재현하지 않았다
 
@@ -172,6 +198,7 @@ printf 'a\r\nb\r\n' | awk '{print}'
 - **schema 키가 없을 때**: bash는 `set -u`로 죽는다(`SCH[verify.ledger.verdicts]: unbound variable`). `ledger_file`의 주석이 예상한 바로 그 "testbed drift"에서, 종료 코드 1에 stdout은 빈 채로. Node는 코드 기본값으로 degrade한다
 - **장부 경로가 디렉터리일 때**: bash의 `mv`가 임시 파일을 **그 디렉터리 안으로 옮기고 rc 0으로 성공을 보고**한다(장부는 안 써진 채 `verify-ledger.tsv/verify-ledger.tsv.tmp.<pid>`가 남는다). Node는 `attest: ledger write failed` rc 1
 - **`require_inside_root ""`**: bash의 `cd ""`는 성공해서 CWD로 해석되므로 **가드를 통과한다**. `paths: truths: /` 설정이면 실제로 도달한다(양쪽 다 `TRUTHS`가 빈 문자열이 된다). Node는 거부한다
+- **truth 파일명을 쓴 디렉터리의 census 표기** (추가 2026-08-04): `truths/t009.md`가 디렉터리면 bash의 `ls "$TRUTHS"/t[0-9]*.md`가 그것을 `<경로>:` 헤더로 나열해 진단에 `t009.md:`(앞 공백 2개 + `.md:` 꼬리)를 흘리고, 그 줄이 `sort -n`에서 0으로 읽혀 **numbering-holes 줄이 통째로 사라진다.** Node는 `t009`로 찍고 holes를 정상 계산한다. validate는 양쪽 다 `TRUTH-DIR`로 막으므로 판정은 같다
 
 **옮길 수 없는 세 부류** — 소리 없이 빠지면 안 되므로 각각 대체 케이스를 만들고, 못 만들면 여기 남긴다:
 - `bash -n` 파싱 검사, `preflight_gnu`(GNU 도구 확인) — 대상이 사라진다. `node --check`가 전자의 자리를 대신하고, 후자는 **필요 자체가 없어진다**

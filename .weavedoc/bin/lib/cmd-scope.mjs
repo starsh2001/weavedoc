@@ -129,11 +129,29 @@ export function cmdScope (m, out, json) {
 
   // ---- truths: live vs tombstone (retracted/discarded leave the population, the same rule
   // retracted materials follow).
+  //
+  // A file that yields NO LINE is not in this population (fixed 2026-08-04, caught by
+  // tests/parity-corpus.sh on `acct_zero_byte_truth` and `block_truth_shaped_directory`). The bash
+  // side classifies with one awk over the glob, and awk contributes nothing for an input it never
+  // reads a record from — a zero-byte file, or a DIRECTORY wearing a truth filename, which gawk
+  // refuses with a stderr warning. Both therefore leave scope's live count untouched there, while a
+  // directory listing sees both and Node was reporting them as live-and-unverified: two extra owed
+  // units that the round has no file to verify.
+  //
+  // This is deliberately NOT the same rule as census, one door over, and the difference is bash's
+  // own: census takes its FILE COUNT from disk precisely so a zero-byte truth cannot vanish from the
+  // denominator, and validate does the same and reports it as "NOT checked". So a degenerate truth
+  // file is COUNTED (it exists) and UNCLASSIFIED (it says nothing) — which is the honest pair, and
+  // reproducing only half of it in either direction is what makes two commands disagree about one
+  // mine.
   const tl = truthFiles(m).map(f => {
     const raw = basename(f, '.md')
+    let lines
+    try { lines = splitLines(readFileSync(f, 'utf8')) } catch { lines = [] }
+    if (lines.length === 0) return null
     const st = fmLoad(f).get('status') ?? ''
     return { cls: (st === 'retracted' || st === 'discarded') ? 'X' : 'L', canon: pad('t', parseInt(raw.slice(1), 10)), raw, file: f }
-  })
+  }).filter(Boolean)
   const ondisk = uniqSort(tl.filter(x => x.cls === 'L').map(x => x.canon))
   const tomb = uniqSort(tl.filter(x => x.cls === 'X').map(x => x.canon))
 
@@ -218,7 +236,12 @@ export function cmdScope (m, out, json) {
     out(`  ledger: ${scan.U.length} entry(s) name units but end in no "${m.sch.get('verify.units.verified') || 'verified'}" verdict — they cover nothing; add the verdict or leave the units owed:`)
     for (const l of scan.U) out(l.replace(/^[ \t]*/, '    '))
   }
-  if (ledgerBad.length) out(`  ledger: row(s) with unknown verdicts — they cover nothing [LEDGER-VERDICT]: ${ledgerBad.join(' ')} `)
+  // NO trailing space (fixed 2026-08-04, caught by tests/parity-corpus.sh). The bash line renders
+  // `printf '%s' "$ledger_bad" | tr '\n' ' '` — a command substitution has already eaten the final
+  // newline, so `tr` finds none to turn into a space and the line ends at the last ')'. The lists
+  // that DO end in a space (the id runs below) come through compress_ids, which prints a separator
+  // after every id and then a bare newline; two different renderings, and both are contract.
+  if (ledgerBad.length) out(`  ledger: row(s) with unknown verdicts — they cover nothing [LEDGER-VERDICT]: ${ledgerBad.join(' ')}`)
   if (ledgerSbad.length) {
     // The shared strict filter dropped these before classification — shown here so a truncated or
     // hand-mangled row reads as "covers nothing" in scope AND blocks in validate, never one without

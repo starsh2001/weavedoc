@@ -6,7 +6,7 @@
 import { readFileSync, existsSync, readdirSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { createHash } from 'node:crypto'
-import { canonId } from './core.mjs'
+import { canonId, isFence } from './core.mjs'
 
 const sha256 = buf => createHash('sha256').update(buf).digest('hex')
 const readBytes = p => { try { return readFileSync(p) } catch { return null } }
@@ -99,8 +99,8 @@ export function matDigest (file) {
   let infm = false
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i].endsWith('\r') ? lines[i].slice(0, -1) : lines[i]
-    if (i === 0 && /^---[ \t]*$/.test(line)) { infm = true; out.push(line); continue }
-    if (infm && /^---[ \t]*$/.test(line)) { infm = false; out.push(line); continue }
+    if (i === 0 && isFence(line)) { infm = true; out.push(line); continue }
+    if (infm && isFence(line)) { infm = false; out.push(line); continue }
     if (infm && /^status[ \t]*:/.test(line)) continue
     out.push(line)
   }

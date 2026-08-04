@@ -31,14 +31,19 @@ export function cmdImpact (m, out, id) {
     out(`  ${fm(f, 'id')}: ${fm(f, 'claim')} [${fm(f, 'status')}]`)
   }
 
+  // PROJECT-RELATIVE, the same rule every diagnostic follows. These three lists were the last
+  // absolute paths either runtime printed, and they cannot be byte-compared while they name the
+  // root: MSYS spells one file /d/repo/x and this runtime spells it D:/repo/x.
+  const rel = p => (p.startsWith(`${m.root}/`) ? p.slice(m.root.length + 1) : p)
+
   // `grep -rl` — files under documents/ holding the id as a whole word, in traversal order.
   out('  -- documents citing it (by id) --')
   const idRx = new RegExp(`\\b${rxEscape(id)}\\b`)
-  for (const f of walkFiles(m.documents)) if (idRx.test(readOr(f))) out(`  ${f}`)
+  for (const f of walkFiles(m.documents)) if (idRx.test(readOr(f))) out(`  ${rel(f)}`)
 
   if (title !== '') {
     out('  -- documents mentioning its title --')
-    for (const f of walkFiles(m.documents)) if (readOr(f).includes(title)) out(`  ${f}`)
+    for (const f of walkFiles(m.documents)) if (readOr(f).includes(title)) out(`  ${rel(f)}`)
   }
 
   // Through the truths. An external-audience document carries neither the material id nor its
@@ -54,7 +59,7 @@ export function cmdImpact (m, out, id) {
       // plan silently drops the document from the radius.
       for (const cid of listField(fm(df, 'cited_truths'))) {
         if (canonId(cid) !== tid) continue
-        hit.push(df); out(`  ${df}`); break
+        hit.push(df); out(`  ${rel(df)}`); break
       }
     }
   }

@@ -23,6 +23,19 @@ export function splitLines (s) {
   return l.map(x => (x.endsWith('\r') ? x.slice(0, -1) : x))
 }
 
+// ---- the frontmatter fence ----------------------------------------------------------------
+// ONE spelling, because there were ELEVEN and every one of them was narrower than the runtime it
+// ports (found 2026-08-04 by a cold review that ran the two side by side instead of reading them).
+// bash writes `^---[[:space:]]*$` in every reader of a fence, with LC_ALL=C pinned on those awks,
+// and in the C locale that class is space · tab · newline · VERTICAL TAB · FORM FEED · carriage
+// return. The port had `[ \t]`, so a fence carrying a `\v` or `\f` closed the block for bash and
+// not for Node — and then Node kept reading frontmatter into the document body. Measured on census:
+// a truth whose closing fence is `---\v` and whose BODY says `status: conflict` tallied that body
+// line, inventing the "tallies do not sum to the file count" alarm on a file with one status.
+// A line never holds a newline, and splitLines has already removed ONE trailing CR; CR stays in the
+// class for the line that carried two of them, which both runtimes still read as a fence.
+export const isFence = l => /^---[ \t\v\f\r]*$/.test(l)
+
 // ---- id spelling --------------------------------------------------------------------------
 // The single definition of "how a number is spelled as an id", used both to resolve a file and to
 // reject a file spelling its number any other way — so lookup and naming convention cannot drift.

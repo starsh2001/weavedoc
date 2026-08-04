@@ -5,7 +5,7 @@
 // path they took (field report D1). Every label comes from truthLabels — written inline nowhere.
 import { existsSync, readFileSync } from 'node:fs'
 import { basename } from 'node:path'
-import { splitLines, truthLabels } from './core.mjs'
+import { isFence, splitLines, truthLabels } from './core.mjs'
 import { join, truthFiles } from './mine.mjs'
 import { fmv } from './read.mjs'
 
@@ -34,10 +34,10 @@ function extract (file) {
   const r = { id: basename(file, '.md'), st: '', cl: '', src: '', asof: '', prov: '', cw: '', res: '', asm: '', bd1: '' }
   let tbl = 0
   const lines = splitLines(readOr(file))
-  let infm = lines.length > 0 && /^---[ \t]*$/.test(lines[0])
+  let infm = lines.length > 0 && isFence(lines[0])
   for (let i = 1; i < lines.length; i++) {
     const l = lines[i]
-    if (infm && /^---[ \t]*$/.test(l)) { infm = false; continue }
+    if (infm && isFence(l)) { infm = false; continue }
     if (!infm) {
       // The first body line too, because the CLAIM is all pull has shown and the claim is the one
       // field nothing verifies — validate seals the BODY, not the claim. Printing them together puts

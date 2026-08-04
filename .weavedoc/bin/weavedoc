@@ -780,18 +780,54 @@ WD_JSON=${WD_JSON:-0}
 # contract, the English prose is presentation and may change. The single-arg form still works and
 # reports as UNCODED; meta_uncoded_ratchet pins how many such sites remain, so the number can only
 # fall. Human output prefixes the code; JSON output carries it as a field.
+# EVERY path in a diagnostic is PROJECT-RELATIVE, and this is the one place that is spelled.
+# Decision ② (2026-08-04) was applied to the truths awk first and stopped there; measuring validate
+# over all 345 case mines afterwards found TWENTY more codes still printing an absolute path
+# (FM-MISSING, MAT-*, CAT-*, PLAN-*, CFG-PATH-*, TRUTH-DIR, DATE-INVALID …). They were invisible
+# because a mine that passes prints no diagnostics at all, and the mine the first hunt used was
+# broken in only a few ways.
+#
+# It is done HERE, on the finished message, rather than at the ~30 construction sites, for the exact
+# reason the first round had to be repaired: `relf` is both the message text AND the key of the
+# frontmatter census, so relativising "the path" at a construction site risks moving a string some
+# lookup depends on. A message is consumed by nothing. Substituting last touches no variable any
+# check reads, so this rule cannot silently switch a check off — and there is one spelling of it,
+# so a diagnostic added later is relative without its author having to know that.
+# A path OUTSIDE the project (a redirected paths: value, a schema found beside the script) does not
+# begin with ROOT and is left whole — an escape must stay visible as an escape.
+# KNOWN LIMIT, and it is sharper than "the value reads shortened": the substitution is over the
+# whole message, so a mine VALUE that itself spells the project's absolute root is quoted back
+# shortened — and the shortened form can be a name that EXISTS. Measured: a truth whose
+# `source: <ROOT>/m001` sits next to a real `materials/m001` reports
+#   [TRUTH-SOURCE-DANGLING] truths/t001.md  source 'm001' → no material folder
+# The VERDICT is right (the value does not name a material folder), but the message now quotes a
+# string that is not in the file and blames an id that is fine. The alternative was relativising at
+# ~30 construction sites, which is the shape that let twenty codes sit absolute for months, and a
+# quote-aware rule was tried and rejected: CFG-PATH-MISSING prints its path inside quotes, so it
+# would exempt exactly the case that has to be covered. Revert condition is recorded in
+# IMPROVEMENT_PLAN.md §11.
+# Answers in RELMSG, deliberately NOT in the shared REPLY. REPLY is the zero-fork return channel of
+# fmv, canon_id, listfield, pipes, file_raw/file_stripped, count_headings and dup_section, and a
+# diagnostic can be emitted between one of those setting it and a caller reading it. Nothing in the
+# suite turned out to depend on that (checked by poisoning REPLY inside prob/warn and running all
+# 348 cases green), but "no case reaches it" is not the same as "no caller does", and a one-word
+# rename removes the class instead of measuring it.
+relmsg() { RELMSG=${1//"$ROOT/"/}; }
+RELMSG=""
 prob() {
   local code="UNCODED"
   if [ $# -ge 2 ]; then code="$1"; shift; fi
   PROBLEMS=$((PROBLEMS+1))
-  if [ "$WD_JSON" = 1 ]; then DIAGS+="${code}"$'\002'"$*"$'\001'
-  else printf '  [%s] %s\n' "$code" "$*"; fi
+  relmsg "$*"
+  if [ "$WD_JSON" = 1 ]; then DIAGS+="${code}"$'\002'"$RELMSG"$'\001'
+  else printf '  [%s] %s\n' "$code" "$RELMSG"; fi
 }
 warn() { # same shape, non-counting — surfaced, never failing
   local code="UNCODED"
   if [ $# -ge 2 ]; then code="$1"; shift; fi
-  if [ "$WD_JSON" = 1 ]; then WARNS+="${code}"$'\002'"$*"$'\001'
-  else printf '  warning: [%s] %s\n' "$code" "$*"; fi
+  relmsg "$*"
+  if [ "$WD_JSON" = 1 ]; then WARNS+="${code}"$'\002'"$RELMSG"$'\001'
+  else printf '  warning: [%s] %s\n' "$code" "$RELMSG"; fi
 }
 emit_probs() { # stdin: lines an awk pass emitted, each "[CODE] rest" (or bare → UNCODED)
   local line code
@@ -1185,7 +1221,17 @@ cmd_validate() {
           for(ii=1;ii<=nn;ii++){ gsub(/^[[:space:]]+|[[:space:]]+$/,"",ta[ii]); if(ta[ii]!="") seentag[ta[ii]]=1 }
         }
       }
-      BEGIN { nreq=split(ENVIRON["WD_REQTAGS"], rt, "\n")
+      # THE ORDER OF THESE DIAGNOSTICS IS SPECIFIED, not left to gawk. Nine families here are
+      # emitted from `for (k in array)`, whose order gawk deliberately leaves unspecified — measured
+      # 2026-08-04: it is NOT sorted at any real scale (50, 300 and 2000 keys all came back
+      # unsorted), so a truth missing several required fields printed them as `status source claim
+      # tags id`, an artifact of the hash. That is unreproducible by anything that is not gawk, which
+      # makes it the one thing a rewrite cannot match, and it is a promise the tool never meant to
+      # make: the SET of problems is the contract, the hash order is not.
+      # Blast radius before changing it: all 345 case mines, both ways — output changed on ZERO of
+      # them. Nothing in the suite depended on the hash order; it simply was not specified.
+      BEGIN { PROCINFO["sorted_in"]="@ind_str_asc"
+              nreq=split(ENVIRON["WD_REQTAGS"], rt, "\n")
               rootp=ENVIRON["WD_ROOT"]
               nm=split(treq,_r," ");    for(i=1;i<=nm;i++) if(_r[i]!="") reqkey[_r[i]]=1
               nm=split(tstenum,_s," ");  for(i=1;i<=nm;i++) if(_s[i]!="") okstatus[_s[i]]=1
@@ -1549,6 +1595,7 @@ EOF
         # normalised: `source: m5`, `## m005` and `t1` must land on the same entry as their canonical forms.
         function norm(s){ sub(/^m0*/,"m",s); sub(/^t0*/,"t",s); return (s=="m"||s=="t") ? "" : s }
         BEGIN {
+          PROCINFO["sorted_in"]="@ind_str_asc"   # same reason as the truths pass: order is specified
           nm=split(matids,a," "); for(i=1;i<=nm;i++) if(a[i]!=""){ mat[a[i]]=1; if(norm(a[i])!="") mat[norm(a[i])]=1 }
           np=split(pairs,b," ")
           for(i=1;i<=np;i++){ if(b[i]=="") continue; split(b[i],c,":"); tsrc[c[1]]=c[2]; if(norm(c[1])!="") tid2file[norm(c[1])]=c[1] }
@@ -2099,11 +2146,18 @@ cmd_impact() {
     local fsrc; fsrc=$(canon_id "$(fm "$f" source)") || fsrc=$(fm "$f" source)
     [ "$fsrc" = "$ncanon" ] && printf '  %s: %s [%s]\n' "$(fm "$f" id)" "$(fm "$f" claim)" "$(fm "$f" status)"
   done
+  # PROJECT-RELATIVE, the same rule the diagnostics follow (see relmsg). These three lists were the
+  # last absolute paths the runtime printed — measured 2026-08-04 over all 345 case mines, after the
+  # diagnostics were relativised: `impact` was still absolute in 326 of them, because it prints these
+  # paths DIRECTLY and never goes through prob/warn. That is the whole §5-2 problem one door over:
+  # MSYS spells the same file /d/repo/x and a native runtime spells it D:/repo/x, so this output
+  # cannot be byte-compared between the two while it names the root. A relative path is also what a
+  # reader would type.
   echo "  -- documents citing it (by id) --"
-  grep -rlnE "\b$n\b" "$DOCUMENTS" 2>/dev/null | sed 's/^/  /' || true
+  grep -rlnE "\b$n\b" "$DOCUMENTS" 2>/dev/null | sed "s|^$ROOT/||; s/^/  /" || true
   if [ -n "$title" ]; then
     echo "  -- documents mentioning its title --"
-    grep -rlnF "$title" "$DOCUMENTS" 2>/dev/null | sed 's/^/  /' || true
+    grep -rlnF "$title" "$DOCUMENTS" 2>/dev/null | sed "s|^$ROOT/||; s/^/  /" || true
   fi
   # Through the truths: an external-audience document carries neither the material id nor its title,
   # so the greps above come back empty exactly when a retraction needs the radius. The
@@ -2123,7 +2177,7 @@ cmd_impact() {
       for cid in $(listfield "$(fm "$df" cited_truths)"); do
         cid=$(canon_id "$cid") || continue
         [ "$cid" = "$tid" ] || continue
-        hitdocs="$hitdocs $df"; printf '  %s\n' "$df"; break
+        hitdocs="$hitdocs $df"; printf '  %s\n' "${df#"$ROOT/"}"; break
       done
     done
   done

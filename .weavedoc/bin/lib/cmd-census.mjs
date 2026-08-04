@@ -3,10 +3,9 @@
 // simply printed.
 import { readFileSync, existsSync } from 'node:fs'
 import { basename } from 'node:path'
-import { canonId, splitLines } from './core.mjs'
+import { canonId, fmVal, isFence, splitLines } from './core.mjs'
 import { nocomment, sectionAll } from './sections.mjs'
 import { fm, join, materialIds, truthFiles } from './mine.mjs'
-import { fmLoad } from './read.mjs'
 
 const readOr = p => { try { return readFileSync(p, 'utf8') } catch { return '' } }
 
@@ -20,6 +19,26 @@ function indexEntries (indexPath) {
     if (m) ids.push(m[1])
   }
   return { lines: ids.length, set: [...new Set(ids)].sort() }
+}
+
+// EVERY `status:` line inside a file's frontmatter, in order — the census tally's substrate.
+// Spelled as the bash awk spells it, and deliberately NOT as fmLoad does:
+//   FNR==1 { infm=($0 ~ /^---[[:space:]]*$/); next }
+//   infm && /^---[[:space:]]*$/ { infm=0; nextfile }
+//   infm && /^status[[:space:]]*:/ { st[fmval($0)]++ }
+// Two differences from fmLoad that both matter. Line 1 is consumed by the FNR==1 rule, so the
+// opening fence can never itself match; and the key gate is `^status[[:space:]]*:` alone — there is
+// no [A-Za-z_] identifier test, so `status :` counts and a bare `status:` counts as the empty value.
+function fmStatusLines (file) {
+  const out = []
+  const lines = splitLines(readOr(file))
+  if (lines.length === 0) return out
+  if (!isFence(lines[0])) return out
+  for (let i = 1; i < lines.length; i++) {
+    if (isFence(lines[i])) break
+    if (/^status[ \t]*:/.test(lines[i])) out.push(fmVal(lines[i]))
+  }
+  return out
 }
 
 // countlines: drops a bullet whose bracket still opens a placeholder, nothing more.
@@ -49,14 +68,25 @@ export function cmdCensus (m, out) {
 
   // Status tally, read through the SHARED frontmatter value rule — this was once a third private
   // copy of it, and a private copy is only ever one edit away from disagreeing with the other two.
+  //
+  // EVERY `status:` line in the frontmatter, not the first (fixed 2026-08-04, caught by
+  // tests/parity-corpus.sh on `block_dup_key`). fmLoad answers "what does this field say", which is
+  // first-spelling-wins, and that is the WRONG question here: census exists to make a duplicated key
+  // ARITHMETICALLY visible. The whole point of the tally is the reconciliation line below — tallies
+  // must sum to the file count — and a file with two `status:` lines is meant to tally twice so the
+  // sum exceeds the file count and says so. Reading only the first made a duplicate key silently
+  // consistent, which is the one thing this counter is bought to prevent. It is also the contract
+  // validate's FM-DUPLICATE-KEY message states out loud: fm reads the FIRST, validate and reindex
+  // read the LAST, census counts BOTH — three commands, three answers, which is why it must be named.
   let nOk = 0; let nRes = 0; let nConf = 0; let nUnsup = 0; let nRetr = 0
   for (const f of files) {
-    const st = fmLoad(f).get('status')
-    if (st === 'ok') nOk++
-    else if (st === 'discarded' || st === 'resolved') nRes++
-    else if (st === 'conflict') nConf++
-    else if (st === 'unsupported') nUnsup++
-    else if (st === 'retracted') nRetr++
+    for (const st of fmStatusLines(f)) {
+      if (st === 'ok') nOk++
+      else if (st === 'discarded' || st === 'resolved') nRes++
+      else if (st === 'conflict') nConf++
+      else if (st === 'unsupported') nUnsup++
+      else if (st === 'retracted') nRetr++
+    }
   }
   const nLive = nOk + nConf + nUnsup
 
