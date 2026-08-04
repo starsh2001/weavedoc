@@ -56,6 +56,9 @@ jobs:
           name: regression-ubuntu
           path: ${{ runner.temp }}/ci-artifact/
       - name: clean worktree after tests (Phase 2 completion condition)
+        # always(): a FAILING suite is exactly when a case is most likely to have left the tree
+        # dirty, and without this the check is skipped on every run that would have proved it.
+        if: always()
         run: |
           status=$(git status --porcelain)
           if [ -n "$status" ]; then
@@ -108,6 +111,8 @@ jobs:
           name: regression-${{ matrix.os }}
           path: ${{ runner.temp }}/ci-artifact/
       - name: clean worktree after tests
+        # Same rule as the Linux job above — one spelling of the §9 completion condition.
+        if: always()
         run: |
           status=$(git status --porcelain)
           if [ -n "$status" ]; then

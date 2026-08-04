@@ -21,7 +21,12 @@ Windows Git Bash에서 `validate` 1회 ≈ 40초라 전체 sweep은 수십 분 �
 
 ## CI
 
-[.github/workflows/ci.yml](../.github/workflows/ci.yml) — push(main·improve/**)·PR·tag에서: `bash -n` + ShellCheck(오류 등급), Ubuntu·Windows·macOS(**전부 required** — macOS는 census 4건이 v0.3.4에서 해소되어 2026-08-04 승격) matrix에서 전체 suite, §7.3 계약대로 실행 케이스 ID·환경을 artifact로 게시, 종료 후 clean worktree 확인, bundle manifest 2회 재현 검증.
+[.github/workflows/ci.yml](../.github/workflows/ci.yml) — **트리거마다 도는 OS가 다르다.**
+
+- **push(main·improve/**)·PR**: `bash -n` + ShellCheck(오류 등급), **Ubuntu에서만** 전체 suite, bundle manifest 2회 재현 검증.
+- **tag(`v*`)·workflow_dispatch**: 위에 더해 **Windows·macOS** matrix에서 전체 suite. 셋 다 **required**(macOS는 census 4건이 v0.3.4에서 해소되어 2026-08-04 승격). Windows는 분당요금 2배에 sweep 한 번이 ~35분, macOS는 10배라 계약이 걸리는 지점 — 태그 — 에서만 돈다.
+
+두 경로 모두 §7.3 계약대로 실행 케이스 ID·환경을 artifact로 게시하고, suite 성패와 무관하게(`if: always()`) 종료 후 clean worktree를 확인한다.
 
 ## baseline/ 산출물
 
