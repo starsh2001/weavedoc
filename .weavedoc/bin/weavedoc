@@ -227,12 +227,18 @@ has_fm() { # $1=file -> 0 when line 1 opens a frontmatter block
 # outside quotes, quotes peeled, first spelling of a key wins.
 # The VALUE rules live in ONE awk function shared by the per-file and the batch loader (v0.3.4):
 # two spellings of "how a value is read" is the drift class the schema roster exists to kill.
-FM_KV_AWK='function emitkv(   line, k, v) {
-  line=$0; k=line; sub(/[[:space:]]*:.*$/, "", k)
+# Split into fmkey/fmval so a reader that wants ONE field's value can call the same rule instead of
+# copying it (v0.3.6): scope's truth classifier and census both carried private status parsers, and
+# scope's never peeled the quotes — `status: "retracted"` was a tombstone to validate and a live
+# truth to scope. Any awk that needs a frontmatter value calls fmval($0); emitkv is unchanged.
+FM_KV_AWK='function fmkey(line,   k) { k=line; sub(/[[:space:]]*:.*$/, "", k); return k }
+function fmval(line,   k, v) {
+  k=fmkey(line)
   v=line; sub("^" k "[[:space:]]*:[[:space:]]*", "", v)
   if (v !~ /^"/) { sub(/[[:space:]]+#.*$/, "", v); if (v ~ /^#/) v="" }
   sub(/[[:space:]]*$/, "", v); sub(/^"/, "", v); sub(/"$/, "", v)
-  printf "%s\037%s\n", k, v }'
+  return v }
+function emitkv(   line) { line=$0; printf "%s\037%s\n", fmkey(line), fmval(line) }'
 declare -A FMV FMLOADED
 fm_load() { # $1=file -> parse its frontmatter into FMV once
   local f="$1" line k v
@@ -299,14 +305,14 @@ listfield() { # `[a, b]` -> one item per line. Was five piped processes (echo|tr
 # listed BEFORE the heading rule, or an adjacent repeat of the heading re-enters instead of ending.
 # Repeats are `dup_section`'s job (not merged here); comments are `nocomment`'s.
 section_body() { # $1=file (or - for stdin) $2="Header" -> body under the first "# Header"
-  awk -v h="$2" '
+  LC_ALL=C awk -v h="$2" '
     on && /^#+[[:space:]]/ { exit }
     $0 ~ ("^#[ 	]+" h "[[:space:]]*$") { on=1; next }
     on { print }
   ' "${1:--}" 2>/dev/null
 }
 section_body2() { # $1=file (or - for stdin) $2="Header" -> body under the first "## Header"
-  awk -v h="$2" '
+  LC_ALL=C awk -v h="$2" '
     on && (/^#[ 	]/ || /^##[ 	]/) { exit }
     $0 ~ ("^##[ 	]+" h "[[:space:]]*$") { on=1; next }
     on { print }
@@ -317,7 +323,7 @@ section_all() { # $1=file (or -) $2="Header" -> body of EVERY matching section, 
   # LEVEL-AGNOSTIC: a section ends only at a SAME-OR-SHALLOWER heading, so the sub-headings a ledger
   # groups its rounds under stay inside and only a sibling section ends it. `Fidelity violations` must
   # NOT use this — a second copy there is a bypass, which `dup_section` blocks.
-  awk -v h="$2" '
+  LC_ALL=C awk -v h="$2" '
     function lev(s){ if (match(s, /^#+/)) return RLENGTH; return 0 }
     { if ($0 ~ ("^#+[[:space:]]+" h "[[:space:]]*$")) { on=1; lv=lev($0); next }
       if (on && $0 ~ /^#+[[:space:]]/ && lev($0) <= lv) { on=0 }
@@ -384,7 +390,7 @@ comment_balanced() { # $1=file -> 0 if the file does not END inside a comment
   # Runs `nocomment`'s own state machine rather than counting delimiters. Counting was not a
   # balance test at all: one orphan `-->` earlier in the file offsets a later unterminated
   # `<!--`, the totals match, and the check passes on exactly the file whose counts are lies.
-  awk '
+  LC_ALL=C awk '
     { line=$0
       while (1) {
         if (inc) { i=index(line,"-->"); if (i==0) { line=""; break }; line=substr(line,i+3); inc=0 }
@@ -406,7 +412,7 @@ countlines() {
 # there — the same two conditions as is_noise, the machine's only judges of "is this a real entry".)
 nocomment() { # stdin -> stdin with <!-- ... --> blocks blanked out (spans lines)
   # Ledger files keep closed/audit history in HTML comments; counting those as live entries is a lie.
-  awk '
+  LC_ALL=C awk '
     { line=$0
       while (1) {
         if (inc) { i=index(line,"-->"); if (i==0) { line=""; break }; line=substr(line,i+3); inc=0 }
@@ -627,7 +633,10 @@ mat_digest() { # $1 = converted.md -> sha256 of the file MINUS its frontmatter `
   # `status` is the lifecycle axis: refine rewrites it at consecration, and a verification that
   # died on a lifecycle stamp would re-fuse the two axes WD-COR-001 split. Only that one
   # frontmatter line is excluded — a body line spelling `status:` is content and stays hashed.
-  awk '
+  # LC_ALL=C (v0.3.6): this awk decides which bytes go into a DIGEST, over material bodies that are
+  # Korean prose. A locale-dependent pass would make the same file hash differently under two
+  # shells — every verification verdict downstream rides on this number.
+  LC_ALL=C awk '
     NR==1 && /^---[[:space:]]*$/  { infm=1; print; next }
     infm && /^---[[:space:]]*$/   { infm=0; print; next }
     infm && /^status[[:space:]]*:/ { next }
@@ -1916,6 +1925,17 @@ EOF
             ;;
           *)
             if [ "$grest_" = "$gl_" ] || [ "$inb_" != 1 ]; then badline_="$gl_"; break; fi
+            # The noise verdict belongs to the ENTRY (bullet + its continuations), never to the
+            # bullet alone (v0.3.6): an entry that kept the shipped placeholder bullet and wrote its
+            # real content in the continuation counted as ZERO, so `required` passed over exactly
+            # the debt it is bought to surface. Judged with the bullet's OWN remainder spelling —
+            # a second, looser one here would be the two-parsers drift class itself. Fail-closed:
+            # content anywhere in the entry makes it an entry. `gnoise_` flips so the entry counts
+            # ONCE however many continuations carry it.
+            if [ "$gnoise_" = 1 ]; then
+              grem_=$(printf '%s' "$grest_" | sed -E 's/\{[^{}]*\}//g; s/<[^<>]*>//g; s/[][(){}<>—:·,.-]+//g; s/[ \t]+//g')
+              [ -n "$grem_" ] && { nopen_=$((nopen_+1)); gnoise_=0; }
+            fi
             ;;
         esac
       done < <(nocomment < "$ROOT/gaps.md" | section_all - "Open")
@@ -2220,11 +2240,12 @@ cmd_census() {
   local n_index_lines
   n_index_lines=$(grep -cE '^- t[0-9]+:' "$TRUTHS/index.md" 2>/dev/null || true); n_index_lines=${n_index_lines:-0}
   n_index=$(grep -oE '^- t[0-9]+:' "$TRUTHS/index.md" 2>/dev/null | LC_ALL=C sort -u | grep -c . || true); n_index=${n_index:-0}
-  stat_out=$(awk '
-    function val(   s){ s=$0; sub(/^[^:]*:[[:space:]]*/,"",s); if(s !~ /^"/){ sub(/[[:space:]]+#.*$/,"",s); if(s ~ /^#/) s="" } sub(/[[:space:]]*$/,"",s); sub(/^"/,"",s); sub(/"$/,"",s); return s }
+  # LC_ALL=C + the SHARED value rule (v0.3.6): this was a third private copy of "how a frontmatter
+  # value is read", and a private copy is only ever one edit away from disagreeing with the other two.
+  stat_out=$(LC_ALL=C awk "$FM_KV_AWK"'
     FNR==1 { infm=($0 ~ /^---[[:space:]]*$/); next }
     infm && /^---[[:space:]]*$/ { infm=0; nextfile }
-    infm && /^status[[:space:]]*:/ { st[val()]++ }
+    infm && /^status[[:space:]]*:/ { st[fmval($0)]++ }
     END { printf "%d %d %d %d %d\n", st["ok"]+0, st["discarded"]+st["resolved"]+0, st["conflict"]+0, st["unsupported"]+0, st["retracted"]+0 }
   ' "$TRUTHS"/t[0-9]*.md)
   set -- $stat_out
@@ -3032,13 +3053,24 @@ cmd_consecrate() { # consecrate <doc-id> — stage candidate, verify seals, ONE 
     rm -rf "$fin"
     local rok_=1
     if [ -n "$oldfin" ]; then mv "$bak" "$oldfin" || rok_=0; fi
+    # THE SAME POSTCONDITION the abort and mv-failure branches verify (v0.3.6). This branch trusted
+    # `rm -rf "$fin"` and, with no original to restore, dropped the marker without ever looking at
+    # the final slot — so a removal that failed left the REJECTED, UNVALIDATED candidate sitting at
+    # final with no trace, which is precisely the state the marker exists to make visible. Three
+    # failure branches, one rule: the marker leaves ONLY behind a verified postcondition.
+    if [ -n "$oldfin" ]; then { [ -e "$oldfin" ] && [ ! -e "$bak" ]; } || rok_=0
+    else [ -e "$fin" ] && rok_=0; fi
     if [ "$rok_" = 1 ]; then
       rm -f "$mark"
       echo "consecrate: full validation FAILED after staging — candidate rejected, original final preserved untouched. Fix the problems above and re-run."
-    else
+    elif [ -n "$oldfin" ] && [ -e "$bak" ]; then
       # Restore failed: the backup is the only original. The marker stays — a mine whose final
       # slot is empty while the original sits in .final.bak must not validate green.
       echo "consecrate: full validation FAILED and the backup could NOT be restored over final — the original is still in ${bak#"$ROOT"/}; restore it by hand. The in-flight marker stays (validate blocks until resolved)."
+    else
+      # The rejected candidate could not be cleared. There is no original behind it (or it is
+      # already back), so the danger is the opposite one: UNVALIDATED bytes wearing the final name.
+      echo "consecrate: full validation FAILED and the rejected candidate could NOT be removed from the final slot — ${fin#"$ROOT"/} holds UNVALIDATED bytes that no clean validation ever covered; remove it by hand (byte-compare against the reviewed draft first). The in-flight marker stays (validate blocks until resolved)."
     fi
     return 1
   fi
@@ -3496,12 +3528,28 @@ cmd_scope() {
   local sf_ lrid_ lrrest_
   for sf_ in "$MATERIALS"/*/converted.md; do [ -f "$sf_" ] && spre_+=("$sf_"); done
   [ "${#spre_[@]}" -gt 0 ] && fm_preload "${spre_[@]}"
-  local -A LROW=()
-  while IFS=$'\t' read -r lrid_ lrrest_; do [ -n "$lrid_" ] && LROW[$lrid_]=$lrrest_; done <<< "$ledger"
   # Unknown verdicts are quarantined BEFORE classification — they cover nothing and are named;
   # letting them fall through to the digest compare is how a typo once counted as verified.
-  ledger_bad=$(printf '%s\n' "$ledger" | awk -F'\t' 'NF >= 3 && $3 != "verified" && $3 != "failed" && $3 != "legacy-unbound" { print $1 " (" $3 ")" }')
-  ledger=$(printf '%s\n' "$ledger" | awk -F'\t' '$3 == "verified" || $3 == "failed" || $3 == "legacy-unbound"')
+  ledger_bad=$(printf '%s\n' "$ledger" | LC_ALL=C awk -F'\t' 'NF >= 3 && $3 != "verified" && $3 != "failed" && $3 != "legacy-unbound" { print $1 " (" $3 ")" }')
+  ledger=$(printf '%s\n' "$ledger" | LC_ALL=C awk -F'\t' '$3 == "verified" || $3 == "failed" || $3 == "legacy-unbound"')
+  # BUILT FROM THE FILTERED LEDGER — this map must stay BELOW the two lines above (v0.3.6). Built
+  # first, it captured quarantined rows and the material loop read them, while `strows` below
+  # slices the filtered `$ledger`: the same typo covered nothing for a truth and counted
+  # digest-bound for a material. Computation before consumption, and the quarantine IS the
+  # computation. A quarantined row leaves no entry, so the material falls back to its own
+  # frontmatter — the same state as a ledger that never named it.
+  local -A LROW=()
+  while IFS=$'\t' read -r lrid_ lrrest_; do [ -n "$lrid_" ] && LROW[$lrid_]=$lrrest_; done <<< "$ledger"
+  # The quarantined ids, kept as a SET (ruled 2026-08-04). Quarantine is not the same as absence:
+  # a row the machine cannot read must never REDUCE what a round owes, so it does not open the
+  # weaker v1 fallbacks below either. Derived from `ledger_bad` itself — one spelling of "which
+  # rows are unreadable", never a third awk that could drift from the two above.
+  local -A LBAD=(); local bid_ badids=""
+  while IFS= read -r bid_; do
+    [ -n "$bid_" ] || continue
+    bid_=${bid_%% *}
+    LBAD[$bid_]=1; badids="$badids$bid_"$'\n'
+  done <<< "$ledger_bad"
 
   # ---- materials: population = converted.md holders minus tombstones. Evidence precedence:
   # sidecar row (digest decides bound/stale, verdict decides failed) > v1 `status: verified`
@@ -3536,10 +3584,15 @@ cmd_scope() {
         if [ "$cur" = "$dg" ]; then n_mbound=$((n_mbound+1))
         else n_mstale=$((n_mstale+1)); mstale="$mstale $m"; fi
       fi
-    elif [ "$mstat" = "verified" ]; then
+    elif [ -z "${LBAD[$m]-}" ] && [ "$mstat" = "verified" ]; then
       n_mlegacy=$((n_mlegacy+1)); mlegacy="$mlegacy $m"
     else
-      # `used` lands here too — lifecycle, not a verdict (WD-COR-001).
+      # `used` lands here too — lifecycle, not a verdict (WD-COR-001). And so does a material whose
+      # only row was QUARANTINED (ruled 2026-08-04): unreadable evidence is no evidence, and no
+      # evidence is owed. Without the LBAD guard a typo demoted a material whose bytes demonstrably
+      # moved from stale (owed) to legacy-unbound (NOT owed) — one unreadable row shrinking the
+      # round it should have grown. `owed` is monotone in garbage: a row nobody can read never buys
+      # a unit its way out of a verify round.
       n_munver=$((n_munver+1)); munver="$munver $m"
       [ "$mstat" = "used" ] && n_mused=$((n_mused+1))
     fi
@@ -3548,7 +3601,12 @@ cmd_scope() {
   # ---- truths: ONE awk pass classifies live vs tombstone (retracted/discarded leave the
   # population — the same rule retracted materials follow). Emits class<TAB>canon<TAB>rawbase.
   local tl ondisk tomb n_t=0 n_tomb=0
-  tl=$(awk '
+  # LC_ALL=C and the SHARED frontmatter value rule (v0.3.6). Both were missing: the private parser
+  # here stripped a trailing comment but never peeled quotes, so `status: "retracted"` classified as
+  # LIVE in scope while validate read it as a tombstone — one field, two answers. Byte semantics
+  # because this awk parses Korean/emoji claim files, the exact shape gawk's multibyte machinery
+  # misread in v0.3.4.
+  tl=$(LC_ALL=C awk "$FM_KV_AWK"'
     function emit() { if (f == "") return
       n = split(f, seg, /[\/\\]/); raw = seg[n]; sub(/\.md$/, "", raw)
       canon = sprintf("t%03d", substr(raw, 2) + 0)
@@ -3557,10 +3615,7 @@ cmd_scope() {
     FNR==1 { emit(); f=FILENAME; st=""; infm=0 }
     FNR==1 && /^---[[:space:]]*$/ { infm=1; next }
     infm && /^---[[:space:]]*$/   { infm=0; next }
-    infm && st=="" && /^status[[:space:]]*:/ {
-      st=$0; sub(/^status[[:space:]]*:[[:space:]]*/, "", st)
-      if (st !~ /^"/) sub(/[[:space:]]+#.*$/, "", st)
-      sub(/[[:space:]]*$/, "", st); next }
+    infm && st=="" && /^status[[:space:]]*:/ { st=fmval($0); next }
     END { emit() }' "$TRUTHS"/t[0-9]*.md 2>/dev/null)
   ondisk=$(printf '%s\n' "$tl" | awk -F'\t' '$1=="L" { print $2 }' | LC_ALL=C sort -u)
   tomb=$(printf '%s\n' "$tl" | awk -F'\t' '$1=="X" { print $2 }' | LC_ALL=C sort -u)
@@ -3569,7 +3624,12 @@ cmd_scope() {
 
   # ---- sidecar-covered live truths: current digests in ONE sha256sum spawn, then classify.
   local strows scov="" tclass="" incov files cur_t
-  strows=$(printf '%s\n' "$ledger" | grep -E '^t[0-9]' || true)
+  # LC_ALL=C is not cosmetic here (v0.3.6): the ledger's free-form `standard` column can hold bytes
+  # that are not valid UTF-8 (a Korean console writes CP949), and GNU grep answers "Binary file
+  # (standard input) matches" for such a stream under a multibyte locale — one sentence instead of
+  # the rows. scope then read ZERO covered truths, rebuilt the debt from the markdown ledger, and
+  # minted a ghost id out of the sentence. Same mine, different verify debt, decided by $LANG.
+  strows=$(printf '%s\n' "$ledger" | LC_ALL=C grep -E '^t[0-9]' || true)
   if [ -n "$strows" ]; then
     scov=$(printf '%s\n' "$strows" | cut -f1 | LC_ALL=C sort -u)
     incov=$(comm -12 <(printf '%s\n' "$ondisk") <(printf '%s\n' "$scov"))
@@ -3596,9 +3656,15 @@ cmd_scope() {
   tfail=$(printf '%s\n' "$tclass" | sed -n 's/^F\t//p' | LC_ALL=C sort -u)
 
   # ---- v1 markdown ledger: verified ids not covered by the sidecar are legacy-unbound.
-  local scan vids unmarked tlegacy tunver tghost diskany n_tlegacy n_tunver
+  local scan vids unmarked tlegacy tunver tghost diskany n_tlegacy n_tunver tbad_
   scan=$(scan_verified_units)
-  vids=$(printf '%s\n' "$scan" | sed -n 's/^V\t//p' | grep -E '^t[0-9]' | LC_ALL=C sort -u)
+  # Same byte-semantics rule as `strows` above: `## Verified units` is prose a human writes.
+  vids=$(printf '%s\n' "$scan" | sed -n 's/^V\t//p' | LC_ALL=C grep -E '^t[0-9]' | LC_ALL=C sort -u)
+  # The TRUTH twin of the LBAD rule (ruled 2026-08-04): a quarantined row must not be rescued into
+  # legacy-unbound by a markdown `## Verified units` mention. Dropping the id here is the whole fix
+  # — `tlegacy` intersects `vids`, and `tunver` is what falls out of both, so the unit lands owed.
+  tbad_=$(printf '%s' "$badids" | grep -E '^t[0-9]' | LC_ALL=C sort -u || true)
+  [ -n "$tbad_" ] && vids=$(comm -23 <(printf '%s\n' "$vids" | grep . || true) <(printf '%s\n' "$tbad_"))
   unmarked=$(printf '%s\n' "$scan" | sed -n 's/^U\t//p')
   diskany=$(printf '%s\n' "$ondisk" "$tomb" | grep . | LC_ALL=C sort -u)
   tlegacy=$(comm -12 <(printf '%s\n' "$vids") <(printf '%s\n' "$ondisk") | comm -23 - <(printf '%s\n' "$scov"))
