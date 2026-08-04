@@ -1054,9 +1054,12 @@ cmd_validate() {
     # verdict stops depending on which locale the shell happened to inherit. The same pin goes on
     # every content-parsing awk; retag's rewrite awk stays UNPINNED (documented: C broke its
     # Korean gsub).
-    qout=$(WD_REQTAGS="$reqtags" LC_ALL=C awk -v matids="$matlist" -v retids="$retlist" -v mroot="$MATERIALS" -v remids="$remlist" -v resids="$reslist" -v Q="'"       -v treq="${SCH[truth.fm.required]//|/ }"       -v tstenum="${SCH[truth.fm.enum.status]//|/ }"       -v tprenum="${SCH[truth.fm.enum.provenance]//|/ }"       -v rtypes="${SCH[truth.fm.resolution.type]//|/ }"       -v rkinds="${SCH[truth.fm.resolution.decision_kind]//|/ }"       -v rby="${SCH[truth.fm.resolution.decided_by]//|/ }"       -v ph="${SCH[fm.placeholder]}" '
+    qout=$(WD_REQTAGS="$reqtags" WD_ROOT="$ROOT/" LC_ALL=C awk -v matids="$matlist" -v retids="$retlist" -v mroot="${MATERIALS#"$ROOT"/}" -v remids="$remlist" -v resids="$reslist" -v Q="'"       -v treq="${SCH[truth.fm.required]//|/ }"       -v tstenum="${SCH[truth.fm.enum.status]//|/ }"       -v tprenum="${SCH[truth.fm.enum.provenance]//|/ }"       -v rtypes="${SCH[truth.fm.resolution.type]//|/ }"       -v rkinds="${SCH[truth.fm.resolution.decision_kind]//|/ }"       -v rby="${SCH[truth.fm.resolution.decided_by]//|/ }"       -v ph="${SCH[fm.placeholder]}" '
       function val(   s){ s=$0; sub(/^[^:]*:[[:space:]]*/,"",s); if(s !~ /^"/){ sub(/[[:space:]]+#.*$/,"",s); if(s ~ /^#/) s="" } sub(/[[:space:]]*$/,"",s); sub(/^"/,"",s); sub(/"$/,"",s); return s }
       function q(s){ return Q s Q }
+      # A path as the user would type it from the project root. WD_ROOT rides via ENVIRON, never
+      # `awk -v`: -v escape-processes its value, and a Windows path is exactly where that bites.
+      function rel(p,   r){ r=p; if(rootp!="" && substr(r,1,length(rootp))==rootp) r=substr(r,length(rootp)+1); return r }
       # Whitespace-collapsed so the seal does not fail on spacing. [[:space:]] covers the newline, so
       # this is the text as markdown renders it: an extra blank line is the same quote, a skipped line
       # is not.
@@ -1183,6 +1186,7 @@ cmd_validate() {
         }
       }
       BEGIN { nreq=split(ENVIRON["WD_REQTAGS"], rt, "\n")
+              rootp=ENVIRON["WD_ROOT"]
               nm=split(treq,_r," ");    for(i=1;i<=nm;i++) if(_r[i]!="") reqkey[_r[i]]=1
               nm=split(tstenum,_s," ");  for(i=1;i<=nm;i++) if(_s[i]!="") okstatus[_s[i]]=1
               nm=split(tprenum,_p," ");  for(i=1;i<=nm;i++) if(_p[i]!="") okprov[_p[i]]=1
@@ -1197,9 +1201,16 @@ cmd_validate() {
       FNR==1 {
         infm = ($0 ~ /^---[[:space:]]*$/) ? 1 : 0
         n=split(FILENAME,pp,"/")
+        # PROJECT-RELATIVE, like every other diagnostic in this command. These few used FILENAME
+        # raw, so they alone printed an absolute path — an inconsistency inside the runtime, not a
+        # design. It also made the message depend on WHERE the mine sits, which is why the Node port
+        # cannot reach byte parity on these lines: MSYS spells the same directory /d/repo/x and a
+        # native runtime spells it D:/repo/x. relf is also the KEY for the frontmatter census below;
+        # the two must be the same string or the required-key lookup silently finds nothing.
+        relf = rel(FILENAME)
         if (FILENAME ~ /converted\.md$/) { ftype="m"; mid=pp[n-1]; if(!(mid in body)) body[mid]="" }
         else {
-          ftype="t"; ntruthfile++; tfile=FILENAME; fn=pp[n]; sub(/\.md$/,"",fn); tid=fn
+          ftype="t"; ntruthfile++; tfile=relf; fn=pp[n]; sub(/\.md$/,"",fn); tid=fn
           tidfield=""; tsrc=""; ttags=""; tstatus=""; tconflict=""; tresolution=""; tprov=""
           hasid=0; hasclaim=0; hassource=0; hastags=0; hasstatus=0; gotline=0; hasderivedfrom=0
           tsuperseded=""; tderivedfrom=""; tcorrob=""
@@ -1214,8 +1225,8 @@ cmd_validate() {
         # A list value whose bracket never closes reads as empty or as the rest of the line depending
         # on the reader, and retag cannot rewrite it. Named here so the user has a repair path.
         if($0 ~ /^[a-z_]+[[:space:]]*:[[:space:]]*\[/ && $0 !~ /\]/)
-          prob("[FM-DUPLICATE-KEY] " FILENAME "  frontmatter " q(substr($0,1,index($0,":")-1)) " opens a list with '[' that never closes on this line — readers disagree about where the value ends, and 'retag' cannot rewrite it. Close the bracket")
-        if($0 ~ /^[a-z_]+[[:space:]]*:/){ kk=$0; sub(/[[:space:]]*:.*$/,"",kk); kcount[FILENAME,kk]++; kval[FILENAME,kk]=val() }
+          prob("[FM-DUPLICATE-KEY] " relf "  frontmatter " q(substr($0,1,index($0,":")-1)) " opens a list with '[' that never closes on this line — readers disagree about where the value ends, and 'retag' cannot rewrite it. Close the bracket")
+        if($0 ~ /^[a-z_]+[[:space:]]*:/){ kk=$0; sub(/[[:space:]]*:.*$/,"",kk); kcount[relf,kk]++; kval[relf,kk]=val() }
         # Every field pattern below is `^key[[:space:]]*:` — the SAME shape the key census one line
         # up uses, and the same shape fm() uses. They used to read `^key:[[:space:]]`, which demands
         # no space BEFORE the colon and one AFTER it, so two spellings YAML calls legal (`source :
@@ -3520,7 +3531,13 @@ cmd_attest() { # attest <verified|failed> <round> <standard> <id...> — the ver
     local mline mtmp
     mline=$(printf -- '- %s — R%s %s · %s · verified' "$(printf '%s' "$names" | sed 's/^ //; s/ / · /g')" "$round" "$today" "$standard")
     mtmp="$TRUTHS/verify.md.tmp.$$"
-    awk -v line="$mline" '{ print } !done && /^#+[[:space:]]*Verified units[[:space:]]*$/ { print line; done=1 }' \
+    # The line rides via ENVIRON, never `awk -v` — the same rule retag already follows, for the same
+    # reason: -v ESCAPE-PROCESSES its value. `standard` is free text a user supplies, so a Windows
+    # path landed in verify.md as `C:<TAB>oolsstd`, and a `\n` in it split the mirror entry into two
+    # lines and broke the markdown. The ledger row is built with printf -v and never had the problem,
+    # so the two surfaces disagreed about the same fact — and stdout, also correct, hid it.
+    WD_MLINE="$mline" awk 'BEGIN { line = ENVIRON["WD_MLINE"] }
+      { print } !done && /^#+[[:space:]]*Verified units[[:space:]]*$/ { print line; done=1 }' \
       "$TRUTHS/verify.md" > "$mtmp" && mv "$mtmp" "$TRUTHS/verify.md" || rm -f "$mtmp" 2>/dev/null
   fi
   printf 'attest: %s — R%s · %s · %s —%s\n' "$verdict" "$round" "$standard" "$today" "$names"

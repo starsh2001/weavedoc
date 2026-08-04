@@ -98,7 +98,17 @@ bash tests/parity.sh /d/repo/eclypse version lang     # 실광산으로도 잰�
 
 **선언된 예외 하나**: `version`의 fingerprint는 런타임 자기 바이트를 해싱하므로 **두 런타임이 다른 값을 내는 게 정상**이다. 이 줄만 정규화하고, 정규화했다는 사실을 매 실행마다 출력한다 — 조용히 봐주는 비교는 진짜 차이도 봐주게 된다.
 
-### 5단계가 시작되기 전에 정해야 할 것 — 진단 메시지의 절대경로 (2b에서 발견)
+### 진단 메시지의 절대경로 — **해결됨 (2026-08-04, bash에서 red-first로 수정)**
+
+> 아래는 결정 전의 기록이다. **결정: ②(상대경로로 바꾼다)** — §11에 결정 행으로 남겼다.
+> 착수해 보니 대상은 **2종이 아니라 4종**이었다(`FM-MISSING`·`SEAL-QUOTE-MISSING`·`FM-DUPLICATE-KEY`·
+> `TRUTH-BODY-FRAGMENT`, 여기에 `SEAL-RETRACTED`·`SEAL-SPLIT-BLOCK`이 자료 경로를 함께 인쇄).
+> 읽어서 세지 말고 **깨진 광산에 validate를 돌려 절대경로를 grep해서** 찾았다.
+> 함정 하나: `tfile`은 메시지용인 동시에 frontmatter 키 census(`kcount`)의 **키**다. 한쪽만
+> 상대화하면 필수 키 조회가 조용히 전부 빗나간다. 같은 문자열(`relf`)로 함께 바꿨다.
+> 결과: 실광산 validate 출력의 절대경로 **0줄**, Linux 345/345 green. 아래 §3의 선언된 예외 2번이 사라졌다.
+
+### (원래 기록) 5단계가 시작되기 전에 정해야 할 것 — 진단 메시지의 절대경로 (2b에서 발견)
 
 truths 진단 두 종류가 **절대경로**를 메시지에 박는다. 나머지 진단은 전부 상대경로(`truths/t040.md`)를 쓴다 — 즉 설계가 아니라 **bash 런타임 안의 불일치**이고, truths awk가 `FILENAME`을 그대로 쓰기 때문이다.
 
@@ -144,6 +154,25 @@ printf 'a\r\nb\r\n' | awk '{print}'
 
 **권고: bash 판의 `mat_digest`에 `\r` 제거를 명시**하고 red-first 케이스를 붙인다. MSYS 답을 정본으로 삼으면 배포된 광산의 기존 digest가 그대로 유효해 churn이 없다. 한 줄짜리 수리이고, 이식과 무관하게 현행 제품의 결함이다.
 
+### 선언된 파리티 예외 — 측정된 것만 (4단계에서 갱신, 2026-08-04)
+
+파리티가 **조용히 봐주는 차이는 하나도 없다.** 아래는 전부 실측했고, 각각 왜 남는지가 적혀 있다.
+
+| # | 무엇이 다른가 | 판정 |
+|---|---|---|
+| 1 | `version`의 fingerprint | 런타임 자기 바이트를 해싱하므로 **달라야 정상**. 필드가 제 일을 하는 것 |
+| 2 | ~~광산 루트 표기(절대경로 진단)~~ | **없어졌다** — 위의 상대경로 수정으로 해소 |
+| 3 | **argv의 유효하지 않은 UTF-8 바이트** | 고칠 수 없다. MSYS bash가 네이티브 프로그램을 띄울 때 바이트열을 UTF-16으로 변환하는데, 유효하지 않은 UTF-8은 그 변환에서 손실된다 — 바이트가 Node 주소공간에 **애초에 도달하지 않는다**. bash는 bash·gawk·sha256sum이 전부 MSYS 안이라 바이트를 그대로 옮긴다. 실측: `attest verified 2 $'\xb0\xcb\xc1\xf5' m001` → bash는 `b0cbc1f5`, Node는 `c2b0c38bc381c3b5`를 장부에 쓴다. **영향 범위는 `standard` 열(자유 텍스트) 하나**이고 digest·id·판정에는 닿지 않는다. 계획된 PowerShell 호출 경로에는 유효하지 않은 바이트가 존재할 수 없다. 회귀 케이스 `pass_locale_scope_census_match`는 Node로 green(그 케이스가 고정하는 것은 로케일 독립성이고 Node에는 로케일 의존이 없다) |
+| 4 | **`reindex --check`의 diff 본문에서 hunk 묶는 방식** | 판정에는 닿지 않는다 — `in sync`/`DIFFERS`, 개수 줄, 종료 코드는 항상 일치한다. 동일 길이의 최소 편집 스크립트가 여럿일 때 GNU diff와 다른 쪽을 고를 수 있다. 측정: `tests/diff-parity.sh` 864케이스 중 **97.9% 바이트 일치**(4,064케이스로 넓히면 96.5%), **실광산 index.md·tree.md 케이스는 0건 불일치**. 불일치는 전부 10단어 알파벳으로 같은 줄을 일부러 반복시킨 합성 입력 |
+
+### bash가 깨져 있고 포트가 낫는 자리 — 재현하지 않았다
+
+포트가 **더 안전한 쪽으로** 갈린다. 되돌리지 말 것. 전부 실측:
+
+- **schema 키가 없을 때**: bash는 `set -u`로 죽는다(`SCH[verify.ledger.verdicts]: unbound variable`). `ledger_file`의 주석이 예상한 바로 그 "testbed drift"에서, 종료 코드 1에 stdout은 빈 채로. Node는 코드 기본값으로 degrade한다
+- **장부 경로가 디렉터리일 때**: bash의 `mv`가 임시 파일을 **그 디렉터리 안으로 옮기고 rc 0으로 성공을 보고**한다(장부는 안 써진 채 `verify-ledger.tsv/verify-ledger.tsv.tmp.<pid>`가 남는다). Node는 `attest: ledger write failed` rc 1
+- **`require_inside_root ""`**: bash의 `cd ""`는 성공해서 CWD로 해석되므로 **가드를 통과한다**. `paths: truths: /` 설정이면 실제로 도달한다(양쪽 다 `TRUTHS`가 빈 문자열이 된다). Node는 거부한다
+
 **옮길 수 없는 세 부류** — 소리 없이 빠지면 안 되므로 각각 대체 케이스를 만들고, 못 만들면 여기 남긴다:
 - `bash -n` 파싱 검사, `preflight_gnu`(GNU 도구 확인) — 대상이 사라진다. `node --check`가 전자의 자리를 대신하고, 후자는 **필요 자체가 없어진다**
 - `rm` 셰임 고장 주입(`block_consecrate_validate_fail_final_unremovable`) — PATH 셰임이 안 통한다. 주입 지점을 인터페이스로 열어 테스트한다
@@ -164,9 +193,14 @@ config·schema·frontmatter 값 규칙·섹션/주석 리더·ledger 행 필터�
 
 **3단계 — 읽기 명령** · `status`·`scope`·`census`·`gaps`·`pull`·`impact`. 부작용이 없어 파리티 실패가 광산을 다치게 하지 않는다.
 
-**4단계 — 쓰기 명령** · `attest`·`reindex`·`retag`·`seal-review`. 원자적 쓰기·롤백 규칙은 bash 판이 어렵게 배운 것이라 그대로 옮긴다.
+**4단계 — 쓰기 명령** · `attest`·`seal-review`·`reindex`. 원자적 쓰기·롤백 규칙은 bash 판이 어렵게 배운 것이라 그대로 옮긴다. **완료 2026-08-04.**
 
-**5단계 — 어려운 둘** · `validate`(진단 86종) · `consecrate`(상태 기계·in-flight marker·postcondition). 바닥과 읽기 명령이 검증된 뒤라야 실패 원인이 좁아진다.
+> **`retag`은 여기서 끝낼 수 없다 — 이 순서는 틀렸었다.** `cmd_retag`이 부르는 다른 명령은 정확히
+> 둘이고(`cmd_reindex`·`cmd_validate`), 커밋 경로가 **사후 전체 validate에 답하고 실패하면 전량
+> 롤백**하는 구조다. validate 없이는 그 경로가 성립하지 않는다(실측: `--dry` 2.5초 / 커밋 경로
+> 17.7초, 회귀 케이스 6건 중 3건이 이 경로). 5단계로 옮겼다 — §11 결정 행.
+
+**5단계 — 어려운 셋** · `validate`(진단 86종) → **`retag`**(129) → `consecrate`(158 · 상태 기계·in-flight marker·postcondition). 바닥과 읽기 명령이 검증된 뒤라야 실패 원인이 좁아진다. validate가 오는 순간 `regress.sh`가 Node를 전면 채점할 수 있게 되므로, 그 시점이 진짜 분기점이다.
 
 **6단계 — 전환** · 기본 대상을 Node로 바꾸고 스킬·문서·CI를 같은 커밋에서 넘긴다. bash 판은 한 릴리스 동안 `legacy/`에 남겨 파리티 검증용으로만 쓴다.
 

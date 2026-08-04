@@ -1696,6 +1696,27 @@ pass_attest_validate_clean() {
   vrun attest verified 2 standard m001 t001
   vrun validate; expect_pass
 }
+pass_attest_standard_verbatim_in_mirror() {
+  # `standard` is free text the caller supplies, and it reaches TWO surfaces: the ledger row (built
+  # with printf -v) and the `## Verified units` mirror line. The mirror used to go through
+  # `awk -v line=…`, and gawk ESCAPE-PROCESSES a -v value — so a Windows path was written as
+  # `C:<TAB>oolsstd` while the ledger held `C:\tools\std`, two spellings of one fact. Worse with a
+  # `\n`: the mirror entry split into two lines and stopped being an entry at all. stdout was
+  # correct throughout, so nothing that watched stdout could see it.
+  vrun attest verified 2 'C:\tools\std' m001
+  OUT=$(cat "$W/truths/verify.md"); RC=0
+  expect_has 'C:\tools\std'
+}
+pass_attest_standard_newline_stays_one_line() {
+  # The same defect at its worst: an escape that expands to a newline used to make ONE mirror entry
+  # into two lines, the second of which reads as a bare list item covering nothing.
+  # Asserted on the line's END, not its start: when the entry splits, the first line still opens
+  # with `- m001 — R2` and only the verdict moves off it, so a prefix match counts 1 either way and
+  # tests nothing. (It did. This case was written that way first and passed against the defect.)
+  vrun attest verified 2 'a\nb' m001
+  OUT=$(grep -c '^- m001 — R2.*· verified$' "$W/truths/verify.md"); RC=0
+  expect_has "1"
+}
 block_attest_bad_target() {
   # attest is all-or-nothing: one unresolvable id and NOTHING is written.
   vrun attest verified 2 standard t001 t999
