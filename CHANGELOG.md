@@ -4,9 +4,9 @@
 
 ---
 
-## 미발행 (2026-08-04, Node 재작성 4단계)
+## 2026-08-04.6
 
-Node 이식이 **현행 bash 판의 결함 두 개**를 드러냈다. 둘 다 red-first 케이스와 함께 bash에서 먼저 고쳤다.
+Node 이식이 **현행 bash 판의 결함 두 개**를 드러냈다. 둘 다 red-first 케이스와 함께 bash에서 먼저 고쳤다. **런타임 출력이 바뀌므로 번들 라벨을 올린다** — 같은 날짜 라벨로 다른 `bin/weavedoc`이 돌면 안 된다.
 
 - **`attest`의 `standard` 값이 verify.md 미러에서 망가졌다.** 미러 줄이 `awk -v line=…`로 전달됐는데 **gawk는 `-v` 값의 이스케이프를 확장한다.** `standard`는 사용자가 주는 자유 텍스트라, Windows 경로 `C:\tools\std`가 `C:<TAB>oolsstd`로 박혔고 `a\nb`는 **미러 항목을 두 줄로 쪼개** 항목이 아니게 만들었다. 장부 행은 `printf -v`로 만들어 멀쩡했으므로 **같은 사실의 두 표면이 어긋났고**, stdout도 멀쩡해서 stdout만 보는 검사로는 잡히지 않았다. `retag`은 같은 이유로 이미 ENVIRON을 쓰고 코드에 그 이유가 적혀 있었다 — `attest`만 안 고쳐져 있었다. 케이스: `pass_attest_standard_verbatim_in_mirror`·`pass_attest_standard_newline_stays_one_line`.
 - **truths 진단이 절대경로를 인쇄했다.** 나머지 진단은 전부 상대경로를 쓴다 — 설계가 아니라 런타임 내부의 불일치였고, 원인은 truths awk가 `FILENAME`을 그대로 쓴 것. 같은 결함이 머신마다 다른 문장으로 보고됐다. **읽어서 세지 않고 깨진 광산에 validate를 돌려 찾으니 2종이 아니라 4종**이었다(`FM-MISSING`·`SEAL-QUOTE-MISSING`·`FM-DUPLICATE-KEY`·`TRUTH-BODY-FRAGMENT`, 여기에 `SEAL-RETRACTED`·`SEAL-SPLIT-BLOCK`이 자료 경로를 함께 인쇄). 실광산 validate 출력의 절대경로가 **0줄**이 됐다.
