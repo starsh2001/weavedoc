@@ -12,6 +12,7 @@
 import { statSync, realpathSync, readFileSync, readdirSync } from 'node:fs'
 import { canonId, isDate, isFence, isPlaceholder, inList, listField, pipes, splitLines } from './core.mjs'
 import { join, materialIds, mdirFor } from './mine.mjs'
+import { nocomment } from './sections.mjs'
 import { fmv } from './read.mjs'
 import { validateTruths } from './validate-truths.mjs'
 
@@ -83,6 +84,139 @@ function matFmState (materialsDir, ids) {
     st.set(id, closed ? 'closed' : (opened ? 'unclosed' : 'nofm'))
   }
   return st
+}
+
+// LC_ALL=C ordering: bytes, not UTF-16 code units. Every id that reaches these sorts is ASCII, and
+// spelling it bytewise keeps that from being an assumption the next tag has to honour.
+const bytewise = (a, b) => Buffer.compare(Buffer.from(a, 'latin1'), Buffer.from(b, 'latin1'))
+
+// Lines of a file in the BYTE domain, one char per byte. The ledger's `standard` column is free text
+// that a Korean console fills with CP949, and decoding it as UTF-8 first would fold invalid bytes to
+// U+FFFD before the tabs are even counted.
+function splitLinesBytes (p) {
+  let b
+  try { b = readFileSync(p) } catch { return [] }
+  const l = b.toString('latin1').split('\n')
+  if (l.length && l[l.length - 1] === '') l.pop()
+  return l.map(x => (x.endsWith('\r') ? x.slice(0, -1) : x))
+}
+
+// `IFS=$'\t' read -r v1 … vN` — and a plain `.split('\t')` is NOT that rule. Measured, after the
+// naive version disagreed with bash on a row whose `standard` column is empty:
+//
+//   t1<TAB>-<TAB>verified<TAB>1<TAB><TAB>2026-07-01
+//     split('\t')  -> [t1, -, verified, 1, '', 2026-07-01]   "standard column is empty"
+//     bash read    -> [t1, -, verified, 1, 2026-07-01, '']   "fewer than six columns"
+//
+// TAB is IFS *whitespace*, so bash collapses runs of it into ONE delimiter and ignores leading and
+// trailing ones; only a non-whitespace IFS makes every delimiter delimit. The last name then absorbs
+// the remainder of the line VERBATIM — inner tabs intact, trailing ones stripped — which is what
+// makes "more than six columns" detectable at all.
+//
+// A consequence worth stating: with runs collapsing, an interior field can never BE empty, so
+// validate's "standard column is empty" message is unreachable on a tab-separated file. It is kept,
+// not deleted, because it is the structure the original has and removing it would be a silent
+// divergence the moment either side's splitting changes.
+function readTabs (line, n) {
+  let s = line.replace(/^\t+/, '').replace(/\t+$/, '')
+  const out = []
+  for (let i = 0; i < n - 1; i++) {
+    if (s === '') { out.push(''); continue }
+    const j = s.indexOf('\t')
+    if (j < 0) { out.push(s); s = ''; continue }
+    out.push(s.slice(0, j))
+    s = s.slice(j).replace(/^\t+/, '')
+  }
+  out.push(s)
+  return out
+}
+
+// truths/coverage.md — map-written (element → truth ids, skips with reasons: T2's audit surface).
+// FLOOR, not a warranty: every section resolves to a material, every mentioned id exists, and every
+// truth from a *sectioned* material appears in it. Materials with no section are legal (legacy).
+function validateCoverage (m, { prob }, covPath, matIds, truthPaths) {
+  const q = s => `'${s}'`
+  // References stay lenient (FORMATS pins the FOLDER spelling only), so every id used as a KEY is
+  // normalised: `source: m5`, `## m005` and `t1` must land on the same entry as their canonical
+  // forms. BOTH substitutions, and a bare `m`/`t` normalises to nothing.
+  const norm = s => {
+    const r = s.replace(/^m0*/, 'm').replace(/^t0*/, 't')
+    return (r === 'm' || r === 't') ? '' : r
+  }
+  const mat = new Set()
+  for (const a of matIds) { if (a === '') continue; mat.add(a); if (norm(a) !== '') mat.add(norm(a)) }
+  // (id, source) pairs. Built by SPLITTING ON SPACE and then on ':' exactly as the original does, so
+  // a source value holding either character truncates the same way here as there.
+  const tsrc = new Map(); const tid2file = new Map()
+  for (const p of truthPaths) {
+    const b = p.slice(p.lastIndexOf('/') + 1).replace(/\.md$/, '')
+    const s = fmv(p, 'source')
+    if (s === '') continue
+    for (const pair of `${b}:${s}`.split(' ')) {
+      if (pair === '') continue
+      const c = pair.split(':')
+      tsrc.set(c[0], c[1] ?? '')
+      if (norm(c[0]) !== '') tid2file.set(norm(c[0]), c[0])
+    }
+  }
+
+  const hassec = new Map(); const legseen = new Set(); const mention = new Set()
+  let sec = ''; let inleg = false
+  for (const line of splitLines(nocomment(readOr(covPath)))) {
+    const secm = /^##[ \t]+(m[0-9]+)([ \t\v\f\r]|$)/.exec(line)
+    if (secm) {
+      // `sec=$2` is awk's SECOND field, which for `## m001 — 제목` is the id and nothing else.
+      sec = secm[1]
+      if (!mat.has(sec)) prob('COVERAGE-SECTION', `truths/coverage.md  ${q(`## ${sec}`)} → no material folder`)
+      hassec.set(norm(sec), sec)
+      continue
+    }
+    if (/^##[ \t]+legacy[ \t\v\f\r]*$/.test(line)) { sec = ''; inleg = true; continue }
+    if (/^##[ \t]/.test(line)) { sec = ''; inleg = false; continue }
+    if (inleg) {
+      // `## legacy` holds user rulings in free prose, not mappings. Ids named in a ruling are talked
+      // ABOUT (often withdrawn ones), so the existence check there would fail validate for a deletion.
+      const lm = /^[ \t\v\f\r]*-[ \t\v\f\r]*(m[0-9]+)/.exec(line)
+      if (lm) {
+        const lid = lm[1]
+        legseen.add(lid)
+        // An exemption is a USER ruling: one line of machine-written prose was enough to shrink the
+        // coverage denominator AND trip the T2 legacy escape at once. Shape AND value — this was the
+        // only place in the tool that looked at a date at all and looked at the shape only, so
+        // 2026-99-99 counted as a ruling while 2026-7-3 read as having none.
+        let rdok = false
+        const rm = /ruled:[ \t\v\f\r]*([0-9][0-9][0-9][0-9])-([0-9][0-9])-([0-9][0-9])/.exec(line)
+        if (rm) {
+          const mo = +rm[2]; const da = +rm[3]
+          if (mo >= 1 && mo <= 12 && da >= 1 && da <= 31) rdok = true
+        }
+        if (!rdok || !/"[^"]+"/.test(line)) {
+          prob('COVERAGE-LEGACY', `truths/coverage.md  ${q('## legacy')} exempts ${q(lid)} without a recorded ruling → add ruled: YYYY-MM-DD plus the quoted user utterance on the same line; the machine does not exempt itself`)
+        }
+      }
+      continue
+    }
+    let rest = line
+    let mm
+    while ((mm = /t[0-9]+/.exec(rest)) !== null) {
+      const id = mm[0]
+      rest = rest.slice(mm.index + mm[0].length)
+      if (!tsrc.has(id) && !tid2file.has(norm(id))) prob('COVERAGE-DANGLING', `truths/coverage.md  mentions ${q(id)} — no such truth file`)
+      else if (sec !== '') mention.add(`${norm(sec)},${norm(id) !== '' ? norm(id) : id}`)
+    }
+  }
+  // Checked here, not inline: `## legacy` may sit ABOVE the `## m<id>` sections, so hassec is only
+  // complete once the whole file has been read.
+  for (const l of [...legseen].sort(bytewise)) {
+    if (!mat.has(l)) prob('COVERAGE-LEGACY', `truths/coverage.md  ${q('## legacy')} exempts ${q(l)} — no such material`)
+    else if (hassec.has(norm(l))) prob('COVERAGE-LEGACY', `truths/coverage.md  ${q('## legacy')} exempts ${q(l)} but it has its own ${q(`## ${hassec.get(norm(l))}`)} section — it is covered, not exempt (that drops the denominator while the numerator stays, which can push the ratio above 1)`)
+  }
+  for (const t of [...tsrc.keys()].sort(bytewise)) {
+    const s = norm(tsrc.get(t))
+    if (hassec.has(s) && !mention.has(`${s},${norm(t)}`)) {
+      prob('COVERAGE-SECTION', `truths/coverage.md  ${q(`## ${hassec.get(s)}`)} missing ${q(t)} — extracted from ${tsrc.get(t)} but absent from its coverage section (update at map)`)
+    }
+  }
 }
 
 export function cmdValidate (m, out, json = false) {
@@ -340,10 +474,88 @@ export function cmdValidate (m, out, json = false) {
     }
   }
 
-  // UNIT BOUNDARY (stage 5a-2). The ledger rows, the index and coverage cross-checks, the document
-  // loop, the completeness warranty and the `examined:` accounting land in 5a-3..5a-5; until then
-  // this function prints the diagnostics it owns and nothing else, and the CLI still refuses
-  // `validate` outright. tests/validate-node.mjs is what the scale runs meanwhile.
-  void nMat; void warns; void diags; void counts; void nofm
+  // --- the verification sidecar is fail-closed: every row fully parsed, verdict from the closed
+  // enum. A typo'd 'verifed' once fell through the classifier into a digest compare and counted as
+  // digest-bound verified — the exact substring-trap class the markdown ledger already guards
+  // against, missed one door over.
+  const lfName = m.ledgerFile()
+  const lfv = join(m.truths, lfName)
+  if (isFileAt(lfv)) {
+    // Read as LATIN1, one char per byte. The `standard` column is free text a Korean console fills
+    // with CP949, and this is exactly where bash's own `read` loses lines under a multibyte locale
+    // (v0.3.7). Byte semantics here means the split lands on the same tabs whatever the content.
+    for (const lline of splitLinesBytes(lfv)) {
+      if (lline === '' || lline.startsWith('#')) continue
+      const [lid, ldg, lvd, lrd, lst, ldt, lex] = readTabs(lline, 7)
+      if (lvd === '') {
+        prob('LEDGER-MALFORMED', `truths/${lfName}  row has fewer than three tab-separated columns: '${lline}' — id·sha256·verdict is the minimum; an unparseable row covers nothing and blocks`)
+        continue
+      }
+      if (canonId(lid) === null) prob('LEDGER-MALFORMED', `truths/${lfName}  row id '${lid}' is not a material/truth id`)
+      if (lvd !== 'verified' && lvd !== 'failed' && lvd !== 'legacy-unbound') {
+        prob('LEDGER-VERDICT', `truths/${lfName}  row for '${lid}' carries unknown verdict '${lvd}' — the enum is verified|failed|legacy-unbound and an unknown word must never count as any of them`)
+      }
+      // The row FORMAT is fail-closed too: attest writes exactly six columns, so any deviation is a
+      // hand edit — and a garbage digest or date wears the shape of evidence while binding nothing.
+      if (ldt === '') {
+        prob('LEDGER-MALFORMED', `truths/${lfName}  row for '${lid}' has fewer than six tab-separated columns — id·sha256·verdict·round·standard·date; attest writes all six`)
+        continue
+      }
+      if (lex !== '') prob('LEDGER-MALFORMED', `truths/${lfName}  row for '${lid}' has more than six tab-separated columns`)
+      if (ldg !== '-' && !/^[0-9a-f]{64}$/.test(ldg)) prob('LEDGER-MALFORMED', `truths/${lfName}  row for '${lid}' digest column '${ldg}' is neither a 64-hex sha256 nor '-'`)
+      // `-` or all digits. `0` passes the shape even though the message says "positive" — the shape
+      // is what is enforced, and saying otherwise here would be a second rule.
+      if (lrd !== '-' && (lrd === '' || /[^0-9]/.test(lrd))) prob('LEDGER-MALFORMED', `truths/${lfName}  row for '${lid}' round column '${lrd}' must be a positive integer or '-'`)
+      if (lst === '') prob('LEDGER-MALFORMED', `truths/${lfName}  row for '${lid}' standard column is empty — attest records the standard met; migration records the origin token`)
+      if (!isDate(ldt)) prob('LEDGER-MALFORMED', `truths/${lfName}  row for '${lid}' date column '${ldt}' is not a date (YYYY-MM-DD, zero-padded, real month and day)`)
+    }
+  }
+
+  // --- ledgers ABOUT the truths, checked whether or not any truth file exists ---
+  // OUTSIDE the truth-file guard: deleting the last truth file must not switch these off while
+  // index.md and coverage.md still name the deleted truth. "No truths" is the strongest thing they
+  // have to say.
+  if (isDirAt(m.truths)) {
+    // With zero truth files a declared required_tag is unmet by definition. The truths pass has its
+    // own version of this check, and it cannot run when that pass does not.
+    if (globbed.length === 0) {
+      for (const rq of reqtags) {
+        if (rq !== '') prob('REQTAG-EMPTY', `required_tag '${rq}' has no live truths — the mine holds no truth files at all; extract it from a material, queue the question (the ask loop turns the answer into a user-answer material), or remove the tag from project.md required_tags — removing it switches the completeness warranty off for that topic`)
+      }
+    }
+    const idxPath = join(m.truths, 'index.md')
+    if (!isFileAt(idxPath)) prob('IDX-MISSING', "truths/index.md missing (run 'weavedoc reindex')")
+    if (!isFileAt(join(m.truths, 'tree.md'))) prob('IDX-MISSING', "truths/tree.md missing (run 'weavedoc reindex')")
+    if (isFileAt(idxPath)) {
+      const fseen = new Set(truthPaths.map(p => p.slice(p.lastIndexOf('/') + 1).replace(/\.md$/, '')))
+      const idxseen = new Set()
+      for (const iline of splitLines(readOr(idxPath))) {
+        if (!iline.startsWith('- t')) continue
+        // `${sid%%[!t0-9]*}` — the leading run of characters drawn from {t, 0-9}, which is why
+        // `- t001: …` yields t001 and `- t0x1` yields t0. The class is exactly that, not \w.
+        const sid = /^[t0-9]*/.exec(iline.slice(2))[0]
+        if (/^t[0-9]/.test(sid)) idxseen.add(sid)
+      }
+      for (const sid of [...fseen].sort(bytewise)) {
+        if (idxseen.has(sid)) continue
+        // Not an index problem when the file has no frontmatter — reindex cannot fix that, and
+        // telling the user to run it again is the loop itself.
+        if (nofm.has(sid)) continue
+        prob('IDX-SYNC', `truths/index.md  no entry for ${sid} (run 'weavedoc reindex')`)
+      }
+      for (const sid of [...idxseen].sort(bytewise)) {
+        if (!fseen.has(sid)) prob('IDX-SYNC', `truths/index.md  entry '${sid}' has no truth file (run 'weavedoc reindex')`)
+      }
+    }
+
+    // --- coverage manifest (soft: only materials WITH a '## m<id>' section are cross-checked) ---
+    const covPath = join(m.truths, 'coverage.md')
+    if (isFileAt(covPath)) validateCoverage(m, { prob }, covPath, mids, truthPaths)
+  }
+
+  // UNIT BOUNDARY (stage 5a-3). The document loop, the completeness warranty, verify.md, the Human
+  // queue tags, the config enums and the `examined:` accounting land in 5a-4/5a-5; until then this
+  // function prints the diagnostics it owns and nothing else, and the CLI still refuses `validate`.
+  void nMat; void warns; void diags; void counts
   return problems > 0 ? 1 : 0
 }
