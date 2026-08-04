@@ -11,14 +11,18 @@
 // comparison, because a substring suite cannot grade a rewrite whose contract is bytes.
 import { statSync, realpathSync, readFileSync, readdirSync } from 'node:fs'
 import { canonId, isDate, isFence, isPlaceholder, inList, listField, pipes, splitLines } from './core.mjs'
-import { join, materialIds, mdirFor } from './mine.mjs'
-import { nocomment } from './sections.mjs'
+import { join, materialIds, mdirFor, docIds, tfileFor, docFinalPath, contextDigest } from './mine.mjs'
+import { nocomment, dupSection, commentBalanced } from './sections.mjs'
+import { artifactDigest } from './verify.mjs'
+import { fidMark, fidBody, isNoise, foldKinds, bearsKind, commentSpans } from './review.mjs'
 import { fmv } from './read.mjs'
 import { validateTruths } from './validate-truths.mjs'
 
 const readOr = p => { try { return readFileSync(p, 'utf8') } catch { return '' } }
 const isDirAt = p => { try { return statSync(p).isDirectory() } catch { return false } }
 const isFileAt = p => { try { return statSync(p).isFile() } catch { return false } }
+// `[ -e ]` — exists, whatever KIND. The consecration markers are detected by presence alone.
+const exists = p => { try { statSync(p); return true } catch { return false } }
 
 // `rp()` — the real path, EMPTY when it is not a directory. Spelled to match, because the bash form
 // is `( cd "$1" && pwd -P )` and `cd` fails on a file: a `paths:` value pointing at a FILE resolves
@@ -219,7 +223,7 @@ function validateCoverage (m, { prob }, covPath, matIds, truthPaths) {
   }
 }
 
-export function cmdValidate (m, out, json = false) {
+export function cmdValidate (m, out, json = false, consecOk = '') {
   let problems = 0
   const diags = []
   const warns = []
@@ -252,6 +256,12 @@ export function cmdValidate (m, out, json = false) {
   }
 
   const sch = k => m.sch.get(k) ?? ''
+
+  // The v1 flag is computed FIRST, and that ordering is load-bearing: the document loop's seal
+  // enforcement branches on it, and it used to be set in the config section that runs AFTER the
+  // documents — so a genuine v1 mine was blocked as tampered for the length of one ordering bug
+  // (v0.3.1, self-caught). Either record saying `1` makes the mine v1.
+  const schemaV1 = fmv(m.project, 'version') === '1' || (m.cfg.flat.get('version') ?? '') === '1'
 
   // A configured path that is not there, or mine content sitting outside it, is the same leak as an
   // unreadable schema: the loops run zero times and the tick looks earned. FORMATS explicitly allows
@@ -553,9 +563,211 @@ export function cmdValidate (m, out, json = false) {
     if (isFileAt(covPath)) validateCoverage(m, { prob }, covPath, mids, truthPaths)
   }
 
-  // UNIT BOUNDARY (stage 5a-3). The document loop, the completeness warranty, verify.md, the Human
-  // queue tags, the config enums and the `examined:` accounting land in 5a-4/5a-5; until then this
-  // function prints the diagnostics it owns and nothing else, and the CLI still refuses `validate`.
-  void nMat; void warns; void diags; void counts
+  // --- each document ---
+  const sections = pipes(sch('review.sections'))
+  const kinds = pipes(sch('review.enum.kind'))
+  const folded = foldKinds(kinds)
+  let nDoc = 0; let nGated = 0; let nConsec = 0; let nRseal = 0; let nRlegacy = 0
+  for (const d of docIds(m)) {
+    const p = join(m.documents, d, 'plan.md')
+    if (isFileAt(p)) {
+      for (const k of pipes(sch('plan.fm.required'))) reqValue(p, k)
+      const pst = fmv(p, 'status')
+      if (!inList(pst, sch('plan.fm.enum.status'))) prob('PLAN-ENUM', `${p}  status '${pst}' invalid`)
+      const did = fmv(p, 'doc_id')
+      if (did !== d) prob('PLAN-DOCID', `${p}  doc_id '${did}' != folder '${d}'`)
+      for (const c of words(listField(fmv(p, 'continues')).join('\n'))) {
+        if (!isDirAt(join(m.documents, c))) prob('PLAN-CONTINUES-DANGLING', `${p}  continues '${c}' → no such document`)
+      }
+      // cited_truths is the lookup key for Trigger A propagation: when a truth changes, this list is
+      // what says which documents must go stale. A dangling id there is silent in the worst way —
+      // the document is simply never matched, so it stays green forever while its ground moved.
+      for (const c of words(listField(fmv(p, 'cited_truths')).join('\n'))) {
+        if (/^t[0-9]/.test(c)) {
+          if (tfileFor(m, c) === null) prob('PLAN-CITED-DANGLING', `${p}  cited_truths '${c}' → no such truth. Trigger A matches documents by this list, so a dangling id exempts this document from staleness detection`)
+        } else {
+          prob('PLAN-CITED-NOT-ID', `${p}  cited_truths '${c}' is not a truth id (expected tNNN)`)
+        }
+      }
+      // audience: external requires publication labels — an external document ships with its labels
+      // or not at all.
+      const aud = fmv(p, 'audience')
+      if (aud !== '') {
+        if (!inList(aud, sch('plan.fm.enum.audience'))) prob('PLAN-AUDIENCE', `${p}  audience '${aud}' invalid → ${sch('plan.fm.enum.audience')}`)
+        if (aud === 'external') {
+          const lab = fmv(p, 'publication_labels')
+          if (!(lab !== '' && !isPlaceholder(lab))) prob('PLAN-LABELS', `${p}  audience 'external' but publication_labels is missing or an untouched placeholder — an external document ships with its labels or not at all`)
+        }
+      }
+    } else {
+      prob('PLAN-MISSING', `${m.documents}/${d}/  no plan.md`)
+    }
+
+    // Three ways to BLIND the gate's reader, checked here because this decides whether a doc ships:
+    //   1. a second copy of the heading — only the FIRST section is read;
+    //   2. an unterminated `<!--` — the stripper blanks it to EOF, deleting every violation below;
+    //   3. a prose `-->` closing a forgotten `<!--` — the file still ends outside a comment, so the
+    //      balance check stays silent while the section between them vanished.
+    const rev = join(m.documents, d, 'review.md')
+    if (isFileAt(rev)) {
+      // Counted at ANY heading level: the spec never fixed the level for this section, so a copy one
+      // level down is a second copy just the same, and only the first is ever read.
+      if (dupSection(rev, 'Fidelity violations', 0) > 1) {
+        prob('REVIEW-DUP-HEADING', `${d} review.md has more than one 'Fidelity violations' heading (at any level) — only the first is read, so violations under the others would ship unseen. Merge them`)
+      }
+      if (!commentBalanced(rev)) {
+        prob('REVIEW-UNTERMINATED-COMMENT', `${d} review.md ends inside an unterminated '<!--' — everything after it is blanked out before any check reads it, so open violations below would ship unseen. Close the comment`)
+      }
+      // Archiving a closed round in a comment stays legal, so the test is whether a section the file
+      // ITSELF declares survives the strip — present raw but gone afterwards = a lost section.
+      for (const r of sections) {
+        if (r === '') continue
+        if (dupSection(rev, r, 0, true) === 0) continue
+        if (dupSection(rev, r, 0) === 0) {
+          prob('REVIEW-LOST-SECTION', `${d} review.md has a '${r}' heading that is gone once comments are stripped — a '-->' in ordinary prose closes an earlier '<!--', and everything between them (headings and open violations alike) is blanked before any check reads it. Close the comment where it was meant to end`)
+        }
+      }
+      if (folded.length > 0) {
+        const marked = fidMark(rev, sections)
+        // THE ZONE RULE (ruled 2026-08-01, replacing the shape census). A violation kind in brackets
+        // may live in exactly one place — inside the 'Fidelity violations' section; anywhere else,
+        // whatever the line looks like, it is named and blocked. The census died because recognising
+        // "entry-shaped lines" chases markdown's unbounded surface forms; this inverts the burden.
+        for (const [tag, line] of marked) {
+          if (tag !== 'O' || !bearsKind(line, folded)) continue
+          prob('REVIEW-KIND-OUTSIDE', `${d} review.md: a violation kind in brackets sits outside the 'Fidelity violations' section: '${line}' — the gate acts only inside that section, so however this line renders, the gate cannot act on it. An open violation belongs under the 'Fidelity violations' heading; a record or mention ABOUT a violation writes its kind without brackets (e.g. 'fixed: contradiction — …'); archived history belongs in an HTML comment with its closing '-->' on its own line`)
+        }
+        // A line that TRIED to be a violation entry but failed is told to fix itself, not binned as
+        // prose. is_noise is still the sole judge of what an entry IS; this looks only at lines it
+        // calls noise and asks whether the bracket slot holds a real kind.
+        for (const [tag, vline] of marked) {
+          if (tag !== 'I' || !vline.includes('[')) continue
+          if (!isNoise(vline, kinds)) continue   // a real entry is the gate's jurisdiction, not this check's
+          const sm = /^[^[]*\[([^\]]*)\]/.exec(vline)
+          let vslot = sm ? sm[1] : vline
+          vslot = vslot.replace(/^[<{]/, '').replace(/[>}]$/, '').replace(/^[ \t\v\f\r]+/, '').replace(/[ \t\v\f\r]+$/, '')
+          if (vslot === '') continue
+          const vfold = vslot.toLowerCase()
+          if (!kinds.some(k => vfold.includes(k))) continue
+          if (vline.startsWith('#')) {
+            prob('REVIEW-KIND-SHAPE', `${d} review.md: '${vline}' starts with '#', so the gate reads it as a heading and drops it — a numbered entry is invisible to the check even though markdown renders it as body text. Start the entry with '- ' instead`)
+          } else if (vline.startsWith('-->')) {
+            // A `-->`-opened line lands here with an EXACT kind — the problem is the arrow, not the
+            // kind: the gate reads it as a comment closer, so the entry after it is invisible.
+            prob('REVIEW-KIND-SHAPE', `${d} review.md: '${vline}' starts with '-->', so the gate reads it as a comment closer and drops the whole line — the entry after the arrow is invisible however correct its kind is. Remove the stray arrow, or if it closes a real comment above, put it on its own line and start the entry on the next`)
+          } else {
+            prob('REVIEW-KIND-UNKNOWN', `${d} review.md: '[${vslot}]' is not an exact violation kind — the gate acts only on an exact one of ${sch('review.enum.kind')} (lowercase, no extra spaces, ONE kind per entry). Written like this the line reads as an untouched template and is silently ignored; fix the kind`)
+          }
+        }
+        // JURISDICTION (ruled 2026-07-31): bounded to swallowed content that BEARS A KIND — a comment
+        // swallowing only prose stays silent (a lost memo breaks no warranty), and the same
+        // kind-in-brackets test feeds both this tripwire and the zone rule so they cannot drift.
+        // KNOWN LIMIT: a prose line that happens to END with `-->` still swallows silently.
+        let vcnt = 0
+        for (const [vtag, vrest] of commentSpans(rev)) {
+          if (vtag === 'I') {
+            if (vrest.includes('[') && bearsKind(vrest, folded)) vcnt++
+          } else if (vtag === 'C') {
+            if (vrest !== '' && vcnt > 0) {
+              prob('REVIEW-COMMENT-SWALLOWS', `${d} review.md: a comment swallows ${vcnt} violation-shaped entr(ies) and its closing '-->' is followed by '${vrest}' on the same line — if that arrow is prose that accidentally closed a forgotten '<!--', close the comment where it was meant to end; if the archive is deliberate, put the closing '-->' on its own line`)
+            }
+            vcnt = 0
+          }
+        }
+      }
+    }
+
+    // gate-clean invariant: a consecrated output implies review.md's 'Fidelity violations' is empty.
+    nDoc++
+    let consecrated = ''
+    if (isFileAt(join(m.documents, d, 'final.md'))) consecrated = 'final.md'
+    if (isDirAt(join(m.documents, d, 'final'))) consecrated = 'final/'
+    if (isFileAt(join(m.documents, d, 'final.md')) && isDirAt(join(m.documents, d, 'final'))) {
+      // Two finals, one digest check: whichever the resolver skipped could carry unreviewed bytes.
+      // Ambiguity is not a shape the gate reads around — it blocks.
+      prob('GATE-DUAL-FINAL', `${d} has both final.md and final/ — only one can be the consecrated output and only one was digest-checked; remove the one that is not the reviewed artifact`)
+    }
+    // In-flight consecration artifacts are mine-level red flags: the marker means the final slot may
+    // hold an unvalidated candidate, the backup means the only original sits aside. Traps cannot run
+    // on a hard kill — the on-disk artifact is the detector. The one legal exemption is consecrate's
+    // own in-process validate for exactly this doc, passed as an ARGUMENT (a variable channel was
+    // environment-injectable — v0.3.3).
+    if (consecOk !== d) {
+      if (exists(join(m.documents, d, '.consecrate.inflight'))) prob('CONSEC-INTERRUPTED', `${d} has .consecrate.inflight — a consecration is running or died here (a hard kill leaves no other trace); if nothing is running, byte-compare final against the reviewed draft BEFORE deciding: identical → it is the staged candidate (safe to remove); different → it is your original (keep it; the crash came before the swap); absent with .final.bak present → restore the backup. Then delete the marker and re-run consecrate`)
+      if (exists(join(m.documents, d, '.final.bak'))) prob('CONSEC-INTERRUPTED', `${d} has .final.bak — an interrupted consecration left the only original here; restore it over final (or remove it if the current final is known good), then re-run consecrate`)
+    }
+    if (consecrated !== '') {
+      nConsec++
+      if (!isFileAt(rev)) {
+        prob('GATE-NO-REVIEW', `${d} has ${consecrated} but no review.md — the fidelity gate has no record of ever running on it. Run review before consecrating`)
+      } else if (dupSection(rev, 'Fidelity violations', 0) === 0) {
+        // A heading the reader cannot find returns nothing both when the section is EMPTY (good) and
+        // when the title does not match — the gate read the second as the first. A suffix, trailing
+        // colon, numbering prefix, NBSP or indent each did it. Absence of a readable heading is now
+        // the same failure as absence of the file: silence, not a pass.
+        prob('GATE-NO-HEADING', `${d} has ${consecrated} but no 'Fidelity violations' heading the gate can read in review.md — the section title must match exactly (any heading level, no suffix, no numbering, no trailing space). A title the reader cannot find is silence, not a pass`)
+      } else {
+        nGated++
+        // The FIRST counted entry is named, or a line the writer did not think of as an entry blocks
+        // the document with no thread back to the line that did it.
+        for (const line of fidBody(rev, sections)) {
+          if (isNoise(line, kinds)) continue
+          prob('GATE-OPEN', `${d} has ${consecrated} but review.md 'Fidelity violations' is non-empty → consecrated through an open gate. First entry the gate sees: '${line}'. Repair each violation by its kind (refine), re-run review until the section is empty — or remove ${consecrated} until the gate is clean; a violation is never edited away in review.md itself`)
+          break
+        }
+      }
+    }
+    // Hoisted OUT of the consecrated guard (v0.3.3): structural seal invariants hold for ANY review —
+    // a draft-stage partial tuple or a marker next to a seal is the same tamper shape one
+    // consecration earlier. Byte/context ENFORCEMENT and the seal counts stay next to a consecrated
+    // output, where the gate's verdict actually ships.
+    if (isFileAt(rev)) {
+      const rk = fmv(rev, 'reviewed_kind')
+      const rdg = fmv(rev, 'reviewed_digest').replace(/^sha256:/, '')
+      const rcx = fmv(rev, 'review_context_digest').replace(/^sha256:/, '')
+      const mkr = fmv(rev, 'review_legacy')
+      if (rdg !== '') {
+        if (consecrated !== '') {
+          nRseal++
+          if (artifactDigest(docFinalPath(m, d)) !== rdg) {
+            prob('GATE-FINAL-DIGEST', `${d} ${consecrated} is not the bytes the clean review reviewed (reviewed_digest mismatch) — something changed after the seal; re-review, then re-consecrate. Nobody reviewed the bytes that are about to ship`)
+          }
+        }
+        if (rcx === '') {
+          if (!schemaV1) prob('GATE-UNSEALED', `${d} review carries reviewed_digest but no review_context_digest — a partial seal on a schema-2 mine reads as tampering, not history; re-run seal-review after a clean round`)
+        } else if (consecrated !== '' && contextDigest(m, d) !== rcx) {
+          prob('GATE-CONTEXT-CHANGED', `${d} review context changed after the seal (a cited truth, its source material, config or schema moved) — the clean review no longer describes this mine; re-review`)
+        }
+        if (rk === '') {
+          if (!schemaV1) prob('GATE-UNSEALED', `${d} review carries reviewed_digest but no reviewed_kind — the seal is a tuple (kind + digest + context, all or none) and a missing member reads as tampering on a schema-2 mine; re-run seal-review after a clean round`)
+        } else if (!inList(rk, sch('review.enum.reviewed_kind'))) {
+          if (!schemaV1) prob('GATE-UNSEALED', `${d} review reviewed_kind '${rk}' is not draft|final — a seal validate cannot interpret certifies nothing; re-run seal-review after a clean round`)
+        }
+        if (mkr !== '') prob('GATE-SEAL-MARKER', `${d} review carries BOTH a seal and the migration marker review_legacy — the marker means 'v1 history, digest-less by definition' and a sealed review is neither; seal-review removes the marker when a real round seals, so coexistence is a hand-added marker parked to demote this review to legacy once the seal is stripped. Remove review_legacy (the seal is the binding record)`)
+      } else if (rk !== '' || rcx !== '') {
+        // Seal fields WITHOUT the digest: the other half of the partial-tuple hole. On v1 the
+        // dual-reader tolerance holds (counted legacy); on v2 stray members block — and the marker
+        // does not rescue them, or a partial seal plus a marker would demote to legacy.
+        if (schemaV1) { if (consecrated !== '') nRlegacy++ } else {
+          prob('GATE-UNSEALED', `${d} review carries seal field(s) without reviewed_digest — a partial seal on a schema-2 mine reads as tampering, not history; re-run seal-review after a clean round (the seal is a tuple: kind + digest + context, all or none)`)
+        }
+      } else if (consecrated === '') {
+        // No seal fields, no final: an unsealed draft-stage review is the normal mid-flow state.
+      } else if (schemaV1 || mkr !== '') {
+        // Two legitimate digest-less states: a v1 mine (dual-reader), and a v2 mine whose review
+        // carries the migration's audit marker. Tamper strips seals but leaves no marker.
+        nRlegacy++
+      } else {
+        // THE review-seal bypass (v0.3.1): on a v2 mine an unsealed review next to a final is not
+        // legacy — v1 is the only legacy there is, and this mine declares version: 2.
+        prob('GATE-UNSEALED', `${d} ${consecrated} stands next to an UNSEALED review on a schema-2 mine — run seal-review after the clean round; deleting the seal fields must never reopen the gate (a genuine v1 mine reads as legacy-unbound instead)`)
+      }
+    }
+  }
+
+  // UNIT BOUNDARY (stage 5a-4). The completeness warranty, verify.md, the Human queue tags, the
+  // config enums and the `examined:` accounting land in 5a-5; until then this function prints the
+  // diagnostics it owns and nothing else, and the CLI still refuses `validate`.
+  void nMat; void warns; void diags; void counts; void nDoc; void nGated; void nConsec; void nRseal; void nRlegacy
   return problems > 0 ? 1 : 0
 }
