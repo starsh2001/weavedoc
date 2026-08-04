@@ -98,6 +98,23 @@ bash tests/parity.sh /d/repo/eclypse version lang     # 실광산으로도 잰�
 
 **선언된 예외 하나**: `version`의 fingerprint는 런타임 자기 바이트를 해싱하므로 **두 런타임이 다른 값을 내는 게 정상**이다. 이 줄만 정규화하고, 정규화했다는 사실을 매 실행마다 출력한다 — 조용히 봐주는 비교는 진짜 차이도 봐주게 된다.
 
+### 5단계가 시작되기 전에 정해야 할 것 — 진단 메시지의 절대경로 (2b에서 발견)
+
+truths 진단 두 종류가 **절대경로**를 메시지에 박는다. 나머지 진단은 전부 상대경로(`truths/t040.md`)를 쓴다 — 즉 설계가 아니라 **bash 런타임 안의 불일치**이고, truths awk가 `FILENAME`을 그대로 쓰기 때문이다.
+
+```
+[FM-MISSING]        /tmp/…/truths/t001.md  frontmatter 'claim' is empty …
+[SEAL-QUOTE-MISSING] /tmp/…/truths/t001.md  quote not found in /tmp/…/materials/m001/converted.md …
+```
+
+문제는 **두 런타임이 같은 디렉터리를 다르게 쓴다**는 것이다: MSYS bash는 `/d/repo/x`, 네이티브 Node는 `D:/repo/x`. 규칙 차이가 아니라 표기 차이지만, 절대경로가 출력에 실리는 순간 **stdout 바이트 파리티가 이 줄들에서만 깨진다.**
+
+선택지: ① Node가 Windows에서 MSYS 표기를 흉내낸다(네이티브 도구로서 틀린 방향 — PowerShell 사용자에게 POSIX 경로를 보여주게 된다) · ② **이 두 진단을 상대경로로 바꾼다** — 나머지 진단과 일관되고 플랫폼 독립이 되며, **bash 판에서 먼저 고치면**(red-first 케이스와 함께) Node는 그냥 따라가면 된다 · ③ 이 줄들만 파리티 예외로 선언한다.
+
+**②를 권한다** — 이식 문제를 현행 제품의 실제 개선으로 바꾸고, 기존 342 케이스가 그 변경을 검증한다. 다만 "출력 바이트 불변" 계약의 의도된 예외이므로 **결정으로 기록하고 진행한다**(§11).
+
+`tests/foundation-mine-parity.sh`는 그때까지 광산 루트를 `<MINE>`으로 정규화하고 매 실행마다 그 사실을 출력한다. **그 정규화가 이 결정을 대신하게 두지 말 것.**
+
 **옮길 수 없는 세 부류** — 소리 없이 빠지면 안 되므로 각각 대체 케이스를 만들고, 못 만들면 여기 남긴다:
 - `bash -n` 파싱 검사, `preflight_gnu`(GNU 도구 확인) — 대상이 사라진다. `node --check`가 전자의 자리를 대신하고, 후자는 **필요 자체가 없어진다**
 - `rm` 셰임 고장 주입(`block_consecrate_validate_fail_final_unremovable`) — PATH 셰임이 안 통한다. 주입 지점을 인터페이스로 열어 테스트한다
