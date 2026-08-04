@@ -65,8 +65,13 @@ const schemaVer = () => SCH.get('schema.version') || '2'
 
 // ---- output helpers ----
 const out = s => process.stdout.write(s)
-const outln = s => process.stdout.write(s + '\n')
+// A Buffer is written as BYTES. Most output is ordinary text, but some lines are echoed straight out
+// of the mine — `reindex --check` prints a diff of files that can hold CP949 — and a JS string is
+// encoded as UTF-8 on the way to stdout, which would re-encode those bytes into something the bash
+// runtime never printed. The caller says which it means by what it passes.
+const outln = s => process.stdout.write(Buffer.isBuffer(s) ? Buffer.concat([s, NL]) : s + '\n')
 const errln = s => process.stderr.write(s + '\n')
+const NL = Buffer.from('\n')
 // json_esc: backslash, quote, newline, tab escaped; carriage return DROPPED (not escaped).
 const jsonEsc = s => s
   .replace(/\\/g, '\\\\').replace(/"/g, '\\"')
@@ -153,8 +158,7 @@ const usage2 = u => { errln(`usage: ${u}`); process.exit(2) }
 
 // Ported in a later stage. Refusing with a distinct code keeps a partial port honest: no case can
 // mistake "not written yet" for "ran and agreed".
-const NOT_PORTED = new Set(['validate', 'attest',
-  'seal-review', 'consecrate', 'reindex', 'retag', 'upgrade'])
+const NOT_PORTED = new Set(['validate', 'consecrate', 'retag', 'upgrade'])
 
 const argv = process.argv.slice(2)
 const cmd = argv[0] ?? ''
@@ -178,6 +182,28 @@ switch (cmd) {
     const { openMine } = await import('./lib/mine.mjs')
     const { cmdScope } = await import('./lib/cmd-scope.mjs')
     rc = cmdScope(openMine(SCRIPT_DIR), outln, sjson); break
+  }
+  case 'attest': {
+    // No arity check HERE on purpose: the bash dispatch forwards attest's whole argv and lets the
+    // command judge it, so the usage line goes to stdout with exit 2 rather than to stderr.
+    const { openMine } = await import('./lib/mine.mjs')
+    const { cmdAttest } = await import('./lib/cmd-attest.mjs')
+    rc = cmdAttest(openMine(SCRIPT_DIR), outln, rest); break
+  }
+  case 'reindex': {
+    // Like attest, the bash dispatch forwards reindex's whole argv — but reindex's own usage line
+    // goes to STDERR, not stdout. Two write commands, two spellings; both are contract.
+    const { openMine } = await import('./lib/mine.mjs')
+    const { cmdReindex } = await import('./lib/cmd-reindex.mjs')
+    rc = cmdReindex(openMine(SCRIPT_DIR), outln, errln, rest); break
+  }
+  case 'seal-review': {
+    // The dispatch owns the arity here (bash does too), so a third argument is a stderr usage and
+    // exit 2, while the command's own refusals go to stdout.
+    if (rest.length < 1 || rest.length > 2) usage2('weavedoc seal-review <doc-id> [draft|final]')
+    const { openMine } = await import('./lib/mine.mjs')
+    const { cmdSealReview } = await import('./lib/cmd-seal-review.mjs')
+    rc = cmdSealReview(openMine(SCRIPT_DIR), outln, rest[0], rest[1]); break
   }
   case 'pull': {
     if (rest.length !== 1) usage2('weavedoc pull <term>')

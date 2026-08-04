@@ -72,9 +72,13 @@ export function pipes (s) {
   return parts
 }
 
-// The list holds EXACTLY this member — never a substring of one.
+// The delimited list CONTAINS the delimited needle. Spelled as the substring test bash performs
+// (`case "|$2|" in *"|$1|"*`) and not as the membership test its comment describes, because the two
+// disagree and the implementation is the contract: a needle that itself holds a delimiter matches a
+// contiguous RUN of members, so `in_list "verified|failed" "verified|failed"` is TRUE. Measured
+// against the original — attest is the first command to hand this raw argv.
 export function inList (needle, list) {
-  return pipes(list).includes(needle)
+  return `|${list}|`.includes(`|${needle}|`)
 }
 
 // ---- placeholders -------------------------------------------------------------------------
@@ -87,6 +91,31 @@ export function isPlaceholder (s) {
   if (s.indexOf('{') !== s.lastIndexOf('{')) return false
   if (s.indexOf('}') !== s.lastIndexOf('}')) return false
   return true
+}
+
+// ---- consumer-facing labels ---------------------------------------------------------------
+// THE one spelling of every label a consumer sees on a truth. pull once attached PLAN-STAGE/as_of/
+// DERIVED/ADOPTED while index and tree carried none, so which fact a reader received depended on
+// which entry path they took. Every writer calls this; the text is spelled inline nowhere else.
+// `enc` encodes the LITERALS only, and exists because the two callers work in different domains:
+// pull builds decoded text, reindex builds byte-domain text copied verbatim out of truth files. The
+// interpolated values (`asOf`, `assumptions`) are the caller's and are never re-encoded — doing so
+// double-encoded a Korean `as_of` into mojibake in the generated index, which is how this was found.
+export function truthLabels (asOf, prov, assumptions, srcStage, srcStatus, enc = s => s) {
+  let lab = ''
+  if (asOf) lab += ` (as_of: ${asOf})`
+  if (prov === 'derived') {
+    // Absent is not `[]`. FORMATS gives the EMPTY LIST a meaning ("uses stated facts only"), so a
+    // MISSING `assumptions` must not render as that positive declaration.
+    if (assumptions && assumptions !== '[]') lab += `${enc(' [DERIVED — assumes ')}${assumptions}]`
+    else if (assumptions === '[]') lab += enc(' [DERIVED — declares no unstated assumptions]')
+    else lab += enc(' [DERIVED — assumptions NOT DECLARED; open the file before reuse]')
+  } else if (prov === 'adopted') {
+    lab += enc(' [ADOPTED — machine-proposed, user-accepted]')
+  }
+  if (srcStage === 'plan') lab += enc(' [PLAN-STAGE SOURCE — never evidence of use]')
+  if (srcStatus === 'retracted') lab += ' [RETRACTED SOURCE]'
+  return lab
 }
 
 // ---- frontmatter value rule ---------------------------------------------------------------

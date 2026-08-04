@@ -5,7 +5,7 @@
 // path they took (field report D1). Every label comes from truthLabels — written inline nowhere.
 import { existsSync, readFileSync } from 'node:fs'
 import { basename } from 'node:path'
-import { splitLines } from './core.mjs'
+import { splitLines, truthLabels } from './core.mjs'
 import { join, truthFiles } from './mine.mjs'
 import { fmv } from './read.mjs'
 
@@ -15,25 +15,9 @@ const readOr = p => { try { return readFileSync(p, 'utf8') } catch { return '' }
 // whole Unicode range, which would make the search match things the bash runtime does not.
 const lowerAscii = s => s.replace(/[A-Z]/g, c => c.toLowerCase())
 
-// THE one spelling of every consumer-facing label. pull once attached PLAN-STAGE / as_of / DERIVED /
-// ADOPTED while index and tree carried none, so the fact a consumer received depended on which
-// entry path they took. Both writers call this.
-export function truthLabels (asOf, prov, assumptions, srcStage, srcStatus) {
-  let lab = ''
-  if (asOf) lab += ` (as_of: ${asOf})`
-  if (prov === 'derived') {
-    // Absent is not `[]`: FORMATS gives the EMPTY LIST a meaning ("uses stated facts only"), so a
-    // missing `assumptions` must not render as that positive declaration.
-    if (assumptions && assumptions !== '[]') lab += ` [DERIVED — assumes ${assumptions}]`
-    else if (assumptions === '[]') lab += ' [DERIVED — declares no unstated assumptions]'
-    else lab += ' [DERIVED — assumptions NOT DECLARED; open the file before reuse]'
-  } else if (prov === 'adopted') {
-    lab += ' [ADOPTED — machine-proposed, user-accepted]'
-  }
-  if (srcStage === 'plan') lab += ' [PLAN-STAGE SOURCE — never evidence of use]'
-  if (srcStatus === 'retracted') lab += ' [RETRACTED SOURCE]'
-  return lab
-}
+// The label rule lives in core.mjs and is imported, NOT copied. It briefly existed here and there
+// at once — the exact "one rule, two spellings" drift the bash runtime spent this project's history
+// paying for, and which the label text was centralised to prevent in the first place.
 
 // The frontmatter value rule as pull's awk spells it: the shared rule plus \x01 folded to a space
 // (the field separator must not survive inside a field).

@@ -96,3 +96,9 @@ fmkey	claim: hello
 fmkey	claim:hello
 fmkey	review_context_digest: sha256:abc
 fmkey	a_b-c: v
+in_list	verified|failed	verified|failed
+in_list	a|b	a|b|c
+in_list	b|c	a|b|c
+in_list	a|c	a|b|c
+in_list	|	a||b
+in_list	a|b|c	a|b|c
