@@ -32,8 +32,21 @@ shift
 # fingerprints; that is the field doing its job, not drift. It is normalised away here and the
 # normalisation is announced on every run, because a comparison that quietly forgives a difference
 # is how a real difference gets forgiven too.
-normalise() { sed -E 's/^fingerprint: [0-9a-f]+ /fingerprint: <RUNTIME-SPECIFIC> /
-                      s/"fingerprint":"[0-9a-f]*"/"fingerprint":"<RUNTIME-SPECIFIC>"/'; }
+# Second declared divergence: the mine root. MSYS bash sees /d/repo/x, native Node sees D:/repo/x —
+# one directory, two spellings. Commands that print ABSOLUTE paths (impact, and two of validate's
+# diagnostics) therefore cannot reach byte parity on Windows until those outputs are made relative,
+# which REWRITE_PLAN §4 records as a decision still to take. Folding it here keeps the rest
+# comparable; it does not settle that.
+MINE_ABS=$(cd "$MINE" >/dev/null 2>&1 && pwd)
+# Windows spells one directory three ways: the MSYS path, the mixed path, and the mixed path with
+# 8.3 short components. cygpath -m can return either name form depending on the input, and Node
+# always reports the long one — so all of them are folded, or the comparison reports a difference
+# that is only a spelling.
+MINE_WIN=$(cygpath -m "$MINE_ABS" 2>/dev/null || printf '%s' "$MINE_ABS")
+MINE_WINL=$(cygpath -ml "$MINE_ABS" 2>/dev/null || printf '%s' "$MINE_WIN")
+normalise() { sed -E -e 's/^fingerprint: [0-9a-f]+ /fingerprint: <RUNTIME-SPECIFIC> /' \
+                     -e 's/"fingerprint":"[0-9a-f]*"/"fingerprint":"<RUNTIME-SPECIFIC>"/' \
+                     -e "s|$MINE_WINL|<MINE>|g" -e "s|$MINE_WIN|<MINE>|g" -e "s|$MINE_ABS|<MINE>|g"; }
 
 echo "parity — mine: $MINE"
 echo "  bash: $BASH_BIN"
