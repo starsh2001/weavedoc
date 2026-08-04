@@ -9,10 +9,11 @@
 //
 // The scale is tests/parity-corpus.sh over the mines the 345 regression cases build — whole-output
 // comparison, because a substring suite cannot grade a rewrite whose contract is bytes.
-import { statSync, realpathSync, readFileSync } from 'node:fs'
+import { statSync, realpathSync, readFileSync, readdirSync } from 'node:fs'
 import { canonId, isDate, isFence, isPlaceholder, inList, listField, pipes, splitLines } from './core.mjs'
 import { join, materialIds, mdirFor } from './mine.mjs'
 import { fmv } from './read.mjs'
+import { validateTruths } from './validate-truths.mjs'
 
 const readOr = p => { try { return readFileSync(p, 'utf8') } catch { return '' } }
 const isDirAt = p => { try { return statSync(p).isDirectory() } catch { return false } }
@@ -44,6 +45,13 @@ verify.ledger.file verify.ledger.origin.material verify.ledger.origin.truths ver
 // and not "split on commas" or "split on newlines" — `for a in $REPLY` after listfield re-splits an
 // item that contains a space into two, and the port has to make the same two.
 const words = s => s.split(/[ \t\n]+/).filter(x => x !== '')
+
+// THE GLOB the bash side hands its readers: `t[0-9]*.md` is 't', one digit, ANYTHING, '.md' — so
+// `t01x.md` is in the population. mine.mjs's truthFiles() is deliberately stricter (it answers "what
+// is a truth file"), and reusing it here would silently shrink the set validate is meant to police.
+// Sorted, because a glob is.
+const TRUTH_GLOB = /^t[0-9].*\.md$/
+const lsGlob = d => { try { return readdirSync(d).filter(n => TRUTH_GLOB.test(n)).sort() } catch { return [] } }
 
 // catalog_ids: `| m001 | …` rows. Whitespace is stripped from the second field before the id shape
 // is judged, so `|  m001  |` is a row for m001.
@@ -158,6 +166,7 @@ export function cmdValidate (m, out, json = false) {
 
   // --- each material ---
   let nMat = 0
+  const nofm = new Set()
   const mids = materialIds(m)
   const matfm = matFmState(m.materials, mids)
   for (const id of mids) {
@@ -240,10 +249,101 @@ export function cmdValidate (m, out, json = false) {
     }
   }
 
-  // UNIT BOUNDARY (stage 5a-1). The truths pass, the ledger and index cross-checks, the document
-  // loop, the completeness warranty and the `examined:` accounting all land in the units after this
-  // one; until then this function prints the shell-side diagnostics and nothing else, and the CLI
-  // still refuses `validate` outright. tests/validate-node.mjs is what the scale runs meanwhile.
-  void nMat; void warns; void diags; void warn
+  // --- truths (single pass) ---
+  // A directory wearing a truth filename is not a truth: gawk skips it with a stderr warning, so
+  // every per-file check would quietly not run on it while the name sits in the population.
+  const globbed = lsGlob(m.truths)
+  for (const n of globbed) {
+    if (isDirAt(join(m.truths, n))) prob('TRUTH-DIR', `${m.truths}/${n}  is a directory wearing a truth filename — not a truth and not counted; rename or remove it`)
+  }
+  // The material lists and the required-tag roster are computed OUTSIDE the truth-file guard below:
+  // they describe the mine, and the checks needing them must still run when the truths are gone —
+  // that state (files 0, index still naming them) is exactly what those checks exist to catch.
+  const retracted = new Set(); const research = new Set()
+  for (const id of mids) {
+    const cf = join(m.materials, id, 'converted.md')
+    if (!isFileAt(cf)) continue
+    if (fmv(cf, 'status') === 'retracted') retracted.add(id)
+    if (fmv(cf, 'origin') === 'research') research.add(id)
+  }
+  const reqtags = listField(fmv(m.project, 'required_tags'))
+  // All ids on the line, zero-padding normalised — the same rule census uses. Taking only the first
+  // id made a truth listed second on a shared `removed:` line fail validate for having no record.
+  const removedlog = new Set()
+  for (const l of splitLines(readOr(join(m.truths, 'changelog.md')))) {
+    if (!/^[ \t\v\f\r]*-[ \t\v\f\r]*removed:/.test(l)) continue
+    for (const t of l.match(/(^|[^0-9A-Za-z])t[0-9]+([^0-9A-Za-z]|$)/g) ?? []) {
+      const id = /t[0-9]+/.exec(t)[0]
+      removedlog.add(id.replace(/^t0*/, 't') === 't' ? id : id.replace(/^t0*/, 't'))
+    }
+  }
+  const truthPaths = globbed.filter(n => isFileAt(join(m.truths, n))).map(n => join(m.truths, n))
+  let counts = { ntruthfile: 0, nsealed: 0, nsealfail: 0, ntomb: 0 }
+  if (isDirAt(m.truths) && globbed.length > 0) {
+    counts = validateTruths(m, {
+      prob, sch, retracted, research, removedlog, reqtags,
+      mroot: m.materials.startsWith(`${m.root}/`) ? m.materials.slice(m.root.length + 1) : m.materials,
+      truthsRel: m.truths.startsWith(`${m.root}/`) ? m.truths.slice(m.root.length + 1) : m.truths
+    }, truthPaths, mids)
+
+    // A truth file whose line 1 is not '---' is invisible to every check above (the parser never
+    // opens), and can never gain an index entry — which made validate loop "run reindex" forever. An
+    // UNCLOSED frontmatter is the same leak: the per-truth checks fire on the CLOSING '---', so
+    // without one every check runs zero times. Both are named here rather than blamed on the index.
+    for (const tf of truthPaths) {
+      const tb = tf.slice(tf.lastIndexOf('/') + 1).replace(/\.md$/, '')
+      const lines = splitLines(readOr(tf))
+      if (lines.length === 0) continue      // no record on the bash side, so no state at all
+      const tc = canonId(tb)
+      if (tc !== null && tb !== tc) {
+        prob('TRUTH-ID-NONCANON', `${m.truths}/${tb}.md  filename is not the canonical id spelling — rename it to '${tc}.md' and set 'id: ${tc}' (ids are zero-padded to at least three digits). Two spellings of one number resolve to the same id, so the reciprocity, winner and retracted tables would collapse both files into one entry`)
+      }
+      const opened = isFence(lines[0])
+      let closed = false
+      if (opened) for (let i = 1; i < lines.length; i++) if (isFence(lines[i])) { closed = true; break }
+      if (closed) continue
+      if (opened) {
+        nofm.add(tb)
+        prob('TRUTH-FM-UNCLOSED', `${m.truths}/${tb}.md  frontmatter is never closed (a second '---' is missing) — the parser stays inside it to EOF, so every check on this file runs zero times and its body is never sealed`)
+      } else {
+        nofm.add(tb)
+        prob('TRUTH-NO-FM', `${m.truths}/${tb}.md  no frontmatter (line 1 must be '---') — this file is not read as a truth at all, so every check on it silently passes and no index entry can ever be generated for it`)
+      }
+    }
+    // D3 (decided 2026-08-04): an unquoted resolution.reason holding a comma that opens no new key is
+    // exactly where a strict YAML parser truncates the value and scatters the rest as ghost keys —
+    // weavedoc's own readers never noticed, so the break surfaced only in external consumers. WARN,
+    // never block: deployed mines must stay green while map quotes new writes.
+    for (const tf of truthPaths) {
+      const tb = tf.slice(tf.lastIndexOf('/') + 1).replace(/\.md$/, '')
+      const lines = splitLines(readOr(tf))
+      if (lines.length === 0) continue
+      let infm = isFence(lines[0])
+      for (let i = 1; i < lines.length && infm; i++) {
+        const line = lines[i]
+        if (isFence(line)) { infm = false; break }
+        if (!/^resolution[ \t\v\f\r]*:/.test(line)) continue
+        if (!/reason[ \t\v\f\r]*:/.test(line)) continue
+        let r = line.replace(/^.*reason[ \t\v\f\r]*:[ \t\v\f\r]*/, '')
+        if (r.startsWith('"')) continue
+        r = r.replace(/[ \t\v\f\r]*\}[ \t\v\f\r]*$/, '')
+        const seg = r.split(',')
+        if (seg.length <= 1) continue
+        for (let j = 1; j < seg.length; j++) {
+          if (!/^[ \t\v\f\r]*[A-Za-z_][A-Za-z0-9_]*[ \t\v\f\r]*:/.test(seg[j])) {
+            warn('RES-REASON-UNQUOTED', `truths/${tb}.md  resolution.reason is unquoted and holds a comma that opens no new key — a strict YAML parser truncates the value there; write reason: "…" (map quotes it since v0.3.4)`)
+            break
+          }
+        }
+        break
+      }
+    }
+  }
+
+  // UNIT BOUNDARY (stage 5a-2). The ledger rows, the index and coverage cross-checks, the document
+  // loop, the completeness warranty and the `examined:` accounting land in 5a-3..5a-5; until then
+  // this function prints the diagnostics it owns and nothing else, and the CLI still refuses
+  // `validate` outright. tests/validate-node.mjs is what the scale runs meanwhile.
+  void nMat; void warns; void diags; void counts; void nofm
   return problems > 0 ? 1 : 0
 }

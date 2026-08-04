@@ -141,6 +141,8 @@ printf 'a\r\nb\r\n' | awk '{print}'
 
 **포트는 벗기는 쪽으로 통일했다** — 명시적 리더들의 의도와 같고, 무엇보다 Node가 세 플랫폼에서 같은 답을 낸다(이식의 목적 그 자체). 줄 읽기는 `core.mjs`의 `splitLines` 하나로 모았다.
 
+**5단계에서 이 결정의 구체적 사례가 나왔다** (2026-08-04, `pass_crlf_retag` 광산): **CRLF truth가 LF 자료를 인용**하면 seal이 갈린다. Linux gawk는 truth 줄의 `\r`을 유지하므로 자료 본문에서 못 찾아 `SEAL-QUOTE-MISSING`을 내고, MSYS gawk는 벗기므로 통과한다 — **같은 광산, 같은 bash, 플랫폼에 따라 다른 판정.** 즉 여기엔 맞출 "bash의 답"이 하나로 존재하지 않는다. 포트는 항상 벗기므로 MSYS 답과 일치하고 플랫폼에 무관하다. 코퍼스 349개 중 줄바꿈이 섞인 광산은 **2개뿐**이고, 나머지 하나(`acct_mat_digest_line_endings_stable`)는 `mat_digest`가 이미 명시적으로 `\r`을 벗기므로 갈리지 않는다. `tests/parity-corpus.sh`에 (광산, 명령) 예외로 선언해 뒀다.
+
 **그리고 이건 소비자가 다시 벗기고 끝나는 문제가 아니다 — `mat_digest`가 이 awk를 지난다.** 2e에서 확인:
 
 | `mat_digest materials/m001/converted.md` (CRLF 950줄) | |
