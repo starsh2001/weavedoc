@@ -19,6 +19,22 @@
 set -u
 REPO=$(cd "$(dirname "$0")/.." >/dev/null 2>&1 && pwd)
 
+# ---- runtime under test (stage 0 of the rewrite — REWRITE_PLAN.md) ----
+# Every case here is a CLI black box: it builds a mine, runs a command, and asserts stdout plus the
+# exit code. Nothing reads the runtime's internals. So the runtime can be swapped WITHOUT touching a
+# single case — which is what makes a rewrite verifiable against its predecessor's own suite.
+# WD_BIN is the invocation prefix: interpreter first, entrypoint second, both project-relative and
+# free of spaces (word splitting here is deliberate and safe for that reason). The default is the
+# shipped bash bundle, so an unset WD_BIN behaves exactly as this file always has.
+#   bash judges bash:   WD_BIN unset
+#   bash judges Node:   WD_BIN="node .weavedoc/bin/weavedoc.mjs" bash tests/regress.sh
+WD_BIN=${WD_BIN:-"bash .weavedoc/bin/weavedoc"}
+read -r -a WDRUN <<< "$WD_BIN"
+[ "${#WDRUN[@]}" -ge 2 ] || { echo "WD_BIN must be '<interpreter> <entrypoint>' — got '$WD_BIN'"; exit 2; }
+WD_RUNNER=${WDRUN[0]}
+WD_ENTRY=${WDRUN[${#WDRUN[@]}-1]}
+[ -f "$REPO/$WD_ENTRY" ] || { echo "WD_BIN entrypoint not found: $REPO/$WD_ENTRY"; exit 2; }
+
 # ---- workspace & result-cache isolation (WD-QA-002) ----
 # Fixtures live in a per-run mktemp dir removed by trap: two runs can never collide, and an
 # interrupted run leaves no workspace behind. Results live in a KEYED cache dir — the key hashes
@@ -27,7 +43,11 @@ REPO=$(cd "$(dirname "$0")/.." >/dev/null 2>&1 && pwd)
 # unreachable, not filtered. WD_REG_KEY_SALT exists so a test can force a fresh key.
 KEY=$( { git -C "$REPO" rev-parse HEAD 2>/dev/null
          cat "$REPO/.weavedoc/VERSION" 2>/dev/null
-         sha256sum "$REPO/.weavedoc/bin/weavedoc" "$REPO/.weavedoc/schema" 2>/dev/null | awk '{print $1}'
+         # The ENTRYPOINT under test, plus WD_BIN itself: a bash run and a Node run of the same
+         # commit are different configurations and must not share a result cache, or `--resume`
+         # would hand one implementation's results to the other and call the rewrite green.
+         printf '%s\n' "$WD_BIN"
+         sha256sum "$REPO/$WD_ENTRY" "$REPO/.weavedoc/schema" 2>/dev/null | awk '{print $1}'
          uname -sr; bash --version | head -1; awk --version 2>/dev/null | head -1; sed --version 2>/dev/null | head -1
          printf '%s' "${WD_REG_KEY_SALT:-}"
        } | sha256sum | awk '{print $1}' | cut -c1-12 )
@@ -103,7 +123,7 @@ mk_v2() { # promote the workspace to a schema-2 mine with a sealed review — th
   # The suite is not `set -e`: a silent seal-review failure here would hand every v2 case an
   # UNSEALED mine, and the strip_seal block cases would then pass for the wrong reason (never
   # sealed is observably identical to stripped). A helper failure is a case failure, loudly.
-  ( cd "$W" && bash .weavedoc/bin/weavedoc seal-review d1 draft >/dev/null 2>&1 ) \
+  ( cd "$W" && "${WDRUN[@]}" seal-review d1 draft >/dev/null 2>&1 ) \
     || bad "mk_v2: seal-review failed — the case would assert against an unsealed mine"
 }
 REV() { review4 "$W" "$@"; }
@@ -140,7 +160,7 @@ mkscale() { # deterministic 8-material · 60-truth mine — the scale where spaw
     printf -- '- added: %s (2026-07-30)\n' "$tid" >> "$W/truths/changelog.md"
   done
   printf -- '---\nstatus: passed\nround: 1\nverified_at: 2026-07-30\n---\n\n## Verified units\n\n## Adjudications\n\n## Human queue\n' > "$W/truths/verify.md"
-  ( cd "$W" && bash .weavedoc/bin/weavedoc reindex >/dev/null 2>&1 ) || bad "mkscale: reindex failed"
+  ( cd "$W" && "${WDRUN[@]}" reindex >/dev/null 2>&1 ) || bad "mkscale: reindex failed"
 }
 pass_locale_emoji_claim() {
   # gawk 5.0's multibyte machinery misread emoji-bearing claim lines under UTF-8 locales: five
@@ -152,10 +172,10 @@ pass_locale_emoji_claim() {
   printf -- '---\nid: t002\nclaim: "품질 심사 — 🔴 즉시 수정, 🟡 확인 필요, 🟢 통과"\nsource: m001\ntags: [위약]\nstatus: ok\nprovenance: stated\n---\n\n제7조 위약금은 계약금액의 10%%로 한다.\n' > "$W/truths/t002.md"
   printf -- '\n- 심사: t002\n' >> "$W/truths/coverage.md"
   printf -- '- added: t002 (2026-07-30)\n' >> "$W/truths/changelog.md"
-  ( cd "$W" && bash .weavedoc/bin/weavedoc reindex >/dev/null 2>&1 )
-  OUT=$( ( cd "$W" && LC_ALL= LANG=ko_KR.UTF-8 $TO bash .weavedoc/bin/weavedoc validate ) 2>&1 ); RC=$?
+  ( cd "$W" && "${WDRUN[@]}" reindex >/dev/null 2>&1 )
+  OUT=$( ( cd "$W" && LC_ALL= LANG=ko_KR.UTF-8 $TO "${WDRUN[@]}" validate ) 2>&1 ); RC=$?
   expect_pass
-  OUT=$( ( cd "$W" && LC_ALL=C $TO bash .weavedoc/bin/weavedoc validate ) 2>&1 ); RC=$?
+  OUT=$( ( cd "$W" && LC_ALL=C $TO "${WDRUN[@]}" validate ) 2>&1 ); RC=$?
   expect_pass
 }
 acct_scope_quoted_status_is_tombstone() {
@@ -179,15 +199,15 @@ pass_locale_scope_census_match() {
   printf -- '---\nid: t002\nclaim: "품질 심사 — 🔴 즉시 수정, 🟡 확인 필요, 🟢 통과"\nsource: m001\ntags: [위약]\nstatus: ok\nprovenance: stated\n---\n\n제7조 위약금은 계약금액의 10%%로 한다.\n' > "$W/truths/t002.md"
   printf -- '\n- 심사: t002\n' >> "$W/truths/coverage.md"
   printf -- '- added: t002 (2026-07-30)\n' >> "$W/truths/changelog.md"
-  ( cd "$W" && bash .weavedoc/bin/weavedoc reindex >/dev/null 2>&1 )
+  ( cd "$W" && "${WDRUN[@]}" reindex >/dev/null 2>&1 )
   vrun attest verified 2 "$(printf '\xb0\xcb\xc1\xf5')" m001 t001
   # STDOUT ONLY. The verdict is on stdout; stderr carries gawk's "invalid multibyte data" notes and,
   # on a machine where ko_KR.UTF-8 was never generated, bash's setlocale warnings. Comparing stderr
   # too would fail the case for the absence of a locale rather than for a disagreement — the same
   # safe-degradation property pass_locale_emoji_claim documents (no locale → the run is C → match).
   for cmd_ in scope census; do
-    sc_=$( ( cd "$W" && LC_ALL=C $TO bash .weavedoc/bin/weavedoc "$cmd_" ) 2>/dev/null )
-    sk_=$( ( cd "$W" && LC_ALL= LANG=ko_KR.UTF-8 $TO bash .weavedoc/bin/weavedoc "$cmd_" ) 2>/dev/null )
+    sc_=$( ( cd "$W" && LC_ALL=C $TO "${WDRUN[@]}" "$cmd_" ) 2>/dev/null )
+    sk_=$( ( cd "$W" && LC_ALL= LANG=ko_KR.UTF-8 $TO "${WDRUN[@]}" "$cmd_" ) 2>/dev/null )
     OUT="[$cmd_ · LC_ALL=C]
 $sc_
 [$cmd_ · ko_KR.UTF-8]
@@ -418,7 +438,7 @@ EOF
 
   cp "$PRISTINE/documents/d1/draft.md" "$PRISTINE/documents/d1/final.md"
   review4 "$PRISTINE" ""
-  ( cd "$PRISTINE" && bash .weavedoc/bin/weavedoc reindex >/dev/null 2>&1 )
+  ( cd "$PRISTINE" && "${WDRUN[@]}" reindex >/dev/null 2>&1 )
 }
 
 # ---------------------------------------------------------------- assertions
@@ -436,7 +456,18 @@ expect_pass() { if [ "$RC" -ne 0 ]; then bad "expected a pass, got rejection"; e
 expect_has()   { printf '%s\n' "$OUT" | grep -qF -- "$1" || bad "output lacks [$1]"; ok; }
 expect_hasnt() { printf '%s\n' "$OUT" | grep -qF -- "$1" && bad "output must not contain [$1]"; ok; }
 
-vrun() { OUT=$( ( cd "$W" && $TO bash .weavedoc/bin/weavedoc "$@" ) 2>&1 ); RC=$?; }
+vrun() { OUT=$( ( cd "$W" && $TO "${WDRUN[@]}" "$@" ) 2>&1 ); RC=$?; }
+# The three cases below read the runtime SOURCE rather than its output — the only ones in the suite
+# that do, and the reason they exist is that the invariants they pin (one judge per rule, every
+# emitted diagnostic code documented) cannot be seen from outside. They encode bash syntax, so a
+# different runtime needs its own spelling of the same invariant, not a path swap. Until that
+# spelling exists they FAIL rather than skip: a green 342/342 must never mean "and three invariants
+# went unwatched". (REWRITE_PLAN §4 — the port-me family.)
+src_shape_unported() {
+  [ "$WD_RUNNER" = bash ] && return 1
+  bad "source-shape case has no spelling for runner '$WD_RUNNER' yet — port the invariant, do not drop it"
+  return 0
+}
 
 # ---------------------------------------------------------------- gate: must block
 # Every one of these ships final.md next to an OPEN violation.
@@ -907,7 +938,8 @@ meta_single_judges() {
   # The drift every round kept finding — "the rule was unified, one site was left out" — is now
   # watched by the suite itself: each grep pins an invariant about the BINARY, so a new duplicate
   # judge fails here before a cold reviewer has to find it.
-  local B="$REPO/.weavedoc/bin/weavedoc" bad="" fn n
+  src_shape_unported && return
+  local B="$REPO/$WD_ENTRY" bad="" fn n
   for fn in is_noise has_fm fid_mark fid_body nocomment canon_id is_placeholder req_value \
             truth_digest mat_digest unit_digest ledger_rows ledger_file \
             artifact_digest context_digest doc_draft_path doc_final_path; do
@@ -1259,7 +1291,7 @@ block_id_unpadded() {
   sed -i 's/^id: t001$/id: t5/' "$W/truths/t5.md"
   sed -i 's/^- 위약금 조항: t001$/- 위약금 조항: t5/' "$W/truths/coverage.md"
   sed -i 's/^cited_truths: \[t001\]$/cited_truths: [t5]/' "$W/documents/d1/plan.md"
-  ( cd "$W" && bash .weavedoc/bin/weavedoc reindex >/dev/null 2>&1 )
+  ( cd "$W" && "${WDRUN[@]}" reindex >/dev/null 2>&1 )
   vrun validate; expect_block "rename it to 't005.md'"
 }
 block_id_overpadded() {
@@ -1267,7 +1299,7 @@ block_id_overpadded() {
   sed -i 's/^id: t001$/id: t0001/' "$W/truths/t0001.md"
   sed -i 's/^- 위약금 조항: t001$/- 위약금 조항: t0001/' "$W/truths/coverage.md"
   sed -i 's/^cited_truths: \[t001\]$/cited_truths: [t0001]/' "$W/documents/d1/plan.md"
-  ( cd "$W" && bash .weavedoc/bin/weavedoc reindex >/dev/null 2>&1 )
+  ( cd "$W" && "${WDRUN[@]}" reindex >/dev/null 2>&1 )
   vrun validate; expect_block "rename it to 't001.md'"
 }
 block_material_id_unpadded() {
@@ -1285,7 +1317,7 @@ pass_id_four_digit() {
   sed -i 's/^- 위약금 조항: t001$/- 위약금 조항: t1000/' "$W/truths/coverage.md"
   sed -i 's/^cited_truths: \[t001\]$/cited_truths: [t1000]/' "$W/documents/d1/plan.md"
   printf -- '- added: t1000 (2026-07-30)\n' >> "$W/truths/changelog.md"
-  ( cd "$W" && bash .weavedoc/bin/weavedoc reindex >/dev/null 2>&1 )
+  ( cd "$W" && "${WDRUN[@]}" reindex >/dev/null 2>&1 )
   vrun validate; expect_pass
 }
 pass_id_generated_files_ignored() {
@@ -1339,7 +1371,7 @@ pass_retag_leaves_unclosed_list_alone() {
   # `tags: [벌칙]tags: [위약` — the only writer corrupting a file while reporting success.
   # The line must survive untouched (deleting it would be worse), and validate names the cause.
   sed -i 's/^tags: \[위약\]$/tags: [위약/' "$W/truths/t001.md"
-  ( cd "$W" && bash .weavedoc/bin/weavedoc retag 위약 벌칙 >/dev/null 2>&1 )
+  ( cd "$W" && "${WDRUN[@]}" retag 위약 벌칙 >/dev/null 2>&1 )
   OUT=$(grep -c '^tags: \[위약$' "$W/truths/t001.md"); RC=0
   expect_has "1"
   vrun validate; expect_block "never closes on this line"
@@ -1372,7 +1404,7 @@ block_resolution_winner_dangling() {
 addt2() { # register t002 in the ledgers so the only thing left to complain about is the seal
   printf -- '- 대금 조항: t002\n' >> "$W/truths/coverage.md"
   printf -- '- added: t002 (2026-07-30)\n' >> "$W/truths/changelog.md"
-  ( cd "$W" && bash .weavedoc/bin/weavedoc reindex >/dev/null 2>&1 )
+  ( cd "$W" && "${WDRUN[@]}" reindex >/dev/null 2>&1 )
 }
 block_short_body_seal() {
   # A body too small to be evidence of anything: index() finds it inside almost any material.
@@ -1401,7 +1433,7 @@ pass_claim_shown_beside_seal() {
   # 255-truth mine on legitimate claims like "4인" and "Phase 2". What is testable is that the
   # consumer surface stops showing only the unverified half: pull must print the sealed line too.
   sed -i 's/^claim: .*$/claim: "위약금은 계약금액의 30%다"/' "$W/truths/t001.md"
-  ( cd "$W" && bash .weavedoc/bin/weavedoc reindex >/dev/null 2>&1 )
+  ( cd "$W" && "${WDRUN[@]}" reindex >/dev/null 2>&1 )
   vrun pull 위약
   expect_has "30%"
   expect_has "sealed: 제7조 위약금은 계약금액의 10%로 한다."
@@ -1456,7 +1488,7 @@ pass_yaml_trailing_comment() {
 }
 pass_hash_in_quoted_claim() {
   sed -i 's/^claim: .*$/claim: "위약금은 계약금액의 10%다 — 3월 회의 #3 결과"/' "$W/truths/t001.md"
-  ( cd "$W" && bash .weavedoc/bin/weavedoc reindex >/dev/null 2>&1 )
+  ( cd "$W" && "${WDRUN[@]}" reindex >/dev/null 2>&1 )
   vrun validate; expect_pass
   OUT=$(cat "$W/truths/index.md"); expect_has '3월 회의 #3 결과'
 }
@@ -1488,7 +1520,7 @@ pass_winner_short_id() {
   sed -i 's/^- 위약금 조항: t001$/- 위약금 조항: t005, t006/' "$W/truths/coverage.md"
   sed -i 's/^cited_truths: \[t001\]$/cited_truths: [t005]/' "$W/documents/d1/plan.md"
   printf -- '- added: t005 (2026-07-30)\n- added: t006 (2026-07-30)\n' >> "$W/truths/changelog.md"
-  ( cd "$W" && bash .weavedoc/bin/weavedoc reindex >/dev/null 2>&1 )
+  ( cd "$W" && "${WDRUN[@]}" reindex >/dev/null 2>&1 )
   vrun validate; expect_pass
   vrun pull 위약; expect_has "usable 1"
 }
@@ -1498,14 +1530,14 @@ pass_cited_short_id() {
   sed -i 's/^- 위약금 조항: t001$/- 위약금 조항: t005/' "$W/truths/coverage.md"
   sed -i 's/^cited_truths: \[t001\]$/cited_truths: [t5]/' "$W/documents/d1/plan.md"
   printf -- '- added: t005 (2026-07-30)\n' >> "$W/truths/changelog.md"
-  ( cd "$W" && bash .weavedoc/bin/weavedoc reindex >/dev/null 2>&1 )
+  ( cd "$W" && "${WDRUN[@]}" reindex >/dev/null 2>&1 )
   vrun validate; expect_pass
 }
 pass_tombstone() {
   printf -- '---\nid: t002\nclaim: "지체상금 조항이 있다"\nsource: m001\ntags: [위약]\nstatus: retracted\n---\n' > "$W/truths/t002.md"
   printf -- '- removed: t002 (2026-07-30) — 원문에 없는 조항이었다\n' >> "$W/truths/changelog.md"
   printf -- '- 지체상금: t002 (철회)\n' >> "$W/truths/coverage.md"
-  ( cd "$W" && bash .weavedoc/bin/weavedoc reindex >/dev/null 2>&1 )
+  ( cd "$W" && "${WDRUN[@]}" reindex >/dev/null 2>&1 )
   vrun validate; expect_pass
   expect_has "1 tombstone"
   expect_hasnt "NOT checked"
@@ -1513,8 +1545,8 @@ pass_tombstone() {
 pass_locales() {
   local l out1="" outN
   for l in C ko_KR.UTF-8 en_US.UTF-8 __unset__; do
-    if [ "$l" = "__unset__" ]; then outN=$( ( cd "$W" && unset LC_ALL LANG; $TO bash .weavedoc/bin/weavedoc validate ) 2>&1 )
-    else outN=$( ( cd "$W" && LC_ALL="$l" LANG="$l" $TO bash .weavedoc/bin/weavedoc validate ) 2>&1 ); fi
+    if [ "$l" = "__unset__" ]; then outN=$( ( cd "$W" && unset LC_ALL LANG; $TO "${WDRUN[@]}" validate ) 2>&1 )
+    else outN=$( ( cd "$W" && LC_ALL="$l" LANG="$l" $TO "${WDRUN[@]}" validate ) 2>&1 ); fi
     if [ -z "$out1" ]; then out1="$outN"
     elif [ "$out1" != "$outN" ]; then
       OUT="locale $l differs:
@@ -1529,7 +1561,7 @@ pass_retag_keeps_trailing_comment() {
   # R4-N2: everything after the closing bracket rides along — a trailing YAML comment is a
   # comment, not part of the value, and the rewrite used to silently delete the user's note
   sed -i 's/^tags: \[위약\]$/tags: [위약]  # 3월 회의에서 정한 분류/' "$W/truths/t001.md"
-  ( cd "$W" && bash .weavedoc/bin/weavedoc retag 위약 벌칙 >/dev/null 2>&1 )
+  ( cd "$W" && "${WDRUN[@]}" retag 위약 벌칙 >/dev/null 2>&1 )
   OUT=$(grep '^tags:' "$W/truths/t001.md"); RC=0
   expect_has "tags: [벌칙]  # 3월 회의에서 정한 분류"
 }
@@ -1654,7 +1686,7 @@ acct_scope_retracted_truth_excluded() {
   # already follow: not owed, or the ratio reports a debt nobody can ever pay down.
   printf -- '---\nid: t002\nclaim: "지체상금 조항이 있다"\nsource: m001\ntags: [위약]\nstatus: retracted\n---\n' > "$W/truths/t002.md"
   printf -- '- removed: t002 (2026-07-30) — 원문에 없었다\n' >> "$W/truths/changelog.md"
-  ( cd "$W" && bash .weavedoc/bin/weavedoc reindex >/dev/null 2>&1 )
+  ( cd "$W" && "${WDRUN[@]}" reindex >/dev/null 2>&1 )
   vrun scope
   expect_has "truths     1 live"
   expect_has "1 tombstone"
@@ -1788,7 +1820,7 @@ for a in "$@"; do case "$a" in */documents/d1/final.md) exit 1 ;; esac; done
 exec /usr/bin/rm "$@"
 EOF
   chmod +x "$W.shim/rm"
-  OUT=$( ( cd "$W" && PATH="$W.shim:$PATH" $TO bash .weavedoc/bin/weavedoc consecrate d1 ) 2>&1 ); RC=$?
+  OUT=$( ( cd "$W" && PATH="$W.shim:$PATH" $TO "${WDRUN[@]}" consecrate d1 ) 2>&1 ); RC=$?
   [ "$RC" -eq 0 ] && bad "consecrate reported success after the full validation failed"
   expect_has "UNVALIDATED"
   # Last, so this message is the one that surfaces: the marker is the whole postcondition.
@@ -1952,7 +1984,7 @@ mkv1() { # devolve the pristine workspace into an authentic v0.1-shaped mine
   # a bracketed kind as legacy HISTORY outside the gate (the zone rule postdates v0.1)
   printf -- '\n- [contradiction] 3장 — R1에서 수정 완료\n' >> "$W/documents/d1/review.md"
   rm -f "$W/truths/verify-ledger.tsv"
-  ( cd "$W" && bash .weavedoc/bin/weavedoc reindex >/dev/null 2>&1 )
+  ( cd "$W" && "${WDRUN[@]}" reindex >/dev/null 2>&1 )
 }
 acct_upgrade_uptodate() {
   # Idempotence starts at the reader: right after an apply, a re-check reports zero work.
@@ -2215,7 +2247,7 @@ e2e_user_answer_chain() {
   printf -- '---\nid: m002\ntitle: 사용자 답변 — 지연 배상\norigin: user-answer\nrole: 계약서\ntopics: [지연]\nformat: md\nsource_path: inbox/answer.md\nadded: 2026-07-02\nstatus: converted\nsummary: 지연 배상 한도에 대한 사용자 답변.\n---\n\n지연 배상 한도는 계약금액의 20%%다.\n' > "$W/materials/m002/converted.md"
   printf '| m002 | 사용자 답변 — 지연 배상 | 계약서 | converted |\n' >> "$W/catalog.md"
   printf -- '---\nid: t002\nclaim: "지연 배상 한도는 계약금액의 20%%다"\nsource: m002\ntags: [지연]\nstatus: ok\nprovenance: stated\n---\n\n지연 배상 한도는 계약금액의 20%%다.\n' > "$W/truths/t002.md"
-  ( cd "$W" && bash .weavedoc/bin/weavedoc reindex >/dev/null 2>&1 )
+  ( cd "$W" && "${WDRUN[@]}" reindex >/dev/null 2>&1 )
   mkdoc2
   sed -i 's/^cited_truths: \[t001\]$/cited_truths: [t001, t002]/' "$W/documents/d2/plan.md"
   printf -- '\n지연 배상 한도는 계약금액의 20%%다. <!-- t:t002 -->\n' >> "$W/documents/d2/draft.md"
@@ -2312,7 +2344,7 @@ block_gate_context_quoted_citations() {
   # cited_truths: ["t001"] — the quoted spelling. The context parser dropped the quotes' ids
   # silently, so a cited truth could move without staling the review.
   sed -i 's/^cited_truths: \[t001\]$/cited_truths: ["t001"]/' "$W/documents/d1/plan.md"
-  ( cd "$W" && bash .weavedoc/bin/weavedoc seal-review d1 draft >/dev/null 2>&1 )
+  ( cd "$W" && "${WDRUN[@]}" seal-review d1 draft >/dev/null 2>&1 )
   sed -i 's/^claim: "위약금은 계약금액의 10%다"$/claim: "위약금은 계약금액의 11%다"/' "$W/truths/t001.md"
   vrun validate; expect_block "review context changed"
 }
@@ -2335,7 +2367,7 @@ block_consecrate_interrupted_detected() {
   # hold an UNVALIDATED candidate and the backup is the only original. Re-running used to delete
   # that backup first — now it refuses until a human restores or clears.
   rm -f "$W/documents/d1/final.md"
-  ( cd "$W" && bash .weavedoc/bin/weavedoc seal-review d1 draft >/dev/null 2>&1 )
+  ( cd "$W" && "${WDRUN[@]}" seal-review d1 draft >/dev/null 2>&1 )
   printf '원본 final이었던 것\n' > "$W/documents/d1/.final.bak"
   vrun consecrate d1
   expect_block "interrupted"
@@ -2476,7 +2508,7 @@ block_consecrate_dual_final() {
   # final/ aside, overwrote final.md with the candidate (no backup), validated a mine where the
   # dual state had vanished, then deleted the backup — BOTH prior artifacts destroyed, exit 0.
   # Consecrate now refuses before its first write, same reading as GATE-DUAL-FINAL.
-  ( cd "$W" && bash .weavedoc/bin/weavedoc seal-review d1 draft >/dev/null 2>&1 )
+  ( cd "$W" && "${WDRUN[@]}" seal-review d1 draft >/dev/null 2>&1 )
   mkdir -p "$W/documents/d1/final"
   printf '보존되어야 할 디렉터리 산출물\n' > "$W/documents/d1/final/01.md"
   vrun consecrate d1
@@ -2570,7 +2602,7 @@ block_gate_draft_partial_tuple() {
   # review with a partial tuple is the same tamper shape one consecration earlier.
   mk_v2
   mkdoc2
-  ( cd "$W" && bash .weavedoc/bin/weavedoc seal-review d2 draft >/dev/null 2>&1 )
+  ( cd "$W" && "${WDRUN[@]}" seal-review d2 draft >/dev/null 2>&1 )
   sed -i '/^reviewed_kind:/d' "$W/documents/d2/review.md"
   vrun validate; expect_block "[GATE-UNSEALED]"
 }
@@ -2579,7 +2611,7 @@ block_gate_draft_seal_marker() {
   # hands the demotion a whole review round to sit undetected.
   mk_v2
   mkdoc2
-  ( cd "$W" && bash .weavedoc/bin/weavedoc seal-review d2 draft >/dev/null 2>&1 )
+  ( cd "$W" && "${WDRUN[@]}" seal-review d2 draft >/dev/null 2>&1 )
   sed -i '1a review_legacy: 2026-01-01' "$W/documents/d2/review.md"
   vrun validate; expect_block "[GATE-SEAL-MARKER]"
 }
@@ -2617,7 +2649,7 @@ block_consecrate_marker_detected() {
   # existed to back up). Re-running must refuse on the marker alone — and the recovery guidance
   # must say COMPARE FIRST: a crash before the swap leaves the ORIGINAL at final, so "remove
   # final" as a blanket instruction deletes the wrong file (third cold review).
-  ( cd "$W" && bash .weavedoc/bin/weavedoc seal-review d1 draft >/dev/null 2>&1 )
+  ( cd "$W" && "${WDRUN[@]}" seal-review d1 draft >/dev/null 2>&1 )
   printf 'started: 2026-08-03\ndoc: d1\n' > "$W/documents/d1/.consecrate.inflight"
   vrun consecrate d1
   expect_block "interrupted"
@@ -2629,7 +2661,7 @@ block_validate_env_injection_ignored() {
   # environment into shell variables, so `WD_CONSEC_DOC=d1 weavedoc validate` handed the
   # consecrate-only exemption to ANY external caller (third cold review P0-2 — reproduced).
   printf 'started: 2026-08-03\ndoc: d1\n' > "$W/documents/d1/.consecrate.inflight"
-  OUT=$( ( cd "$W" && WD_CONSEC_DOC=d1 $TO bash .weavedoc/bin/weavedoc validate ) 2>&1 ); RC=$?
+  OUT=$( ( cd "$W" && WD_CONSEC_DOC=d1 $TO "${WDRUN[@]}" validate ) 2>&1 ); RC=$?
   expect_block "[CONSEC-INTERRUPTED]"
 }
 block_consecrate_bad_docid() {
@@ -2642,7 +2674,7 @@ acct_consecrate_no_residue() {
   # The clean path leaves nothing behind: final promoted, no marker, no backup — the artifacts
   # exist only while the transaction is genuinely open.
   rm -f "$W/documents/d1/final.md"
-  ( cd "$W" && bash .weavedoc/bin/weavedoc seal-review d1 draft >/dev/null 2>&1 )
+  ( cd "$W" && "${WDRUN[@]}" seal-review d1 draft >/dev/null 2>&1 )
   vrun consecrate d1
   expect_pass
   [ -f "$W/documents/d1/final.md" ] || bad "final.md was not created"
@@ -2799,7 +2831,8 @@ meta_diag_code_table() {
   # Two emission shapes, both harvested: shell `prob CODE "…"` / `warn CODE "…"`, and awk
   # `prob("[CODE] " …)`. Comment lines are skipped so the doc-comment's own `prob CODE` example
   # is not mistaken for an emitted code.
-  local B="$REPO/.weavedoc/bin/weavedoc" F="$REPO/.weavedoc/FORMATS.md" bad="" c emitted
+  src_shape_unported && return
+  local B="$REPO/$WD_ENTRY" F="$REPO/.weavedoc/FORMATS.md" bad="" c emitted
   emitted=$( { grep -vE '^[[:space:]]*#' "$B" | grep -oE '\b(prob|warn) [A-Z][A-Z0-9-]+' | awk '{print $2}'
                grep -oE 'prob\("\[[A-Z][A-Z0-9-]+' "$B" | sed 's/.*\[//'; } | grep -v '^CODE$' | LC_ALL=C sort -u)
   for c in $emitted; do
@@ -2815,7 +2848,8 @@ meta_uncoded_ratchet() {
   # Every SHELL prob site carries a code; the two matches allowed are emit_probs' router lines.
   # awk-emitted diagnostics are wave 11b — this ratchet keeps the shell side at zero meanwhile.
   local n
-  n=$(grep -E '\bprob "' "$REPO/.weavedoc/bin/weavedoc" | grep -cvE '\$code|\$line' || true)
+  src_shape_unported && return
+  n=$(grep -E '\bprob "' "$REPO/$WD_ENTRY" | grep -cvE '\$code|\$line' || true)
   OUT="uncoded shell prob sites: ${n:-?}"; RC=0
   if [ "${n:-1}" -eq 0 ]; then ok; else bad "shell prob sites without a code: $n (the ratchet allows zero)"; fi
 }
@@ -2870,21 +2904,21 @@ pass_retag_leaves_body_alone() {
   printf -- '---\nid: t002\nclaim: "자료가 선언한 태그 줄"\nsource: m001\ntags: [대금]\nstatus: ok\n---\n\ntags: [위약, 대금]\n' > "$W/truths/t002.md"
   printf -- '- 태그 선언 줄: t002\n' >> "$W/truths/coverage.md"
   printf -- '- added: t002 (2026-07-30)\n' >> "$W/truths/changelog.md"
-  ( cd "$W" && bash .weavedoc/bin/weavedoc reindex >/dev/null 2>&1 )
+  ( cd "$W" && "${WDRUN[@]}" reindex >/dev/null 2>&1 )
   vrun validate; expect_pass
-  ( cd "$W" && bash .weavedoc/bin/weavedoc retag 위약 벌칙 >/dev/null 2>&1 )
+  ( cd "$W" && "${WDRUN[@]}" retag 위약 벌칙 >/dev/null 2>&1 )
   OUT=$(cat "$W/truths/t002.md")
   expect_has "tags: [위약, 대금]"      # the BODY quote is untouched
   expect_hasnt "tags: [벌칙, 대금]"    # nothing rewrote it
   vrun validate; expect_pass           # and the seal still holds
 }
 pass_retag_still_rewrites_frontmatter() {
-  ( cd "$W" && bash .weavedoc/bin/weavedoc retag 위약 벌칙 >/dev/null 2>&1 )
+  ( cd "$W" && "${WDRUN[@]}" retag 위약 벌칙 >/dev/null 2>&1 )
   OUT=$(grep '^tags:' "$W/truths/t001.md"); expect_has "벌칙"
 }
 pass_crlf_retag() {
   printf -- '---\r\nid: t002\r\nclaim: "대금은 5천만원이다"\r\nsource: m001\r\ntags: [대금]\r\nstatus: ok\r\n---\r\n\r\n제3조 대금은 5천만원으로 한다.\r\n' > "$W/truths/t002.md"
-  ( cd "$W" && bash .weavedoc/bin/weavedoc retag 대금 금액 >/dev/null 2>&1 )
+  ( cd "$W" && "${WDRUN[@]}" retag 대금 금액 >/dev/null 2>&1 )
   # Through od, not grep: MSYS grep reads files in text mode, so a CR-matching pattern never fires
   # and the test reported every CRLF file as stripped.
   hascr() { od -c "$1" | grep -qF '\r'; }
@@ -2898,7 +2932,7 @@ pass_space_in_path() {
   local sw="$WORK/space-$$/with space/proj"
   rm -rf "$WORK/space-$$" 2>/dev/null; mkdir -p "$WORK/space-$$/with space"
   cp -r "$PRISTINE" "$sw"
-  OUT=$( ( cd "$sw" && $TO bash .weavedoc/bin/weavedoc validate ) 2>&1 ); RC=$?
+  OUT=$( ( cd "$sw" && $TO "${WDRUN[@]}" validate ) 2>&1 ); RC=$?
   expect_pass
   expect_has "materials 1"
   rm -rf "$WORK/space-$$" 2>/dev/null
@@ -2933,8 +2967,8 @@ pass_shipped_templates() {
   printf '# 자료 목록\n\n| id | 제목 |\n|---|---|\n| m001 | 계약서 |\n' > "$p/catalog.md"
   printf '# Coverage\n\n## m001\n\n- 위약금: t001\n' > "$p/truths/coverage.md"
   cp "$REPO/.weavedoc/templates/review.md" "$p/documents/d1/review.md"
-  ( cd "$p" && bash .weavedoc/bin/weavedoc reindex >/dev/null 2>&1 )
-  OUT=$( ( cd "$p" && $TO bash .weavedoc/bin/weavedoc validate ) 2>&1 ); RC=$?
+  ( cd "$p" && "${WDRUN[@]}" reindex >/dev/null 2>&1 )
+  OUT=$( ( cd "$p" && $TO "${WDRUN[@]}" validate ) 2>&1 ); RC=$?
   expect_pass
 }
 
@@ -2943,13 +2977,13 @@ pass_shipped_templates() {
 acct_clean() { vrun validate; expect_has "truths 1 (1 sealed)"; }
 acct_sealfail() {
   printf -- '---\nid: t002\nclaim: "지체상금은 일 0.1%%다"\nsource: m001\ntags: [위약]\nstatus: ok\n---\n\n제9조 지체상금은 일 0.1%%로 한다.\n' > "$W/truths/t002.md"
-  ( cd "$W" && bash .weavedoc/bin/weavedoc reindex >/dev/null 2>&1 )
+  ( cd "$W" && "${WDRUN[@]}" reindex >/dev/null 2>&1 )
   vrun validate; expect_has "1 sealed · 1 seal FAILED"
 }
 acct_tombstone() {
   printf -- '---\nid: t002\nclaim: "지체상금 조항이 있다"\nsource: m001\ntags: [위약]\nstatus: retracted\n---\n' > "$W/truths/t002.md"
   printf -- '- removed: t002 (2026-07-30) — 원문에 없었다\n' >> "$W/truths/changelog.md"
-  ( cd "$W" && bash .weavedoc/bin/weavedoc reindex >/dev/null 2>&1 )
+  ( cd "$W" && "${WDRUN[@]}" reindex >/dev/null 2>&1 )
   vrun validate; expect_has "1 sealed · 1 tombstone"
 }
 acct_notchecked() {
@@ -3009,9 +3043,15 @@ if [ -n "$FILTER" ]; then CASES=$(printf '%s\n' "$CASES" | grep -F "$FILTER" || 
 
 echo "weavedoc regression — $(cd "$REPO" && git rev-parse --short HEAD 2>/dev/null) / bundle $(cat "$REPO/.weavedoc/VERSION") / $(printf '%s\n' "$CASES" | wc -l | tr -d ' ') cases, -j$JOBS"
 echo "  env: $(uname -sr) · bash ${BASH_VERSION%%(*} · cache key $KEY"
-bash -n "$REPO/.weavedoc/bin/weavedoc" || { echo "!! bin/weavedoc does not parse"; exit 2; }
+# Syntax-check the entrypoint before building a fixture: a runtime that does not parse fails every
+# case identically and buries the one line that says why. Runner-aware, since the check is.
+case "$WD_RUNNER" in
+  bash) bash -n "$REPO/$WD_ENTRY" || { echo "!! $WD_ENTRY does not parse"; exit 2; } ;;
+  node) node --check "$REPO/$WD_ENTRY" || { echo "!! $WD_ENTRY does not parse"; exit 2; } ;;
+  *)    echo "!! no syntax check known for runner '$WD_RUNNER' — add one before trusting a green run"; exit 2 ;;
+esac
 mkpristine
-OUT=$( ( cd "$PRISTINE" && bash .weavedoc/bin/weavedoc validate ) 2>&1 ) || {
+OUT=$( ( cd "$PRISTINE" && "${WDRUN[@]}" validate ) 2>&1 ) || {
   echo "!! the pristine fixture does not validate — every case below would be meaningless"
   printf '%s\n' "$OUT" | sed 's/^/   | /'; exit 2
 }
