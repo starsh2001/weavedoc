@@ -5,10 +5,9 @@
 // are in real data: a comment that is not a comment, a value that keeps its own '#', a key spelled
 // with a dot.
 import { readFileSync, existsSync } from 'node:fs'
-import { fmKey, fmVal, isFmLine } from './core.mjs'
+import { fmKey, fmVal, isFmLine, splitLines } from './core.mjs'
 
 const readOr = (p, fb = '') => { try { return readFileSync(p, 'utf8') } catch { return fb } }
-const splitLines = s => s.split('\n').map(l => (l.endsWith('\r') ? l.slice(0, -1) : l))
 
 // ---- schema ------------------------------------------------------------------------------
 // Flat `key: value`, first spelling of a key wins. The value keeps its trailing whitespace — the

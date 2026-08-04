@@ -8,6 +8,21 @@
 //
 // Nothing here reads the filesystem or prints — pure rules, so they can be tested as a table.
 
+// ---- how a line is read -------------------------------------------------------------------
+// ONE spelling, because the bash runtime has two and they disagree by platform. Its explicit
+// readers (has_fm, count_headings, the gaps scanner) strip a trailing CR by hand; its awk readers
+// do not — and MSYS gawk strips CR itself while Linux gawk keeps it. Measured 2026-08-04:
+//     printf 'a\r\nb\r\n' | awk '{print}'   ->  MSYS: a\nb\n     Linux: a\r\nb\r\n
+// So the SAME mine already reads differently on the two platforms today, and a CRLF checkout is
+// the normal state of a Windows working tree. The port follows the explicit readers — strip it —
+// which is the codebase's stated intent and makes the answer platform-independent, which is the
+// whole reason for the port. A trailing empty element (from a final newline) is not a line.
+export function splitLines (s) {
+  const l = s.split('\n')
+  if (l.length && l[l.length - 1] === '') l.pop()
+  return l.map(x => (x.endsWith('\r') ? x.slice(0, -1) : x))
+}
+
 // ---- id spelling --------------------------------------------------------------------------
 // The single definition of "how a number is spelled as an id", used both to resolve a file and to
 // reject a file spelling its number any other way — so lookup and naming convention cannot drift.

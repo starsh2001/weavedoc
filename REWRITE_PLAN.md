@@ -115,6 +115,24 @@ truths 진단 두 종류가 **절대경로**를 메시지에 박는다. 나머�
 
 `tests/foundation-mine-parity.sh`는 그때까지 광산 루트를 `<MINE>`으로 정규화하고 매 실행마다 그 사실을 출력한다. **그 정규화가 이 결정을 대신하게 두지 말 것.**
 
+### 이식이 드러낸 현행 런타임의 잠복 차이 — CRLF (2c에서 발견)
+
+측정(2026-08-04):
+
+```
+printf 'a\r\nb\r\n' | awk '{print}'
+  MSYS gawk  -> a\nb\n      (\r을 벗긴다)
+  Linux gawk -> a\r\nb\r\n  (유지한다)
+```
+
+**같은 광산이 Windows와 Linux에서 이미 다르게 읽힌다.** `nocomment`가 그 위에 서 있고, consecration 게이트·gaps 계수·섹션 추출이 다시 그 위에 선다. CRLF 체크아웃은 Windows 작업트리의 정상 상태다(git autocrlf).
+
+코드베이스는 이 문제를 **일부만** 방어한다: `has_fm`·`count_headings`·gaps 스캐너는 `\r`을 손으로 벗기는데, awk 리더들은 플랫폼에 맡긴다. 즉 의도는 "벗긴다"인데 철자가 두 개다.
+
+**포트는 벗기는 쪽으로 통일했다** — 명시적 리더들의 의도와 같고, 무엇보다 Node가 세 플랫폼에서 같은 답을 낸다(이식의 목적 그 자체). 줄 읽기는 `core.mjs`의 `splitLines` 하나로 모았다.
+
+**남는 일**: bash 판에도 같은 통일을 적용할지는 별건이다. 지금은 Linux에서만 `\r`이 남고, 소비자 대부분이 다시 벗기므로 실피해가 확인되지 않았다 — 실피해 사례가 나오면 §11에 상정한다.
+
 **옮길 수 없는 세 부류** — 소리 없이 빠지면 안 되므로 각각 대체 케이스를 만들고, 못 만들면 여기 남긴다:
 - `bash -n` 파싱 검사, `preflight_gnu`(GNU 도구 확인) — 대상이 사라진다. `node --check`가 전자의 자리를 대신하고, 후자는 **필요 자체가 없어진다**
 - `rm` 셰임 고장 주입(`block_consecrate_validate_fail_final_unremovable`) — PATH 셰임이 안 통한다. 주입 지점을 인터페이스로 열어 테스트한다

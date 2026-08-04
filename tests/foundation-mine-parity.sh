@@ -46,6 +46,27 @@ esc() { local s=$1; s=${s//\\/\\\\}; s=${s//$'\n'/\\n}; s=${s//$'\t'/\\t}; print
   for kk in "${!FMV[@]}"; do
     printf 'fm\t%s\t%s\t%s\n' "${kk%%$'\037'*}" "${kk#*$'\037'}" "$(esc "${FMV[$kk]}")"
   done
+
+  # Comment stripping and the verdict that guards it. nocomment is compared by digest — one line per
+  # input line across ~300 files still fails loudly while staying readable.
+  sha() { sha256sum | cut -c1-16; }
+  for f in "${files[@]}"; do
+    printf 'nocomment\t%s\t\t%s\n' "$f" "$(nocomment < "$f" 2>/dev/null | sha)"
+    comment_balanced "$f"; printf 'cbal\t%s\t\t%s\n' "$f" "$?"
+  done
+
+  sect_files=(gaps.md catalog.md truths/verify.md truths/coverage.md)
+  for d in documents/*/; do [ -d "$d" ] && { sect_files+=("${d}review.md" "${d}plan.md"); }; done
+  for rel in "${sect_files[@]}"; do
+    [ -f "$rel" ] || continue
+    for h in Open Accepted "Verified units" Adjudications "Human queue" "Fidelity violations" legacy m001 "자료 목록"; do
+      printf 'sect1\t%s\t%s\t%s\n'   "$rel" "$h" "$(section_body  "$rel" "$h" | sha)"
+      printf 'sect2\t%s\t%s\t%s\n'   "$rel" "$h" "$(section_body2 "$rel" "$h" | sha)"
+      printf 'sectall\t%s\t%s\t%s\n' "$rel" "$h" "$(section_all   "$rel" "$h" | sha)"
+      for lv in 0 1 2; do dup_section "$rel" "$h" "$lv" >/dev/null; printf 'dup%s\t%s\t%s\t%s\n' "$lv" "$rel" "$h" "$REPLY"; done
+      dup_section "$rel" "$h" 2 raw >/dev/null; printf 'dupraw\t%s\t%s\t%s\n' "$rel" "$h" "$REPLY"
+    done
+  done
 ) | LC_ALL=C sort > "$BOUT"
 
 node "$REPO/tests/foundation-mine-node.mjs" "$MINE" | LC_ALL=C sort > "$NOUT" \
