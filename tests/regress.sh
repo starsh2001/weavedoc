@@ -181,9 +181,13 @@ pass_locale_scope_census_match() {
   printf -- '- added: t002 (2026-07-30)\n' >> "$W/truths/changelog.md"
   ( cd "$W" && bash .weavedoc/bin/weavedoc reindex >/dev/null 2>&1 )
   vrun attest verified 2 "$(printf '\xb0\xcb\xc1\xf5')" m001 t001
+  # STDOUT ONLY. The verdict is on stdout; stderr carries gawk's "invalid multibyte data" notes and,
+  # on a machine where ko_KR.UTF-8 was never generated, bash's setlocale warnings. Comparing stderr
+  # too would fail the case for the absence of a locale rather than for a disagreement — the same
+  # safe-degradation property pass_locale_emoji_claim documents (no locale → the run is C → match).
   for cmd_ in scope census; do
-    sc_=$( ( cd "$W" && LC_ALL=C $TO bash .weavedoc/bin/weavedoc "$cmd_" ) 2>&1 )
-    sk_=$( ( cd "$W" && LC_ALL= LANG=ko_KR.UTF-8 $TO bash .weavedoc/bin/weavedoc "$cmd_" ) 2>&1 )
+    sc_=$( ( cd "$W" && LC_ALL=C $TO bash .weavedoc/bin/weavedoc "$cmd_" ) 2>/dev/null )
+    sk_=$( ( cd "$W" && LC_ALL= LANG=ko_KR.UTF-8 $TO bash .weavedoc/bin/weavedoc "$cmd_" ) 2>/dev/null )
     OUT="[$cmd_ · LC_ALL=C]
 $sc_
 [$cmd_ · ko_KR.UTF-8]

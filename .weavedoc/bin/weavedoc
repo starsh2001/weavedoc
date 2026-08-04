@@ -3519,6 +3519,19 @@ cmd_attest() { # attest <verified|failed> <round> <standard> <id...> — the ver
   return 0
 }
 cmd_scope() {
+  # BYTE SEMANTICS FOR THE WHOLE COMMAND (v0.3.6). Not a duplicate of the per-awk pins below: the
+  # reader that broke here is BASH ITSELF. Under a multibyte locale `read` silently yields NOTHING
+  # for a line holding an invalid multibyte sequence — both `IFS=$'\t' read -r a b` and the
+  # `IFS= read -r l` + `${l%%…}` form, and piping the data through `LC_ALL=C cat` does not help
+  # because it is the READING shell's locale that decides. The ledger's free-form `standard` column
+  # is exactly where such bytes arrive (a Korean console writes CP949), and the LROW map below came
+  # back EMPTY under ko_KR.UTF-8 on glibc: every material read as unverified while LC_ALL=C called
+  # the same mine digest-bound. MSYS does not reproduce it, so the local sweep was green and the
+  # Linux CI leg was not — the §3 policy pinned every content-parsing awk and had no clause for
+  # bash's own readers. scope is pure verdict computation and renders no project text, so pinning
+  # the command is the honest scope for the fix. (A blanket top-level `export LC_ALL=C` stays
+  # rejected — see the v0.3.1 note at the top: it breaks retag's Korean gsub.)
+  local LC_ALL=C
   local ledger ledger_bad ledger_sbad
   ledger=$(ledger_rows)
   ledger_sbad=$(ledger_rows_badstruct | tr '\n' ' ')
