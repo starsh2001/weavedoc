@@ -4,6 +4,23 @@
 
 ---
 
+## 2026-08-04.3
+
+**4차 cold review 잔여 — 반나절 위생 패치.** 4차 리뷰가 P0 3건이라 했으나 재판정 결과 **심각도 인플레이션**으로 결론: 손 편집·조건 결합으로만 열리는 틈이고 긴급하지 않다. 다만 수리가 싸고 방치하면 원칙이 장식이 되므로 전부 고쳤다. 이번 라운드부터 **새 작업 규율** 적용 — 커밋 전 자기-적대 체크리스트(계산-소비 순서 · 실패 분기 전수 · 관용×noise 합성 · 로케일/플랫폼 · m/t·validate/scope 대칭), **수정 자체를 공격하는 케이스**, 침습 유닛은 **커밋 전 콜드 서브에이전트 diff 리뷰**.
+
+- **scope 격리 비대칭 (유닛 1)** — `LROW` 맵이 unknown-verdict 격리 **앞에서** 만들어져, truth 레인은 필터된 장부를 쓰는데 material 레인만 격리 전 행을 읽었다. 오타 난 verdict가 자료에서는 digest-bound로 세이고 truth에서는 "아무것도 보증 안 함"으로 세이던 상태. 맵 구축을 필터 뒤로.
+  **콜드 diff 리뷰가 이 수정의 부작용을 잡았다**: 격리가 v1 `status: verified` 폴백을 열어, 바이트가 바뀐 자료가 `stale`(빚)에서 `legacy-unbound`(빚 아님)로 **내려갔다** — 오타 하나가 할 일을 줄인 것. **§11 결정(사용자 2026-08-04): 격리 = 증거 없음.** 격리 행은 유닛을 곧장 unverified로 보내고 더 약한 폴백을 열지 않는다. **m·t 두 레인 동일** — truth 레인의 같은 선재 구멍(markdown `## Verified units` 언급이 격리 행을 legacy-unbound로 구제하던 것)도 같은 커밋에서 닫았다. 기각: 폴백 유지(오타가 빚을 줄임) · verdict만 불신하고 digest 유지(격리의 뜻이 둘이 됨).
+- **gaps noise가 bullet 단위 (유닛 2)** — 배포된 플레이스홀더 bullet을 그대로 두고 **들여쓴 continuation에 실제 내용을 쓴 항목이 0건으로** 세였다. `required`가 자기가 사려던 바로 그 부채를 통과시킨 것. 판정을 **논리 entry(bullet + continuation 묶음)** 단위로 옮기고, bullet 규칙의 **자기 remainder 스펠링을 그대로 재사용**(둘째 파서 금지). entry당 1건 계상, fail-closed.
+- **consecrate validate-실패 분기 (유닛 3)** — abort·mv-실패 분기는 marker를 지우기 전에 postcondition을 검증하는데 이 분기만 안 했다. `rm -rf "$fin"`의 결과를 믿었고, **복원할 원본이 없는 최초 consecration**에서는 final 자리를 한 번도 보지 않고 marker를 지웠다 — 거부된 **미검증** candidate가 final 이름을 달고 아무 흔적 없이 남는다. 세 분기 한 규칙. 고장 주입 케이스(`rm` 셰임)로 red 확인.
+- **FM 값 규칙 단일화 + 로케일 잔여 (유닛 4)** — scope의 truth 분류기가 **사설 status 파서**를 들고 있었고 그건 따옴표를 벗기지 않았다: `status: "retracted"`가 validate에는 tombstone, scope에는 **live**. census는 같은 규칙의 세 번째 사본. `FM_KV_AWK`가 `fmkey`/`fmval`을 노출하고 셋 다 그걸 쓴다(`emitkv` 동작 불변).
+  로케일 핀(§3 정책: 콘텐츠 파싱 awk는 `LC_ALL=C`, retag 재작성 awk만 문서화된 예외): scope truth awk · `mat_digest`(**digest에 들어갈 바이트를 고르는 awk** — 모든 검증 판정이 이 숫자를 탄다) · census status awk · scope 격리 awk 2개 · 공유 마크다운 리더 5종(`nocomment`·`comment_balanced`·`section_body`·`section_body2`·`section_all` — gaps/review/verify/coverage가 전부 이걸 쓴다).
+  **그리고 awk가 아니라 grep 하나**: `strows`가 장부를 무핀 `grep -E '^t[0-9]'`로 잘랐다. 장부의 자유 텍스트 `standard` 열은 유효하지 않은 UTF-8을 담을 수 있고(한국어 콘솔이 CP949로 쓴다), GNU grep은 그런 스트림에 멀티바이트 로케일에서 **`Binary file (standard input) matches` 한 문장**을 돌려준다. scope는 "검증된 truth 0개"로 읽고 markdown 장부에서 부채를 재구성하며 **그 문장에서 유령 id를 만들어냈다**. 픽스처 실측: 같은 광산이 `LC_ALL=C`에서 `1 verified (digest-bound)`, `ko_KR.UTF-8`에서 `0 verified · 1 legacy-unbound`. `vids`(사람이 쓴 `## Verified units` 산문)에 같은 핀.
+- **문서·CI 정합 (유닛 5)** — 계획서 상태줄이 "다음: v0.3.4 · macOS census 4건"으로 네 릴리스만큼 스테일 · **§9 완료조건은 macOS best-effort, §11은 required로 자기모순**(승격 커밋이 체크리스트 줄을 빠뜨림) · `tests/README`가 3-OS를 push/PR에서도 도는 것처럼 읽힘(실제는 tag·dispatch 한정) · clean-worktree 스텝에 `if: always()` 없음 — **두 job 모두**. 스윕이 실패한 run이야말로 트리가 더럽혀졌을 가능성이 가장 높은데 바로 그때 검사가 건너뛰어졌다.
+
+검증: `bash -n` 통과 · 회귀 **342/342**(-j3 클린 완주 **36분 47초**, 신규 10 — 전부 red-first 확인, 유닛 1·4는 엔진을 임시 되돌려 red 재확인) · 수정을 공격하는 케이스 4건(폴백 경계 · entry당 중복 계수 · 플레이스홀더 continuation · stale digest) · scope/census가 C와 ko_KR.UTF-8에서 **바이트 동일** 실측 · doccheck ✓.
+
+스윕 실측 갱신: 342케이스 -j3 = **36m47s**(직전 332케이스 31.5분 대비 케이스 10개 증가분). fork 직렬화 지배는 그대로.
+
 ## 2026-08-04.2
 
 **P1 2단계 + 로케일 독립 판정 복원(잠복 결함 — 실광산이 곧 밟을 지뢰였음).**
