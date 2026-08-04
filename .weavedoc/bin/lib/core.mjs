@@ -1,0 +1,102 @@
+// WeaveDoc foundations — the rules every command stands on.
+//
+// These are ports of the bash runtime's shared judges, and they are the layer where bash drifted
+// most: on 2026-08-04 alone, "how a frontmatter value is read" had THREE spellings, and scope's
+// private copy never peeled quotes, so `status: "retracted"` was a tombstone to validate and a live
+// truth to scope. Here each rule is ONE exported function, and tests/foundation-parity.sh feeds the
+// same table to the bash originals and to these, so agreement is measured rather than assumed.
+//
+// Nothing here reads the filesystem or prints — pure rules, so they can be tested as a table.
+
+// ---- id spelling --------------------------------------------------------------------------
+// The single definition of "how a number is spelled as an id", used both to resolve a file and to
+// reject a file spelling its number any other way — so lookup and naming convention cannot drift.
+// Base-10 is forced (bash: `10#$n`), or `010` would read as octal.
+export function canonId (s) {
+  if (typeof s !== 'string' || s === '') return null
+  const p = s[0]
+  if (p !== 't' && p !== 'm') return null
+  const n = s.slice(1)
+  if (n === '' || /[^0-9]/.test(n)) return null
+  return p + String(parseInt(n, 10)).padStart(3, '0')
+}
+
+// ---- dates --------------------------------------------------------------------------------
+// One judge for every date in the mine: shape AND value. 2026-99-99 fails, and so does an
+// unpadded 2026-7-3 — the format requires zero padding. Full Gregorian leap rule.
+export function isDate (s) {
+  if (typeof s !== 'string') return false
+  if (!/^[0-9]{4}-[0-9]{2}-[0-9]{2}$/.test(s)) return false
+  const y = parseInt(s.slice(0, 4), 10)
+  const m = parseInt(s.slice(5, 7), 10)
+  const d = parseInt(s.slice(8, 10), 10)
+  if (m < 1 || m > 12) return false
+  let max = 31
+  if (m === 4 || m === 6 || m === 9 || m === 11) max = 30
+  else if (m === 2) max = (y % 4 === 0 && (y % 100 !== 0 || y % 400 === 0)) ? 29 : 28
+  return d >= 1 && d <= max
+}
+
+// ---- list fields --------------------------------------------------------------------------
+// `[a, b]` -> ["a","b"]. Brackets and double quotes are stripped first, then the split is on comma
+// ONLY, so an item containing spaces survives intact. Empty items are dropped.
+export function listField (s) {
+  if (typeof s !== 'string') return []
+  const bare = s.replace(/[[\]"]/g, '')
+  return bare.split(',').map(x => x.replace(/^[ \t]+/, '').replace(/[ \t]+$/, '')).filter(x => x !== '')
+}
+
+// Pipe-separated schema lists. The splitting is bash word splitting with IFS='|', which is NOT the
+// same as "split and drop empties" (the differential caught this): with a NON-whitespace IFS every
+// delimiter delimits, so interior and leading empty fields SURVIVE — `a||b` is three fields, `|a|`
+// is two. Only a single trailing delimiter adds nothing, and an empty string is zero fields.
+export function pipes (s) {
+  if (typeof s !== 'string' || s === '') return []
+  const parts = s.split('|')
+  if (parts.length > 1 && parts[parts.length - 1] === '') parts.pop()
+  return parts
+}
+
+// The list holds EXACTLY this member — never a substring of one.
+export function inList (needle, list) {
+  return pipes(list).includes(needle)
+}
+
+// ---- placeholders -------------------------------------------------------------------------
+// An unfilled `{…}` placeholder is not a value (ruled 2026-07-31): write once took a placeholder
+// tone AS the document's tone. "Entirely ONE brace group" — a value that merely CONTAINS braces is
+// real content, and a value with two groups is not this shape either.
+export function isPlaceholder (s) {
+  if (typeof s !== 'string' || s === '') return false
+  if (!(s.startsWith('{') && s.endsWith('}'))) return false
+  if (s.indexOf('{') !== s.lastIndexOf('{')) return false
+  if (s.indexOf('}') !== s.lastIndexOf('}')) return false
+  return true
+}
+
+// ---- frontmatter value rule ---------------------------------------------------------------
+// THE rule, one spelling. A key is everything before the first colon; the value is the remainder
+// with leading whitespace removed, then — only when the value does not open with a quote — a
+// trailing YAML comment stripped; then trailing whitespace removed and one layer of surrounding
+// double quotes peeled. The quote check comes BEFORE comment stripping because a `#` inside a
+// quoted value is content, not a comment.
+export function fmKey (line) {
+  const i = line.search(/[ \t]*:/)
+  return i < 0 ? line : line.slice(0, i)
+}
+
+export function fmVal (line) {
+  const k = fmKey(line)
+  let v = line.slice(k.length).replace(/^[ \t]*:[ \t]*/, '')
+  if (!v.startsWith('"')) {
+    v = v.replace(/[ \t]+#.*$/, '')
+    if (v.startsWith('#')) v = ''
+  }
+  v = v.replace(/[ \t]+$/, '').replace(/^"/, '').replace(/"$/, '')
+  return v
+}
+
+// A frontmatter line at all? The shape the bash readers gate on before calling fmKey/fmVal.
+export function isFmLine (line) {
+  return /^[A-Za-z_][A-Za-z0-9_-]*[ \t]*:/.test(line)
+}
