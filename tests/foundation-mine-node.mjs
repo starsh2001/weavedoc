@@ -6,6 +6,7 @@ import { join } from 'node:path'
 import { createHash } from 'node:crypto'
 import { loadConfig, cfgPath, fmLoad, hasFm } from '../.weavedoc/bin/lib/read.mjs'
 import { nocomment, commentBalanced, sectionBody, sectionBody2, sectionAll, dupSection } from '../.weavedoc/bin/lib/sections.mjs'
+import { ledgerRows, ledgerRowsBadstruct, truthDigest, matDigest, artifactDigest } from '../.weavedoc/bin/lib/verify.mjs'
 
 const MINE = process.argv[2]
 if (!MINE) { process.stderr.write('usage: node foundation-mine-node.mjs <mine-dir>\n'); process.exit(2) }
@@ -69,6 +70,29 @@ for (const rel of SECT_FILES) {
     rows.push(`sectall\t${rel}\t${h}\t${sha(sectionAll(text, h))}`)
     for (const lv of [0, 1, 2]) rows.push(`dup${lv}\t${rel}\t${h}\t${dupSection(f, h, lv, false)}`)
     rows.push(`dupraw\t${rel}\t${h}\t${dupSection(f, h, 2, true)}`)
+  }
+}
+
+// ---- ledger + digests ----
+// The verification substrate. EVERY truth and material in the mine is digested here, because a
+// digest that disagrees is a verification verdict that disagrees, and there is no cheaper way to
+// find that out than to compute all of them and compare.
+const LEDGER = join(MINE, 'truths', 'verify-ledger.tsv')
+for (const r of ledgerRows(LEDGER)) rows.push(`ledrow\t${r.replace(/\t/g, ' ')}\t\t`)
+for (const b of ledgerRowsBadstruct(LEDGER)) rows.push(`ledbad\t${b}\t\t`)
+for (const t of dirList('truths')) {
+  if (!/^t[0-9]+\.md$/.test(t)) continue
+  rows.push(`tdigest\t${t}\t\t${truthDigest(join(MINE, 'truths', t))}`)
+}
+for (const m of dirList('materials')) {
+  const f = join(MINE, 'materials', m, 'converted.md')
+  if (!existsSync(f)) continue
+  rows.push(`mdigest\t${m}\t\t${matDigest(f)}`)
+}
+for (const d of dirList('documents')) {
+  for (const a of ['draft', 'final', 'draft.md', 'final.md']) {
+    const p = join(MINE, 'documents', d, a)
+    if (existsSync(p)) rows.push(`adigest\t${d}/${a}\t\t${artifactDigest(p)}`)
   }
 }
 

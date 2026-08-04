@@ -67,6 +67,23 @@ esc() { local s=$1; s=${s//\\/\\\\}; s=${s//$'\n'/\\n}; s=${s//$'\t'/\\t}; print
       dup_section "$rel" "$h" 2 raw >/dev/null; printf 'dupraw\t%s\t%s\t%s\n' "$rel" "$h" "$REPLY"
     done
   done
+  # The verification substrate: ledger rows as the readers see them, and EVERY unit's digest. A
+  # digest that disagrees is a verification verdict that disagrees.
+  ledger_rows          | while IFS= read -r r; do [ -n "$r" ] && printf 'ledrow\t%s\t\t\n' "${r//$'\t'/ }"; done
+  ledger_rows_badstruct | while IFS= read -r r; do [ -n "$r" ] && printf 'ledbad\t%s\t\t\n' "$r"; done
+  for f in truths/t[0-9]*.md; do [ -f "$f" ] && printf 'tdigest\t%s\t\t%s\n' "${f#truths/}" "$(truth_digest "$f")"; done
+  for d in materials/*/; do
+    [ -f "${d}converted.md" ] || continue
+    m=${d%/}; m=${m#materials/}
+    printf 'mdigest\t%s\t\t%s\n' "$m" "$(mat_digest "${d}converted.md")"
+  done
+  for d in documents/*/; do
+    [ -d "$d" ] || continue
+    dd=${d%/}; dd=${dd#documents/}
+    for a in draft final draft.md final.md; do
+      [ -e "$d$a" ] && printf 'adigest\t%s/%s\t\t%s\n' "$dd" "$a" "$(artifact_digest "$d$a")"
+    done
+  done
 ) | LC_ALL=C sort > "$BOUT"
 
 node "$REPO/tests/foundation-mine-node.mjs" "$MINE" | LC_ALL=C sort > "$NOUT" \
