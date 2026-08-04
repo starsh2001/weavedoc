@@ -107,13 +107,26 @@ stderr는 대조하지 않는다(구현마다 경고 문구가 다를 수밖에 
 
 §11의 2026-08-02 기각 사유였던 "배포 의존성 증가"는 **Go에 한해서는 반대 방향**이다(Python·Node였다면 맞는 지적이다). 스크립트의 `preflight_gnu()`와 CI macOS job의 `brew install` 단계가 통째로 사라진다.
 
-### 새로 생기는 부담 하나 — 코드 서명
+### 코드 서명 — 배달 경로가 결정한다 (조사 2026-08-04)
 
-bash 스크립트에는 없던 문제다. 서명되지 않은 바이너리는:
-- **macOS**: 다운로드 경로로 받으면 Gatekeeper가 격리한다(`com.apple.quarantine`). 사용자가 손으로 풀게 하는 것은 배포 품질이 아니다 → Apple Developer ID 서명 + notarization이 필요하다.
-- **Windows**: SmartScreen이 경고를 띄운다. 평판이 쌓이기 전까지는 Authenticode 서명이 필요하다.
+bash 스크립트에는 없던 문제지만, **인증서를 사는 문제가 아니라 배달 경로를 정하는 문제다.**
 
-**1단계 착수 전에 결정할 필요는 없지만, 6단계(전환) 전에는 결정해야 한다.** 선택지: ① 양쪽 인증서 구매(연간 비용) · ② 서명 없이 배포하고 설치 안내에 우회 절차를 명시 · ③ 사용자가 소스에서 빌드(그러면 Go 설치가 사용자 요구사항으로 돌아온다 — 위 표가 무효가 되므로 기본 경로로는 부적합).
+Gatekeeper와 SmartScreen은 **브라우저가 붙인 표시가 있는 파일에만** 발동한다. macOS의 `com.apple.quarantine`은 브라우저가 붙이고, Apple은 `curl`·`scp`·`git` 같은 유닉스 도구가 이를 붙이지 **않는** 것을 공식 동작으로 문서화하고 있다. Windows의 SmartScreen도 같은 구조로 브라우저가 붙이는 Mark-of-the-Web(Zone.Identifier)을 본다.
+
+| 배달 경로 | 서명 |
+|---|---|
+| `git clone` · 저장소에서 `.weavedoc/` 복사 | **불필요** |
+| `curl -L … -o weavedoc` · 설치 스크립트 | **불필요** |
+| 브라우저로 릴리스 zip 다운로드 | 필요 |
+
+**결정: 배달 경로를 git/curl로 고정하고 서명하지 않는다.** 현행 배포 모델(`.weavedoc/` 폴더를 프로젝트에 복사)이 이미 그 경로다.
+
+**기각한 대안**:
+- **양쪽 인증서 구매** — Windows는 Azure Trusted Signing(2026년 Azure Artifact Signing으로 개명) 월 $9.99가 최저가이고, macOS는 Apple Developer Program 연 $99 + `codesign`→`notarytool`→`stapler`. 비용보다 큰 문제는 **CLI 바이너리에 notarization 티켓을 staple할 수 없다는 것**이다(Mach-O는 이미 서명이 붙어 있어 불가). zip/pkg/dmg로 감싸 그 컨테이너에 staple해야 하므로 "바이너리 하나"라는 단순함이 깨진다. 참고: Azure 개인 가입에 Entra ID P2가 추가로 요구됐다는 보고가 있어, 이 길을 택한다면 결제 전 확인이 필요하다. 2024년부터 EV 인증서의 즉시 SmartScreen 통과 특혜는 사라져 EV를 살 이유는 없다.
+- **서명 없이 브라우저 다운로드를 기본 경로로 열고 우회 절차를 안내** — 사용자에게 `xattr -d`를 시키는 것은 배포 품질이 아니다.
+- **사용자가 소스에서 빌드** — Go가 다시 사용자 요구사항이 되어 위 표가 무효가 된다.
+
+**되돌림 조건**: 브라우저 다운로드가 실제 주요 배달 경로가 되면(예: 릴리스 페이지 안내가 표준이 되면) 서명을 재상정한다. 그때는 Windows부터 — 월 $9.99에 staple 제약이 없다.
 
 ## 4. 순서
 
