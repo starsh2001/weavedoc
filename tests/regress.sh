@@ -158,6 +158,40 @@ pass_locale_emoji_claim() {
   OUT=$( ( cd "$W" && LC_ALL=C $TO bash .weavedoc/bin/weavedoc validate ) 2>&1 ); RC=$?
   expect_pass
 }
+acct_scope_quoted_status_is_tombstone() {
+  # scope's truth classifier carried its OWN status parser, and that one never peeled the quotes.
+  # A perfectly legal `status: "retracted"` therefore read as a LIVE truth in scope while validate
+  # — which uses the shared frontmatter value rule — read the same bytes as a tombstone. Two
+  # parsers on one field is the drift class itself; scope uses the shared rule now.
+  printf -- '---\nid: t002\nclaim: "철회된 주장"\nsource: m001\ntags: [위약]\nstatus: "retracted"\nprovenance: stated\n---\n\n제7조 위약금은 계약금액의 10%%로 한다.\n' > "$W/truths/t002.md"
+  vrun scope
+  expect_has "truths     1 live"
+  expect_has "1 tombstone truth(s)"
+}
+pass_locale_scope_census_match() {
+  # The locale pin, extended to the two commands the sweep missed (2026-08-04). scope classified
+  # truths with an unpinned awk and SLICED THE LEDGER WITH AN UNPINNED GREP: GNU grep calls a
+  # stream holding invalid UTF-8 "binary" under a multibyte locale and prints one sentence instead
+  # of the matching rows, so scope reported different verify debt — and fabricated a ghost id out
+  # of the sentence — depending on which locale the shell happened to inherit. The `standard`
+  # column is free-form text a Korean console can easily fill with CP949 bytes. Byte semantics,
+  # one verdict. A missing ko_KR locale degrades to C, so this cannot false-fail where it is absent.
+  printf -- '---\nid: t002\nclaim: "품질 심사 — 🔴 즉시 수정, 🟡 확인 필요, 🟢 통과"\nsource: m001\ntags: [위약]\nstatus: ok\nprovenance: stated\n---\n\n제7조 위약금은 계약금액의 10%%로 한다.\n' > "$W/truths/t002.md"
+  printf -- '\n- 심사: t002\n' >> "$W/truths/coverage.md"
+  printf -- '- added: t002 (2026-07-30)\n' >> "$W/truths/changelog.md"
+  ( cd "$W" && bash .weavedoc/bin/weavedoc reindex >/dev/null 2>&1 )
+  vrun attest verified 2 "$(printf '\xb0\xcb\xc1\xf5')" m001 t001
+  for cmd_ in scope census; do
+    sc_=$( ( cd "$W" && LC_ALL=C $TO bash .weavedoc/bin/weavedoc "$cmd_" ) 2>&1 )
+    sk_=$( ( cd "$W" && LC_ALL= LANG=ko_KR.UTF-8 $TO bash .weavedoc/bin/weavedoc "$cmd_" ) 2>&1 )
+    OUT="[$cmd_ · LC_ALL=C]
+$sc_
+[$cmd_ · ko_KR.UTF-8]
+$sk_"; RC=0
+    [ "$sc_" = "$sk_" ] || { bad "$cmd_ verdict depends on locale"; return; }
+  done
+  ok
+}
 acct_res_reason_comma_warns() {
   # D3 (field report, decided 2026-08-04): an unquoted reason holding a comma that opens no new
   # key is exactly where a strict YAML parser truncates the value (eclypse t245's correction
