@@ -158,7 +158,7 @@ const usage2 = u => { errln(`usage: ${u}`); process.exit(2) }
 
 // Ported in a later stage. Refusing with a distinct code keeps a partial port honest: no case can
 // mistake "not written yet" for "ran and agreed".
-const NOT_PORTED = new Set(['consecrate', 'upgrade'])
+const NOT_PORTED = new Set(['upgrade'])
 
 const argv = process.argv.slice(2)
 const cmd = argv[0] ?? ''
@@ -174,6 +174,19 @@ switch (cmd) {
     // Top-level await (ESM): keeps node:child_process off the startup path — it is loaded only on
     // the Windows-registry fallback, which most runs never reach.
     rc = await cmdLocale(); break
+  case 'consecrate': {
+    if (rest.length !== 1) usage2('weavedoc consecrate <doc-id>')
+    const { openMine } = await import('./lib/mine.mjs')
+    const { cmdConsecrate, realOps } = await import('./lib/cmd-consecrate.mjs')
+    const { cmdValidate } = await import('./lib/cmd-validate.mjs')
+    const mine = openMine(SCRIPT_DIR)
+    // validate runs IN PROCESS and prints straight through, as the bash version does. The doc id
+    // rides as an ARGUMENT so this document's in-flight artifacts are exempt — never a variable,
+    // which the environment could inject.
+    rc = cmdConsecrate(mine, outln, errln, rest[0],
+      { ...realOps, validate: doc => cmdValidate(mine, outln, false, doc) })
+    break
+  }
   case 'retag': {
     if (rest.length < 2 || rest.length > 3) usage2('weavedoc retag <old> <new> [--dry]')
     const { openMine } = await import('./lib/mine.mjs')

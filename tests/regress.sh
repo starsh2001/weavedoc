@@ -1907,6 +1907,18 @@ block_consecrate_validate_fail_final_unremovable() {
   printf '개정판. <!-- t:t001 -->\n' > "$W/documents/d1/draft.md"
   vrun seal-review d1 draft
   rm -f "$W/truths/index.md"                          # fails validate AFTER staging — outside the context manifest
+  # The injection differs by runner and the INVARIANT does not. bash gets a PATH shim for `rm`;
+  # node:fs cannot be reached that way, so the node runner drives the module through the operation
+  # seam consecrate exposes for exactly this (REWRITE_PLAN §4: this case must not be dropped
+  # silently). Both make the SAME removal fail and both assert the same three things below.
+  if [ "$WD_RUNNER" = node ]; then
+    OUT=$( ( cd "$W" && $TO node "$REPO/tests/consecrate-faultinject.mjs" d1 documents/d1/final.md ) 2>&1 ); RC=$?
+    [ "$RC" -eq 0 ] && bad "consecrate reported success after the full validation failed"
+    expect_has "UNVALIDATED"
+    [ -e "$W/documents/d1/.consecrate.inflight" ] \
+      || bad "in-flight marker removed while the final slot still held the rejected candidate"
+    return
+  fi
   mkdir -p "$W.shim"
   cat > "$W.shim/rm" <<'EOF'
 #!/usr/bin/env bash
