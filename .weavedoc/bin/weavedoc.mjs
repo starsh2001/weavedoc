@@ -110,13 +110,18 @@ function cmdVersion (json) {
   try {
     const h = createHash('sha1')
     h.update(readFileSync(join(SCRIPT_DIR, 'weavedoc.mjs')))
-    const libDir = join(SCRIPT_DIR, 'lib')
-    for (const n of readdirSync(libDir).sort()) {
-      const p = join(libDir, n)
-      if (!statSync(p).isFile()) continue
-      h.update(n)
-      h.update(readFileSync(p))
+    // RECURSIVE, relative-path-keyed (v0.5.1): a flat listing skipped any future lib/subdir/ — the
+    // manifest globs the whole directory, so the fingerprint has to see exactly what ships.
+    const walk = (dir, pre) => {
+      for (const n of readdirSync(dir).sort()) {
+        const p = join(dir, n)
+        const r = pre === '' ? n : `${pre}/${n}`
+        if (statSync(p).isDirectory()) { walk(p, r); continue }
+        h.update(r)
+        h.update(readFileSync(p))
+      }
     }
+    walk(join(SCRIPT_DIR, 'lib'), '')
     h.update(readFileSync(SCHEMA))
     fp = h.digest('hex')
   } catch { /* a runtime that cannot read itself still reports its label */ }
@@ -177,8 +182,8 @@ async function cmdLocale () {
 // is a typo'd intention, and a tool that ignores it does something other than what was asked.
 const USAGE = 'weavedoc — validate | pull <term> | impact <material-id> | status | scope | ' +
   'attest <verdict> <round> <standard> <id...> | seal-review <doc-id> [draft|final] | ' +
-  'consecrate <doc-id> | gaps | census | reindex [--check] | retag <old> <new> [--dry] | ' +
-  'version | lang | locale'
+  'consecrate <doc-id> | upgrade [--check|--dry-run|--apply] | gaps | census | ' +
+  'reindex [--check] | retag <old> <new> [--dry] | version | lang | locale'
 
 const usage2 = u => { errln(`usage: ${u}`); process.exit(2) }
 

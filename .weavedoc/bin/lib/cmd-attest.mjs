@@ -3,7 +3,13 @@
 // The digest is computed HERE and never by hand, so "which bytes were verified" has one spelling.
 // All-or-nothing: every id resolves, exists and is not a tombstone BEFORE one byte is written —
 // a partially applied attest would record coverage for units nobody checked.
-import { statSync, readFileSync, writeFileSync, appendFileSync, openSync, readSync, closeSync } from 'node:fs'
+import { statSync, readFileSync, writeFileSync, appendFileSync, openSync, readSync, closeSync, truncateSync, unlinkSync } from 'node:fs'
+
+// The append, injectable (the consecrate/retag/upgrade precedent): node:fs cannot be reached by a
+// PATH shim, so the fault-injection driver is the only caller that ever passes anything else.
+export const realOps = {
+  append: (f, buf) => appendFileSync(f, buf)
+}
 import { canonId, inList, splitLines } from './core.mjs'
 import { join, fm, tfileFor, unitDigest } from './mine.mjs'
 import { today, writeAtomic, readText, textBuf, U } from './write.mjs'
@@ -18,7 +24,7 @@ const LEDGER_HEADER =
   '# machine-owned verification ledger — append-only; LAST row per id wins. Written by `weavedoc attest`.\n' +
   '# id\tsha256\tverdict\tround\tstandard\tdate\n'
 
-export function cmdAttest (m, out, argv) {
+export function cmdAttest (m, out, argv, ops = realOps) {
   if (argv.length < 4) { out('usage: weavedoc attest <verified|failed> <round> <standard> <id...>'); return 2 }
   const verdict = argv[0]
   const round = argv[1]
@@ -82,8 +88,10 @@ export function cmdAttest (m, out, argv) {
   //      interleave by row and cannot overwrite each other.
   // The file is created with its header via 'wx' — atomic create-if-absent, so two processes racing
   // to create it cannot both write a header.
+  let createdHere = false
   try {
     writeFileSync(lf, LEDGER_HEADER, { flag: 'wx' })
+    createdHere = true
   } catch (e) {
     if (e.code !== 'EEXIST') { out(`attest: cannot create the ledger (${e.code}) — nothing written`); return 1 }
   }
@@ -93,6 +101,14 @@ export function cmdAttest (m, out, argv) {
   // here, and a failure to do it is fatal on purpose — the case above is what silent fallback costs.
   try {
     const st = statSync(lf)
+    // NOT A REGULAR FILE — a directory wearing the ledger's name. Checked HERE, before the
+    // tail-byte guard, because the two OSes disagree about what happens next (v0.5.1 cold review):
+    // on Windows a directory stats as size 0, the guard never ran, the append failed EISDIR, and
+    // the failure branch told the user to hand-delete a torn row that never existed. One refusal,
+    // one true sentence, both platforms.
+    if (!st.isFile()) {
+      out('attest: the ledger path exists but is not a regular file (a directory wearing its name) — fix the path first; nothing written'); return 1
+    }
     if (st.size > 0) {
       const fd = openSync(lf, 'r')
       const tail = Buffer.alloc(1)
@@ -104,10 +120,32 @@ export function cmdAttest (m, out, argv) {
   } catch (e) {
     out(`attest: cannot read the ledger's end (${e.code}) — refusing to append blind; nothing written`); return 1
   }
+  // All-or-nothing SURVIVES a partial append (v0.5.1, external review P1-3): one append call can
+  // land some bytes and then fail (ENOSPC, a size limit), and whatever COMPLETE rows landed become
+  // real evidence under last-row-wins while the command reports failure — the first id verified,
+  // the second not, under one rc 1. The size is recorded before the append and the file is put back
+  // on failure; the truncation is then VERIFIED, because "restored" is a claim like any other.
+  const sizeBefore = (() => { try { return statSync(lf).size } catch { return null } })()
   try {
-    appendFileSync(lf, Buffer.from(rows.join(''), 'utf8'))
+    ops.append(lf, Buffer.from(rows.join(''), 'utf8'))
   } catch (e) {
-    out(`attest: ledger write failed (${e.code})`); return 1
+    // If THIS run created the file, "as before" means ABSENT — truncating to the header would leave
+    // a ledger where none existed and a sentence claiming otherwise (v0.5.1 cold review).
+    if (createdHere) {
+      let gone = false
+      try { unlinkSync(lf); gone = !isFile(lf) } catch { gone = false }
+      if (gone) { out(`attest: ledger write failed (${e.code}) — the ledger this run created was removed again; there was none before and there is none now`); return 1 }
+      out(`attest: ledger write failed (${e.code}) AND the just-created ledger could not be removed — it holds a header and possibly a torn row; run validate, then delete the file by hand`); return 1
+    }
+    let restored = false
+    if (sizeBefore !== null) {
+      try {
+        truncateSync(lf, sizeBefore)
+        restored = statSync(lf).size === sizeBefore
+      } catch { restored = false }
+    }
+    if (restored) { out(`attest: ledger write failed (${e.code}) — the partial append was rolled back, the ledger is as before; nothing counts as attested`); return 1 }
+    out(`attest: ledger write failed (${e.code}) AND the partial bytes could not be removed — run validate: it will name the torn row; delete it by hand before re-running`); return 1
   }
 
   // Human mirror into `## Verified units` — the markdown stays the readable view while the sidecar
@@ -128,9 +166,12 @@ export function cmdAttest (m, out, argv) {
         outl.push(l)
         if (!done && isHead(l)) { outl.push(mline); done = true }
       }
-      // A failure here is silent in the original and stays silent: the ledger row is already
-      // committed, and the mirror is the readable copy of a fact that is now recorded either way.
-      writeAtomic(vmd, textBuf(outl.map(l => `${l}\n`).join('')))
+      // The ledger row is already committed, so a mirror failure does not fail the command — but it
+      // is NAMED now (v0.5.1): the mirror is the same fact on a second surface, and two surfaces
+      // silently disagreeing about one fact is the exact split the -v/ENVIRON episode taught.
+      if (!writeAtomic(vmd, textBuf(outl.map(l => `${l}\n`).join('')))) {
+        out(`attest: warning — the ledger row is recorded, but the human mirror in truths/verify.md could not be written; the two surfaces now disagree until you add the line by hand or re-run a mirrorable attest`)
+      }
     }
   }
 

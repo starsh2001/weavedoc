@@ -11,7 +11,7 @@ import { splitLines } from './core.mjs'
 import { nocomment, sectionAll } from './sections.mjs'
 import { join, materialIds, truthFiles } from './mine.mjs'
 import { fmv, fmLoad } from './read.mjs'
-import { ledgerRows, ledgerRowsBadstruct, ledgerQuarantined, matDigest, truthDigest } from './verify.mjs'
+import { ledgerRows, ledgerRowsBadstruct, ledgerQuarantined, ledgerIndex, matDigest, truthDigest } from './verify.mjs'
 
 const readOr = p => { try { return readFileSync(p, 'utf8') } catch { return '' } }
 const lowerAscii = s => s.replace(/[A-Z]/g, c => c.toLowerCase())
@@ -82,8 +82,20 @@ const inter = (a, b) => { const s = new Set(b); return a.filter(x => s.has(x)) }
 
 export function cmdScope (m, out, json) {
   const lf = join(m.truths, m.ledgerFile())
-  let ledger = ledgerRows(lf).map(r => r.split('\t'))
-  const ledgerSbad = ledgerRowsBadstruct(lf)
+  // TWO STATES VOID THE WHOLE SIDECAR, not just one id (v0.5.1, external review P0-1b/P0-2):
+  //   unreadable — the file exists but its bytes cannot be read: the evidence is in an UNKNOWN
+  //     state, and the last rows could be failures. Folding that into "no ledger" opened the v1
+  //     fallbacks over a `failed` verdict (measured: chmod-000 sidecar, owed dropped to zero).
+  //   headless   — a row whose id column is empty (a leading tab, a truncated write). It cannot be
+  //     attributed, which means the row that vanished could have been ANY id's physical last — so
+  //     per-id last-row-wins is undecidable for everyone, and no row and no fallback may count.
+  // Both are named below, validate blocks both, and the whole ledger contributes nothing until the
+  // file is repaired. (v0.5.0 counted headless rows and read the counter nowhere — the review's
+  // P0-1b walked a `failed` verdict straight through that hole.)
+  const lidx = ledgerIndex(lf)
+  const ledgerDead = lidx.state === 'unreadable' || lidx.headless > 0
+  let ledger = ledgerDead ? [] : ledgerRows(lf).map(r => r.split('\t'))
+  const ledgerSbad = ledgerDead ? [...lidx.malformed].sort() : ledgerRowsBadstruct(lf)
 
   // Unknown verdicts are quarantined BEFORE classification — they cover nothing and are named.
   // Letting them fall through to the digest compare is how a typo once counted as verified.
@@ -103,6 +115,8 @@ export function cmdScope (m, out, json) {
   // ---- materials: population = converted.md holders minus tombstones. Evidence precedence:
   // sidecar row > v1 `status: verified` (legacy-unbound: real history, binds no bytes) > nothing.
   const originToken = m.sch.get('verify.ledger.origin.material') || 'v1-material-frontmatter'
+  const matSet = new Set(materialIds(m))
+  const mghost = [...LROW.keys()].filter(k => !/^t[0-9]/.test(k) && !matSet.has(k))
   let nMconv = 0; let nMbound = 0; let nMlegacy = 0; let nMstale = 0; let nMfail = 0; let nMunver = 0; let nMused = 0
   const munver = []; const mstale = []; const mfail = []; const mlegacy = []; const mOriginless = []
   for (const id of materialIds(m)) {
@@ -122,7 +136,7 @@ export function cmdScope (m, out, json) {
     if (row) {
       if (row.vd === 'failed') { nMfail++; mfail.push(id) } else if (row.vd === 'legacy-unbound') { nMlegacy++; mlegacy.push(id) } else if (matDigest(f) === row.dg) nMbound++
       else { nMstale++; mstale.push(id) }
-    } else if (!LBAD.has(id) && mstat === 'verified') {
+    } else if (!ledgerDead && !LBAD.has(id) && mstat === 'verified') {
       nMlegacy++; mlegacy.push(id)
     } else {
       // `used` lands here too — lifecycle, not a verdict. And so does a material whose only row was
@@ -185,6 +199,9 @@ export function cmdScope (m, out, json) {
   // ---- v1 markdown ledger: verified ids not covered by the sidecar are legacy-unbound.
   const scan = scanVerifiedUnits(m)
   let vids = uniqSort(scan.V.filter(x => /^t[0-9]/.test(x)))
+  // A DEAD sidecar closes this fallback too: the markdown record is the weaker evidence, and the
+  // sidecar that would supersede it (a later `failed`, a re-verify) is exactly what cannot be read.
+  if (ledgerDead) vids = []
   // The TRUTH twin of the LBAD rule: a quarantined row must not be rescued into legacy-unbound by a
   // markdown `## Verified units` mention.
   const tbad = uniqSort([...LBAD].filter(x => /^t[0-9]/.test(x)))
@@ -199,6 +216,7 @@ export function cmdScope (m, out, json) {
   if (json) {
     const jarr = a => `[${a.map(x => `"${x}"`).join(',')}]`
     out(`{"output_schema_version":1,"command":"scope","bundle":"${readOr(join(m.root, '.weavedoc', 'VERSION')).replace(/\n+$/, '')}","schema_version":${m.schemaVer()},` +
+      `"ledger_state":"${ledgerDead ? (lidx.state === 'unreadable' ? 'unreadable' : 'headless-rows') : lidx.state}",` +
       `"materials":{"converted":${nMconv},"verified_bound":${nMbound},"legacy_unbound":${nMlegacy},"stale":${nMstale},"failed":${nMfail},"unverified":${nMunver},"used_but_unverified":${nMused},"originless_rows_ignored":${jarr(mOriginless)},"owed":${jarr([...munver, ...mstale, ...mfail])}},` +
       `"truths":{"live":${ondisk.length},"verified_bound":${nTbound},"legacy_unbound":${tlegacy.length},"stale":${nTstale},"failed":${nTfail},"unverified":${tunver.length},"tombstones":${tomb.length},"owed":${jarr([...tunver, ...tstale, ...tfail])}},` +
       `"ghost_ledger_ids":${jarr(tghost)}}`)
@@ -220,6 +238,10 @@ export function cmdScope (m, out, json) {
     // SHOWN, never absorbed: an ignored row that vanished silently would look identical to a ledger
     // that never held it, and nobody would know a mine migrated by <=0.3.1 needs re-verify.
     if (mOriginless.length) out(`    (${mOriginless.length} pre-0.3.2 m-id ledger row(s) ignored — origin-less legacy rows are truths-lane history, not material evidence; each material reads from its own status instead: ${compressIds(uniqSort(mOriginless))})`)
+    // The t-lane always had its ghost line; the m-lane and the unclassifiable (an id that fails
+    // canonicalisation and keeps its raw spelling) were absorbed in silence — against this
+    // command's own SHOWN-never-absorbed discipline (v0.5.1 cold review).
+    if (mghost.length) out(`    ledger names ${mghost.length} id(s) with no material on disk — they cover nothing: ${compressIds(uniqSort(mghost))}`)
   }
   if (ondisk.length > 0 || tomb.length > 0) {
     out(`  truths     ${ondisk.length} live · ${nTbound} verified (digest-bound) · ${tlegacy.length} legacy-unbound · ${nTstale} stale · ${nTfail} failed · ${tunver.length} unverified   (source: truths/${m.ledgerFile()} + ## Verified units)`)
@@ -246,6 +268,11 @@ export function cmdScope (m, out, json) {
   // newline, so `tr` finds none to turn into a space and the line ends at the last ')'. The lists
   // that DO end in a space (the id runs below) come through compress_ids, which prints a separator
   // after every id and then a bare newline; two different renderings, and both are contract.
+  if (lidx.state === 'unreadable') {
+    out(`  ledger: truths/${m.ledgerFile()} exists but CANNOT BE READ (${lidx.code}) — the evidence is in an unknown state, so nothing counts as verified and no v1 fallback opens [LEDGER-UNREADABLE]`)
+  } else if (lidx.headless > 0) {
+    out(`  ledger: ${lidx.headless} row(s) carry no id (a leading tab, or a truncated write) — an unattributable row could be ANY unit's latest verdict, so the sidecar contributes nothing and no v1 fallback opens [LEDGER-MALFORMED]`)
+  }
   if (ledgerBad.length) out(`  ledger: row(s) with unknown verdicts — they cover nothing [LEDGER-VERDICT]: ${ledgerBad.join(' ')}`)
   if (ledgerSbad.length) {
     // The shared strict filter dropped these before classification — shown here so a truncated or

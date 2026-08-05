@@ -54,6 +54,12 @@ KEY=$( { git -C "$REPO" rev-parse HEAD 2>/dev/null
          # finding; HEAD only covers COMMITTED edits).
          sha256sum "$REPO/.weavedoc/bin/weavedoc.mjs" \
                    "$REPO/.weavedoc/bin/lib/"* "$REPO/.weavedoc/schema" 2>/dev/null | awk '{print $1}'
+         # The RUNNER's version and THIS HARNESS's own bytes (v0.5.1, external review): a dirty
+         # edit to a case body under an unchanged name could hand --resume the previous run's
+         # result, and a node upgrade is a different configuration the way a bash upgrade always
+         # was (bash/awk/sed versions are keyed below; node was not).
+         node --version 2>/dev/null
+         sha256sum "$REPO/tests/regress.sh" 2>/dev/null | awk '{print $1}'
          uname -sr; bash --version | head -1; awk --version 2>/dev/null | head -1; sed --version 2>/dev/null | head -1
          printf '%s' "${WD_REG_KEY_SALT:-}"
        } | sha256sum | awk '{print $1}' | cut -c1-12 )
@@ -2014,6 +2020,31 @@ block_completeness_required_no_register() {
   req_completeness
   vrun validate; expect_block "no gaps.md"
 }
+block_completeness_kind_typo_open() {
+  # v0.5.1 external review P1-6. `gaps.enum.kind` sat in the schema while nothing read it — the
+  # declared-but-unread class the schema's own header warns about. A typo'd kind under Open used to
+  # block only as an ordinary open gap (the safe direction, but the wrong diagnosis); it is named
+  # as a vocabulary violation now, with the enum in the message.
+  req_completeness
+  printf '# Open\n\n- [declraed] m001 — 오타 kind — 근거\n\n# Accepted\n' > "$W/gaps.md"
+  vrun validate
+  expect_block "kind '[declraed]' is not in the vocabulary"
+}
+block_completeness_kind_typo_accepted() {
+  # The dangerous direction: under Accepted a typo'd kind used to pass SILENTLY — a decision nobody
+  # made about a kind that does not exist, invisible until its re-surface triggers never fired.
+  req_completeness
+  printf '# Open\n\n# Accepted\n\n- [declraed] m001 — 오타 kind — scope: x — recheck: y — as-of: t001\n' > "$W/gaps.md"
+  vrun validate
+  expect_block "kind '[declraed]' is not in the vocabulary"
+}
+pass_completeness_kind_conf_suffix() {
+  # The guard against over-reach: every real kind still passes, including alongside the documented
+  # `conf:` suffix, and the placeholder bullet (`- [<kind>]`) is still template noise, not a typo.
+  req_completeness
+  printf '# Open\n\n# Accepted\n\n- [symmetry] KnockOne — 의도적 얕음 — scope: KnockOne — recheck: 상세 truth 추가 시 — as-of: t060\n- [enumeration] 목록 — 의도 — scope: x — recheck: y — as-of: t001\n' > "$W/gaps.md"
+  vrun validate; expect_pass
+}
 block_completeness_accepted_prose() {
   # The external review's finding, verbatim: under `required`, prose that is not a bullet and
   # carries none of the entry's fields sat under '# Accepted' and validate PASSED. The register
@@ -3035,6 +3066,72 @@ acct_upgrade_write_fault_rolls_back() {
   [ -z "$(ls -d "$W"/.upgrade-backup-* 2>/dev/null)" ] || bad "backup dir left after a verified rollback"
   ok
 }
+acct_attest_partial_append_rolls_back() {
+  # v0.5.1 external review P1-3. One append call can land SOME bytes and then fail (ENOSPC, a size
+  # limit) — and whatever COMPLETE rows landed became real evidence under last-row-wins while the
+  # command reported failure: the first id verified, the second not, under one rc 1. All-or-nothing
+  # now survives the partial: the size is recorded before, the file truncated back, the truncation
+  # VERIFIED — and the case asserts the LEDGER, not just the message.
+  vrun attest verified 1 seed m001
+  cp "$W/truths/verify-ledger.tsv" "$W/.ledger.before"
+  OUT=$( ( cd "$W" && $TO node "$REPO/tests/attest-faultinject.mjs" verified 2 std m001 t001 ) 2>&1 ); RC=$?
+  [ "$RC" -eq 0 ] && bad "attest reported success around an injected partial append"
+  expect_has "rolled back"
+  cmp -s "$W/.ledger.before" "$W/truths/verify-ledger.tsv" || bad "ledger not byte-identical after the rollback — partial rows remain"
+  vrun scope
+  expect_has "1 verified (digest-bound)"
+}
+block_reindex_unreadable_index_refuses() {
+  # v0.5.1 external review P1-1. An existing index this command cannot read is an index it cannot
+  # promise to put back — the read failure used to fold into "no index yet", which handed the undo
+  # path the wrong null: after a tree fault, "restore the old bytes" became "delete the file", and
+  # the command said "rolled back" over an index it had just destroyed. Refused up front now, while
+  # both views are untouched. (The directory spelling of unreadable — chmod does not bind for the
+  # container's root; the EACCES branch is the same code, measured by hand as an unprivileged user.)
+  rm -f "$W/truths/index.md"; mkdir "$W/truths/index.md"
+  vrun reindex
+  expect_block "cannot be read"
+  [ -d "$W/truths/index.md" ] || bad "the unreadable index was touched"
+  OUT=$(head -1 "$W/truths/tree.md"); RC=0
+  expect_has "#"
+}
+acct_retag_rollback_resync_failure_named() {
+  # v0.5.1 external review P1-2. The rollback's own re-sync used to run unchecked, and the message
+  # still said "indexes re-synced" — combine a write fault with an index fault and the command
+  # claimed a sync that never happened. The restored tag files are byte-verified either way; what
+  # changes is the SENTENCE, which now says the re-sync failed and what to run.
+  sed -i 's/^required_tags: \[\]$/required_tags: [위약]/' "$W/project.md"
+  rm -f "$W/truths/index.md"; mkdir "$W/truths/index.md"
+  vrun retag 위약 벌칙
+  expect_block "index re-sync itself failed"
+  [ "$(grep -m1 '^tags:' "$W/truths/t001.md")" = 'tags: [위약]' ] || bad "t001 tags not restored"
+  [ -z "$(ls -d "$W"/.retag-bak.* 2>/dev/null)" ] || bad "backup dir left behind"
+}
+acct_upgrade_copy_fault_leaves_no_partial() {
+  # v0.5.1 external review P1-4. Registration is INTENT, and intent must be on the rollback list
+  # before the first byte that acts on it. In the old order — copy, delete old, then register — a
+  # copy that died partway left a half-made new path rollback did not know about: the old came back
+  # from its snapshot and the partial new sat BESIDE it. `crtd` now precedes the copy, so the
+  # half-made path is removed like anything else the transaction created.
+  mv "$W/truths/t001.md" "$W/truths/t01.md"
+  OUT=$( ( cd "$W" && $TO node "$REPO/tests/upgrade-faultinject.mjs" - - t001.md ) 2>&1 ); RC=$?
+  [ "$RC" -eq 0 ] && bad "upgrade reported success around an injected partial copy"
+  expect_has "rolled back"
+  [ -f "$W/truths/t01.md" ] || bad "the old path was not restored"
+  [ ! -e "$W/truths/t001.md" ] || bad "the half-made new path survived the rollback"
+  [ -z "$(ls -d "$W"/.upgrade-backup-* 2>/dev/null)" ] || bad "backup dir left after a verified rollback"
+}
+acct_upgrade_rm_fault_leaves_no_partial() {
+  # The removal twin: the copy landed whole, the OLD path refuses to go. Old order registered the
+  # new path only after this point, so rollback restored old and left new beside it — two files,
+  # one id, and the collision precheck then refused every future run. Both gone-or-both-back now.
+  mv "$W/truths/t001.md" "$W/truths/t01.md"
+  OUT=$( ( cd "$W" && $TO node "$REPO/tests/upgrade-faultinject.mjs" - - - t01.md ) 2>&1 ); RC=$?
+  [ "$RC" -eq 0 ] && bad "upgrade reported success around an injected removal failure"
+  expect_has "rolled back"
+  [ -f "$W/truths/t01.md" ] || bad "the old path is gone"
+  [ ! -e "$W/truths/t001.md" ] || bad "the copied new path survived the rollback"
+}
 acct_upgrade_rollback_fault_preserves_backup() {
   # Write fails at the stamp AND the rollback cannot restore verify.md. Keep the backup, name the
   # file, never claim "byte-identical" — the backup is the only copy of the original left.
@@ -3063,6 +3160,140 @@ acct_mat_digest_line_endings_stable() {
   vrun scope
   expect_has "materials  1 converted · 1 verified (digest-bound)"
   expect_hasnt "→ stale:"
+}
+block_ledger_extra_empty_column_blocks_both() {
+  # v0.5.1 external review P0-1a. validate's column reader was still the retired bash runtime's
+  # `IFS=$'\t' read` model — trailing tabs IGNORED — so a row with an extra empty column read as six
+  # clean fields there (rc 0) while scope's exact split quarantined it: "named in scope and blocks
+  # in validate" held on exactly one side. Every tab delimits now, in both.
+  vrun attest verified 1 std m001
+  sed -i 's/^m001\t.*$/&\t/' "$W/truths/verify-ledger.tsv"
+  grep -q $'\t$' "$W/truths/verify-ledger.tsv" || { bad "fixture no-op: no trailing tab landed"; return; }
+  vrun validate
+  expect_block "more than six tab-separated columns"
+  vrun scope
+  expect_has "0 verified (digest-bound)"
+  expect_has "[LEDGER-MALFORMED]"
+}
+block_ledger_headless_row_voids_sidecar() {
+  # v0.5.1 external review P0-1b — the worst shape it found. A leading tab makes the id column
+  # EMPTY; the old validate reader collapsed leading tabs and read the row as VALID (rc 0), while
+  # scope could not attribute it to any id — so m001's FAILED verdict vanished there too, and with
+  # `status: verified` in the material the v1 fallback opened: the debt disappeared from both
+  # surfaces at once. The headless counter existed and nothing read it.
+  # Now: validate names the empty id and blocks; scope voids the WHOLE sidecar (an unattributable
+  # row could be ANY unit's latest verdict) and no fallback opens.
+  sed -i 's/^status: converted$/status: verified/' "$W/materials/m001/converted.md"
+  vrun attest failed 1 std m001
+  sed -i 's/^m001\t\(.*\tfailed\t.*\)$/\tm001\t\1/' "$W/truths/verify-ledger.tsv"
+  grep -q $'^\t' "$W/truths/verify-ledger.tsv" || { bad "fixture no-op: no leading tab landed"; return; }
+  vrun validate
+  expect_block "row has an EMPTY id column"
+  vrun scope
+  expect_has "1 unverified"
+  expect_has "carry no id"
+  expect_hasnt "legacy-unbound: m001"
+}
+block_ledger_whitespace_line_voids_both() {
+  # v0.5.1 cold review finding 1: validate parsed a lone-TAB line as an empty-id row and blocked,
+  # while scope's skip predicate absorbed whitespace-only lines — the two-readers split, one
+  # predicate down from the parser that had just been unified. Whitespace-bearing lines now parse
+  # (and fail) identically in both.
+  vrun attest verified 1 std m001
+  printf '\t\n' >> "$W/truths/verify-ledger.tsv"
+  vrun validate
+  expect_block "row has an EMPTY id column"
+  vrun scope
+  expect_has "carry no id"
+  expect_has "0 verified (digest-bound)"
+}
+acct_ledger_lenient_id_binds_in_both() {
+  # v0.5.1 cold review finding 2: validate accepts a lenient id spelling (`t1` canonicalizes to
+  # t001) while scope keyed rows by RAW bytes — so the row could never match its on-disk unit:
+  # validate green, evidence silently demoted, and the ghost line then named the WRONG id (the
+  # display canonicalized what the keying had not). One id space now: the row binds.
+  vrun attest verified 1 std t001
+  sed -i 's/^t001\t/t1\t/' "$W/truths/verify-ledger.tsv"
+  grep -q $'^t1\t' "$W/truths/verify-ledger.tsv" || { bad "fixture no-op: the id was not respelled"; return; }
+  vrun validate; expect_pass
+  vrun scope
+  expect_has "truths     1 live · 1 verified (digest-bound)"
+  expect_hasnt "no truth file"
+}
+acct_scope_ghost_material_named() {
+  # The m-lane twin of the t-ghost line (v0.5.1 cold review finding 9): a structurally valid row
+  # for a material that does not exist was absorbed in silence — against scope's own
+  # SHOWN-never-absorbed discipline. validate does not check row-id existence (a ledger may
+  # legitimately outlive a removed unit), so scope's line is the one place this surfaces.
+  vrun attest verified 1 std m001
+  printf 'm999\t-\tlegacy-unbound\t-\tv1-material-frontmatter\t2026-07-01\n' >> "$W/truths/verify-ledger.tsv"
+  vrun scope
+  expect_has "no material on disk"
+  vrun validate; expect_pass
+}
+acct_attest_ledger_directory_refuses_truthfully() {
+  # v0.5.1 cold review finding 3: on Windows a directory stats as size 0, so the tail-byte guard
+  # never ran, the append failed EISDIR, and the failure branch told the user to delete a torn row
+  # that never existed — a refusal with a FALSE diagnosis, and a different one per OS. One check,
+  # one true sentence, both platforms.
+  vrun attest verified 1 seed m001
+  rm -f "$W/truths/verify-ledger.tsv"; mkdir "$W/truths/verify-ledger.tsv"
+  vrun attest verified 2 std m001
+  expect_block "not a regular file"
+}
+block_upgrade_headless_ledger_refuses() {
+  # v0.5.1 cold review finding 6: scope and validate both declare a headless ledger VOID, but
+  # upgrade's scan was a third consumer quietly computing its plan from rows the other two had
+  # ruled unusable — a wrong preview, over evidence in an undecidable state. Refused in every mode
+  # now, same as unreadable.
+  vrun attest failed 1 std m001
+  sed -i 's/^m001\t\(.*\tfailed\t.*\)$/\tm001\t\1/' "$W/truths/verify-ledger.tsv"
+  grep -q $'^\t' "$W/truths/verify-ledger.tsv" || { bad "fixture no-op: no leading tab landed"; return; }
+  vrun upgrade --check
+  expect_block "the sidecar is void"
+}
+block_consecrate_validator_throw_restores() {
+  # v0.5.1 cold review finding 5 made this case exist: the fix (a throwing validator counts as a
+  # failed validation) was in, tested by hand, and the CHANGELOG claimed red-first coverage the
+  # suite did not have. An exception used to escape the whole command — candidate left at final,
+  # marker and backup beside it — where the contract promises the automatic restore.
+  printf '개정판. <!-- t:t001 -->\n' > "$W/documents/d1/draft.md"
+  vrun seal-review d1 draft
+  cp "$W/documents/d1/final.md" "$W/.final.before"
+  OUT=$( ( cd "$W" && $TO node "$REPO/tests/consecrate-faultinject.mjs" d1 --throw-validate ) 2>&1 ); RC=$?
+  [ "$RC" -eq 0 ] && bad "consecrate reported success around a crashing validator"
+  expect_has "original final preserved"
+  cmp -s "$W/.final.before" "$W/documents/d1/final.md" || bad "final.md is not byte-identical after the restore"
+  [ ! -e "$W/documents/d1/.consecrate.inflight" ] || bad "in-flight marker left behind after a verified restore"
+}
+block_verify_md_directory_is_not_absent() {
+  # Found by sweeping the absent-vs-unreadable class across every legal-absence file rather than
+  # waiting for the next review (v0.5.1). verify.md may legitimately not exist, so a DIRECTORY
+  # wearing its name folded into "never verified" and validate stayed green over records in an
+  # unknown state. (chmod-unreadable already blocked — the empty read fails FM-MISSING — so the
+  # directory was the one silent spelling.)
+  rm -f "$W/truths/verify.md"; mkdir "$W/truths/verify.md"
+  vrun validate
+  expect_block "not a readable file"
+}
+block_ledger_unreadable_is_not_absent() {
+  # v0.5.1 external review P0-2, in the spelling every platform and every user can test: a DIRECTORY
+  # wearing the ledger's name (the chmod-000 shape takes an unprivileged user, which the harness is
+  # not in the container — measured there by hand instead, same branch, EACCES for EISDIR). A file
+  # that exists but cannot be read is evidence in an UNKNOWN state: the last rows could be failures.
+  # It used to fold into "no ledger" — validate skipped the section (isFileAt false), scope read []
+  # and opened the v1 fallbacks over whatever the real bytes said.
+  sed -i 's/^status: converted$/status: verified/' "$W/materials/m001/converted.md"
+  vrun attest failed 1 std m001
+  rm -f "$W/truths/verify-ledger.tsv"; mkdir "$W/truths/verify-ledger.tsv"
+  vrun validate
+  expect_block "[LEDGER-UNREADABLE]"
+  vrun scope
+  expect_has "CANNOT BE READ"
+  expect_has "1 unverified"
+  expect_hasnt "legacy-unbound: m001"
+  vrun upgrade --check
+  expect_block "cannot be read"
 }
 acct_ledger_crlf_reads_as_verified() {
   # ONE READER (§11 2026-08-05). A git checkout with core.autocrlf=true — the Windows default —
@@ -3314,6 +3545,13 @@ acct_fingerprint_covers_lib() {
   printf '\n' >> "$W/.weavedoc/bin/lib/core.mjs"
   f2=$( cd "$W" && node .weavedoc/bin/weavedoc.mjs version 2>/dev/null | grep -m1 'fingerprint:' )
   [ "$f1" != "$f2" ] || { bad "a lib byte change did not change the fingerprint — the hash does not cover lib/"; return; }
+  # ...including a SUBDIRECTORY (v0.5.1): the flat listing skipped lib/subdir/, and the manifest
+  # globs the whole directory — the fingerprint must see exactly what ships.
+  mkdir -p "$W/.weavedoc/bin/lib/subprobe"
+  printf '// probe\n' > "$W/.weavedoc/bin/lib/subprobe/x.mjs"
+  local f2b
+  f2b=$( cd "$W" && node .weavedoc/bin/weavedoc.mjs version 2>/dev/null | grep -m1 'fingerprint:' )
+  [ "$f2" != "$f2b" ] || { bad "a file in a lib SUBDIRECTORY did not change the fingerprint — the walk is not recursive"; return; }
   printf '\n' >> "$W/.weavedoc/bin/weavedoc.mjs"
   f3=$( cd "$W" && node .weavedoc/bin/weavedoc.mjs version 2>/dev/null | grep -m1 'fingerprint:' )
   [ "$f2" != "$f3" ] || { bad "an entrypoint byte change did not change the fingerprint"; return; }
@@ -3372,14 +3610,29 @@ pass_retag_still_rewrites_frontmatter() {
   OUT=$(grep '^tags:' "$W/truths/t001.md"); expect_has "벌칙"
 }
 pass_crlf_retag() {
+  # The fixture holds an INTERIOR BLANK LINE on purpose, and the assertion counts CRs instead of
+  # detecting one (v0.5.1, external review P1-5): the old writer skipped empty lines when
+  # re-attaching CRs, so a CRLF file came back MIXED — one bare LF in the middle — and this case
+  # passed because "a CR survived somewhere" is true of a mangled file too. Command success is
+  # asserted as well: it was not, and a failing rename would have passed the old spelling.
   printf -- '---\r\nid: t002\r\nclaim: "대금은 5천만원이다"\r\nsource: m001\r\ntags: [대금]\r\nstatus: ok\r\n---\r\n\r\n제3조 대금은 5천만원으로 한다.\r\n' > "$W/truths/t002.md"
-  ( cd "$W" && "${WDRUN[@]}" retag 대금 금액 >/dev/null 2>&1 )
-  # Through od, not grep: MSYS grep reads files in text mode, so a CR-matching pattern never fires
-  # and the test reported every CRLF file as stripped.
-  hascr() { od -c "$1" | grep -qF '\r'; }
-  if ! hascr "$W/truths/t002.md"; then OUT="$(cat -A "$W/truths/t002.md" | head -4)"; bad "retag stripped CRLF"; return; fi
-  if hascr "$W/truths/t001.md"; then OUT="$(cat -A "$W/truths/t001.md" | head -4)"; bad "retag introduced CR into an LF file"; return; fi
-  OUT="(line endings preserved both ways)"; ok
+  # ...and t002 must be a truth the mine ACCEPTS, or retag's post-validate rejects and rolls back —
+  # at which point this case measures the ROLLBACK's byte preservation, not the writer's. That is
+  # exactly what the pre-v0.5.1 spelling had been doing without saying so: the old fixture failed
+  # validation (t002 missing from coverage), every run rolled back, and "CR survived" was true of
+  # the RESTORED file. The success assertion below is what forced this to the surface.
+  sed -i 's/^- 대금 조항: (아직 추출 안 함)$/- 대금 조항: t002/' "$W/truths/coverage.md"
+  # Counted with od+wc, not grep: MSYS grep reads files in text mode, so CR patterns never fire.
+  crcount() { od -c "$1" | grep -oF '\r' | wc -l; }
+  lfcount() { od -c "$1" | grep -oF '\n' | wc -l; }
+  local crb lfb; crb=$(crcount "$W/truths/t002.md"); lfb=$(lfcount "$W/truths/t002.md")
+  [ "$crb" = "$lfb" ] || { bad "fixture is not uniformly CRLF (cr=$crb lf=$lfb) — the case would prove nothing"; return; }
+  vrun retag 대금 금액
+  expect_pass
+  local cra lfa; cra=$(crcount "$W/truths/t002.md"); lfa=$(lfcount "$W/truths/t002.md")
+  [ "$cra" = "$crb" ] && [ "$lfa" = "$lfb" ] || { OUT="$(cat -A "$W/truths/t002.md" | head -6)"; bad "line endings changed: cr $crb->$cra lf $lfb->$lfa — a mixed-EOL file is a whole-file diff waiting to happen"; return; }
+  od -c "$W/truths/t001.md" | grep -qF '\r' && { OUT="$(cat -A "$W/truths/t001.md" | head -4)"; bad "retag introduced CR into an LF file"; return; }
+  OUT="(line endings preserved both ways: cr=$cra lf=$lfa)"; ok
 }
 pass_space_in_path() {
   # Lives under the per-run mktemp workspace like every other fixture — the trap cleans it, and

@@ -81,9 +81,12 @@ function rewrite (text, key, oldTag, newTag) {
   return { hit, text: out.length ? out.join('\n') + '\n' : '' }
 }
 
-// Line endings are PRESERVED: the writer emits LF, so a one-tag rename would otherwise rewrite every
-// line of a CRLF file — a whole-file diff for one word. The file's own first line decides, and
-// trailing CRs are normalised to exactly one.
+// Line endings follow the file's FIRST LINE: the rewriter emits LF, so without this a one-tag
+// rename rewrote every line of a CRLF file — a whole-file diff for one word. Stated precisely
+// (v0.5.1 cold review measured the mixed case): a uniformly-CRLF file comes back uniformly CRLF
+// and a uniformly-LF file uniformly LF, byte-preserving in both; a file that arrives MIXED is
+// NORMALISED to its first line's ending, which is a repair, not preservation — one bare LF inside
+// a CRLF file gains its CR (cr 8→9 measured), and CRLF strays inside an LF file lose theirs.
 // The write itself goes through the injected op — stage+rename with false PROMOTED (§11 2026-08-05):
 // the direct writeFileSync this replaces threw EACCES out of the whole command on a read-only
 // target, leaving the rename half-applied with the backup dir still sitting there (measured, the
@@ -92,7 +95,13 @@ function rewrite (text, key, oldTag, newTag) {
 function writePreservingEol (file, text, original, write) {
   const first = original.split('\n')[0] ?? ''
   if (first.endsWith('\r')) {
-    text = text.split('\n').map(l => (l === '' ? l : l.replace(/\r*$/, '\r'))).join('\n')
+    // BLANK lines carry the CR too (v0.5.1, external review P1-5). The old `l === ''` skip meant a
+    // CRLF file with an interior blank line came back MIXED — one bare LF in a CRLF file, measured
+    // as 11 CRs in and 10 out — and post-validate called it clean because content-wise it is. Only
+    // the final empty element (the split artifact after the last newline) stays bare; giving it a
+    // CR would append a phantom \r-only line to the file.
+    const parts = text.split('\n')
+    text = parts.map((l, i) => (i === parts.length - 1 && l === '' ? l : l.replace(/\r*$/, '\r'))).join('\n')
   }
   write(file, Buffer.from(text, 'latin1'))
 }
@@ -151,13 +160,23 @@ export function cmdRetag (m, out, errln, argv, runReindex, runValidate, ops = re
       } catch { failed.push(rel) }
     }
     clearFileCaches()
-    if (truthhits > 0) runReindex()
+    // The re-sync's OWN failure is part of the rollback's truth (v0.5.1, external review P1-2):
+    // this used to run unchecked and the message below still said "indexes re-synced" — combine it
+    // with an index fault and the command claimed a sync that never happened over a view that might
+    // be gone. The restored TAG FILES are byte-verified either way; the generated views are
+    // regenerable, so a failed re-sync downgrades the message, not the restoration.
+    let resync = true
+    if (truthhits > 0 && runReindex() !== 0) resync = false
     if (failed.length) {
       const u = x => Buffer.from(x, 'latin1').toString('utf8')
       errln(`retag: rollback INCOMPLETE — could not restore: ${failed.map(u).join(' ')}. The originals are preserved in ${u(relOf(bak))}/ — restore them by hand, then run validate. Do NOT delete that directory until the mine validates clean.`)
       return 1
     }
     rmSync(bak, { recursive: true, force: true })
+    if (!resync) {
+      errln(`${msg.replace(', indexes re-synced', '')} BUT the index re-sync itself failed — run 'weavedoc reindex', then validate.`)
+      return 1
+    }
     errln(msg)
     return 1
   }

@@ -166,6 +166,28 @@ jobs:
             echo "worktree not clean after the suite:"; echo "$status"; exit 1
           fi
 
+  # The suite runs under bash everywhere — but the DOCUMENTED Windows invocation is PowerShell
+  # (Git Bash pays ~290ms per process to emulate Unix), and until v0.5.1 no CI job ever executed
+  # that path: the recommended way to run the tool was the one way nobody tested. A smoke, not a
+  # sweep: it proves the entrypoint runs and answers under pwsh, which is the shape of the claim.
+  powershell-smoke:
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/')
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+      - name: the documented Windows invocation answers under PowerShell
+        shell: pwsh
+        run: |
+          $v = node .weavedoc/bin/weavedoc.mjs version
+          $v
+          if ($LASTEXITCODE -ne 0) { throw "version exited $LASTEXITCODE" }
+          if (-not ($v -match 'fingerprint:')) { throw "no fingerprint line — the runtime did not answer" }
+          node .weavedoc/bin/weavedoc.mjs bogus-command-name
+          if ($LASTEXITCODE -eq 0) { throw "an unknown command exited 0 under pwsh" }
+
   manifest:
     runs-on: ubuntu-latest
     steps:
@@ -182,7 +204,7 @@ jobs:
   # dispatch diff (the v0.2.0 tag hand-listed six commands its predecessor already had).
   release:
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [lint, regression-linux, manifest, regression-full]
+    needs: [lint, regression-linux, manifest, regression-full, powershell-smoke]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -190,7 +212,7 @@ jobs:
       - uses: actions/checkout@v5
         with:
           fetch-depth: 0
-      - name: cohesion — tag, VERSION, CHANGELOG, schema are one fact (§9)
+      - name: cohesion — VERSION, CHANGELOG and schema agree (doccheck); the tag itself is echoed for the log, not asserted — no formal rule maps a SemVer tag to a date-labelled bundle
         run: |
           bash tests/doccheck.sh
           echo "tag=$GITHUB_REF_NAME · bundle=$(cat .weavedoc/VERSION) · schema=$(grep -m1 '^schema.version:' .weavedoc/schema | sed 's/.*:[[:space:]]*//')"

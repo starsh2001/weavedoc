@@ -4,6 +4,35 @@
 
 ---
 
+## 2026-08-05.7
+
+**v0.5.1 — v0.5.0 외부 리뷰 후속. P0 2건과 쓰기 내구성 P1들, 그리고 문서·식별자.** 전 항목 수정 전 실측 → 수정 → red-first 케이스 순서. **red-first가 없는 예외는 둘이고 이유가 적혀 있다**: attest 미러 경고와 upgrade MANIFEST 경고는 비특권 사용자가 필요해 스위트(컨테이너 root)에서 발동시킬 수 없다 — 콜드 리뷰가 컨테이너의 `nobody`로 손수 발동을 확인했다.
+
+**커밋 전 실행-기반 콜드 리뷰가 이 패치 자체에서 real 6건을 더 찾았고, 전부 반영했다** (CRITICAL 0 — P0 수정은 전 공격 형태에서 유지):
+
+- **공백-전용 줄에서 두-리더 갈림이 한 술어 아래로 재발** — validate는 lone-TAB을 빈-id 행으로 차단하는데 scope의 skip 술어가 흡수했다. skip은 이제 진짜 빈 줄과 `#`뿐, 공백을 실은 줄은 양쪽에서 같은 방식으로 파싱되고 같은 방식으로 실패한다.
+- **raw-vs-canonical id 키잉 갈림** — validate는 관용 철자(`t1`→t001)를 받는데 scope가 raw 바이트로 키를 잡아 그 행이 디스크 유닛과 영영 못 만났다(validate green + 증거 강등), 게다가 유령 줄이 표시만 canonical화해 **파일이 있는 id를 "파일 없음"으로 지목**했다. 파서가 canonical로 키를 잡는다 — id 공간도 하나.
+- **attest의 디렉터리-장부 진단이 Windows에서 거짓** — 디렉터리가 size 0으로 stat되어 꼬리-바이트 가드를 건너뛰고, "찢어진 행을 지우라"는 존재하지 않는 상태를 안내했다. 정규 파일 검사를 가드 앞에 두어 양 OS가 한 문장으로 거부한다.
+- **upgrade의 스캔이 headless-blind** — scope·validate가 void라 선언한 사이드카에서 세 번째 소비자가 조용히 계획을 계산했다. unreadable과 같이 전 모드 거부.
+- **장부가 없던 자리의 "as before"** — 이 실행이 만든 헤더 파일을 남기며 "이전과 같다"고 말했다. 이 실행이 만들었으면 지우고, 그 사실을 말한다.
+- **consecrate 던지는-validator 수정의 케이스 부재**(CHANGELOG가 약속한 red-first가 스위트에 없었다) — 드라이버에 `--throw-validate` 모드를 추가하고 케이스로 고정(pre-fix red: "final.md is not byte-identical").
+
+nit 셋도 정리: retag의 줄바꿈 주석을 실측대로 정직화(균일 파일은 보존, **혼합 파일은 첫 줄 기준 정규화** — 보존이 아니라 수리), scope의 m-레인 유령 줄 추가(SHOWN-never-absorbed의 결락), golden은 **커밋 직전 마지막 단계로 재생성**(중간 상태의 fingerprint가 박히는 것을 방지).
+
+**P0: 장부 파서가 이제 정말 하나다.** `.4`가 줄 리더를 합쳤지만 **열 파서**가 남아 있었다 — validate의 `readTabs`는 bash `IFS=$'\t' read`를 재현하는 물건(선행·연속 TAB 붕괴)이고, 그 존재 이유는 bash와 함께 죽었는데 규칙만 살아남았다. 실측: 빈 열 하나 추가 → validate rc 0 / scope 격리(한쪽만 발동), **failed 행 앞 TAB + `status: verified` → 부채가 양쪽에서 소멸(owed=0)** — 행이 id 없는(headless) 행이 되어 scope가 귀속을 못 하고, v0.5.0의 headless 카운터는 **아무도 읽지 않는 죽은 코드**였다. 이제:
+
+- **모든 TAB이 열을 가른다** — validate도 정확 분리(`readTabs` 은퇴), 초과 열·빈 id 전부 명명.
+- **id 없는 행은 사이드카 전체를 무효화한다** — 귀속 불가능한 행은 **누구의 최신 verdict였을지 모르므로**, 어떤 행도 이기지 못하고 어떤 폴백도 열리지 않는다. scope가 이유를 인쇄하고 validate가 차단한다.
+- **absent ≠ unreadable** (`ledgerRead`가 상태를 구분). `chmod 000` 장부(마지막 verdict failed)가 **"빚 없음"으로 읽히던 것**(rc 0 + 폴백 개방)이 → validate `LEDGER-UNREADABLE` 차단 + scope 명시 + 폴백 전면 금지. 디렉터리가 장부 이름을 쓴 경우도 같은 가지(스위트에서 검증 가능한 철자). `upgrade`는 읽을 수 없는 장부 위에서 **전 모드 거부**(장부가 이미 가진 것을 기준으로 행을 주조하므로).
+
+**쓰기 내구성.** `attest`: 부분 append(ENOSPC류)가 **완성된 앞 행만 발효**시키던 것 → 크기 기록·truncate-back·복원 검증(all-or-nothing이 장애를 넘어 성립). `reindex`: **읽을 수 없는 기존 index는 시작 전에 거부** — 읽기 실패를 "원래 없음"과 합치면 롤백이 "복원" 대신 **삭제**를 하고 "rolled back"이라 보고했다(실측). `retag`: 롤백 중 재색인 실패가 이제 **문장을 바꾼다**("indexes re-synced"를 거짓으로 만들 수 없다). `upgrade`: **`crtd`(의도 등록)가 복사보다 먼저** — 도중에 죽은 복사가 롤백 목록 밖의 반쪽 경로를 남겼다. copy/rm도 주입 시임에 편입. `consecrate`: **던지는 validator = 실패한 validation**(예외가 경계를 통째로 건너뛰던 것). attest 미러·upgrade MANIFEST 쓰기 실패는 **경고로 명명**(조용한 무시 금지).
+
+**retag의 CRLF 빈 줄.** 빈 줄의 CR을 보존하지 않아 CRLF 파일이 **혼합 줄바꿈**으로 나왔다(실측 cr 9→8). 보존하도록 고치고 — 그 과정에서 **기존 `pass_crlf_retag`가 롤백의 보존을 재고 있었음**이 드러났다: 픽스처가 validate를 통과하지 못해 매 실행 롤백됐고, "CR이 살아남았다"는 **원복된 파일**에 대해 참이었다. 픽스처를 유효하게 만들고(coverage 등록) 성공 단언 + CR/LF **개수** 단언으로 강화.
+
+**gaps 스키마 결속.** `gaps.enum.kind`가 선언만 되고 읽히지 않았다(schema 헤더가 경고하는 바로 그 클래스). 오타 kind `[declraed]`가 Open에선 open gap으로 계수(차단은 되나 오진), **Accepted에선 조용히 통과** — 존재하지 않는 kind에 대한, 아무도 내리지 않은 결정. 이제 양쪽 절에서 어휘 위반으로 명명·차단.
+
+**식별자·CI·문서.** manifest에 `.weavedoc/VERSION` 편입(43→44 — 라벨만 다른 두 설치본이 같은 manifest를 갖던 것). 회귀 캐시 키에 **node 버전 + 하네스 자신의 바이트**(dirty 케이스 수정 후 `--resume` 재사용 구멍). fingerprint의 lib 워크 **재귀화**(+하위 디렉터리 케이스). CI에 **PowerShell 스모크** — 문서가 권장하는 Windows 호출 경로를 처음으로 CI가 실행한다. CLI 도움말에 `upgrade` 추가 + **doccheck 검사 #4**(USAGE 줄 ↔ dispatch, red-first 확인). "tag cohesion" 단계 이름 정직화. IMPROVEMENT_PLAN 상태줄(v0.3.6에서 멈춰 있던 것) 현행화. verify 스킬의 근거 예시(.4 이후 거짓이 된 CRLF 갈림) 교체. gaps 스킬의 "not yet wired"(v0.3.3부터 wired) 정정.
+
 ## 2026-08-05.6
 
 **성공을 보고하면서 실패하던 자리 셋.** 전부 수정 전에 실측하고, 수정 후 다시 쟀다.

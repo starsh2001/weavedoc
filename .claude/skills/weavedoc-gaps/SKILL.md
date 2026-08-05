@@ -78,7 +78,7 @@ Anything fuzzy or qualitative (narrative balance, "this theme is thin", "add sta
 ## Relationship to other skills (no overlap)
 - **verify** checks transformation *fidelity* ("was the material extracted faithfully?"). This checks *coverage* ("is what should be here, here?") — a different axis.
 - **map** owns truths and conflicts; gaps never writes truths — fills route through map. A `reference`/`symmetry` gap is about absence, not contradiction.
-- **plan** may consult `gaps.md` before proposing structure (document-scoped structural questions stay in plan; mine-scoped closure lives here). This skill does **not** hard-block plan — it's available anytime; the user chooses to harden the mine first or proceed. (Whether an open gap blocks `final.md` is a project decision, not yet wired.)
+- **plan** may consult `gaps.md` before proposing structure (document-scoped structural questions stay in plan; mine-scoped closure lives here). This skill does **not** hard-block plan — it's available anytime; the user chooses to harden the mine first or proceed. (Whether an open gap blocks `final.md` is the `fidelity.completeness` knob: `required` makes `validate` block a consecrated output while `# Open` holds entries — wired since v0.3.3.)
 - **required_tags** (`project.md`) is the existing mine-level "tag must have ≥1 truth" check enforced by the fidelity gate; treat a zero-coverage required tag as an enumeration gap and surface it here too.
 
 ## Next
