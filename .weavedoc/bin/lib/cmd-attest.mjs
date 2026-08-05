@@ -3,7 +3,7 @@
 // The digest is computed HERE and never by hand, so "which bytes were verified" has one spelling.
 // All-or-nothing: every id resolves, exists and is not a tombstone BEFORE one byte is written —
 // a partially applied attest would record coverage for units nobody checked.
-import { statSync, readFileSync } from 'node:fs'
+import { statSync, readFileSync, writeFileSync, appendFileSync, openSync, readSync, closeSync } from 'node:fs'
 import { canonId, inList, splitLines } from './core.mjs'
 import { join, fm, tfileFor, unitDigest } from './mine.mjs'
 import { today, writeAtomic, readText, textBuf, U } from './write.mjs'
@@ -33,6 +33,15 @@ export function cmdAttest (m, out, argv) {
   if (round === '' || round === '0' || /[^0-9]/.test(round)) {
     out(`attest: round '${round}' must be a positive integer`); return 2
   }
+  // `standard` is the one free-text column, and a control byte in it CORRUPTS THE ROW: a TAB adds
+  // a column, a newline splits the row in two. Both were writable before — the row then covered
+  // nothing, and `validate` reported a malformed ledger the user had not knowingly created. The
+  // writer refuses at the door instead, so the ledger cannot be broken through its own front door.
+  // (Rejected here rather than escaped: escaping would put a spelling in the file that no reader
+  // un-escapes, which is a second format nobody declared.)
+  if (/[\x00-\x1f\x7f]/.test(standard)) { // eslint-disable-line no-control-regex
+    out("attest: the standard column may not contain a tab, newline or other control character — it is one TSV field, and a control byte there splits or widens the row (write it as plain text; a Windows path is fine, an embedded newline is not)"); return 2
+  }
 
   const day = today()
   const rows = []
@@ -61,13 +70,44 @@ export function cmdAttest (m, out, argv) {
 
   const lf = join(m.truths, m.ledgerFile())
   if (!isDir(m.truths)) { out('attest: no truths/ directory'); return 2 }
-  // The existing sidecar is carried across as BYTES, never as decoded text: the `standard` column is
-  // free-form and a Korean console fills it with whatever it fills it with. Re-encoding a file on
-  // the way through would rewrite rows this command was only appending to.
-  let prior
-  try { prior = isFile(lf) ? readFileSync(lf) : Buffer.from(LEDGER_HEADER, 'utf8') } catch { prior = Buffer.from(LEDGER_HEADER, 'utf8') }
-  if (!writeAtomic(lf, Buffer.concat([prior, Buffer.from(rows.join(''), 'utf8')]))) {
-    out('attest: ledger write failed'); return 1
+
+  // THE LEDGER IS APPENDED TO, NOT REWRITTEN (§11 2026-08-05). It used to be read whole, joined
+  // with the new rows and renamed into place, which had two consequences the external review named:
+  //   1. a read that FAILED on an existing file fell back to a fresh header — so an unreadable
+  //      ledger was REPLACED and its verification history deleted, reporting success. The fix is
+  //      not a better error path: this command no longer reads the ledger to write it, so there is
+  //      nothing to fail to read and nothing to accidentally replace.
+  //   2. read-then-rewrite is a lost-update window — two attests both read, both rewrite, and the
+  //      later one drops the earlier's rows. An append is one operation; concurrent appends
+  //      interleave by row and cannot overwrite each other.
+  // The file is created with its header via 'wx' — atomic create-if-absent, so two processes racing
+  // to create it cannot both write a header.
+  try {
+    writeFileSync(lf, LEDGER_HEADER, { flag: 'wx' })
+  } catch (e) {
+    if (e.code !== 'EEXIST') { out(`attest: cannot create the ledger (${e.code}) — nothing written`); return 1 }
+  }
+  // An append onto a file whose last row was never terminated would FUSE the two rows into one.
+  // validate already blocks such a ledger (that torn row is the signature of an attest that died
+  // mid-write), and this refuses to make it worse. Reading one byte is also the only read left
+  // here, and a failure to do it is fatal on purpose — the case above is what silent fallback costs.
+  try {
+    const st = statSync(lf)
+    if (st.size > 0) {
+      const fd = openSync(lf, 'r')
+      const tail = Buffer.alloc(1)
+      try { readSync(fd, tail, 0, 1, st.size - 1) } finally { closeSync(fd) }
+      if (tail[0] !== 0x0a) {
+        out('attest: the ledger\'s last row has no line terminator — appending would fuse it with the new row. That torn row is what an interrupted attest leaves behind; run validate, repair or delete it, then re-run. Nothing written'); return 1
+      }
+    }
+  } catch (e) {
+    out(`attest: cannot read the ledger's end (${e.code}) — refusing to append blind; nothing written`); return 1
+  }
+  try {
+    appendFileSync(lf, Buffer.from(rows.join(''), 'utf8'))
+  } catch (e) {
+    out(`attest: ledger write failed (${e.code})`); return 1
   }
 
   // Human mirror into `## Verified units` — the markdown stays the readable view while the sidecar

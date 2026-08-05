@@ -895,7 +895,16 @@ export function cmdValidate (m, out, json = false, consecOk = '') {
       } else {
         // STATE-BASED entry scan: a continuation is legal only AFTER a bullet — an indented line with
         // no open entry above is prose the counter cannot see, not a continuation of nothing.
-        let nopen = 0; let badline = ''; let inb = false; let gnoise = false
+        //
+        // ONE SCANNER, BOTH SECTIONS (§11 2026-08-05). It ran over '# Open' only, so `# Accepted`
+        // accepted anything — bare prose under it passed while FORMATS says the register grammar is
+        // fail-closed and "anything else blocks". A second, looser reader for the twin section is
+        // the two-parsers drift class itself, so there is one function and it is called twice.
+        // BOUNDARY, deliberate: this enforces the register GRAMMAR (bullets, continuations only
+        // under a bullet, no bare prose) — which is what the fail-closed sentence enumerates. It
+        // does NOT require an Accepted entry's `scope:`/`recheck:`/`as-of:` fields; that is the
+        // entry FORMAT, documented but never machine-enforced, and turning it into a gate could
+        // block mines written before the rule without a decision to do so.
         // The placeholder filter judges the REMAINDER, the same ruling review entries follow.
         // The bracket class is spelled in BYTES, and it is a class of BYTES rather than of
         // characters — which is what `sed -E 's/[…—:·,.-]+//g'` means under LC_ALL=C, where every
@@ -903,27 +912,30 @@ export function cmdValidate (m, out, json = false, consecOk = '') {
         // matched nothing at all here (this module is byte-domain), and a template stub stopped
         // reading as a stub: two pass_completeness_* cases went red the moment the domain changed.
         const strip = s => s.replace(/\{[^{}]*\}/g, '').replace(/<[^<>]*>/g, '').replace(/[[\](){}<>\xe2\x80\x94\xc2\xb7:,.-]+/g, '').replace(/[ \t]+/g, '')
-        for (let gl of splitLines(sectionAll(nocomment(readOr(gapsPath)), 'Open'))) {
-          gl = gl.replace(/\r$/, '')
-          if (!/[^ \t]/.test(gl)) { inb = false; continue }
-          const grest = gl.replace(/^[ \t]*/, '')
-          if (grest.startsWith('- ')) {
-            inb = true
-            gnoise = false
-            if (grest.startsWith('- [<') || grest.startsWith('- [{')) {
-              if (strip(grest.includes(']') ? grest.slice(grest.indexOf(']') + 1) : grest) === '') gnoise = true
+        const scanRegister = (section) => {
+          let n = 0; let badline = ''; let inb = false; let gnoise = false
+          for (let gl of splitLines(sectionAll(nocomment(readOr(gapsPath)), section))) {
+            gl = gl.replace(/\r$/, '')
+            if (!/[^ \t]/.test(gl)) { inb = false; continue }
+            const grest = gl.replace(/^[ \t]*/, '')
+            if (grest.startsWith('- ')) {
+              inb = true
+              gnoise = false
+              if (grest.startsWith('- [<') || grest.startsWith('- [{')) {
+                if (strip(grest.includes(']') ? grest.slice(grest.indexOf(']') + 1) : grest) === '') gnoise = true
+              }
+              if (!gnoise) n++
+            } else {
+              if (grest === gl || !inb) { badline = gl; break }
+              if (gnoise && strip(grest) !== '') { n++; gnoise = false }
             }
-            if (!gnoise) nopen++
-          } else {
-            if (grest === gl || !inb) { badline = gl; break }
-            // The noise verdict belongs to the ENTRY (bullet + its continuations), never to the
-            // bullet alone (v0.3.6): an entry that kept the shipped placeholder bullet and wrote its
-            // real content in the continuation counted as ZERO, so `required` passed over exactly the
-            // debt it is bought to surface. Judged with the bullet's OWN remainder spelling — a
-            // second, looser one here would be the two-parsers drift class itself. The flag flips so
-            // the entry counts ONCE however many continuations carry it.
-            if (gnoise && strip(grest) !== '') { nopen++; gnoise = false }
           }
+          return { n, badline }
+        }
+        const { n: nopen, badline } = scanRegister('Open')
+        const accepted = scanRegister('Accepted')
+        if (accepted.badline !== '') {
+          prob('COMP-MALFORMED', M`completeness is 'required' but gaps.md '# Accepted' holds a line the register grammar cannot read: '${accepted.badline}' — the same grammar as '# Open': entries are '- ' bullets and an indented line is a continuation ONLY under one. An accepted gap is a DECISION, so prose the counter cannot attribute to an entry is a decision nobody can point at`)
         }
         if (badline !== '') {
           prob('COMP-MALFORMED', M`completeness is 'required' but gaps.md '# Open' holds a line the register grammar cannot read: '${badline}' — entries are '- [<kind>] …' bullets; an indented line is a continuation ONLY under a bullet, and prose anywhere is a gap no counter sees, so it blocks like a malformed register`)

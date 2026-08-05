@@ -1787,6 +1787,66 @@ pass_attest_standard_newline_stays_one_line() {
   OUT=$(grep -c '^- m001 — R2.*· verified$' "$W/truths/verify.md"); RC=0
   expect_has "1"
 }
+block_attest_control_byte_in_standard() {
+  # The one free-text column may not carry a control byte: a TAB widens the row, a newline splits
+  # it. Both were writable, and the row then covered nothing while validate reported a malformed
+  # ledger the user never knowingly created. Refused at the door — the ledger must not be breakable
+  # through its own writer. Asserted on the RESULTING FILE too, not just the exit code: a refusal
+  # that still wrote something is not a refusal.
+  local before after
+  before=$( [ -f "$W/truths/verify-ledger.tsv" ] && wc -l < "$W/truths/verify-ledger.tsv" || echo 0 )
+  vrun attest verified 2 "$(printf 'a\tb')" m001
+  expect_block "may not contain a tab, newline or other control character"
+  after=$( [ -f "$W/truths/verify-ledger.tsv" ] && wc -l < "$W/truths/verify-ledger.tsv" || echo 0 )
+  [ "$before" = "$after" ] || bad "refused but still wrote: ledger went from $before to $after line(s)"
+  vrun attest verified 2 "$(printf 'a\nb')" m001
+  expect_block "may not contain a tab, newline or other control character"
+}
+block_attest_onto_unterminated_ledger() {
+  # An append onto a torn final row would FUSE the two into one row. That torn row is the signature
+  # of an attest that died mid-write, so this is the second attest of a crashed pair: it must refuse
+  # rather than quietly make the damage unreadable. validate already blocks the mine; this stops the
+  # writer from compounding it.
+  vrun attest verified 1 standard m001
+  printf 't001\t-\tverified\t1\tstandard\t2026-07-01' >> "$W/truths/verify-ledger.tsv"
+  vrun attest verified 2 standard t001
+  expect_block "no line terminator"
+  # ...and the torn row is still exactly as it was — not fused, not repaired behind the user's back.
+  OUT=$(tail -c 40 "$W/truths/verify-ledger.tsv"); RC=0
+  expect_has "2026-07-01"
+}
+acct_attest_ledger_accumulates_in_order() {
+  # A REGRESSION GUARD, and it passes against the old writer too — said plainly because a case that
+  # cannot fail on the change it accompanies is not evidence for that change, and this suite has
+  # twice been fooled by one that looked like it was. What it pins is the INVARIANT the rewrite must
+  # not break: rows accumulate, the header survives, and order is preserved (order decides which row
+  # `LAST row per id wins` selects, so a writer that reordered would change verdicts silently).
+  #
+  # The change it accompanies — appending instead of read-whole-then-rewrite — closes two holes the
+  # suite cannot reach, and they are not equally proven:
+  #   MEASURED. A read fault on an EXISTING ledger. Old writer, as an unprivileged user against a
+  #   chmod-000 ledger: rc 0, "attest: verified — R2 …", and the earlier row COUNT WENT 1 -> 0. It
+  #   reported success while deleting the verification history. New writer: rc 1, refuses, row
+  #   survives. Not testable here — the harness runs as root in the container, where chmod does not
+  #   bind.
+  #   NOT REPRODUCED. The lost update between two concurrent attests. Read-then-rewrite is a
+  #   lost-update pattern by construction, but two short-lived node processes did not interleave in
+  #   the critical section when tried, so this is an argument from the code's shape, not a
+  #   measurement. Appending removes the pattern either way; a race in a suite would be a flake
+  #   generator, so it is not pinned here.
+  vrun attest verified 1 first m001
+  vrun attest verified 2 second t001
+  vrun attest verified 3 third m001
+  local f="$W/truths/verify-ledger.tsv"
+  grep -q '^# machine-owned' "$f" || bad "header lost"
+  [ "$(grep -c '	first	' "$f")" = 1 ] || bad "the first round's row did not survive later attests"
+  [ "$(grep -c '	second	' "$f")" = 1 ] || bad "the second round's row did not survive"
+  # Order matters: LAST row per id wins, so a rewrite that reordered would change which one does.
+  [ "$(grep -n '	third	' "$f" | cut -d: -f1)" -gt "$(grep -n '	first	' "$f" | cut -d: -f1)" ] \
+    || bad "the newer m001 row is not after the older one — 'last row per id wins' would pick the wrong one"
+  vrun scope; expect_has "1 verified (digest-bound)"
+  vrun validate; expect_pass
+}
 block_attest_bad_target() {
   # attest is all-or-nothing: one unresolvable id and NOTHING is written.
   vrun attest verified 2 standard t001 t999
@@ -1953,6 +2013,30 @@ block_completeness_required_no_register() {
   # warranty nobody ran is not a warranty (fail-closed, same as the gate's own record).
   req_completeness
   vrun validate; expect_block "no gaps.md"
+}
+block_completeness_accepted_prose() {
+  # The external review's finding, verbatim: under `required`, prose that is not a bullet and
+  # carries none of the entry's fields sat under '# Accepted' and validate PASSED. The register
+  # grammar is documented fail-closed — "anything else blocks" — but the scanner only ever ran over
+  # '# Open', so the twin section accepted anything. One scanner now, called twice.
+  req_completeness
+  printf '# Open\n\n# Accepted\n\nprose with no bullet and none of the fields at all\n' > "$W/gaps.md"
+  vrun validate; expect_block "'# Accepted' holds a line the register grammar cannot read"
+}
+block_completeness_accepted_orphan_continuation() {
+  # The state-based half of the same grammar: an indented line is a continuation only UNDER a
+  # bullet. Orphaned, it is a decision nobody can point at — the Accepted twin of the rule '# Open'
+  # has had since v0.3.3.
+  req_completeness
+  printf '# Open\n\n# Accepted\n\n  계속 줄인데 위에 항목이 없다\n' > "$W/gaps.md"
+  vrun validate; expect_block "'# Accepted' holds a line the register grammar cannot read"
+}
+pass_completeness_accepted_continuation_under_bullet() {
+  # ...and the shape that must NOT block, so the rule above cannot drift into refusing legitimate
+  # multi-line accepted entries. Same fixture family, one indent level, a real bullet above it.
+  req_completeness
+  printf '# Open\n\n# Accepted\n\n- [declared] m001 — 부속서 없음 — scope: 위약 — recheck: 입수 시 — as-of: t001\n  이어지는 설명 줄\n' > "$W/gaps.md"
+  vrun validate; expect_pass
 }
 pass_completeness_required_accepted_only() {
   # Accepted gaps are decisions, not debt — `required` blocks only what is still open.
