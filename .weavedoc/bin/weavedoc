@@ -18,6 +18,16 @@
 # skill names, the command name) is expressly permitted.
 #
 # weavedoc — deterministic checks for a WeaveDoc project (the floor under the AI fidelity gate).
+#
+# ============================================================================================
+# THIS IS THE LEGACY REFERENCE RUNTIME. The shipped runtime is `weavedoc.mjs` beside this file.
+# Both are in the bundle for ONE release and they agree: the 349-case suite passes against each,
+# 349 broken mines match command by command, and every write command leaves identical bytes on
+# disk. This file is kept so that agreement can still be MEASURED if a report comes in — that is
+# its whole remaining job. It is scheduled for removal in the release after 0.4.0.
+# Do not add behaviour here. A change that lands in one runtime and not the other is the drift
+# class this rewrite existed to end.
+# ============================================================================================
 #   validate          format + truth coherence (exit non-zero on any problem)
 #   pull <term>       protocol-correct mine lookup for consumers outside the pipeline (see READ.md)
 #   impact <mID>      which truths were extracted from a material + which documents cite it (blast radius)
@@ -2137,7 +2147,12 @@ EOF
   # review next to a final is real history that binds no bytes — visible, never silently equal
   # to a sealed one.
   [ "$N_CONSEC" -gt 0 ] && echo "  review seals: $N_RSEAL digest-bound · $N_RLEGACY legacy-unbound"
-  [ "${SCHEMA_V1:-0}" = "1" ] && echo "  schema: v1 mine — readable (dual-reader), current format is v$(schema_ver); run 'bash .weavedoc/bin/weavedoc upgrade --check' to see the migration"
+  # The invocation this line NAMES is the Node one, from stage 6 on — it is the runtime the bundle
+  # ships and the one the skills call. Shell-neutral on purpose: `node <path> …` is the same words
+  # in bash and in PowerShell, and the plan forbids a `.ps1` wrapper (it would become subject to the
+  # execution policy). Both runtimes print the identical string, changed in the same commit, because
+  # this is output contract and the suite compares it byte for byte.
+  [ "${SCHEMA_V1:-0}" = "1" ] && echo "  schema: v1 mine — readable (dual-reader), current format is v$(schema_ver); run 'node .weavedoc/bin/weavedoc.mjs upgrade --check' to see the migration"
   if [ "$PROBLEMS" -eq 0 ]; then echo "✓ validate: all checks passed"; return 0
   else echo "✗ validate: $PROBLEMS problem(s)"; return 1; fi
 }

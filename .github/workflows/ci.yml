@@ -19,11 +19,27 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
-      - name: bash -n (bin + suite)
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '18'          # the declared floor; the runtime uses node:fs/path/crypto only
+      - name: parse checks (BOTH runtimes — the bundle ships both for one release)
         run: |
           bash -n .weavedoc/bin/weavedoc
           bash -n tests/regress.sh
           bash -n tests/make-manifest.sh
+          node --check .weavedoc/bin/weavedoc.mjs
+          for f in .weavedoc/bin/lib/*.mjs; do node --check "$f"; done
+      - name: no literal control character in a runtime module
+        # The bash runtime keeps its reference-index separator as a raw U+0001, which RENDERS AS
+        # NOTHING — reading it as text says "split on the empty string" and the port did exactly
+        # that until it was run. The Node modules spell theirs as escapes; this keeps it that way.
+        run: |
+          # This workflow scans ITSELF: the first draft of the comment above put a real U+0001
+          # into the YAML, which is the same invisible-character trap one layer out.
+          for f in .weavedoc/bin/weavedoc.mjs .weavedoc/bin/lib/*.mjs .github/workflows/ci.yml; do
+            n=$(node tests/ctlscan.mjs "$f" | tail -1 | sed 's/[^0-9]//g')
+            [ "$n" = 0 ] || { echo "$f holds $n line(s) with a literal control character"; exit 1; }
+          done
       - name: shellcheck (errors block; the full style pass is a §9 release condition)
         run: |
           sudo apt-get update -q && sudo apt-get install -y -q shellcheck
@@ -33,9 +49,16 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '18'
       - name: generate ko_KR.UTF-8 (pass_locales compares real locale behavior, not a warning)
         run: sudo locale-gen ko_KR.UTF-8
-      - name: run the regression suite
+      - name: run the regression suite against the SHIPPED runtime (Node)
+        # Node is the product from stage 6 on, so it is the gate. The bash run below is the parity
+        # reference, kept for one release — if the two ever disagree, the suite says which.
+        run: WD_BIN="node .weavedoc/bin/weavedoc.mjs" bash tests/regress.sh
+      - name: run the same suite against the bash reference
         run: bash tests/regress.sh
       - name: executed-case artifact (§7.3 — the case ID list, not just a PASS count)
         if: always()
@@ -92,7 +115,12 @@ jobs:
           echo "/opt/homebrew/opt/gnu-sed/libexec/gnubin" >> "$GITHUB_PATH"
           echo "/usr/local/opt/coreutils/libexec/gnubin" >> "$GITHUB_PATH"
           echo "/opt/homebrew/opt/coreutils/libexec/gnubin" >> "$GITHUB_PATH"
-      - name: run the regression suite
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+      - name: run the regression suite against the SHIPPED runtime (Node)
+        run: WD_BIN="node .weavedoc/bin/weavedoc.mjs" bash tests/regress.sh
+      - name: run the same suite against the bash reference
         run: bash tests/regress.sh
       - name: executed-case artifact (§7.3)
         if: always()

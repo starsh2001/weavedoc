@@ -1020,10 +1020,10 @@ export function cmdValidate (m, out, json = false, consecOk = '') {
   // review next to a final is real history that binds no bytes — visible, never silently equal to a
   // sealed one.
   if (nConsec > 0) out(`  review seals: ${nRseal} digest-bound · ${nRlegacy} legacy-unbound`)
-  // The command named here is the BASH one, and stays so until stage 6 moves the default runtime:
-  // the string is contract, and pointing a v1 mine at a runtime that cannot yet run `upgrade` would
-  // be worse than the inconsistency.
-  if (schemaV1) out(`  schema: v1 mine — readable (dual-reader), current format is v${m.schemaVer()}; run 'bash .weavedoc/bin/weavedoc upgrade --check' to see the migration`)
+  // The invocation NAMED here is the Node one, from stage 6 on. Shell-neutral on purpose: `node
+  // <path> …` reads the same in bash and in PowerShell, and the plan forbids a `.ps1` wrapper.
+  // Changed in the same commit as the bash side, because this is output contract.
+  if (schemaV1) out(`  schema: v1 mine — readable (dual-reader), current format is v${m.schemaVer()}; run 'node .weavedoc/bin/weavedoc.mjs upgrade --check' to see the migration`)
   if (problems === 0) { out('✓ validate: all checks passed'); return 0 }
   out(`✗ validate: ${problems} problem(s)`)
   return 1

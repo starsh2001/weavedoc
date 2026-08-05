@@ -9,6 +9,8 @@ The data mine's intake channel — turn whatever is in `inbox/` into clean, clas
 
 > **Language: read it first.** Read `language:` from `.weavedoc/config.yaml` and write **every** reply in that language. These skill files are English; your output is not.
 
+> **Running weavedoc: pick the shell by platform.** Commands below are written `node .weavedoc/bin/weavedoc.mjs …` and read the same in every shell. **On Windows run them through PowerShell; everywhere else through bash** — Git Bash pays ~290ms per process to emulate Unix (measured: 373ms vs 80ms for one invocation), and a mine-wide command spends most of its time there. Never create a `.ps1` wrapper: PowerShell's execution policy applies to `.ps1` files and a downloaded one is blocked under `RemoteSigned`, while `node script.mjs` is not subject to it at all.
+
 > **Decisions: recommend + leave a way out.** When you ask the user to decide: **mark your recommended option `(추천)`** with a one-line why, and **always allow a free-form answer.** Don't force a closed pick.
 
 > **Thin context.** Don't read all existing materials into context. Read only `catalog.md` (the index) for duplicate checking and id assignment. The truth is on disk; re-read when you need it.
@@ -65,7 +67,7 @@ Provenance is not a trust axis — a `conversation` material is grounded and cit
 
 When the user withdraws a source ("m005 빼줘", "이 자료는 잘못됐어") — first check which case it is. **Replacement is the norm; retraction is rare.** If a corrected version exists (or the user can supply one), use the replacement flow: gather the correction, let map supersede — the truth changes because its grounding changed. Retract only when the material should stop grounding anything, with nothing in its place.
 
-1. **Show the blast radius first.** Run `bash .weavedoc/bin/weavedoc impact <id>` and show what falls: which truths were extracted from it, which documents cite them. Confirm with the user before touching anything.
+1. **Show the blast radius first.** Run `node .weavedoc/bin/weavedoc.mjs impact <id>` and show what falls: which truths were extracted from it, which documents cite them. Confirm with the user before touching anything.
 2. **Mark, never delete.** Set the material's frontmatter `status: retracted`. The folder, `source.*`, and `converted.md` all stay — the mine keeps its audit trail; a retracted material grounds nothing but still shows what was once declared.
 3. **Regenerate `catalog.md`** (the status column shows it).
 4. **Route to map for propagation** — truths are map's write-scope, not gather's: its live truths → `unsupported`, resolutions it won re-open, citing documents → `stale` (see map's correction table). `weavedoc validate` enforces the truth-side invariants mechanically — a retracted source with a live `ok` truth fails validate, so nothing rides on memory.
