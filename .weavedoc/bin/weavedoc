@@ -2699,14 +2699,18 @@ cmd_retag() {
     hitlist=$(WD_OLD="$old" WD_NEW="$new" awk -v key="tags" -v mode=s "$prog" "$TRUTHS"/t[0-9]*.md)
     while IFS= read -r f; do
       [ -n "$f" ] || continue
-      printf '  %s (tags)\n' "$f"; total=$((total+1)); truthhits=$((truthhits+1))
+      # PROJECT-RELATIVE, like every other path this runtime prints (decision ②, 2026-08-04). retag
+      # was the LAST surface still absolute, and it was found by sweeping every remaining command
+      # over the corpus rather than by fixing whichever one was in front of me — which is exactly
+      # how the first pass missed the shell diagnostics and the second missed `impact`.
+      printf '  %s (tags)\n' "${f#"$ROOT/"}"; total=$((total+1)); truthhits=$((truthhits+1))
       [ "$dry" -eq 0 ] && rewrite_file "$f" tags
     done <<< "$hitlist"
   fi
   if [ -f "$PROJECT" ]; then
     c=$(WD_OLD="$old" WD_NEW="$new" awk -v key="required_tags" -v mode=c "$prog" "$PROJECT")
     if [ "${c:-0}" -gt 0 ]; then
-      printf '  %s (required_tags)\n' "$PROJECT"; total=$((total+1))
+      printf '  %s (required_tags)\n' "${PROJECT#"$ROOT/"}"; total=$((total+1))
       [ "$dry" -eq 0 ] && rewrite_file "$PROJECT" required_tags
     fi
   fi
@@ -2714,14 +2718,14 @@ cmd_retag() {
     [ -f "$DOCUMENTS/$d/plan.md" ] || continue
     c=$(WD_OLD="$old" WD_NEW="$new" awk -v key="scope_tags" -v mode=c "$prog" "$DOCUMENTS/$d/plan.md")
     if [ "${c:-0}" -gt 0 ]; then
-      printf '  %s (scope_tags)\n' "$DOCUMENTS/$d/plan.md"; total=$((total+1))
+      printf '  %s (scope_tags)\n' "${DOCUMENTS#"$ROOT/"}/$d/plan.md"; total=$((total+1))
       [ "$dry" -eq 0 ] && rewrite_file "$DOCUMENTS/$d/plan.md" scope_tags
     fi
   done < <(doc_ids)
   if [ "$total" -eq 0 ]; then echo "  no list-field occurrences of '$old'"; fi
   local freetext=""
   for f in "$ROOT/gaps.md" "$ROOT/questions.md" "$TRUTHS/verify.md"; do
-    [ -f "$f" ] && grep -qF -- "$old" "$f" && freetext="$freetext $f"
+    [ -f "$f" ] && grep -qF -- "$old" "$f" && freetext="$freetext ${f#"$ROOT/"}"
   done
   [ -n "$freetext" ] && echo "  review manually (free-text mentions of '$old', not rewritten):$freetext"
   if [ "$dry" -eq 1 ]; then return 0; fi

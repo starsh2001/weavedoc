@@ -158,7 +158,7 @@ const usage2 = u => { errln(`usage: ${u}`); process.exit(2) }
 
 // Ported in a later stage. Refusing with a distinct code keeps a partial port honest: no case can
 // mistake "not written yet" for "ran and agreed".
-const NOT_PORTED = new Set(['consecrate', 'retag', 'upgrade'])
+const NOT_PORTED = new Set(['consecrate', 'upgrade'])
 
 const argv = process.argv.slice(2)
 const cmd = argv[0] ?? ''
@@ -174,6 +174,21 @@ switch (cmd) {
     // Top-level await (ESM): keeps node:child_process off the startup path — it is loaded only on
     // the Windows-registry fallback, which most runs never reach.
     rc = await cmdLocale(); break
+  case 'retag': {
+    if (rest.length < 2 || rest.length > 3) usage2('weavedoc retag <old> <new> [--dry]')
+    const { openMine } = await import('./lib/mine.mjs')
+    const { cmdRetag } = await import('./lib/cmd-retag.mjs')
+    const { cmdReindex } = await import('./lib/cmd-reindex.mjs')
+    const { cmdValidate } = await import('./lib/cmd-validate.mjs')
+    const mine = openMine(SCRIPT_DIR)
+    // reindex and validate run IN PROCESS, exactly as the bash version calls its own functions —
+    // that is what lets the rename answer to a full validation and roll back as one transaction.
+    // Their output is swallowed (reindex) or captured (validate), never printed straight through.
+    rc = cmdRetag(mine, outln, errln, rest,
+      () => cmdReindex(mine, () => {}, () => {}, []),
+      collect => cmdValidate(mine, collect, false))
+    break
+  }
   case 'validate': {
     let vjson = false
     let va = rest

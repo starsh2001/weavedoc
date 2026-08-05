@@ -3201,6 +3201,25 @@ acct_diag_order_is_specified() {
   if [ "$seen" = "claim id source status tags" ]; then ok
   else bad "truth FM-MISSING order is '$seen', want 'claim id source status tags' (schema order sorted; an unspecified order cannot be ported)"; fi
 }
+acct_retag_paths_are_relative() {
+  # The third and last surface that printed an absolute path, found by sweeping EVERY remaining
+  # command over the corpus rather than by fixing the one in front of me — which is how the first
+  # two rounds of this missed `impact` and then `retag`. All four of retag's print sites are
+  # exercised: a truth file, project.md, a plan, and the free-text list.
+  # The pristine's required_tags is empty, so the project.md site is UNREACHABLE without this line —
+  # asserting on it unchanged would have been an assertion about a branch that never ran.
+  sed -i 's/^required_tags: \[\]$/required_tags: [위약]/' "$W/project.md"
+  printf -- '\n위약 이야기\n' >> "$W/gaps.md"
+  vrun retag 위약 벌칙 --dry
+  expect_pass
+  expect_has "truths/t001.md (tags)"
+  expect_has "documents/d1/plan.md (scope_tags)"
+  expect_has "project.md (required_tags)"
+  case "$OUT" in
+    *"$W"*) bad "retag printed the absolute mine root: $(printf '%s\n' "$OUT" | grep -F "$W" | head -1)" ;;
+    *) ok ;;
+  esac
+}
 acct_impact_paths_are_relative() {
   # The same rule one door over, and the reason this is a SECOND case: `impact` prints its file
   # lists DIRECTLY, so the diagnostic-side fix cannot reach them and a case that only ran validate

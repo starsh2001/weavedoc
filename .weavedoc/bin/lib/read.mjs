@@ -148,3 +148,13 @@ export function fmvB (file, key) {
   if (m === undefined) { m = fmLoadBytes(file); FM_CACHE_B.set(file, m) }
   return m.get(key) ?? ''
 }
+
+// Content caches are per-PROCESS, and a WRITE command that re-validates in the same process would
+// otherwise validate the bytes it cached BEFORE its own edits. The bash runtime clears its
+// frontmatter and file caches at the top of cmd_validate for exactly this reason (a v0.3.1
+// self-catch: the marker `upgrade` had just written was invisible to the very validation gating it).
+// retag and consecrate both re-validate in process, so they call this first.
+export function clearFileCaches () {
+  FM_CACHE.clear()
+  FM_CACHE_B.clear()
+}
