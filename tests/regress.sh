@@ -1061,8 +1061,19 @@ pass_paths_dot_prefix() {
   vrun validate; expect_pass
 }
 pass_paths_absolute() {
+  # The path must be spelled in the NATIVE form on Windows. Under MSYS `pwd` prints an MSYS path
+  # (`/tmp/...`), and that spelling is a translation only MSYS programs perform — measured here,
+  # `/tmp` is not `C:\tmp` but `C:\Users\<u>\AppData\Local\Temp`, which nothing outside MSYS can
+  # know. bash IS an MSYS program so it resolves it; the shipped Node runtime is a native program
+  # and cannot. Declared parity exception (REWRITE_PLAN §5) — the same MSYS/native boundary as the
+  # invalid-UTF-8 argv bytes. What this case is FOR is that an absolute path in config.paths works
+  # at all, so it spells one the way a Windows user actually would.
   local abs; abs=$( cd "$W" >/dev/null && pwd )
+  case "$(uname -s)" in MINGW*|MSYS*) abs=$( cd "$W" >/dev/null && pwd -W );; esac
   sed -i "s|^  documents: documents$|  documents: $abs/documents|" "$W/.weavedoc/config.yaml"
+  # ...and the edit has to have LANDED. Without this the case degrades into a plain `validate`
+  # pass the moment the config key is respelled, and reports AGREE while measuring nothing.
+  grep -qF "  documents: $abs/documents" "$W/.weavedoc/config.yaml" || { bad "fixture no-op: config still has no absolute documents path"; return; }
   vrun validate; expect_pass
 }
 

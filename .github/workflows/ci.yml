@@ -115,6 +115,25 @@ jobs:
           echo "/opt/homebrew/opt/gnu-sed/libexec/gnubin" >> "$GITHUB_PATH"
           echo "/usr/local/opt/coreutils/libexec/gnubin" >> "$GITHUB_PATH"
           echo "/opt/homebrew/opt/coreutils/libexec/gnubin" >> "$GITHUB_PATH"
+          # gawk ships no gnubin dir and installs no `awk` link, so `awk` on this leg stayed
+          # /usr/bin/awk (BWK) for its whole life — this job has been testing an UNSUPPORTED
+          # toolchain while claiming otherwise. The tool's own preflight cannot catch it: BWK awk
+          # answers `awk --version` with exit 0 too. Found 2026-08-05 by the v0.4.0 tag run, where
+          # the specified diagnostic order came out in BWK's hash order — PROCINFO["sorted_in"] is
+          # a gawk extension and every other awk ignores it in silence.
+          mkdir -p "$RUNNER_TEMP/gnubin"
+          ln -sf "$(brew --prefix gawk)/bin/gawk" "$RUNNER_TEMP/gnubin/awk"
+          echo "$RUNNER_TEMP/gnubin" >> "$GITHUB_PATH"
+      - name: and the GNU toolchain is the one actually on PATH (a silent BSD fallback is what this leg exists to catch)
+        if: runner.os == 'macOS'
+        run: |
+          # A separate step on purpose: $GITHUB_PATH only takes effect from the NEXT step on.
+          for t in awk sed; do
+            v=$("$t" --version 2>/dev/null | head -1)
+            case "$v" in *GNU*) echo "$t → $v" ;;
+                          *) echo "$t is not GNU: [${v:-no --version}] — the leg would silently grade a toolchain the tool does not support"; exit 1 ;;
+            esac
+          done
       - uses: actions/setup-node@v4
         with:
           node-version: '18'
@@ -131,7 +150,10 @@ jobs:
             echo "bundle: $(cat .weavedoc/VERSION)"
             echo "os: $(uname -sr)"
             echo "bash: $BASH_VERSION"
-          } > "$RUNNER_TEMP/ci-artifact/env.txt"
+            echo "awk: $(awk --version 2>/dev/null | head -1)"   # the Linux leg has recorded these
+            echo "sed: $(sed --version 2>/dev/null | head -1)"   # since day one; this leg did not,
+          } > "$RUNNER_TEMP/ci-artifact/env.txt"                 # which is why the BSD awk went
+                                                                 # unnoticed. One rule, one spelling.
           [ -n "$key_dir" ] && ls "$key_dir/res" > "$RUNNER_TEMP/ci-artifact/executed-cases.txt" || true
       - uses: actions/upload-artifact@v4
         if: always()
