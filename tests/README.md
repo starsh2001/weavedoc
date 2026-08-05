@@ -11,12 +11,19 @@ bash tests/regress.sh --resume   # 같은 구성의 이전 결과 재사용, 남
 bash tests/regress.sh --one NAME # 케이스 하나, 출력 인라인 (pristine 자동 생성)
 ```
 
-Windows Git Bash에서 `validate` 1회 ≈ 40초라 전체 sweep은 수십 분 걸린다 (Phase 4의 성능 작업이 이를 줄인다).
+기본 러너는 **배포되는 런타임**(`node .weavedoc/bin/weavedoc.mjs`)이다. bash 판이 함께 배포되던 동안 기본값이 그쪽이어서 **로컬에서 그냥 돌리면 제품이 아니라 기준을 채점**하고 있었다(v0.4.0 외부 리뷰 지적, 번들 2026-08-05.3에서 수정). 다른 대상을 채점하려면 `WD_BIN="<인터프리터> <진입점>"`.
+
+MSYS는 프로세스 생성을 전역 직렬화해서 Windows 전체 sweep은 수십 분이다. **컨테이너를 쓴다** — 같은 sweep이 20초 미만:
+
+```bash
+bash tests/in-container.sh regress          # 전체 suite
+bash tests/in-container.sh sh '<셸 명령>'    # 그 외, /work가 트리
+```
 
 ## 격리 모델 (Phase 2, WD-QA-002)
 
 - **픽스처**: 실행마다 `mktemp -d` workspace — trap으로 종료 시 제거. 병렬/중복 실행이 충돌할 수 없고, 중단돼도 workspace가 남지 않는다.
-- **결과 캐시**: `$TMPDIR/wd-reg-<key>/res` — key는 **commit + bundle 바이트 + OS + bash/awk/sed 버전**의 해시. `--resume`은 정확히 같은 구성의 결과만 재사용할 수 있다: 다른 구성은 다른 디렉터리라서, 오래된 결과는 걸러지는 게 아니라 **도달 불가능**하다. (`WD_REG_KEY_SALT` 환경변수로 강제 새 키 가능. 쌓인 `wd-reg-*` 디렉터리는 언제든 지워도 된다.)
+- **결과 캐시**: `$TMPDIR/wd-reg-<key>/res` — key는 **commit + bundle 바이트 + 런타임 전체(진입점 + `bin/lib/*` + schema)의 해시 + WD_BIN + OS + 도구 버전**. 런타임 전체를 넣는 이유: 진입점만 해시하면 **커밋 안 된 lib 수정 뒤 `--resume`이 이전 결과를 재사용**한다(HEAD는 커밋된 변경만 덮는다 — 같은 외부 리뷰가 지적). `--resume`은 정확히 같은 구성의 결과만 재사용할 수 있다: 다른 구성은 다른 디렉터리라서, 오래된 결과는 걸러지는 게 아니라 **도달 불가능**하다. (`WD_REG_KEY_SALT` 환경변수로 강제 새 키 가능. 쌓인 `wd-reg-*` 디렉터리는 언제든 지워도 된다.)
 - 워커는 부모의 workspace를 env로 상속하며, mktemp를 **만든** 호출만 제거를 담당한다.
 
 ## CI
@@ -33,7 +40,8 @@ Windows Git Bash에서 `validate` 1회 ≈ 40초라 전체 sweep은 수십 분 �
 | 파일 | 내용 |
 |---|---|
 | `case-manifest.txt` | Phase 0 시점 182개 케이스 ID (기준선 — 이후 케이스는 suite가 자체 열거) |
-| `bundle.manifest` (+`.sha256`) | Phase 0 시점 21개 동작 결정 파일의 SHA-256 (git blob 기준). 재생성: `bash tests/make-manifest.sh` |
+| `bundle.manifest` (+`.sha256`) | Phase 0 시점 21개 동작 결정 파일의 SHA-256 (git blob 기준). 재생성: `bash tests/make-manifest.sh` (현재 43개) |
+| `parity-final-2026-08-05.md` | **bash 판 삭제 직전의 마지막 대조** — 회귀·코퍼스·쓰기 명령 전수·실광산·장애 주입. 삭제하면 다시 잴 수단이 없으므로 이력에 고정했다 |
 | `fidtest-inventory.md` | 구 fidtest.sh 11개 실험의 판정 기록 — Phase 2에서 흡수 3 · 폐기 8로 완결, 파일 자체 제거 |
 | `golden/` | 최소 정상 fixture에 대한 각 명령의 human output 스냅샷 (동작 변경 시 커밋 단위로 갱신) |
 | `perf-baseline.md` | validate 3회 median 39.658s (Phase 4의 70% 목표 기준점) |

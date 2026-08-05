@@ -3,7 +3,7 @@
 // These are ports of the bash runtime's shared judges, and they are the layer where bash drifted
 // most: on 2026-08-04 alone, "how a frontmatter value is read" had THREE spellings, and scope's
 // private copy never peeled quotes, so `status: "retracted"` was a tombstone to validate and a live
-// truth to scope. Here each rule is ONE exported function, and tests/foundation-parity.sh feeds the
+// truth to scope. Here each rule is ONE exported function, and the foundation differential fed the
 // same table to the bash originals and to these, so agreement is measured rather than assumed.
 //
 // Nothing here reads the filesystem or prints — pure rules, so they can be tested as a table.

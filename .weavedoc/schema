@@ -1,9 +1,9 @@
 # WeaveDoc format schema — the single source of truth for artifact formats.
-# Both bin/weavedoc (the checker) and FORMATS.md (human prose) defer to THIS file.
-# Kept flat with |-separated lists so bash/awk parse it with no yq/jq dependency.
+# Both bin/weavedoc.mjs (the checker) and FORMATS.md (human prose) defer to THIS file.
+# Kept flat with |-separated lists so it parses with no yq/jq dependency.
 # `*.fm.optional` lists are DESCRIPTIVE: validate does not reject unknown frontmatter keys, so they
 # document what a writer may add rather than gating anything. Every other key here is read by
-# bin/weavedoc via `sch <key>`. If you add a key, wire it or say here that it is descriptive —
+# bin/weavedoc.mjs via the schema map. If you add a key, wire it or say here that it is descriptive —
 # a declared-but-unread key looks exactly like an enforced one, and `repeat` sat unwired that way.
 
 # An UNTOUCHED template placeholder: a required value that is nothing but one brace group, the

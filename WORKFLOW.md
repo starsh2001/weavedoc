@@ -95,9 +95,9 @@ The fidelity gate keeps the record faithful to the sources. This layer guards th
 
 ---
 
-## 6. Deterministic checks (`.weavedoc/bin/weavedoc`)
+## 6. Deterministic checks (`.weavedoc/bin/weavedoc.mjs`)
 
-A dependency-free checker — the mechanical floor under the AI gate. Requirements (preflighted at startup): **bash ≥ 4** + **GNU awk/sed** — Windows Git Bash ships all three; macOS needs `brew install bash gawk gnu-sed` (the default 3.2/BSD tools are not supported; with that toolchain macOS is a **required CI platform** — promoted 2026-08-04, it gates the release alongside Linux·Windows). Format source of truth is `.weavedoc/schema` (which `FORMATS.md` mirrors).
+A dependency-free checker — the mechanical floor under the AI gate. Requirement: **Node 18+**, and nothing else (`node:fs`, `node:path`, `node:crypto` only — no `package.json`, no `npm install`). The bash 4 + GNU awk/sed floor belonged to the runtime this replaced, deleted in bundle `2026-08-05.3`. Linux, Windows and macOS all gate the release. Format source of truth is `.weavedoc/schema` (which `FORMATS.md` mirrors).
 
 - **`validate`** — format + truth coherence, exits non-zero with the list:
   - required frontmatter · enums · `id` matches filename · role ∈ project roles;

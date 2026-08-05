@@ -176,8 +176,18 @@ export function cmdConsecrate (m, out, errln, docId, ops = realOps) {
         out(`consecrate: warning — could not remove ${bak.startsWith(`${m.root}/`) ? bak.slice(m.root.length + 1) : bak}; validate blocks while it remains, remove it by hand`)
       }
     }
-    try { ops.rmrf(mark) } catch { /* the message below is still the truth about the promotion */ }
+    // A marker that survives the promotion makes the NEXT validate fail CONSEC-INTERRUPTED, so
+    // swallowing this left the user with a green consecrate and a red mine and no line connecting
+    // them (measured 2026-08-05: rc 0, marker present, next validate rc 1). Named, in the same
+    // spelling the backup-removal failure two lines up already uses. The exit code stays 0 because
+    // the promotion is REAL — the final is the reviewed draft — and saying otherwise would send the
+    // user to re-do work that is done; what is left is one file to remove.
+    let markerGone = true
+    try { ops.rmrf(mark) } catch { markerGone = false }
     out(`consecrate: ${d} consecrated — full validation: 1 run, clean. The reviewed draft IS the final, byte for byte.`)
+    if (!markerGone) {
+      out(`  warning — the promotion is done but the in-flight marker could not be removed: ${mark.startsWith(`${m.root}/`) ? mark.slice(m.root.length + 1) : mark}. validate blocks with CONSEC-INTERRUPTED while it remains; delete that file by hand`)
+    }
     if ((m.cfg.flat.get('completeness') ?? '') !== 'required') {
       out('  note: completeness is off — undetected omissions are outside this document\'s warranty (fidelity.completeness)')
     }

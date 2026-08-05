@@ -7,14 +7,15 @@
 // the first; a zero-byte file is invisible to an awk and present to a directory listing. Each of
 // those was found by measurement after being got wrong by reading.
 //
-// The scale is tests/parity-corpus.sh over the mines the 345 regression cases build — whole-output
-// comparison, because a substring suite cannot grade a rewrite whose contract is bytes.
+// The scale was a whole-output comparison against the bash runtime over every mine the regression
+// cases build — a substring suite cannot grade a rewrite whose contract is bytes. Both that scale
+// and its reference are gone; the last run of it is in tests/baseline/parity-final-2026-08-05.md.
 import { statSync, realpathSync, readFileSync, readdirSync } from 'node:fs'
 import { canonId, isDate, isFence, isPlaceholder, inList, listField, fmVal, pipes, splitLines, U, M } from './core.mjs'
 import { join, materialIds, mdirFor, docIds, tfileFor, docFinalPath, contextDigest } from './mine.mjs'
 import { nocomment, dupSection, commentBalanced, sectionAll } from './sections.mjs'
 import { hqFiles } from './cmd-status.mjs'
-import { artifactDigest } from './verify.mjs'
+import { artifactDigest, ledgerLines } from './verify.mjs'
 import { fidMark, fidBody, isNoise, foldKinds, bearsKind, commentSpans } from './review.mjs'
 import { fmvB as fmv, loadSchema, loadConfig } from './read.mjs'
 import { validateTruths } from './validate-truths.mjs'
@@ -118,13 +119,11 @@ function splitLinesBytes (p) {
 //      `git clone` of a mine produces exactly this.
 //   2. there is no `|| [ -n "$line" ]`, so a final line with NO trailing newline is never read at
 //      all — bash's `read` returns non-zero on it and the loop ends.
-function ledgerLinesRaw (p) {
-  let b
-  try { b = readFileSync(p) } catch { return [] }
-  const l = b.toString('latin1').split('\n')
-  l.pop()          // whatever follows the last \n — the empty string, or an unterminated final line
-  return l
-}
+// REPLACED by verify.mjs's ledgerLines (§11 2026-08-05): one reader for one file. What this one
+// did, faithfully reproducing bash's `while IFS= read -r`, was KEEP a trailing CR (so a git
+// autocrlf checkout blocked as LEDGER-MALFORMED while `scope` called the same mine fully verified)
+// and DISCARD a final line with no newline (so the row a crashed `attest` leaves behind vanished
+// instead of raising anything). Both were faithful to a runtime that no longer exists.
 
 // `IFS=$'\t' read -r v1 … vN` — and a plain `.split('\t')` is NOT that rule. Measured, after the
 // naive version disagreed with bash on a row whose `standard` column is empty:
@@ -579,8 +578,15 @@ export function cmdValidate (m, out, json = false, consecOk = '') {
     // Read as LATIN1, one char per byte. The `standard` column is free text a Korean console fills
     // with CP949, and this is exactly where bash's own `read` loses lines under a multibyte locale
     // (v0.3.7). Byte semantics here means the split lands on the same tabs whatever the content.
-    for (const lline of ledgerLinesRaw(lfv)) {
+    for (const { raw: lline, terminated } of ledgerLines(lfv) ?? []) {
       if (lline === '' || lline.startsWith('#')) continue
+      // A final line with content and no newline is the shape a crashed `attest` leaves. It is
+      // named rather than skipped — the skip was the old reader's, and it made an interrupted
+      // verification write look like a ledger that had simply not got there yet.
+      if (!terminated) {
+        prob('LEDGER-MALFORMED', M`truths/${lfName}  the last row has no line terminator: '${lline}' — a row written without its newline is the signature of a verification that died mid-write; re-run the attest that produced it, or delete the partial row`)
+        continue
+      }
       const [lid, ldg, lvd, lrd, lst, ldt, lex] = readTabs(lline, 7)
       if (lvd === '') {
         prob('LEDGER-MALFORMED', M`truths/${lfName}  row has fewer than three tab-separated columns: '${lline}' — id·sha256·verdict is the minimum; an unparseable row covers nothing and blocks`)
@@ -597,6 +603,14 @@ export function cmdValidate (m, out, json = false, consecOk = '') {
         continue
       }
       if (lex !== '') prob('LEDGER-MALFORMED', M`truths/${lfName}  row for '${lid}' has more than six tab-separated columns`)
+      // A control byte INSIDE a field (a CR that is not the line ending, a stray NUL). This file
+      // applies the rule with its own diagnostics rather than through verify.mjs's rowOk, so the
+      // rule has to be spelled here too — and it was missed exactly that way when the shared parser
+      // landed: `scope` quarantined such a row and `validate` passed it, which is the two-readers
+      // split the shared parser existed to end, reappearing one level down. Measured, not assumed.
+      if (/[\x00-\x08\x0a-\x1f\x7f]/.test(lline)) { // eslint-disable-line no-control-regex
+        prob('LEDGER-MALFORMED', M`truths/${lfName}  row for '${lid}' holds a control byte inside a column — a CR or newline in free text corrupts the row for the next reader, which is how one fact ends up spelled two ways; re-run the attest that wrote it with a plain-text standard`)
+      }
       if (ldg !== '-' && !/^[0-9a-f]{64}$/.test(ldg)) prob('LEDGER-MALFORMED', M`truths/${lfName}  row for '${lid}' digest column '${ldg}' is neither a 64-hex sha256 nor '-'`)
       // `-` or all digits. `0` passes the shape even though the message says "positive" — the shape
       // is what is enforced, and saying otherwise here would be a second rule.
@@ -881,7 +895,16 @@ export function cmdValidate (m, out, json = false, consecOk = '') {
       } else {
         // STATE-BASED entry scan: a continuation is legal only AFTER a bullet — an indented line with
         // no open entry above is prose the counter cannot see, not a continuation of nothing.
-        let nopen = 0; let badline = ''; let inb = false; let gnoise = false
+        //
+        // ONE SCANNER, BOTH SECTIONS (§11 2026-08-05). It ran over '# Open' only, so `# Accepted`
+        // accepted anything — bare prose under it passed while FORMATS says the register grammar is
+        // fail-closed and "anything else blocks". A second, looser reader for the twin section is
+        // the two-parsers drift class itself, so there is one function and it is called twice.
+        // BOUNDARY, deliberate: this enforces the register GRAMMAR (bullets, continuations only
+        // under a bullet, no bare prose) — which is what the fail-closed sentence enumerates. It
+        // does NOT require an Accepted entry's `scope:`/`recheck:`/`as-of:` fields; that is the
+        // entry FORMAT, documented but never machine-enforced, and turning it into a gate could
+        // block mines written before the rule without a decision to do so.
         // The placeholder filter judges the REMAINDER, the same ruling review entries follow.
         // The bracket class is spelled in BYTES, and it is a class of BYTES rather than of
         // characters — which is what `sed -E 's/[…—:·,.-]+//g'` means under LC_ALL=C, where every
@@ -889,27 +912,30 @@ export function cmdValidate (m, out, json = false, consecOk = '') {
         // matched nothing at all here (this module is byte-domain), and a template stub stopped
         // reading as a stub: two pass_completeness_* cases went red the moment the domain changed.
         const strip = s => s.replace(/\{[^{}]*\}/g, '').replace(/<[^<>]*>/g, '').replace(/[[\](){}<>\xe2\x80\x94\xc2\xb7:,.-]+/g, '').replace(/[ \t]+/g, '')
-        for (let gl of splitLines(sectionAll(nocomment(readOr(gapsPath)), 'Open'))) {
-          gl = gl.replace(/\r$/, '')
-          if (!/[^ \t]/.test(gl)) { inb = false; continue }
-          const grest = gl.replace(/^[ \t]*/, '')
-          if (grest.startsWith('- ')) {
-            inb = true
-            gnoise = false
-            if (grest.startsWith('- [<') || grest.startsWith('- [{')) {
-              if (strip(grest.includes(']') ? grest.slice(grest.indexOf(']') + 1) : grest) === '') gnoise = true
+        const scanRegister = (section) => {
+          let n = 0; let badline = ''; let inb = false; let gnoise = false
+          for (let gl of splitLines(sectionAll(nocomment(readOr(gapsPath)), section))) {
+            gl = gl.replace(/\r$/, '')
+            if (!/[^ \t]/.test(gl)) { inb = false; continue }
+            const grest = gl.replace(/^[ \t]*/, '')
+            if (grest.startsWith('- ')) {
+              inb = true
+              gnoise = false
+              if (grest.startsWith('- [<') || grest.startsWith('- [{')) {
+                if (strip(grest.includes(']') ? grest.slice(grest.indexOf(']') + 1) : grest) === '') gnoise = true
+              }
+              if (!gnoise) n++
+            } else {
+              if (grest === gl || !inb) { badline = gl; break }
+              if (gnoise && strip(grest) !== '') { n++; gnoise = false }
             }
-            if (!gnoise) nopen++
-          } else {
-            if (grest === gl || !inb) { badline = gl; break }
-            // The noise verdict belongs to the ENTRY (bullet + its continuations), never to the
-            // bullet alone (v0.3.6): an entry that kept the shipped placeholder bullet and wrote its
-            // real content in the continuation counted as ZERO, so `required` passed over exactly the
-            // debt it is bought to surface. Judged with the bullet's OWN remainder spelling — a
-            // second, looser one here would be the two-parsers drift class itself. The flag flips so
-            // the entry counts ONCE however many continuations carry it.
-            if (gnoise && strip(grest) !== '') { nopen++; gnoise = false }
           }
+          return { n, badline }
+        }
+        const { n: nopen, badline } = scanRegister('Open')
+        const accepted = scanRegister('Accepted')
+        if (accepted.badline !== '') {
+          prob('COMP-MALFORMED', M`completeness is 'required' but gaps.md '# Accepted' holds a line the register grammar cannot read: '${accepted.badline}' — the same grammar as '# Open': entries are '- ' bullets and an indented line is a continuation ONLY under one. An accepted gap is a DECISION, so prose the counter cannot attribute to an entry is a decision nobody can point at`)
         }
         if (badline !== '') {
           prob('COMP-MALFORMED', M`completeness is 'required' but gaps.md '# Open' holds a line the register grammar cannot read: '${badline}' — entries are '- [<kind>] …' bullets; an indented line is a continuation ONLY under a bullet, and prose anywhere is a gap no counter sees, so it blocks like a malformed register`)

@@ -7,11 +7,19 @@
 // Write mode is a TRANSACTION. Targets are guarded, every file is snapshotted before its first edit,
 // and the whole rename answers to a post-write FULL VALIDATION — fail and every byte is restored and
 // the generated views are re-synced. A tag rename must not be able to half-happen.
-import { readFileSync, writeFileSync, readdirSync, mkdtempSync, rmSync, existsSync, statSync, appendFileSync, copyFileSync } from 'node:fs'
+import { readFileSync, readdirSync, mkdtempSync, rmSync, existsSync, statSync, appendFileSync, copyFileSync } from 'node:fs'
 import { splitLines, isFence, U } from './core.mjs'
 import { join, docIds } from './mine.mjs'
 import { clearFileCaches } from './read.mjs'
-import { requireInsideRoot } from './write.mjs'
+import { requireInsideRoot, writeAtomicX } from './write.mjs'
+
+// The two operations a fault can land on, injectable the way consecrate's are (and for the same
+// reason: node:fs cannot be reached by a PATH shim, so the fault-injection driver is the only
+// caller that ever passes anything else — no runtime switch, no environment channel).
+export const realOps = {
+  write: (f, buf) => writeAtomicX(f, buf),
+  restore: (from, to) => copyFileSync(from, to)
+}
 
 // BYTES throughout, for the same reason validate works in bytes: retag prints the paths it touched
 // and rewrites tag lists that are Korean in every real mine. A UTF-8 decode would fold an invalid
@@ -76,15 +84,20 @@ function rewrite (text, key, oldTag, newTag) {
 // Line endings are PRESERVED: the writer emits LF, so a one-tag rename would otherwise rewrite every
 // line of a CRLF file — a whole-file diff for one word. The file's own first line decides, and
 // trailing CRs are normalised to exactly one.
-function writePreservingEol (file, text, original) {
+// The write itself goes through the injected op — stage+rename with false PROMOTED (§11 2026-08-05):
+// the direct writeFileSync this replaces threw EACCES out of the whole command on a read-only
+// target, leaving the rename half-applied with the backup dir still sitting there (measured, the
+// v0.4.0 external review's P0). bash never had that failure shape to match — its sed/mv writes
+// replace the file instead of opening it.
+function writePreservingEol (file, text, original, write) {
   const first = original.split('\n')[0] ?? ''
   if (first.endsWith('\r')) {
     text = text.split('\n').map(l => (l === '' ? l : l.replace(/\r*$/, '\r'))).join('\n')
   }
-  writeFileSync(file, Buffer.from(text, 'latin1'))
+  write(file, Buffer.from(text, 'latin1'))
 }
 
-export function cmdRetag (m, out, errln, argv, runReindex, runValidate) {
+export function cmdRetag (m, out, errln, argv, runReindex, runValidate, ops = realOps) {
   const oldTag = argv[0] ?? ''
   const newTag = argv[1] ?? ''
   const flag = argv[2] ?? ''
@@ -120,68 +133,98 @@ export function cmdRetag (m, out, errln, argv, runReindex, runValidate) {
 
   let total = 0; let truthhits = 0
   const relOf = f => (f.startsWith(`${m.root}/`) ? f.slice(m.root.length + 1) : f)
-  const doFile = (f, key, label) => {
-    const text = readB(f)
-    const r = rewrite(text, key, O, N)
-    if (!r.hit) return
-    out(`  ${Buffer.from(relOf(f), 'latin1').toString('utf8')} (${label})`)
-    total++
-    if (key === 'tags') truthhits++
-    if (dry) return
-    snapshot(f)
-    writePreservingEol(f, r.text, text)
-  }
 
-  for (const n of truthGlob(m)) {
-    const f = join(m.truths, n)
-    if (isFileAt(f)) doFile(f, 'tags', 'tags')
-  }
-  if (isFileAt(m.project)) doFile(m.project, 'required_tags', 'required_tags')
-  for (const d of docIds(m)) {
-    const p = join(m.documents, d, 'plan.md')
-    if (isFileAt(p)) doFile(p, 'scope_tags', 'scope_tags')
-  }
-  if (total === 0) out(`  no list-field occurrences of '${oldTag}'`)
-
-  // Free-text mentions are LISTED, never rewritten: these files hold prose, and a rename that edited
-  // prose would be editing a human's words on a machine's guess.
-  const free = []
-  for (const f of [`${m.root}/gaps.md`, `${m.root}/questions.md`, join(m.truths, 'verify.md')]) {
-    if (isFileAt(f) && readB(f).includes(O)) free.push(relOf(f))
-  }
-  if (free.length) out(`  review manually (free-text mentions of '${oldTag}', not rewritten):${free.map(x => ' ' + Buffer.from(x, 'latin1').toString('utf8')).join('')}`)
-
-  if (dry) return 0
-  if (total === 0) { rmSync(bak, { recursive: true, force: true }); return 0 }
-
-  // ---- commit path: regenerate the views, then the full validation everything answers to --------
-  // THE CACHES ARE DROPPED FIRST. Content caches are per-PROCESS, and a write command that
-  // re-validates in the same process would otherwise validate the bytes it CACHED before its own
-  // edits — the bash runtime resets its frontmatter and file caches at the top of cmd_validate for
-  // exactly this reason, and it self-caught the bug that made the rule. Without this the rename's
-  // own new tags are invisible to the validation that is supposed to approve them.
-  clearFileCaches()
-  let vrc = 0
-  if (truthhits > 0 && runReindex() !== 0) vrc = 1
-  let vout = []
-  if (vrc === 0) {
+  // Restore every snapshot, verify the restoration, re-sync the views — ONE spelling, answered to
+  // by both failure paths (post-validate red, and a write that threw mid-rename). The postcondition
+  // is byte equality against the snapshot, VERIFIED rather than assumed (§11 2026-08-05): a restore
+  // that failed, or restored different bytes, keeps the backup and says so — this command never
+  // claims "as before" it did not check.
+  const rollbackAll = (msg) => {
+    const failed = []
+    for (const rel of baked) {
+      try { ops.restore(`${bak}/${rel.split('/').join('__')}`, `${m.root}/${rel}`) } catch { failed.push(rel) }
+    }
+    for (const rel of baked) {
+      if (failed.includes(rel)) continue
+      try {
+        if (!readFileSync(`${m.root}/${rel}`).equals(readFileSync(`${bak}/${rel.split('/').join('__')}`))) failed.push(rel)
+      } catch { failed.push(rel) }
+    }
     clearFileCaches()
-    const rc = runValidate(l => vout.push(l))
-    if (rc !== 0) vrc = 1
-  }
-  if (vrc === 0) {
+    if (truthhits > 0) runReindex()
+    if (failed.length) {
+      const u = x => Buffer.from(x, 'latin1').toString('utf8')
+      errln(`retag: rollback INCOMPLETE — could not restore: ${failed.map(u).join(' ')}. The originals are preserved in ${u(relOf(bak))}/ — restore them by hand, then run validate. Do NOT delete that directory until the mine validates clean.`)
+      return 1
+    }
     rmSync(bak, { recursive: true, force: true })
-    out(`done — ${total} file(s) rewritten · post-validate clean.`)
-    return 0
+    errln(msg)
+    return 1
   }
-  // Rollback: restore every snapshot, then re-sync the generated views to the RESTORED tags.
-  for (const l of vout) out(Buffer.isBuffer(l) ? Buffer.concat([Buffer.from('  ', 'latin1'), l]) : `  ${l}`)
-  for (const rel of baked) {
-    try { copyFileSync(`${bak}/${rel.split('/').join('__')}`, `${m.root}/${rel}`) } catch { /* best effort, as bash */ }
+
+  try {
+    const doFile = (f, key, label) => {
+      const text = readB(f)
+      const r = rewrite(text, key, O, N)
+      if (!r.hit) return
+      out(`  ${Buffer.from(relOf(f), 'latin1').toString('utf8')} (${label})`)
+      total++
+      if (key === 'tags') truthhits++
+      if (dry) return
+      snapshot(f)
+      writePreservingEol(f, r.text, text, ops.write)
+    }
+
+    for (const n of truthGlob(m)) {
+      const f = join(m.truths, n)
+      if (isFileAt(f)) doFile(f, 'tags', 'tags')
+    }
+    if (isFileAt(m.project)) doFile(m.project, 'required_tags', 'required_tags')
+    for (const d of docIds(m)) {
+      const p = join(m.documents, d, 'plan.md')
+      if (isFileAt(p)) doFile(p, 'scope_tags', 'scope_tags')
+    }
+    if (total === 0) out(`  no list-field occurrences of '${oldTag}'`)
+
+    // Free-text mentions are LISTED, never rewritten: these files hold prose, and a rename that edited
+    // prose would be editing a human's words on a machine's guess.
+    const free = []
+    for (const f of [`${m.root}/gaps.md`, `${m.root}/questions.md`, join(m.truths, 'verify.md')]) {
+      if (isFileAt(f) && readB(f).includes(O)) free.push(relOf(f))
+    }
+    if (free.length) out(`  review manually (free-text mentions of '${oldTag}', not rewritten):${free.map(x => ' ' + Buffer.from(x, 'latin1').toString('utf8')).join('')}`)
+
+    if (dry) return 0
+    if (total === 0) { rmSync(bak, { recursive: true, force: true }); return 0 }
+
+    // ---- commit path: regenerate the views, then the full validation everything answers to --------
+    // THE CACHES ARE DROPPED FIRST. Content caches are per-PROCESS, and a write command that
+    // re-validates in the same process would otherwise validate the bytes it CACHED before its own
+    // edits — the bash runtime resets its frontmatter and file caches at the top of cmd_validate for
+    // exactly this reason, and it self-caught the bug that made the rule. Without this the rename's
+    // own new tags are invisible to the validation that is supposed to approve them.
+    clearFileCaches()
+    let vrc = 0
+    if (truthhits > 0 && runReindex() !== 0) vrc = 1
+    let vout = []
+    if (vrc === 0) {
+      clearFileCaches()
+      const rc = runValidate(l => vout.push(l))
+      if (rc !== 0) vrc = 1
+    }
+    if (vrc === 0) {
+      rmSync(bak, { recursive: true, force: true })
+      out(`done — ${total} file(s) rewritten · post-validate clean.`)
+      return 0
+    }
+    for (const l of vout) out(Buffer.isBuffer(l) ? Buffer.concat([Buffer.from('  ', 'latin1'), l]) : `  ${l}`)
+    return rollbackAll('retag: post-write validation FAILED — every edit rolled back, indexes re-synced; the mine is as before. The problems above predate the rename.')
+  } catch (e) {
+    // A write (or anything else mid-mutation) threw. Before §11 2026-08-05 this escaped the command
+    // whole: stack trace, half the rename applied, the backup dir abandoned — the exact state the
+    // snapshot discipline exists to prevent. Same rollback, same postcondition, its own message.
+    if (bak === null) throw e
+    errln(`retag: ${e.message}`)
+    return rollbackAll('retag: a write FAILED mid-rename — every prior edit rolled back, indexes re-synced; the mine is as before.')
   }
-  clearFileCaches()
-  if (truthhits > 0) runReindex()
-  rmSync(bak, { recursive: true, force: true })
-  errln('retag: post-write validation FAILED — every edit rolled back, indexes re-synced; the mine is as before. The problems above predate the rename.')
-  return 1
 }

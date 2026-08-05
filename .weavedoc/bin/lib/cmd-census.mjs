@@ -70,7 +70,7 @@ export function cmdCensus (m, out) {
   // copy of it, and a private copy is only ever one edit away from disagreeing with the other two.
   //
   // EVERY `status:` line in the frontmatter, not the first (fixed 2026-08-04, caught by
-  // tests/parity-corpus.sh on `block_dup_key`). fmLoad answers "what does this field say", which is
+  // the corpus scale on `block_dup_key`, since retired with the bash runtime it compared against). fmLoad answers "what does this field say", which is
   // first-spelling-wins, and that is the WRONG question here: census exists to make a duplicated key
   // ARITHMETICALLY visible. The whole point of the tally is the reconciliation line below — tallies
   // must sum to the file count — and a file with two `status:` lines is meant to tally twice so the

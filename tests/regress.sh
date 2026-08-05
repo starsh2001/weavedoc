@@ -19,19 +19,20 @@
 set -u
 REPO=$(cd "$(dirname "$0")/.." >/dev/null 2>&1 && pwd)
 
-# ---- runtime under test (stage 0 of the rewrite — REWRITE_PLAN.md) ----
+# ---- runtime under test ----
 # Every case here is a CLI black box: it builds a mine, runs a command, and asserts stdout plus the
 # exit code. Nothing reads the runtime's internals. So the runtime can be swapped WITHOUT touching a
-# single case — which is what makes a rewrite verifiable against its predecessor's own suite.
-# WD_BIN is the invocation prefix: interpreter first, entrypoint second, both project-relative and
-# free of spaces (word splitting here is deliberate and safe for that reason). The default is the
-# shipped bash bundle, so an unset WD_BIN behaves exactly as this file always has.
-#   bash judges bash:   WD_BIN unset
-#   bash judges Node:   WD_BIN="node .weavedoc/bin/weavedoc.mjs" bash tests/regress.sh
-WD_BIN=${WD_BIN:-"bash .weavedoc/bin/weavedoc"}
+# single case — which is what made the bash→Node rewrite verifiable against its predecessor's own
+# suite, and what will make the next such change verifiable too. WD_BIN is the invocation prefix:
+# interpreter first, entrypoint second, both project-relative and free of spaces (word splitting
+# here is deliberate and safe for that reason).
+# The default is the SHIPPED runtime. It was `bash .weavedoc/bin/weavedoc` while both runtimes
+# shipped, which meant a plain local run graded the reference rather than the product — the v0.4.0
+# external review's finding. The bash runtime was deleted in bundle 2026-08-05.3; its last
+# comparison is pinned in tests/baseline/parity-final-2026-08-05.md.
+WD_BIN=${WD_BIN:-"node .weavedoc/bin/weavedoc.mjs"}
 read -r -a WDRUN <<< "$WD_BIN"
 [ "${#WDRUN[@]}" -ge 2 ] || { echo "WD_BIN must be '<interpreter> <entrypoint>' — got '$WD_BIN'"; exit 2; }
-WD_RUNNER=${WDRUN[0]}
 WD_ENTRY=${WDRUN[${#WDRUN[@]}-1]}
 [ -f "$REPO/$WD_ENTRY" ] || { echo "WD_BIN entrypoint not found: $REPO/$WD_ENTRY"; exit 2; }
 
@@ -43,11 +44,16 @@ WD_ENTRY=${WDRUN[${#WDRUN[@]}-1]}
 # unreachable, not filtered. WD_REG_KEY_SALT exists so a test can force a fresh key.
 KEY=$( { git -C "$REPO" rev-parse HEAD 2>/dev/null
          cat "$REPO/.weavedoc/VERSION" 2>/dev/null
-         # The ENTRYPOINT under test, plus WD_BIN itself: a bash run and a Node run of the same
-         # commit are different configurations and must not share a result cache, or `--resume`
-         # would hand one implementation's results to the other and call the rewrite green.
+         # WD_BIN itself: two different invocations of the same commit are different configurations
+         # and must not share a result cache, or `--resume` would hand one implementation's results
+         # to the other and call the run green.
          printf '%s\n' "$WD_BIN"
-         sha256sum "$REPO/$WD_ENTRY" "$REPO/.weavedoc/schema" 2>/dev/null | awk '{print $1}'
+         # The WHOLE runtime's bytes, not just the entrypoint. The entrypoint is a thin dispatcher
+         # whose behavior lives in bin/lib/, so a key that hashed only $WD_ENTRY let a dirty lib
+         # edit reuse the previous run's results under --resume (the v0.4.0 external review's
+         # finding; HEAD only covers COMMITTED edits).
+         sha256sum "$REPO/.weavedoc/bin/weavedoc.mjs" \
+                   "$REPO/.weavedoc/bin/lib/"* "$REPO/.weavedoc/schema" 2>/dev/null | awk '{print $1}'
          uname -sr; bash --version | head -1; awk --version 2>/dev/null | head -1; sed --version 2>/dev/null | head -1
          printf '%s' "${WD_REG_KEY_SALT:-}"
        } | sha256sum | awk '{print $1}' | cut -c1-12 )
@@ -457,18 +463,11 @@ expect_has()   { printf '%s\n' "$OUT" | grep -qF -- "$1" || bad "output lacks [$
 expect_hasnt() { printf '%s\n' "$OUT" | grep -qF -- "$1" && bad "output must not contain [$1]"; ok; }
 
 vrun() { OUT=$( ( cd "$W" && $TO "${WDRUN[@]}" "$@" ) 2>&1 ); RC=$?; }
-# The three cases below read the runtime SOURCE rather than its output — the only ones in the suite
+# The two cases below read the runtime SOURCE rather than its output — the only ones in the suite
 # that do, and the reason they exist is that the invariants they pin (one judge per rule, every
-# emitted diagnostic code documented) cannot be seen from outside. They encode bash syntax, so a
-# different runtime needs its own spelling of the same invariant, not a path swap. Until that
-# spelling exists they FAIL rather than skip: a green 342/342 must never mean "and three invariants
-# went unwatched". (REWRITE_PLAN §4 — the port-me family.)
-src_shape_unported() {
-  [ "$WD_RUNNER" = bash ] && return 1
-  [ "$WD_RUNNER" = node ] && return 1
-  bad "source-shape case has no spelling for runner '$WD_RUNNER' yet — port the invariant, do not drop it"
-  return 0
-}
+# emitted diagnostic code documented, no uncoded diagnostic) cannot be seen from outside. They
+# encode the runtime's own syntax, so a future runtime needs its own spelling of the same
+# invariant, not a path swap: a green sweep must never mean "and these invariants went unwatched".
 # NAMED `nodeshape_`, not `meta_`, and that matters: the case selector picks up every function
 # matching ^(block|pass|acct|meta|e2e)_, so a helper called meta_..._node is SELECTED as a case of
 # its own and run under the bash runner too, where it inspects the wrong entrypoint. It reported
@@ -1010,26 +1009,11 @@ nodeshape_single_judges() {
 }
 meta_single_judges() {
   # The drift every round kept finding — "the rule was unified, one site was left out" — is now
-  # watched by the suite itself: each grep pins an invariant about the BINARY, so a new duplicate
-  # judge fails here before a cold reviewer has to find it.
-  [ "$WD_RUNNER" = node ] && { nodeshape_single_judges; return; }
-  src_shape_unported && return
-  local B="$REPO/$WD_ENTRY" bad="" fn n
-  for fn in is_noise has_fm fid_mark fid_body nocomment canon_id is_placeholder req_value \
-            truth_digest mat_digest unit_digest ledger_rows ledger_file \
-            artifact_digest context_digest doc_draft_path doc_final_path; do
-    n=$(grep -cE "^${fn}\(\)" "$B" || true)
-    [ "${n:-0}" -eq 1 ] || bad="$bad ${fn}=${n};"
-  done
-  # the opening-fence judge is has_fm ONLY — an inline exact-match comparison is a second judge
-  n=$(grep -c 'head -1.*= "---"' "$B" || true)
-  [ "${n:-0}" -eq 0 ] || bad="$bad inline-fence-judges=${n};"
-  # strict key spelling (`^key:` with nothing between key and colon) must not reappear in any
-  # frontmatter/flow reader — the lenient form is `^key[[:space:]]*:` (three rounds re-learned this)
-  n=$(grep -cE '\^(source|status|tags|claim|title|origin|role|topics|format|added|summary|resolution|conflict_with|provenance|derived_from|superseded|corroborated_by|winner|decided_by|decision_kind|scope):[^:]' "$B" || true)
-  [ "${n:-0}" -eq 0 ] || bad="$bad strict-key-patterns=${n};"
-  OUT="${bad:-ok}"; RC=0; [ -n "$bad" ] && RC=1
-  expect_pass
+  # watched by the suite itself: each grep pins an invariant about the RUNTIME SOURCE, so a new
+  # duplicate judge fails here before a cold reviewer has to find it. This is one of the two cases
+  # in the suite that read the source rather than the output, because the invariant it pins cannot
+  # be seen from outside.
+  nodeshape_single_judges
 }
 pass_hq_kind_mention() {
   # a Human-queue entry whose prose mentions a kind — first slot is [open], not a kind (kind-bearing filter)
@@ -1803,6 +1787,66 @@ pass_attest_standard_newline_stays_one_line() {
   OUT=$(grep -c '^- m001 — R2.*· verified$' "$W/truths/verify.md"); RC=0
   expect_has "1"
 }
+block_attest_control_byte_in_standard() {
+  # The one free-text column may not carry a control byte: a TAB widens the row, a newline splits
+  # it. Both were writable, and the row then covered nothing while validate reported a malformed
+  # ledger the user never knowingly created. Refused at the door — the ledger must not be breakable
+  # through its own writer. Asserted on the RESULTING FILE too, not just the exit code: a refusal
+  # that still wrote something is not a refusal.
+  local before after
+  before=$( [ -f "$W/truths/verify-ledger.tsv" ] && wc -l < "$W/truths/verify-ledger.tsv" || echo 0 )
+  vrun attest verified 2 "$(printf 'a\tb')" m001
+  expect_block "may not contain a tab, newline or other control character"
+  after=$( [ -f "$W/truths/verify-ledger.tsv" ] && wc -l < "$W/truths/verify-ledger.tsv" || echo 0 )
+  [ "$before" = "$after" ] || bad "refused but still wrote: ledger went from $before to $after line(s)"
+  vrun attest verified 2 "$(printf 'a\nb')" m001
+  expect_block "may not contain a tab, newline or other control character"
+}
+block_attest_onto_unterminated_ledger() {
+  # An append onto a torn final row would FUSE the two into one row. That torn row is the signature
+  # of an attest that died mid-write, so this is the second attest of a crashed pair: it must refuse
+  # rather than quietly make the damage unreadable. validate already blocks the mine; this stops the
+  # writer from compounding it.
+  vrun attest verified 1 standard m001
+  printf 't001\t-\tverified\t1\tstandard\t2026-07-01' >> "$W/truths/verify-ledger.tsv"
+  vrun attest verified 2 standard t001
+  expect_block "no line terminator"
+  # ...and the torn row is still exactly as it was — not fused, not repaired behind the user's back.
+  OUT=$(tail -c 40 "$W/truths/verify-ledger.tsv"); RC=0
+  expect_has "2026-07-01"
+}
+acct_attest_ledger_accumulates_in_order() {
+  # A REGRESSION GUARD, and it passes against the old writer too — said plainly because a case that
+  # cannot fail on the change it accompanies is not evidence for that change, and this suite has
+  # twice been fooled by one that looked like it was. What it pins is the INVARIANT the rewrite must
+  # not break: rows accumulate, the header survives, and order is preserved (order decides which row
+  # `LAST row per id wins` selects, so a writer that reordered would change verdicts silently).
+  #
+  # The change it accompanies — appending instead of read-whole-then-rewrite — closes two holes the
+  # suite cannot reach, and they are not equally proven:
+  #   MEASURED. A read fault on an EXISTING ledger. Old writer, as an unprivileged user against a
+  #   chmod-000 ledger: rc 0, "attest: verified — R2 …", and the earlier row COUNT WENT 1 -> 0. It
+  #   reported success while deleting the verification history. New writer: rc 1, refuses, row
+  #   survives. Not testable here — the harness runs as root in the container, where chmod does not
+  #   bind.
+  #   NOT REPRODUCED. The lost update between two concurrent attests. Read-then-rewrite is a
+  #   lost-update pattern by construction, but two short-lived node processes did not interleave in
+  #   the critical section when tried, so this is an argument from the code's shape, not a
+  #   measurement. Appending removes the pattern either way; a race in a suite would be a flake
+  #   generator, so it is not pinned here.
+  vrun attest verified 1 first m001
+  vrun attest verified 2 second t001
+  vrun attest verified 3 third m001
+  local f="$W/truths/verify-ledger.tsv"
+  grep -q '^# machine-owned' "$f" || bad "header lost"
+  [ "$(grep -c '	first	' "$f")" = 1 ] || bad "the first round's row did not survive later attests"
+  [ "$(grep -c '	second	' "$f")" = 1 ] || bad "the second round's row did not survive"
+  # Order matters: LAST row per id wins, so a rewrite that reordered would change which one does.
+  [ "$(grep -n '	third	' "$f" | cut -d: -f1)" -gt "$(grep -n '	first	' "$f" | cut -d: -f1)" ] \
+    || bad "the newer m001 row is not after the older one — 'last row per id wins' would pick the wrong one"
+  vrun scope; expect_has "1 verified (digest-bound)"
+  vrun validate; expect_pass
+}
 block_attest_bad_target() {
   # attest is all-or-nothing: one unresolvable id and NOTHING is written.
   vrun attest verified 2 standard t001 t999
@@ -1918,33 +1962,15 @@ block_consecrate_validate_fail_final_unremovable() {
   printf '개정판. <!-- t:t001 -->\n' > "$W/documents/d1/draft.md"
   vrun seal-review d1 draft
   rm -f "$W/truths/index.md"                          # fails validate AFTER staging — outside the context manifest
-  # The injection differs by runner and the INVARIANT does not. bash gets a PATH shim for `rm`;
-  # node:fs cannot be reached that way, so the node runner drives the module through the operation
-  # seam consecrate exposes for exactly this (REWRITE_PLAN §4: this case must not be dropped
-  # silently). Both make the SAME removal fail and both assert the same three things below.
-  if [ "$WD_RUNNER" = node ]; then
-    OUT=$( ( cd "$W" && $TO node "$REPO/tests/consecrate-faultinject.mjs" d1 documents/d1/final.md ) 2>&1 ); RC=$?
-    [ "$RC" -eq 0 ] && bad "consecrate reported success after the full validation failed"
-    expect_has "UNVALIDATED"
-    [ -e "$W/documents/d1/.consecrate.inflight" ] \
-      || bad "in-flight marker removed while the final slot still held the rejected candidate"
-    return
-  fi
-  mkdir -p "$W.shim"
-  cat > "$W.shim/rm" <<'EOF'
-#!/usr/bin/env bash
-# Fails ONLY for the final slot. Every other rm the transaction needs (candidate, marker) still
-# works, so the branch under test is reached with the rest of the machinery intact.
-for a in "$@"; do case "$a" in */documents/d1/final.md) exit 1 ;; esac; done
-exec /usr/bin/rm "$@"
-EOF
-  chmod +x "$W.shim/rm"
-  OUT=$( ( cd "$W" && PATH="$W.shim:$PATH" $TO "${WDRUN[@]}" consecrate d1 ) 2>&1 ); RC=$?
+  # node:fs cannot be reached by a PATH shim, so the removal is an injectable operation with a real
+  # default and this driver is the only caller that passes anything else — no runtime switch, no
+  # environment channel. (The bash arm used a PATH shim for `rm`; it went with the bash runtime in
+  # bundle 2026-08-05.3, and the invariant below is unchanged.)
+  OUT=$( ( cd "$W" && $TO node "$REPO/tests/consecrate-faultinject.mjs" d1 documents/d1/final.md ) 2>&1 ); RC=$?
   [ "$RC" -eq 0 ] && bad "consecrate reported success after the full validation failed"
   expect_has "UNVALIDATED"
   # Last, so this message is the one that surfaces: the marker is the whole postcondition.
-  [ -e "$W/documents/d1/.consecrate.inflight" ] \
-    || bad "in-flight marker removed while the final slot still held the rejected candidate"
+  [ -e "$W/documents/d1/.consecrate.inflight" ]     || bad "in-flight marker removed while the final slot still held the rejected candidate"
 }
 pass_gate_tree_seal_match() {
   mktree
@@ -1987,6 +2013,30 @@ block_completeness_required_no_register() {
   # warranty nobody ran is not a warranty (fail-closed, same as the gate's own record).
   req_completeness
   vrun validate; expect_block "no gaps.md"
+}
+block_completeness_accepted_prose() {
+  # The external review's finding, verbatim: under `required`, prose that is not a bullet and
+  # carries none of the entry's fields sat under '# Accepted' and validate PASSED. The register
+  # grammar is documented fail-closed — "anything else blocks" — but the scanner only ever ran over
+  # '# Open', so the twin section accepted anything. One scanner now, called twice.
+  req_completeness
+  printf '# Open\n\n# Accepted\n\nprose with no bullet and none of the fields at all\n' > "$W/gaps.md"
+  vrun validate; expect_block "'# Accepted' holds a line the register grammar cannot read"
+}
+block_completeness_accepted_orphan_continuation() {
+  # The state-based half of the same grammar: an indented line is a continuation only UNDER a
+  # bullet. Orphaned, it is a decision nobody can point at — the Accepted twin of the rule '# Open'
+  # has had since v0.3.3.
+  req_completeness
+  printf '# Open\n\n# Accepted\n\n  계속 줄인데 위에 항목이 없다\n' > "$W/gaps.md"
+  vrun validate; expect_block "'# Accepted' holds a line the register grammar cannot read"
+}
+pass_completeness_accepted_continuation_under_bullet() {
+  # ...and the shape that must NOT block, so the rule above cannot drift into refusing legitimate
+  # multi-line accepted entries. Same fixture family, one indent level, a real bullet above it.
+  req_completeness
+  printf '# Open\n\n# Accepted\n\n- [declared] m001 — 부속서 없음 — scope: 위약 — recheck: 입수 시 — as-of: t001\n  이어지는 설명 줄\n' > "$W/gaps.md"
+  vrun validate; expect_pass
 }
 pass_completeness_required_accepted_only() {
   # Accepted gaps are decisions, not debt — `required` blocks only what is still open.
@@ -2271,6 +2321,55 @@ acct_retag_rollback() {
   expect_block "rolled back"
   OUT=$(cat "$W/truths/t001.md"); RC=0
   expect_has "tags: [위약]"
+}
+acct_retag_readonly_target_no_partial_state() {
+  # §9's fault condition ("write failure injection leaves no partial state"), asserted as the DUAL
+  # OUTCOME it actually promises: fully-before with rc!=0, or fully-after with rc==0 — never half.
+  # Before §11 2026-08-05 the node runtime failed this exact probe: EACCES escaped mid-loop, t001
+  # kept the new tag, project.md kept the old one, and the backup dir sat abandoned (measured).
+  sed -i 's/^required_tags: \[\]$/required_tags: [위약]/' "$W/project.md"
+  chmod 444 "$W/project.md" 2>/dev/null
+  vrun retag 위약 벌칙
+  local rc=$RC t r
+  chmod 644 "$W/project.md" 2>/dev/null
+  t=$(grep -m1 '^tags:' "$W/truths/t001.md"); r=$(grep -m1 '^required_tags:' "$W/project.md")
+  local p; p=$(grep -m1 '^scope_tags:' "$W/documents/d1/plan.md")
+  if [ "$rc" -eq 0 ]; then
+    { [ "$t" = 'tags: [벌칙]' ] && [ "$r" = 'required_tags: [벌칙]' ] && [ "$p" = 'scope_tags: [벌칙]' ]; } || bad "rc 0 but not fully-after: t001='$t' project='$r' plan='$p'"
+  else
+    { [ "$t" = 'tags: [위약]' ] && [ "$r" = 'required_tags: [위약]' ] && [ "$p" = 'scope_tags: [위약]' ]; } || bad "rc $rc but not fully-before: t001='$t' project='$r' plan='$p'"
+  fi
+  [ -z "$(ls -d "$W"/.retag-bak.* 2>/dev/null)" ] || bad "backup dir left behind"
+  ok
+}
+acct_retag_write_fault_rolls_back() {
+  # Nth-write failure, injected through the operation seam (a PATH shim cannot reach node:fs):
+  # truths rewrite first, project.md second, and the fault lands on the SECOND write — so the
+  # boundary is entered with real half-applied state to roll back. Fully-before, rc!=0, no backup
+  # left, and the rollback is VERIFIED (byte equality), not assumed.
+  sed -i 's/^required_tags: \[\]$/required_tags: [위약]/' "$W/project.md"
+  OUT=$( ( cd "$W" && $TO node "$REPO/tests/retag-faultinject.mjs" 위약 벌칙 project.md ) 2>&1 ); RC=$?
+  [ "$RC" -eq 0 ] && bad "retag reported success around an injected write failure"
+  expect_has "rolled back"
+  [ "$(grep -m1 '^tags:' "$W/truths/t001.md")" = 'tags: [위약]' ] || bad "t001 tags not restored"
+  [ "$(grep -m1 '^required_tags:' "$W/project.md")" = 'required_tags: [위약]' ] || bad "project required_tags changed"
+  # The THIRD write surface too (cold review 2026-08-05): the code's postcondition covers plan.md,
+  # and an assertion that named only two surfaces would pass a half-state on the third.
+  [ "$(grep -m1 '^scope_tags:' "$W/documents/d1/plan.md")" = 'scope_tags: [위약]' ] || bad "plan scope_tags changed"
+  [ -z "$(ls -d "$W"/.retag-bak.* 2>/dev/null)" ] || bad "backup dir left after a verified rollback"
+}
+acct_retag_rollback_fault_preserves_backup() {
+  # The write fails AND the rollback's restore fails for the file that was already rewritten. The
+  # one honest outcome: keep the backup, name what could not be restored, refuse to say "as
+  # before". Deleting the backup here would be the only copy of the original going with it.
+  sed -i 's/^required_tags: \[\]$/required_tags: [위약]/' "$W/project.md"
+  OUT=$( ( cd "$W" && $TO node "$REPO/tests/retag-faultinject.mjs" 위약 벌칙 project.md t001.md ) 2>&1 ); RC=$?
+  [ "$RC" -eq 0 ] && bad "retag reported success around an injected write failure"
+  expect_has "rollback INCOMPLETE"
+  local b
+  b=$(ls -d "$W"/.retag-bak.* 2>/dev/null | head -1)
+  [ -n "$b" ] || { bad "backup dir was deleted though the rollback could not be verified"; return; }
+  grep -q '위약' "$b/truths__t001.md" || bad "backup does not hold the original t001"
 }
 block_plan_audience_invalid() {
   sed -i 's/^scope_tags: \[위약\]$/scope_tags: [위약]\naudience: 사외/' "$W/documents/d1/plan.md"
@@ -2708,6 +2807,53 @@ block_sealreview_dashnote_fm() {
   vrun seal-review d1 draft
   expect_block "no frontmatter"
 }
+block_sealreview_unclosed_fm_keeps_the_seal() {
+  # The SIBLING of the case above, and the worse half. `---note` fails the opening precheck; a block
+  # that OPENS correctly and never CLOSES sailed past it, and then the insertion loop — which puts
+  # the three fields in just before the closing fence, dropping any earlier spelling on the way —
+  # never found a fence. So it dropped every seal line and inserted none, printed the digests it had
+  # just failed to write, and exited 0. Measured: a review that HELD a valid seal came out with
+  # NONE. A seal binds a clean review to the bytes it reviewed; deleting one while reporting success
+  # is the worst direction this command can fail in.
+  vrun seal-review d1 draft; expect_pass
+  local before after
+  before=$(grep -c '^reviewed_\|^review_context_' "$W/documents/d1/review.md")
+  [ "$before" = 3 ] || { bad "fixture never got a seal ($before fields) — the case would prove nothing"; return; }
+  # remove the CLOSING fence only
+  awk 'NR==1{print;next} !d && /^---[ \t]*$/ {d=1;next} {print}' "$W/documents/d1/review.md" > "$W/t" && mv "$W/t" "$W/documents/d1/review.md"
+  vrun seal-review d1 draft
+  expect_block "frontmatter block never closes"
+  after=$(grep -c '^reviewed_\|^review_context_' "$W/documents/d1/review.md")
+  [ "$before" = "$after" ] || bad "refused but still edited the file: seal fields went $before -> $after"
+}
+acct_reindex_partial_rename_rolls_back() {
+  # Staging BOTH views before renaming EITHER is not enough: with tree.md unreplaceable the first
+  # rename still landed, so index.md was regenerated beside an untouched tree.md — the very split
+  # the staging exists to prevent — and the command printed "the staged copies were discarded",
+  # which was FALSE about the one that had not been. A message that misreports the state is worse
+  # than the state. The first rename is undoable now, and the message says which of the two
+  # outcomes actually happened.
+  printf 'stale-index\n' > "$W/truths/index.md"
+  rm -f "$W/truths/tree.md"; mkdir "$W/truths/tree.md"; printf 'x\n' > "$W/truths/tree.md/inside"
+  vrun reindex
+  expect_block "index.md was rolled back"
+  OUT=$(head -1 "$W/truths/index.md"); RC=0
+  expect_has "stale-index"
+}
+acct_consecrate_marker_removal_failure_is_named() {
+  # The promotion succeeds, the in-flight marker cannot be removed, and the NEXT validate then fails
+  # CONSEC-INTERRUPTED. Swallowing that left a green consecrate beside a red mine with no line
+  # connecting them (measured: rc 0, marker present, next validate rc 1). rc STAYS 0 — the final
+  # really is the reviewed draft, and failing would send the user to redo work that is done — but
+  # the one remaining file is named, in the spelling the backup-removal failure already uses.
+  printf '개정판. <!-- t:t001 -->\n' > "$W/documents/d1/draft.md"
+  vrun seal-review d1 draft
+  OUT=$( ( cd "$W" && $TO node "$REPO/tests/consecrate-faultinject.mjs" d1 .consecrate.inflight ) 2>&1 ); RC=$?
+  [ "$RC" -eq 0 ] || bad "consecrate should still report success — the promotion happened (rc $RC)"
+  expect_has "in-flight marker could not be removed"
+  expect_has "CONSEC-INTERRUPTED"
+  [ -e "$W/documents/d1/.consecrate.inflight" ] || bad "the injection did not actually keep the marker — the case would prove nothing"
+}
 block_upgrade_garbage_version() {
   # `version: banana` skipped the numeric future-check and read as "already at schema 2" with
   # exit 0. The matrix is closed: a record is 1 or the current schema, anything else refuses.
@@ -2848,6 +2994,55 @@ pass_upgrade_resume_mixed() {
   expect_pass
   vrun validate; expect_pass
 }
+acct_upgrade_readonly_target_no_partial_state() {
+  # §9's fault condition as the DUAL OUTCOME (fully-before + rc!=0, or fully-after + rc==0). Before
+  # §11 2026-08-05 the node runtime failed this probe in the worst shape: EACCES escaped at the
+  # version stamp, review_legacy already inserted, version still 1, backup abandoned (measured —
+  # the exact mixed state the marker discipline exists to prevent).
+  chmod 444 "$W/project.md" 2>/dev/null
+  vrun upgrade --apply
+  local rc=$RC pv cv
+  chmod 644 "$W/project.md" 2>/dev/null
+  pv=$(grep -m1 '^version:' "$W/project.md"); cv=$(grep -m1 '^version:' "$W/.weavedoc/config.yaml")
+  if [ "$rc" -eq 0 ]; then
+    { [ "$pv" = 'version: 2' ] && [ "$cv" = 'version: 2' ]; } || bad "rc 0 but not fully-after: project='$pv' config='$cv'"
+    [ -n "$(ls -d "$W"/.upgrade-backup-* 2>/dev/null)" ] || bad "success keeps the backup+manifest dir by design, and it is missing"
+  else
+    { [ "$pv" = 'version: 1' ] && [ "$cv" = 'version: 1' ]; } || bad "rc $rc but not fully-before: project='$pv' config='$cv'"
+    grep -q 'review_legacy' "$W/documents/d1/review.md" && bad "rc $rc but review_legacy marker left stamped"
+    [ -z "$(ls -d "$W"/.upgrade-backup-* 2>/dev/null)" ] || bad "failure left the backup dir with rollback claimed complete"
+  fi
+  ok
+}
+acct_upgrade_write_fault_rolls_back() {
+  # Nth-write failure through the operation seam: the fault lands on the version stamp, so every
+  # earlier phase (verify.md verdict words, the materialized ledger, review_legacy markers) has
+  # really happened when the boundary fires. Rollback restores the touched, REMOVES the created
+  # (the materialized ledger is born in this transaction), and is verified before "rolled back".
+  # The verdict word is stripped FIRST so phase 2 genuinely edits verify.md (cold review
+  # 2026-08-05) — otherwise the byte-restore assertion below would be guarding an untouched file.
+  sed -i 's/ · verified$//' "$W/truths/verify.md"
+  grep -q 'passes 2/2$' "$W/truths/verify.md" || { bad "fixture no-op: verify.md row still carries its verdict word"; return; }
+  cp "$W/truths/verify.md" "$W/.verify.before"
+  OUT=$( ( cd "$W" && $TO node "$REPO/tests/upgrade-faultinject.mjs" project.md ) 2>&1 ); RC=$?
+  [ "$RC" -eq 0 ] && bad "upgrade reported success around an injected write failure"
+  expect_has "rolled back"
+  [ "$(grep -m1 '^version:' "$W/project.md")" = 'version: 1' ] || bad "project version not restored"
+  [ "$(grep -m1 '^version:' "$W/.weavedoc/config.yaml")" = 'version: 1' ] || bad "config version not restored"
+  grep -q 'review_legacy' "$W/documents/d1/review.md" && bad "review_legacy marker left stamped"
+  cmp -s "$W/.verify.before" "$W/truths/verify.md" || bad "verify.md not byte-restored"
+  [ ! -f "$W/truths/verify-ledger.tsv" ] || bad "created ledger not removed by rollback"
+  [ -z "$(ls -d "$W"/.upgrade-backup-* 2>/dev/null)" ] || bad "backup dir left after a verified rollback"
+  ok
+}
+acct_upgrade_rollback_fault_preserves_backup() {
+  # Write fails at the stamp AND the rollback cannot restore verify.md. Keep the backup, name the
+  # file, never claim "byte-identical" — the backup is the only copy of the original left.
+  OUT=$( ( cd "$W" && $TO node "$REPO/tests/upgrade-faultinject.mjs" project.md verify.md ) 2>&1 ); RC=$?
+  [ "$RC" -eq 0 ] && bad "upgrade reported success around an injected write failure"
+  expect_has "rollback is INCOMPLETE"
+  [ -n "$(ls -d "$W"/.upgrade-backup-* 2>/dev/null)" ] || bad "backup dir was deleted though the rollback could not be verified"
+}
 acct_mat_digest_line_endings_stable() {
   # A material's digest must not depend on the platform that computed it. mat_digest passes the file
   # through awk, and MSYS gawk strips CR while Linux gawk keeps it — so the SAME material digested
@@ -2868,6 +3063,68 @@ acct_mat_digest_line_endings_stable() {
   vrun scope
   expect_has "materials  1 converted · 1 verified (digest-bound)"
   expect_hasnt "→ stale:"
+}
+acct_ledger_crlf_reads_as_verified() {
+  # ONE READER (§11 2026-08-05). A git checkout with core.autocrlf=true — the Windows default —
+  # turns the ledger CRLF, and the two readers then disagreed about the same file: `scope` stripped
+  # the CR and reported the material fully verified, `validate` kept it (so the date column read
+  # `2026-07-01\r`) and blocked every row as LEDGER-MALFORMED. A verdict that depends on which
+  # command asked is not a verdict. Now a trailing CRLF is a line ending, in both.
+  vrun attest verified 2 standard m001
+  # Rewritten in bash, not sed/awk: those are the tools whose CR handling differs by platform, so
+  # building the fixture with them would make the case prove nothing on one of them.
+  { while IFS= read -r l || [ -n "$l" ]; do printf '%s\r\n' "${l%$'\r'}"; done < "$W/truths/verify-ledger.tsv"; } > "$W/l.crlf"
+  mv "$W/l.crlf" "$W/truths/verify-ledger.tsv"
+  IFS= read -r l0 < "$W/truths/verify-ledger.tsv"
+  case "$l0" in *$'\r') ;; *) bad "fixture did not become CRLF — the case would prove nothing"; return ;; esac
+  vrun scope
+  expect_has "materials  1 converted · 1 verified (digest-bound)"
+  vrun validate; expect_pass
+}
+acct_ledger_unterminated_last_row_blocks() {
+  # The signature of an `attest` that died mid-write: a final row with no newline. `scope` READ it
+  # and `validate` DISCARDED it, so a half-written verification either counted or vanished
+  # depending on who asked — and vanishing is the dangerous half, since it looks exactly like a
+  # ledger that had simply not got there yet. It is now named.
+  vrun attest verified 2 standard m001
+  printf 't001\t-\tverified\t1\tstandard\t2026-07-01' >> "$W/truths/verify-ledger.tsv"
+  [ -n "$(tail -c 1 "$W/truths/verify-ledger.tsv")" ] || { bad "fixture ends in a newline — the case would prove nothing"; return; }
+  vrun validate
+  expect_block "no line terminator"
+}
+acct_ledger_malformed_last_row_quarantines_id() {
+  # `LAST row per id wins` is the published contract, and this is what it means when that last row
+  # is unreadable: the id carries NO evidence — not the earlier valid row, and not the v1
+  # frontmatter fallback. Reading it as "last VALID row wins" instead means a verification that
+  # broke while being written RESURRECTS the previous `verified`, and scope then describes a state
+  # the mine is not in. Same ruling as the unknown-verdict quarantine above, one layer down.
+  vrun attest verified 2 standard m001
+  vrun scope; expect_has "materials  1 converted · 1 verified (digest-bound)"   # the row really landed
+  printf 'm001\tbroken\n' >> "$W/truths/verify-ledger.tsv"
+  vrun scope
+  expect_has "materials  1 converted · 0 verified (digest-bound) · 0 legacy-unbound · 0 stale · 0 failed · 1 unverified"
+  vrun validate; expect_block "[LEDGER-MALFORMED]"
+}
+acct_ledger_malformed_then_valid_row_wins() {
+  # The OTHER direction, and it must not be quarantined: a malformed row followed by a good one for
+  # the same id is a repaired ledger. The good row wins — while the malformed one is still reported,
+  # because a row that vanished silently would look identical to a ledger that never held it.
+  printf 'm001\tbroken\n' >> "$W/truths/verify-ledger.tsv"
+  vrun attest verified 2 standard m001
+  vrun scope
+  expect_has "materials  1 converted · 1 verified (digest-bound)"
+  expect_has "[LEDGER-MALFORMED]"
+  vrun validate; expect_block "[LEDGER-MALFORMED]"
+}
+acct_ledger_control_byte_in_standard_blocks() {
+  # A control byte inside a field corrupts the row for the NEXT reader — the same fact then reads
+  # two ways on two surfaces, which is the class this parser exists to end. Structure, not display:
+  # the row fails the strict filter, so it covers nothing and blocks.
+  vrun attest verified 2 standard m001
+  printf 'm001\t-\tverified\t1\tstd\rwith-cr\t2026-07-01\n' >> "$W/truths/verify-ledger.tsv"
+  vrun scope
+  expect_has "materials  1 converted · 0 verified (digest-bound)"
+  vrun validate; expect_block "[LEDGER-MALFORMED]"
 }
 acct_scope_ledger_unknown_verdict() {
   # The fail-open the cold review found: a typo'd verdict fell through to the digest compare and
@@ -2965,36 +3222,26 @@ acct_json_version() {
   expect_has '"fingerprint"'
   expect_has '"schema_version":2'
 }
-nodeshape_diag_code_table() {
-  # Same contract, one emission shape: `prob('CODE', …)` / `warn('CODE', …)`. Comment lines are
-  # skipped so a doc-comment quoting a code is not mistaken for an emitted one — the port's comments
-  # quote codes constantly.
-  local F="$REPO/.weavedoc/FORMATS.md" bad="" c emitted
+meta_diag_code_table() {
+  # FORMATS documents every code the runtime can emit, and documents no code it cannot — the table
+  # is the contract's published half, so drift in EITHER direction is a defect. One emission shape:
+  # `prob('CODE', …)` / `warn('CODE', …)`. Comment lines are skipped so a doc-comment quoting a code
+  # is not mistaken for an emitted one — this runtime's comments quote codes constantly.
+  #
+  # THE ORPHAN DIRECTION IS BACK ON. While the port was partial it was checked only on the bash arm,
+  # because a documented code whose only site was an unported command would have read as an orphan —
+  # an assertion about how far the port had got, not about the contract. The port is complete and
+  # the bash arm is gone, so leaving it off would mean nobody checks it at all, which is the
+  # "a check that quietly stopped running" class this suite exists to prevent.
+  local F="$REPO/.weavedoc/FORMATS.md" bad="" c emitted ne
   local -a SRC; mapfile -t SRC < <(node_sources)
   emitted=$(grep -hv "^[[:space:]]*//" "${SRC[@]}" | grep -oE "\b(prob|warn)\('[A-Z][A-Z0-9-]+'" \
             | sed -E "s/.*'([A-Z][A-Z0-9-]+)'/\1/" | LC_ALL=C sort -u)
-  for c in $emitted; do
-    grep -q "\`$c\`" "$F" || bad="$bad UNDOCUMENTED:$c"
-  done
-  # The ORPHAN direction is deliberately NOT checked for the node runner: the port is partial, so a
-  # documented code that `consecrate`/`retag`/`upgrade` emits has no site here YET. Reporting those
-  # as orphans would be an assertion about how far the port has got, not about the contract — and it
-  # would go green by itself as the port lands, which is a test that measures the wrong thing. The
-  # bash arm still checks both directions, so the table cannot grow an orphan unnoticed.
-  OUT="${bad:-all emitted codes documented (orphan direction: bash arm)}"; RC=0
-  if [ -z "$bad" ]; then ok; else bad "diagnostic code table drift:$bad"; fi
-}
-meta_diag_code_table() {
-  # FORMATS documents every code the binary can emit, and documents no code it cannot — the
-  # table is the contract's published half, so drift in either direction is a defect.
-  # Two emission shapes, both harvested: shell `prob CODE "…"` / `warn CODE "…"`, and awk
-  # `prob("[CODE] " …)`. Comment lines are skipped so the doc-comment's own `prob CODE` example
-  # is not mistaken for an emitted code.
-  [ "$WD_RUNNER" = node ] && { nodeshape_diag_code_table; return; }
-  src_shape_unported && return
-  local B="$REPO/$WD_ENTRY" F="$REPO/.weavedoc/FORMATS.md" bad="" c emitted
-  emitted=$( { grep -vE '^[[:space:]]*#' "$B" | grep -oE '\b(prob|warn) [A-Z][A-Z0-9-]+' | awk '{print $2}'
-               grep -oE 'prob\("\[[A-Z][A-Z0-9-]+' "$B" | sed 's/.*\[//'; } | grep -v '^CODE$' | LC_ALL=C sort -u)
+  # VACUITY GUARD. An earlier draft of this line lost its escapes and `emitted` came out EMPTY,
+  # which reported all 93 documented codes as orphans — loud, so it was caught. The quiet direction
+  # is what this guards: an empty set makes the UNDOCUMENTED loop run zero times and pass.
+  ne=$(printf '%s\n' "$emitted" | grep -c . || true)
+  [ "${ne:-0}" -ge 50 ] || bad="$bad EXTRACTED-ONLY-${ne:-0}-CODES(the parse is broken, not the table)"
   for c in $emitted; do
     grep -q "\`$c\`" "$F" || bad="$bad UNDOCUMENTED:$c"
   done
@@ -3005,26 +3252,16 @@ meta_diag_code_table() {
   if [ -z "$bad" ]; then ok; else bad "diagnostic code table drift:$bad"; fi
 }
 meta_uncoded_ratchet() {
-  # Every SHELL prob site carries a code; the two matches allowed are emit_probs' router lines.
-  # awk-emitted diagnostics are wave 11b — this ratchet keeps the shell side at zero meanwhile.
-  local n
-  if [ "$WD_RUNNER" = node ]; then
-    # The port makes the code a REQUIRED first parameter, so an uncoded site cannot be written by
-    # accident — but "cannot happen" is what the bash side believed too. Counted, not assumed: every
-    # prob/warn call must open with a quoted upper-case code.
-    local -a SRC; mapfile -t SRC < <(node_sources)
-    n=$(grep -hv "^[[:space:]]*//" "${SRC[@]}" | grep -oE "\b(prob|warn)\(" | wc -l)
-    local coded
-    coded=$(grep -hv "^[[:space:]]*//" "${SRC[@]}" | grep -oE "\b(prob|warn)\('[A-Z][A-Z0-9-]+'" | wc -l)
-    OUT="prob/warn call sites: $n · carrying a code: $coded"
-    RC=0
-    if [ "${n:-0}" -eq "${coded:-0}" ]; then ok; else bad "prob/warn sites without a code: $(( n - coded ))"; fi
-    return
-  fi
-  src_shape_unported && return
-  n=$(grep -E '\bprob "' "$REPO/$WD_ENTRY" | grep -cvE '\$code|\$line' || true)
-  OUT="uncoded shell prob sites: ${n:-?}"; RC=0
-  if [ "${n:-1}" -eq 0 ]; then ok; else bad "shell prob sites without a code: $n (the ratchet allows zero)"; fi
+  # Every diagnostic carries a code. The runtime makes the code a REQUIRED first parameter, so an
+  # uncoded site cannot be written by accident — but "cannot happen" is what the bash runtime
+  # believed too, and it was carrying uncoded sites. Counted, not assumed.
+  local n coded
+  local -a SRC; mapfile -t SRC < <(node_sources)
+  n=$(grep -hv "^[[:space:]]*//" "${SRC[@]}" | grep -oE "\b(prob|warn)\(" | wc -l)
+  coded=$(grep -hv "^[[:space:]]*//" "${SRC[@]}" | grep -oE "\b(prob|warn)\('[A-Z][A-Z0-9-]+'" | wc -l)
+  OUT="prob/warn call sites: $n · carrying a code: $coded"
+  RC=0
+  if [ "${n:-0}" -eq "${coded:-0}" ]; then ok; else bad "prob/warn sites without a code: $(( n - coded ))"; fi
 }
 
 meta_doc_sync() {
@@ -3037,6 +3274,51 @@ meta_doc_sync() {
 
 # ---- command smoke floor (Phase 2: every CLI command has at least one covered run) ----
 acct_smoke_version() { vrun version; expect_pass; expect_has "fingerprint:"; }
+acct_golden_outputs_current() {
+  # tests/baseline/golden/ is the record of what each command PRINTS on a clean minimal mine, and
+  # until now NOTHING read it — it sat a whole release out of date (bundle 2026-08-05.1 next to a
+  # 2026-08-05.2 runtime) while the suite stayed green. A snapshot nobody compares is a file, not a
+  # record. Found by a cold review, 2026-08-05.
+  #
+  # This makes an intentional output change SHOW UP: the case fails until `bash tests/refresh-golden.sh`
+  # is run, and the change then appears in that directory's diff where a reviewer can see it.
+  #
+  # version.txt is compared on its LABEL LINE ONLY. The fingerprint hashes the whole runtime, so
+  # asserting it would demand a golden refresh on every lib edit — friction with no signal, since
+  # what this case is for is OUTPUT drift, and doccheck already ties the label to the CHANGELOG.
+  local G="$REPO/tests/baseline/golden" c bad=""
+  for c in validate census scope status gaps; do
+    [ -f "$G/$c.txt" ] || { bad="$bad MISSING:$c.txt"; continue; }
+    ( cd "$W" && $TO "${WDRUN[@]}" "$c" ) > "$W/.g.$c" 2>&1
+    cmp -s "$W/.g.$c" "$G/$c.txt" || bad="$bad DRIFT:$c"
+  done
+  ( cd "$W" && $TO "${WDRUN[@]}" version ) > "$W/.g.version" 2>&1
+  local now golden
+  now=$(head -1 "$W/.g.version"); golden=$(head -1 "$G/version.txt")
+  [ "$now" = "$golden" ] || bad="$bad LABEL:golden='$golden' runtime='$now'"
+  OUT="${bad:-golden snapshots match the current runtime}"; RC=0
+  if [ -z "$bad" ]; then ok; else bad "golden drift —$bad (run 'bash tests/refresh-golden.sh' and review the diff)"; fi
+}
+acct_fingerprint_covers_lib() {
+  # The fingerprint is the ONE spelling of "are these two installs the same runtime", and the Node
+  # runtime is a dispatcher plus the modules under lib/ — an entrypoint-only hash reported
+  # IDENTICAL for commit pairs differing solely in lib/ (v0.4.0 external review; f3b05f2 and
+  # ef48366 are such commits). Proven on a COPY of the runtime: the shipped one must not be edited
+  # by a test, and a copy is exactly what an install is. Runs the node runtime directly on both
+  # arms — the bash fingerprint hashes its own single file and was never blind this way.
+  cp -r "$REPO/.weavedoc/bin" "$W/.weavedoc/bin"
+  cp "$REPO/.weavedoc/VERSION" "$W/.weavedoc/VERSION"
+  local f1 f2 f3
+  f1=$( cd "$W" && node .weavedoc/bin/weavedoc.mjs version 2>/dev/null | grep -m1 'fingerprint:' )
+  [ -n "$f1" ] || { bad "no fingerprint line from the copied runtime — the fixture is broken, not the hash"; return; }
+  printf '\n' >> "$W/.weavedoc/bin/lib/core.mjs"
+  f2=$( cd "$W" && node .weavedoc/bin/weavedoc.mjs version 2>/dev/null | grep -m1 'fingerprint:' )
+  [ "$f1" != "$f2" ] || { bad "a lib byte change did not change the fingerprint — the hash does not cover lib/"; return; }
+  printf '\n' >> "$W/.weavedoc/bin/weavedoc.mjs"
+  f3=$( cd "$W" && node .weavedoc/bin/weavedoc.mjs version 2>/dev/null | grep -m1 'fingerprint:' )
+  [ "$f2" != "$f3" ] || { bad "an entrypoint byte change did not change the fingerprint"; return; }
+  ok
+}
 acct_smoke_lang()    { vrun lang;    expect_pass; expect_has "ko"; }
 acct_smoke_locale() {
   # `locale`'s contract has TWO documented outcomes: a short code + exit 0, or empty + exit 1
@@ -3295,12 +3577,8 @@ if [ -n "$FILTER" ]; then CASES=$(printf '%s\n' "$CASES" | grep -F "$FILTER" || 
 echo "weavedoc regression — $(cd "$REPO" && git rev-parse --short HEAD 2>/dev/null) / bundle $(cat "$REPO/.weavedoc/VERSION") / $(printf '%s\n' "$CASES" | wc -l | tr -d ' ') cases, -j$JOBS"
 echo "  env: $(uname -sr) · bash ${BASH_VERSION%%(*} · cache key $KEY"
 # Syntax-check the entrypoint before building a fixture: a runtime that does not parse fails every
-# case identically and buries the one line that says why. Runner-aware, since the check is.
-case "$WD_RUNNER" in
-  bash) bash -n "$REPO/$WD_ENTRY" || { echo "!! $WD_ENTRY does not parse"; exit 2; } ;;
-  node) node --check "$REPO/$WD_ENTRY" || { echo "!! $WD_ENTRY does not parse"; exit 2; } ;;
-  *)    echo "!! no syntax check known for runner '$WD_RUNNER' — add one before trusting a green run"; exit 2 ;;
-esac
+# case identically and buries the one line that says why.
+node --check "$REPO/$WD_ENTRY" || { echo "!! $WD_ENTRY does not parse"; exit 2; }
 mkpristine
 OUT=$( ( cd "$PRISTINE" && "${WDRUN[@]}" validate ) 2>&1 ) || {
   echo "!! the pristine fixture does not validate — every case below would be meaningless"

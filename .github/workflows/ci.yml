@@ -22,17 +22,17 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '18'          # the declared floor; the runtime uses node:fs/path/crypto only
-      - name: parse checks (BOTH runtimes — the bundle ships both for one release)
+      - name: parse checks (the runtime, and every shell script that gates or ships a release)
+        # release-notes.sh is on this list because the `release` job RUNS it at tag time: a syntax
+        # error there fails the publish after every other gate has gone green.
         run: |
-          bash -n .weavedoc/bin/weavedoc
-          bash -n tests/regress.sh
-          bash -n tests/make-manifest.sh
+          for f in tests/*.sh; do bash -n "$f"; done
           node --check .weavedoc/bin/weavedoc.mjs
           for f in .weavedoc/bin/lib/*.mjs; do node --check "$f"; done
       - name: no literal control character in a runtime module
-        # The bash runtime keeps its reference-index separator as a raw U+0001, which RENDERS AS
-        # NOTHING — reading it as text says "split on the empty string" and the port did exactly
-        # that until it was run. The Node modules spell theirs as escapes; this keeps it that way.
+        # The bash runtime this replaced kept its reference-index separator as a raw U+0001, which
+        # RENDERS AS NOTHING — reading it as text says "split on the empty string", and the port did
+        # exactly that until it was RUN. These modules spell theirs as escapes; this keeps it so.
         run: |
           # This workflow scans ITSELF: the first draft of the comment above put a real U+0001
           # into the YAML, which is the same invisible-character trap one layer out.
@@ -43,7 +43,7 @@ jobs:
       - name: shellcheck (errors block; the full style pass is a §9 release condition)
         run: |
           sudo apt-get update -q && sudo apt-get install -y -q shellcheck
-          shellcheck --severity=error .weavedoc/bin/weavedoc tests/regress.sh tests/make-manifest.sh
+          shellcheck --severity=error tests/*.sh
 
   regression-linux:
     runs-on: ubuntu-latest
@@ -54,11 +54,10 @@ jobs:
           node-version: '18'
       - name: generate ko_KR.UTF-8 (pass_locales compares real locale behavior, not a warning)
         run: sudo locale-gen ko_KR.UTF-8
-      - name: run the regression suite against the SHIPPED runtime (Node)
-        # Node is the product from stage 6 on, so it is the gate. The bash run below is the parity
-        # reference, kept for one release — if the two ever disagree, the suite says which.
-        run: WD_BIN="node .weavedoc/bin/weavedoc.mjs" bash tests/regress.sh
-      - name: run the same suite against the bash reference
+      - name: run the regression suite
+        # One runtime since bundle 2026-08-05.3, so one run. The harness defaults to the shipped
+        # runtime — the default was the bash reference while both shipped, which meant a plain local
+        # run graded the wrong one.
         run: bash tests/regress.sh
       - name: executed-case artifact (§7.3 — the case ID list, not just a PASS count)
         if: always()
@@ -137,9 +136,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '18'
-      - name: run the regression suite against the SHIPPED runtime (Node)
-        run: WD_BIN="node .weavedoc/bin/weavedoc.mjs" bash tests/regress.sh
-      - name: run the same suite against the bash reference
+      - name: run the regression suite
         run: bash tests/regress.sh
       - name: executed-case artifact (§7.3)
         if: always()
