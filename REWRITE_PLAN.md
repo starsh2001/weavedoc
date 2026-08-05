@@ -260,6 +260,10 @@ config·schema·frontmatter 값 규칙·섹션/주석 리더·ledger 행 필터�
 > `src_shape_unported()`가 지키던 세 케이스에 Node 철자를 썼다(§4의 "건너뛰면 안 된다"). `meta_diag_code_table`의 Node판은 **고아 방향을 의도적으로 검사하지 않는다**: 포트가 부분인 동안 미이식 명령의 코드는 사이트가 없고, 그걸 고아로 신고하면 계약이 아니라 이식 진척도를 재는 테스트가 되어 포트가 진행되면 저절로 녹색이 된다. bash 판이 양방향을 계속 본다.
 > `meta_single_judges`의 Node판은 첫 실행에서 **포트 안에 이미 있던 리터럴 제어문자 3개**를 잡았다(`cmd-pull.mjs`의 `replace(/<SOH>/g,' ')`, `diff.mjs`의 `<NUL>` 마커) — 화면에는 `replace(//g,' ')`로 보이는, bash에서 이 이식을 속인 것과 **같은 함정**. 이스케이프로 바꿨고 이제 상시 감시된다.
 
+> **5단계 전체 완료 2026-08-05.** `validate` → `retag` → `consecrate` → `upgrade` 순. **`NOT_PORTED`가 비었다** — 모든 명령이 Node로 돈다.
+> 실측: 회귀 **349/349 양쪽 러너**(bash 채점·Node 채점) · 코퍼스 광산 349개 × 읽기 명령 9개 전부 일치(선언 예외만) · 쓰기 명령은 `tests/parity-write.sh`로 stdout·종료 코드·**결과 트리**까지 대조(retag 7 · consecrate 8 · upgrade 7 모양).
+> `upgrade --apply`의 백업 디렉터리 이름은 `.upgrade-backup-<date>.<PID>`라 두 실행이 항상 다르다 — **bash를 bash와 비교해도 같은 차이가 나온다**는 걸 확인하고 하네스에서 정규화했다(내용은 계속 대조한다).
+
 **6단계 — 전환** · 기본 대상을 Node로 바꾸고 스킬·문서·CI를 같은 커밋에서 넘긴다. bash 판은 한 릴리스 동안 `legacy/`에 남겨 파리티 검증용으로만 쓴다.
 
 **7단계 (별건) — 하네스도 Node로**

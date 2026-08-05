@@ -41,8 +41,13 @@ trap '[ -n "$KEEP" ] || rm -rf "$WORK"' EXIT
 #    two spellings. Folding it keeps everything else comparable; it does not settle REWRITE_PLAN §4.
 SCRATCH_WIN=$(cygpath -m "$SCRATCH" 2>/dev/null || printf '%s' "$SCRATCH")
 SCRATCH_WINL=$(cygpath -ml "$SCRATCH" 2>/dev/null || printf '%s' "$SCRATCH_WIN")
+# 3. `upgrade --apply` names its backup directory `.upgrade-backup-<date>.<PID>`. Two runs are two
+#    processes, so the suffix ALWAYS differs — verified by running bash against BASH, which reports
+#    the same divergence and nothing else. Folding it is not forgiving a port difference; leaving it
+#    would make this command permanently red and train the reader to skim past red.
 normalise() { sed -E -e 's/^fingerprint: [0-9a-f]+ /fingerprint: <RUNTIME-SPECIFIC> /' \
                      -e 's/"fingerprint":"[0-9a-f]*"/"fingerprint":"<RUNTIME-SPECIFIC>"/' \
+                     -e 's/(\.upgrade-backup-[0-9]{4}-[0-9]{2}-[0-9]{2})\.[0-9]+/\1.<PID>/g' \
                      -e "s|$SCRATCH_WINL|<MINE>|g" -e "s|$SCRATCH_WIN|<MINE>|g" -e "s|$SCRATCH|<MINE>|g"; }
 
 # The tree as bytes: every file's path and sha256, sorted. Computed with one sha256sum process for
@@ -50,8 +55,11 @@ normalise() { sed -E -e 's/^fingerprint: [0-9a-f]+ /fingerprint: <RUNTIME-SPECIF
 # Temp files the runtimes stage and rename are gone by the time this runs; anything still here that
 # looks like one is a leak, and showing it is the point.
 snapshot() {
+  # The backup directory's PID suffix is folded in the PATH column for the same reason it is folded
+  # in the transcript: two runs are two processes. Its CONTENTS are still compared, so a difference
+  # in WHAT was backed up is still caught — only the directory's name is normalised.
   ( cd "$1" && find . -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum 2>/dev/null \
-      | sed -E 's|^([0-9a-f]+) [ *]| \1  |' ) | LC_ALL=C sort -k2
+      | sed -E 's|^([0-9a-f]+) [ *]| \1  |; s|(\.upgrade-backup-[0-9]{4}-[0-9]{2}-[0-9]{2})\.[0-9]+|\1.<PID>|g' ) | LC_ALL=C sort -k2
 }
 
 # Run the whole sequence on a fresh copy of the template and leave the tree at $2 for diffing.

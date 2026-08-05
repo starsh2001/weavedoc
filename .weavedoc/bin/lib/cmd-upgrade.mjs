@@ -1,0 +1,456 @@
+// weavedoc upgrade [--check|--dry-run|--apply] [--from 0.1] — a v1 mine to schema 2.
+//
+// THREE MODES, ONE SCAN. --check, --dry-run and --apply all read the same scanUpgrade(), so they
+// can never disagree about what the migration IS. --apply is a staged transaction: every touched
+// path is snapshotted once before its first edit, every created path recorded, and the whole thing
+// answers to the same full validation everything else answers to — fail and the mine is
+// byte-identical to before.
+import { existsSync, statSync, readFileSync, writeFileSync, appendFileSync, mkdirSync, renameSync, rmSync, cpSync, readdirSync } from 'node:fs'
+import { splitLines, canonId, isFence, U, M } from './core.mjs'
+import { nocomment, sectionAll } from './sections.mjs'
+import { join, materialIds, docIds, fm } from './mine.mjs'
+import { fmvB, clearFileCaches } from './read.mjs'
+import { ledgerRows } from './verify.mjs'
+import { scanVerifiedUnits } from './cmd-scope.mjs'
+
+const readB = p => { try { return readFileSync(p).toString('latin1') } catch { return '' } }
+const isFileAt = p => { try { return statSync(p).isFile() } catch { return false } }
+const isDirAt = p => { try { return statSync(p).isDirectory() } catch { return false } }
+const exists = p => { try { statSync(p); return true } catch { return false } }
+const bytewise = (a, b) => Buffer.compare(Buffer.from(a, 'latin1'), Buffer.from(b, 'latin1'))
+const uniqSort = xs => [...new Set(xs)].filter(x => x !== '').sort(bytewise)
+const truthGlob = m => {
+  try { return readdirSync(m.truths).filter(n => /^t[0-9].*\.md$/.test(n)).sort(bytewise) } catch { return [] }
+}
+const write = (p, s) => writeFileSync(p, Buffer.from(s, 'latin1'))
+
+// ---- the Verified units row reader, shared by the scan and the apply -------------------------
+// Success evidence means COMPLETE evidence: `passes 1/2` is a run that stopped short, and stamping
+// it verified would erase unfinished work from the debt (v0.3.1). Anything that names units without
+// complete success is handed to a human — the machine never certifies what the ledger did not say.
+function verdictRows (m) {
+  const vd = (m.sch.get('verify.units.verified') || 'verified')
+  const body = sectionAll(nocomment(readB(join(m.truths, 'verify.md'))), 'Verified units')
+  const rows = []
+  for (const raw of splitLines(body)) {
+    const line = raw.split('Â·').join(' ').split('·').join(' ')
+    if (!/^[ \t\v\f\r]*[|-]/.test(line)) continue
+    if (/^[ \t\v\f\r]*\|[ \t\v\f\r|:-]*$/.test(line)) continue
+    if (!/[mt][0-9]/.test(line)) continue
+    const v = line.replace(/[ \t\v\f\r|*.-]+$/, '')
+    if (new RegExp(`(^|[^a-z_])${vd}$`).test(v.toLowerCase())) continue
+    let ok2 = false
+    const pm = /passes[ \t\v\f\r]*([0-9]+)\/([0-9]+)/.exec(line)
+    if (pm && +pm[1] === +pm[2] && +pm[2] > 0) ok2 = true
+    rows.push({ ok2, raw, line })
+  }
+  return rows
+}
+
+// Materials whose OWN v1 record says verified. The material lane's v1 evidence is the material's
+// `status: verified` — an m-id mentioned in the truths-lane markdown ledger is extraction scope,
+// not a conversion verdict (WD-COR-001), and minting m rows from that mention demoted mandatory
+// debt into non-blocking legacy backlog (v0.3.2).
+const v1VerifiedMaterials = m => materialIds(m)
+  .filter(id => isFileAt(join(m.materials, id, 'converted.md')) && fmvB(join(m.materials, id, 'converted.md'), 'status') === 'verified')
+
+// Ledger coverage for the MATERIAL lane is origin-aware (v0.3.3): an origin-less m legacy row (a
+// pre-0.3.2 mint) is not material evidence, so it must not block the correct row on a resumed
+// migration — only a real verdict, or the material origin token, covers this lane.
+function materialCovered (m) {
+  const tok = m.sch.get('verify.ledger.origin.material') || 'v1-material-frontmatter'
+  return uniqSort(ledgerRows(join(m.truths, m.ledgerFile())).map(r => r.split('\t'))
+    .filter(f => /^m/.test(f[0]) && (f[2] !== 'legacy-unbound' || f[3] === tok)).map(f => f[0]))
+}
+
+const missingTruthRows = m => {
+  const scan = scanVerifiedUnits(m)
+  const vids = uniqSort(scan.V.filter(x => /^t[0-9]/.test(x)))
+  const scov = uniqSort(ledgerRows(join(m.truths, m.ledgerFile())).map(r => r.split('\t')[0]))
+  return vids.filter(x => !scov.includes(x))
+}
+const missingMatRows = m => {
+  const cov = materialCovered(m)
+  return uniqSort(v1VerifiedMaterials(m)).filter(x => !cov.includes(x))
+}
+
+// ---- the scan ---------------------------------------------------------------------------------
+export function scanUpgrade (m) {
+  const items = []
+  const add = (kind, display) => items.push([kind, display])
+  const pv = fmvB(m.project, 'version')
+  const cv = m.cfg.flat.get('version') ?? ''
+  if (pv === '1') add('version', U('project.md version: 1 → 2'))
+  if (cv === '1') add('version', U('config.yaml version: 1 → 2'))
+  for (const b of materialIds(m)) {
+    const c = canonId(b)
+    if (c !== null && b !== c) add('rename', M`materials/${b} → ${c} (folder, id:, catalog, strict references)`)
+  }
+  for (const n of truthGlob(m)) {
+    const b = n.replace(/\.md$/, '')
+    const c = canonId(b)
+    if (c !== null && b !== c) add('rename', M`truths/${b} → ${c} (file, id:, strict references)`)
+  }
+  if (isFileAt(join(m.truths, 'verify.md'))) {
+    for (const r of verdictRows(m)) {
+      if (r.ok2) add('verdict', M`Verified units row gains its trailing verdict word: ${r.line}`)
+      else add('verdict-manual', M`row names units but shows no COMPLETE success evidence (passes N/N with N=N) — review by hand: ${r.line}`)
+    }
+    const stripped = nocomment(readB(join(m.truths, 'verify.md')))
+    for (const b of (m.sch.get('verify.sections') ?? '').split('|')) {
+      if (b === '') continue
+      if (!new RegExp(`^#{1,2}[ \t]+${b.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}[ \t]*$`, 'm').test(stripped)) {
+        add('verify-section', M`truths/verify.md gains an empty section: ## ${b}`)
+      }
+    }
+  }
+  if (/^[ \t\v\f\r]+repeat:[ \t\v\f\r]*[0-9]/m.test(readB(m.config))) {
+    add('repeat', U('config scalar repeat → per-scale map (skip 0 · light/standard keep the scalar · full is one stricter)'))
+  }
+  // v1 reviews are digest-less by definition; on schema 2 they need the audit marker or the
+  // unsealed-review block would refuse the very mine the migration just produced. GATED ON v1 —
+  // this item is the one that laundered stripped seals into "history" when it ran ungated (v0.3.2).
+  if (pv === '1' || cv === '1') {
+    for (const d of docIds(m)) {
+      const f = join(m.documents, d, 'review.md')
+      if (!isFileAt(f)) continue
+      if (fmvB(f, 'reviewed_digest') !== '' || fmvB(f, 'review_legacy') !== '') continue
+      add('review-legacy', M`documents/${d}/review.md → marked review_legacy (v1 history, digest-less; new rounds seal via seal-review)`)
+    }
+  }
+  for (const d of docIds(m)) {
+    const f = join(m.documents, d, 'review.md')
+    if (!isFileAt(f)) continue
+    const n = countHistoryBrackets(readB(f))
+    if (n > 0) add('review-history', M`documents/${d}/review.md: ${n} bracketed kind record(s) outside the gate → brackets removed (record form; VERIFY none was an open violation)`)
+  }
+  // Ledger materialization belongs to the v1 migration ONLY: on a v2 mine a markdown row with no
+  // sidecar twin is the LEGAL legacy-unbound state (preserved, re-verified by risk), not pending
+  // work — otherwise "nothing to do" would be unreachable for any mine with history.
+  if (pv === '1' || cv === '1') {
+    const miss = missingTruthRows(m)
+    if (miss.length) add('ledger', M`${miss.length} markdown-verified truth unit(s) → verify-ledger.tsv rows verdict=legacy-unbound origin=${m.sch.get('verify.ledger.origin.truths') || 'v1-truths-ledger'} (digest NOT back-stamped — §11 decision)`)
+    const mmiss = missingMatRows(m)
+    if (mmiss.length) add('ledger', M`${mmiss.length} material(s) with v1 status: verified → verify-ledger.tsv rows verdict=legacy-unbound origin=${m.sch.get('verify.ledger.origin.material') || 'v1-material-frontmatter'}`)
+  }
+  return items
+}
+
+// A bracketed violation kind sitting OUTSIDE the gate section is a RECORD, not an open violation —
+// on schema 2 it loses its brackets so the zone rule stops reading it as one. Counting and
+// rewriting share this walk so the scan and the apply cannot disagree about what they found.
+const KINDRX = /\[[A-Za-z_ -]+\]/
+function historyWalk (text, rewriteFn) {
+  let sec = ''
+  const out = []
+  let n = 0
+  for (const line of splitLines(text)) {
+    if (/^#/.test(line)) {
+      sec = line.replace(/^#+[ \t\v\f\r]*/, '').replace(/[ \t\v\f\r]*$/, '')
+      out.push(line); continue
+    }
+    if (sec !== 'Fidelity violations' && /^[ \t\v\f\r]*[-|*].*\[[A-Za-z_ -]+\]/.test(line)) {
+      const mm = KINDRX.exec(line)
+      const k = mm[0].slice(1, -1)
+      const kn = k.replace(/[^a-zA-Z]/g, '').toLowerCase()
+      if (kn === 'contradiction' || kn === 'unsupported' || kn === 'missingrequired') {
+        n++
+        out.push(rewriteFn ? line.replace(KINDRX, k) : line)
+        continue
+      }
+    }
+    out.push(line)
+  }
+  return { n, text: out.length ? out.join('\n') + '\n' : '' }
+}
+const countHistoryBrackets = t => historyWalk(nocomment(t), null).n
+
+// ---- the command ------------------------------------------------------------------------------
+export function cmdUpgrade (m, out, argv, runReindex, runValidate) {
+  let mode = '--check'
+  let from = '0.1'
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i]
+    if (a === '--check' || a === '--dry-run' || a === '--apply') mode = a
+    else if (a === '--from') { i++; from = argv[i] ?? '' } else {
+      out('usage: weavedoc upgrade [--check|--dry-run|--apply] [--from 0.1]')
+      return 2
+    }
+  }
+  const sv = m.schemaVer()
+  if (from !== '0.1') { out(`upgrade: only --from 0.1 is supported (v1 → schema ${sv})`); return 2 }
+  // The version matrix is CLOSED (v0.3.3): each record is 1 or the current schema and nothing else.
+  // `version: banana` used to skip the numeric future-check and read as "already at schema 2" with
+  // exit 0 — a success report over a mine this migration cannot even classify.
+  const pv = fmvB(m.project, 'version')
+  const cv = m.cfg.flat.get('version') ?? ''
+  for (const v of [pv, cv]) {
+    if (v === '1' || v === sv) continue
+    if (v === '' || /[^0-9]/.test(v)) {
+      out(`upgrade: version record '${v === '' ? '<missing>' : v}' is not a version this migration understands — a v1 mine says 1, a current mine says ${sv}; fix the version: fields in project.md/config.yaml first`)
+      return 2
+    }
+    if (Number(v) > Number(sv)) out(`upgrade: this mine declares schema ${v}, newer than this runtime (schema ${sv}) — refusing to touch a format this code cannot read; use a newer runtime`)
+    else out(`upgrade: version record '${v}' is not a version this migration understands — supported records are 1 and ${sv}`)
+    return 2
+  }
+  // A mine already at schema 2 gets "nothing to do" WITHOUT scanning: the scan's items are
+  // migration writes, and running them on a v2 mine was the seal-laundering path — strip the seals,
+  // run --apply, and the review_legacy marker stamped tamper as history.
+  if (pv !== '1' && cv !== '1') { out(`upgrade: nothing to do — the mine is already at schema ${sv}`); return 0 }
+
+  const items = scanUpgrade(m)
+  if (items.length === 0) { out(`upgrade: nothing to do — the mine is already at schema ${sv}`); return 0 }
+  const n = items.length
+  if (mode === '--check') {
+    out(`upgrade --check: ${n} migration item(s) v1 → schema ${sv}  (read-only — nothing written)`)
+    for (const [k, disp] of items) out(Buffer.from(`  [${k}] ${disp}`, 'latin1'))
+    out('  next: weavedoc upgrade --dry-run (full plan) · weavedoc upgrade --apply (staged, rollback-safe)')
+    return 1
+  }
+  if (mode === '--dry-run') {
+    out(`upgrade --dry-run: ${n} item(s), 0 write(s) — the plan:`)
+    for (const [, disp] of items) out(Buffer.from(`  would: ${disp}`, 'latin1'))
+    out(`  expected after apply: project at schema ${sv} · validate clean · history preserved as legacy-unbound, never back-stamped`)
+    return 1
+  }
+  return upgradeApply(m, out, n, runReindex, runValidate)
+}
+
+// ---- the staged, rollback-safe transaction ----------------------------------------------------
+function upgradeApply (m, out, nitems, runReindex, runValidate) {
+  const today = new Date().toISOString().slice(0, 10)
+  const bak = `${m.root}/.upgrade-backup-${today}.${process.pid}`
+  const rel = p => (p.startsWith(`${m.root}/`) ? p.slice(m.root.length + 1) : p)
+  const created = []; const touched = []
+
+  // Every touched path is snapshotted ONCE before its first edit; every created path is recorded.
+  // Rollback = remove created, restore touched, in that order. A path this transaction CREATED is
+  // never snapshotted — that would make rollback resurrect the mid-transaction copy right after the
+  // created-removal pass deleted it.
+  const bkup = p => {
+    if (!exists(`${m.root}/${p}`)) return
+    if (exists(`${bak}/${p}`)) return
+    if (created.includes(p)) return
+    mkdirSync(`${bak}/${p}`.replace(/\/[^/]*$/, ''), { recursive: true })
+    cpSync(`${m.root}/${p}`, `${bak}/${p}`, { recursive: true })
+    touched.push(p)
+    appendFileSync(`${bak}/.touched`, p + '\n')
+  }
+  const crtd = p => { created.push(p); appendFileSync(`${bak}/.created`, p + '\n') }
+  const rollback = () => {
+    for (const p of created) rmSync(`${m.root}/${p}`, { recursive: true, force: true })
+    for (const p of touched) {
+      rmSync(`${m.root}/${p}`, { recursive: true, force: true })
+      cpSync(`${bak}/${p}`, `${m.root}/${p}`, { recursive: true })
+    }
+    rmSync(bak, { recursive: true, force: true })
+  }
+
+  // Canonicalise STRICT reference fields and the ledgers — NEVER prose. Two passes, because a
+  // boundary regex can eat a shared separator between adjacent ids.
+  const canonRefs = (o, nw) => {
+    const bnd = (s, oo, nn) => s.replace(new RegExp(`(^|[^0-9A-Za-z])${oo}([^0-9A-Za-z]|$)`, 'g'), `$1${nn}$2`)
+    for (let pass = 0; pass < 2; pass++) {
+      for (const nfile of truthGlob(m)) {
+        const f = join(m.truths, nfile)
+        bkup(rel(f))
+        write(f, splitLines(readB(f)).map(l =>
+          /^[ \t\v\f\r]*(source|conflict_with|derived_from|corroborated_by|winner|corrects)[ \t\v\f\r]*:/.test(l) ? bnd(l, o, nw) : l
+        ).join('\n') + '\n')
+      }
+      if (isFileAt(`${m.root}/catalog.md`)) {
+        bkup('catalog.md')
+        write(`${m.root}/catalog.md`, readB(`${m.root}/catalog.md`)
+          .replace(new RegExp(`\\|([ \t\v\f\r]*)${o}([ \t\v\f\r]*)\\|`, 'g'), `|$1${nw}$2|`))
+      }
+      const cov = join(m.truths, 'coverage.md')
+      if (isFileAt(cov)) { bkup(rel(cov)); write(cov, bnd(readB(cov), o, nw)) }
+      for (const dd of docIds(m)) {
+        const p = join(m.documents, dd, 'plan.md')
+        if (!isFileAt(p)) continue
+        bkup(rel(p))
+        write(p, splitLines(readB(p)).map(l =>
+          /^[ \t\v\f\r]*cited_truths[ \t\v\f\r]*:/.test(l) ? bnd(l, o, nw) : l).join('\n') + '\n')
+      }
+    }
+  }
+
+  // PRECHECK: every rename target must be free BEFORE one byte moves — free on disk AND free among
+  // the other renames. `t01` and `t1` both canonicalise to t001, and a sequential apply would have
+  // the second silently overwrite the first (v0.3.1).
+  const pairs = []
+  const mt = new Set(); const tt = new Set()
+  for (const b of materialIds(m)) {
+    const c = canonId(b)
+    if (c === null || b === c) continue
+    if (exists(join(m.materials, c))) { out(`upgrade: rename collision — materials/${c} already exists next to materials/${b}; resolve by hand (nothing written)`); return 1 }
+    if (mt.has(c)) { out(`upgrade: rename collision — two material folders both canonicalize to ${c}; resolve by hand (nothing written)`); return 1 }
+    mt.add(c); pairs.push(['m', b, c])
+  }
+  for (const nfile of truthGlob(m)) {
+    const b = nfile.replace(/\.md$/, '')
+    const c = canonId(b)
+    if (c === null || b === c) continue
+    if (exists(join(m.truths, `${c}.md`))) { out(`upgrade: rename collision — truths/${c}.md already exists next to truths/${b}.md; resolve by hand (nothing written)`); return 1 }
+    if (tt.has(c)) { out(`upgrade: rename collision — two truth files both canonicalize to ${c} (e.g. t01.md and t1.md); resolve by hand (nothing written)`); return 1 }
+    tt.add(c); pairs.push(['t', b, c])
+  }
+  // verdict-manual rows block the WHOLE apply: stamping schema 2 over rows the machine cannot
+  // certify would leave --check red forever while apply reports success (broken idempotence), and
+  // worse, would move unfinished verification out of sight. Human first, stamp second.
+  const manual = scanUpgrade(m).filter(([k]) => k === 'verdict-manual')
+  if (manual.length) {
+    out('upgrade: rows in ## Verified units need a human ruling before apply can stamp schema 2 (nothing written):')
+    for (const [, disp] of manual) out(Buffer.from(`  - ${disp}`, 'latin1'))
+    out('  fix each row (complete the verification, or mark its real verdict), then re-run')
+    return 1
+  }
+  try { mkdirSync(bak, { recursive: true }) } catch { out(`upgrade: cannot create backup dir ${bak}`); return 1 }
+
+  // 1. canonical renames + strict-reference rewrite. Prose and changelog history stay untouched:
+  //    lenient resolution reads old spellings, and consecrated bytes are never edited.
+  for (const [kind, old, nw] of pairs) {
+    if (kind === 'm') {
+      bkup(rel(join(m.materials, old)))
+      cpSync(join(m.materials, old), join(m.materials, nw), { recursive: true })
+      rmSync(join(m.materials, old), { recursive: true, force: true })
+      crtd(rel(join(m.materials, nw)))
+      const cf = join(m.materials, nw, 'converted.md')
+      write(cf, splitLines(readB(cf)).map(l => (l === `id: ${old}` ? `id: ${nw}` : l)).join('\n') + '\n')
+    } else {
+      bkup(rel(join(m.truths, `${old}.md`)))
+      cpSync(join(m.truths, `${old}.md`), join(m.truths, `${nw}.md`))
+      rmSync(join(m.truths, `${old}.md`), { force: true })
+      crtd(rel(join(m.truths, `${nw}.md`)))
+      const tf = join(m.truths, `${nw}.md`)
+      write(tf, splitLines(readB(tf)).map(l => (l === `id: ${old}` ? `id: ${nw}` : l)).join('\n') + '\n')
+    }
+    clearFileCaches()
+    canonRefs(old, nw)
+  }
+  clearFileCaches()
+
+  // 2. verify.md: success rows gain their verdict word; missing sections appended empty.
+  const vmd = join(m.truths, 'verify.md')
+  if (isFileAt(vmd)) {
+    bkup(rel(vmd))
+    const vd = (m.sch.get('verify.units.verified') || 'verified')
+    const outl = []
+    for (const line of splitLines(readB(vmd))) {
+      const t = line.split('Â·').join(' ').split('·').join(' ')
+      if (!/^[ \t\v\f\r]*[|-]/.test(t) || /^[ \t\v\f\r]*\|[ \t\v\f\r|:-]*$/.test(t) || !/[mt][0-9]/.test(t)) { outl.push(line); continue }
+      const v = t.replace(/[ \t\v\f\r|*.-]+$/, '')
+      if (new RegExp(`(^|[^a-z_])${vd}$`).test(v.toLowerCase())) { outl.push(line); continue }
+      const pm = /passes[ \t\v\f\r]*([0-9]+)\/([0-9]+)/.exec(t)
+      if (pm && +pm[1] === +pm[2] && +pm[2] > 0) outl.push(`${line} ${U('·')} ${vd}`)
+      else outl.push(line)
+    }
+    let text = outl.length ? outl.join('\n') + '\n' : ''
+    write(vmd, text)
+    for (const b of (m.sch.get('verify.sections') ?? '').split('|')) {
+      if (b === '') continue
+      const stripped = nocomment(readB(vmd))
+      if (!new RegExp(`^#{1,2}[ \t]+${b.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}[ \t]*$`, 'm').test(stripped)) {
+        text = readB(vmd) + `\n## ${b}\n`
+        write(vmd, text)
+      }
+    }
+  }
+
+  // 3. review history: bracketed kinds outside the gate lose their brackets (record form).
+  for (const d of docIds(m)) {
+    const f = join(m.documents, d, 'review.md')
+    if (!isFileAt(f)) continue
+    bkup(rel(f))
+    write(f, historyWalk(readB(f), true).text)
+  }
+
+  // 4. config: scalar repeat → per-scale map.
+  if (/^[ \t\v\f\r]+repeat:[ \t\v\f\r]*[0-9]/m.test(readB(m.config))) {
+    bkup('.weavedoc/config.yaml')
+    const outl = []
+    for (const line of splitLines(readB(m.config))) {
+      const mm = /^  repeat:[ \t\v\f\r]*([0-9]+)/.exec(line)
+      if (!mm) { outl.push(line); continue }
+      const v = mm[1]
+      outl.push(`  repeat:                # clean rounds IN A ROW required to pass, by scale (migrated from scalar ${v})`)
+      outl.push('    skip:     0')
+      outl.push(`    light:    ${v}`)
+      outl.push(`    standard: ${v}`)
+      outl.push(`    full:     ${Number(v) + 1}`)
+    }
+    write(m.config, outl.join('\n') + '\n')
+  }
+
+  // 5. regenerate the generated views under the canonical spellings.
+  bkup(rel(join(m.truths, 'index.md'))); bkup(rel(join(m.truths, 'tree.md')))
+  clearFileCaches()
+  runReindex()
+
+  // 6. materialize digest-less verified history as legacy-unbound sidecar rows — preserved, never
+  //    back-stamped with a digest the verification never computed (§11 decision).
+  clearFileCaches()
+  const miss = missingTruthRows(m)
+  const mmiss = missingMatRows(m)
+  if (miss.length || mmiss.length) {
+    const lf = join(m.truths, m.ledgerFile())
+    if (isFileAt(lf)) bkup(rel(lf)); else crtd(rel(lf))
+    const head = isFileAt(lf)
+      ? readB(lf)
+      // U(): this header is WRITTEN through the byte-domain writer, so its em-dash has to BE bytes.
+      // Caught by parity-write comparing the resulting tree — the dash was silently dropped, and a
+      // ledger header is a file the next reader diffs.
+      : U('# machine-owned verification ledger — append-only; LAST row per id wins. Written by `weavedoc attest`.\n# id\tsha256\tverdict\tround\tstandard\tdate\n')
+    const ot = m.sch.get('verify.ledger.origin.truths') || 'v1-truths-ledger'
+    const om = m.sch.get('verify.ledger.origin.material') || 'v1-material-frontmatter'
+    write(lf, head +
+      miss.map(x => `${x}\t-\tlegacy-unbound\t-\t${ot}\t${today}\n`).join('') +
+      mmiss.map(x => `${x}\t-\tlegacy-unbound\t-\t${om}\t${today}\n`).join(''))
+  }
+
+  // 6b. digest-less reviews receive the audit marker — the record that says "v1 history", which is
+  //     what lets the v2 unsealed-review block distinguish history from tamper.
+  clearFileCaches()
+  for (const d of docIds(m)) {
+    const f = join(m.documents, d, 'review.md')
+    if (!isFileAt(f)) continue
+    if (fmvB(f, 'reviewed_digest') !== '' || fmvB(f, 'review_legacy') !== '') continue
+    const lines = splitLines(readB(f))
+    const marker = `review_legacy: ${today}   ${U('# v1 review, digest-less by definition — migrated, not tampered')}`
+    bkup(rel(f))
+    if (isFence(lines[0] ?? '')) {
+      write(f, [lines[0], marker, ...lines.slice(1)].join('\n') + '\n')
+    } else {
+      // A genuine v0.1 review may have NO frontmatter block at all. The scan promised a marker this
+      // branch could not insert, so post-validate hit GATE-UNSEALED and rolled the whole migration
+      // back — such a mine was permanently unmigratable (v0.3.2). The marker gets a fresh block.
+      write(f, `---\n${marker}\n---\n\n` + readB(f))
+    }
+  }
+
+  // 7. version stamps, LAST among the edits: a crashed apply resumes as a v1 rescan.
+  bkup('project.md')
+  write(m.project, splitLines(readB(m.project)).map(l => (l === 'version: 1' ? 'version: 2' : l)).join('\n') + '\n')
+  bkup('.weavedoc/config.yaml')
+  write(m.config, splitLines(readB(m.config)).map(l => l.replace(/^version: 1/, 'version: 2')).join('\n') + '\n')
+
+  // 8. the same full validation everything else answers to.
+  clearFileCaches()
+  if (runValidate() === 0) {
+    // Written to disk through the byte-domain writer too, so its separators are byte-encoded and
+    // the bundle label (read as bytes) passes through untouched.
+    const man = [M`upgrade applied: ${today} · bundle ${readB(`${m.root}/.weavedoc/VERSION`).replace(/\n+$/, '')} · ${nitems} item(s)`,
+      'touched (originals preserved in this directory):',
+      ...uniqSort(touched).map(p => `  ${p}`),
+      'created:',
+      ...uniqSort(created).map(p => `  ${p}`)]
+    write(`${bak}/MANIFEST.txt`, man.join('\n') + '\n')
+    out(`upgrade --apply: applied ${nitems} item(s) — schema ${m.schemaVer()}, validate clean.`)
+    out(`  backup + manifest: ${rel(bak)}/ (originals; delete when you no longer want the restore point)`)
+    return 0
+  }
+  rollback()
+  out('upgrade --apply: post-apply validation FAILED — every change rolled back, the mine is byte-identical to before. Fix the problems above (they predate the migration), then re-run.')
+  return 1
+}

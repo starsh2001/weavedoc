@@ -158,7 +158,9 @@ const usage2 = u => { errln(`usage: ${u}`); process.exit(2) }
 
 // Ported in a later stage. Refusing with a distinct code keeps a partial port honest: no case can
 // mistake "not written yet" for "ran and agreed".
-const NOT_PORTED = new Set(['upgrade'])
+// EMPTY: every command is ported. The refusal stays in place because it is what kept the port
+// honest — a case reaching an unported command had to fail and say which one it wanted.
+const NOT_PORTED = new Set([])
 
 const argv = process.argv.slice(2)
 const cmd = argv[0] ?? ''
@@ -174,6 +176,17 @@ switch (cmd) {
     // Top-level await (ESM): keeps node:child_process off the startup path — it is loaded only on
     // the Windows-registry fallback, which most runs never reach.
     rc = await cmdLocale(); break
+  case 'upgrade': {
+    const { openMine } = await import('./lib/mine.mjs')
+    const { cmdUpgrade } = await import('./lib/cmd-upgrade.mjs')
+    const { cmdReindex } = await import('./lib/cmd-reindex.mjs')
+    const { cmdValidate } = await import('./lib/cmd-validate.mjs')
+    const mine = openMine(SCRIPT_DIR)
+    rc = cmdUpgrade(mine, outln, rest,
+      () => cmdReindex(mine, () => {}, () => {}, []),
+      () => cmdValidate(mine, outln, false))
+    break
+  }
   case 'consecrate': {
     if (rest.length !== 1) usage2('weavedoc consecrate <doc-id>')
     const { openMine } = await import('./lib/mine.mjs')
