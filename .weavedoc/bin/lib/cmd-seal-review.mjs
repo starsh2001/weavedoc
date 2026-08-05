@@ -41,11 +41,19 @@ export function cmdSealReview (m, out, d, kindArg) {
   if (adg === null) { out(`seal-review: cannot digest ${art}`); return 2 }
   const cdg = contextDigest(m, d)
 
+  // THE BLOCK MUST CLOSE. The guard above only proves line 1 is a fence, so an unclosed block used
+  // to reach the loop below — where `infm` never clears, the three fields are never inserted, and
+  // every existing seal line is dropped on the way past. Measured 2026-08-05: a review that HAD a
+  // valid seal came out with none, and the command printed the seal it had just failed to write and
+  // exited 0. A seal is the binding between a clean review and the bytes it reviewed; deleting one
+  // while reporting success is the worst direction this command can fail in. Refuse instead, and
+  // leave the file exactly as it is — the reviewer's own text is not this command's to edit when it
+  // cannot do its job.
+  if (!lines.slice(1).some(l => FENCE.test(l))) {
+    out("seal-review: review.md's frontmatter block never closes (no '---' after line 1) — nothing sealed, and the existing seal is left untouched. Close the block, then re-run"); return 2
+  }
   // The three fields go in immediately BEFORE the closing fence, and any earlier spelling of them
   // inside the block is dropped on the way past — so re-sealing replaces rather than accumulates.
-  // Note what happens when the block never closes: infm stays set, the fields are never inserted,
-  // and any existing seal is stripped. That is the original's behaviour and it is kept, because the
-  // frontmatter guard above is what is supposed to catch a malformed block, not this loop.
   const outl = []
   let infm = false
   for (let i = 0; i < lines.length; i++) {

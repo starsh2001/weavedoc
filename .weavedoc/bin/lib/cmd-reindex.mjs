@@ -2,7 +2,7 @@
 //
 // These two files are GENERATED VIEWS: the truth files are the source, and anything hand-edited here
 // is lost on the next run. `--check` is the read-only form that reports drift and writes nothing.
-import { statSync, readdirSync, writeFileSync, unlinkSync } from 'node:fs'
+import { statSync, readdirSync, writeFileSync, unlinkSync, readFileSync } from 'node:fs'
 import { isFence, splitLines, truthLabels } from './core.mjs'
 import { join } from './mine.mjs'
 import { fmv } from './read.mjs'
@@ -184,19 +184,48 @@ export function cmdReindex (m, out, errln, argv) {
   // BOTH views are staged before EITHER is renamed. Writing one and then discovering the other
   // cannot be written would leave index.md describing a tree.md that was never regenerated — two
   // generated views that disagree is worse than neither being updated.
+  //
+  // STAGING BOTH IS NOT ENOUGH, and the gap was measured (2026-08-05): with tree.md unreplaceable,
+  // the FIRST rename still landed, so index.md was regenerated next to an untouched tree.md — the
+  // exact split this comment claims to prevent — and the command then printed "the staged copies
+  // were discarded", which was FALSE about the one that had not been. A message that misreports the
+  // state is worse than the state. So the first rename is now UNDOABLE: the old index bytes are
+  // held in memory until the second rename lands.
   const sti = join(m.truths, `.index.md.tmp.${process.pid}`)
   const stt = join(m.truths, `.tree.md.tmp.${process.pid}`)
-  let ok = false
+  const idxPath = join(m.truths, 'index.md')
+  let oldIdx = null
+  try { oldIdx = readFileSync(idxPath) } catch { /* no index yet — then there is nothing to undo */ }
+  let landed = 0
+  let err = null
   try {
     writeFileSync(sti, textBuf(text(idx)))
     writeFileSync(stt, textBuf(text(tree)))
-    rename(sti, join(m.truths, 'index.md'))
-    rename(stt, join(m.truths, 'tree.md'))
-    ok = true
-  } catch { /* reported below */ }
-  if (!ok) {
+    rename(sti, idxPath); landed = 1
+    rename(stt, join(m.truths, 'tree.md')); landed = 2
+  } catch (e) { err = e }
+  if (landed !== 2) {
     for (const p of [sti, stt]) { try { unlinkSync(p) } catch { /* never staged, or already renamed */ } }
-    errln('reindex: write failed — the staged copies were discarded')
+    if (landed === 1) {
+      // index.md was replaced and tree.md was not. Put the old index back, and VERIFY it went back —
+      // a rollback nobody checked is the same class of claim as the message this replaced.
+      let restored = false
+      try {
+        if (oldIdx === null) { unlinkSync(idxPath); restored = true } else {
+          const und = join(m.truths, `.index.md.undo.${process.pid}`)
+          writeFileSync(und, oldIdx)
+          rename(und, idxPath)
+          restored = readFileSync(idxPath).equals(oldIdx)
+        }
+      } catch { restored = false }
+      if (!restored) {
+        errln(`reindex: tree.md could not be replaced (${err?.code ?? 'unknown'}) AND index.md could not be put back — the two generated views now disagree. Fix the tree.md target, then re-run reindex; do not trust index.md until you do`)
+        return 1
+      }
+      errln(`reindex: tree.md could not be replaced (${err?.code ?? 'unknown'}) — index.md was rolled back, so both views are as they were. Neither is updated`)
+      return 1
+    }
+    errln(`reindex: write failed (${err?.code ?? 'unknown'}) — the staged copies were discarded, both views are as they were`)
     return 1
   }
   out(`regenerated truths/index.md + truths/tree.md (${recs.length} truths)`)

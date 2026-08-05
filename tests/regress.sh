@@ -2807,6 +2807,53 @@ block_sealreview_dashnote_fm() {
   vrun seal-review d1 draft
   expect_block "no frontmatter"
 }
+block_sealreview_unclosed_fm_keeps_the_seal() {
+  # The SIBLING of the case above, and the worse half. `---note` fails the opening precheck; a block
+  # that OPENS correctly and never CLOSES sailed past it, and then the insertion loop — which puts
+  # the three fields in just before the closing fence, dropping any earlier spelling on the way —
+  # never found a fence. So it dropped every seal line and inserted none, printed the digests it had
+  # just failed to write, and exited 0. Measured: a review that HELD a valid seal came out with
+  # NONE. A seal binds a clean review to the bytes it reviewed; deleting one while reporting success
+  # is the worst direction this command can fail in.
+  vrun seal-review d1 draft; expect_pass
+  local before after
+  before=$(grep -c '^reviewed_\|^review_context_' "$W/documents/d1/review.md")
+  [ "$before" = 3 ] || { bad "fixture never got a seal ($before fields) — the case would prove nothing"; return; }
+  # remove the CLOSING fence only
+  awk 'NR==1{print;next} !d && /^---[ \t]*$/ {d=1;next} {print}' "$W/documents/d1/review.md" > "$W/t" && mv "$W/t" "$W/documents/d1/review.md"
+  vrun seal-review d1 draft
+  expect_block "frontmatter block never closes"
+  after=$(grep -c '^reviewed_\|^review_context_' "$W/documents/d1/review.md")
+  [ "$before" = "$after" ] || bad "refused but still edited the file: seal fields went $before -> $after"
+}
+acct_reindex_partial_rename_rolls_back() {
+  # Staging BOTH views before renaming EITHER is not enough: with tree.md unreplaceable the first
+  # rename still landed, so index.md was regenerated beside an untouched tree.md — the very split
+  # the staging exists to prevent — and the command printed "the staged copies were discarded",
+  # which was FALSE about the one that had not been. A message that misreports the state is worse
+  # than the state. The first rename is undoable now, and the message says which of the two
+  # outcomes actually happened.
+  printf 'stale-index\n' > "$W/truths/index.md"
+  rm -f "$W/truths/tree.md"; mkdir "$W/truths/tree.md"; printf 'x\n' > "$W/truths/tree.md/inside"
+  vrun reindex
+  expect_block "index.md was rolled back"
+  OUT=$(head -1 "$W/truths/index.md"); RC=0
+  expect_has "stale-index"
+}
+acct_consecrate_marker_removal_failure_is_named() {
+  # The promotion succeeds, the in-flight marker cannot be removed, and the NEXT validate then fails
+  # CONSEC-INTERRUPTED. Swallowing that left a green consecrate beside a red mine with no line
+  # connecting them (measured: rc 0, marker present, next validate rc 1). rc STAYS 0 — the final
+  # really is the reviewed draft, and failing would send the user to redo work that is done — but
+  # the one remaining file is named, in the spelling the backup-removal failure already uses.
+  printf '개정판. <!-- t:t001 -->\n' > "$W/documents/d1/draft.md"
+  vrun seal-review d1 draft
+  OUT=$( ( cd "$W" && $TO node "$REPO/tests/consecrate-faultinject.mjs" d1 .consecrate.inflight ) 2>&1 ); RC=$?
+  [ "$RC" -eq 0 ] || bad "consecrate should still report success — the promotion happened (rc $RC)"
+  expect_has "in-flight marker could not be removed"
+  expect_has "CONSEC-INTERRUPTED"
+  [ -e "$W/documents/d1/.consecrate.inflight" ] || bad "the injection did not actually keep the marker — the case would prove nothing"
+}
 block_upgrade_garbage_version() {
   # `version: banana` skipped the numeric future-check and read as "already at schema 2" with
   # exit 0. The matrix is closed: a record is 1 or the current schema, anything else refuses.
