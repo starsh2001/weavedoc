@@ -45,6 +45,14 @@ export function writeAtomic (target, data) {
   }
 }
 
+// The same write, PROMOTED: false becomes a throw naming the file. For callers inside a
+// transaction boundary (retag, upgrade — §11 2026-08-05) — there, a false someone forgets to test
+// IS the half-applied state the boundary exists to prevent, so the type system of "you must
+// handle this" is an exception, not a return value.
+export function writeAtomicX (target, data) {
+  if (!writeAtomic(target, data)) throw new Error(`write failed: ${target}`)
+}
+
 // POSIX rename REPLACES the destination — permission to do so belongs to the directory, not to the
 // file being replaced. Windows disagrees: renameSync onto a file carrying the read-only attribute
 // throws EPERM, while the MSYS `mv` this replaces succeeds. Left alone that is a silent split —

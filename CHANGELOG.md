@@ -4,6 +4,16 @@
 
 ---
 
+## 2026-08-05.2
+
+**v0.5.0 1단계 — 외부 리뷰가 실측으로 확인해 준 포트 구멍 네 곳을 막는다.** v0.4.0 태그 직후의 외부 리뷰를 쌍둥이 광산 실측(컨테이너, 양 런타임)으로 전수 검증했고, 그 수렴이 §11에 결정 4건으로 기록됐다: **v0.5.0 직행(0.4.1 없음) · 장부 ID 격리 의미론 · CRLF 허용 공통 파서(bash 삭제와 같은 릴리스에서) · retag·upgrade의 (a)+(b)**. 이 라벨은 그중 bash를 건드리지 않고 할 수 있는 몫이다. **성공 경로 출력 바이트는 불변** — 바뀐 것은 장애 경로의 결말과 자기 식별 뿐이다.
+
+- **retag·upgrade가 트랜잭션이 됐다 — 실패 시에도.** 실측(2026-08-05): 읽기 전용 project.md에서 Node retag는 EACCES가 명령 밖으로 새며 **t001만 개명된 반적용 상태 + 백업 잔류**로 죽었다(bash는 post-validate 롤백으로 원상). upgrade는 더 나빴다 — review_legacy 마커는 박혔는데 version은 1인 혼합 상태. 원인은 두 명령이 write.mjs의 **writeAtomic(스테이징+rename, EPERM/EACCES 시 속성 해제 재시도)을 우회한 직접 writeFileSync**. 이제 ① 모든 파일 쓰기는 stage+rename이고 실패는 **예외로 승격**되며(writeAtomic은 false를 반환한다 — 치환만 하면 조용히 넘어간다), ② 명령 전체가 snapshot → 시도 → 실패 시 전체 rollback → **postcondition 검증**(바이트 동등을 확인하고 나서야 "as before"를 말한다) 경계 안에서 돈다. 복구를 확인 못 하면 백업을 보존하고 명시적으로 차단한다.
+- **fingerprint가 런타임 전체를 덮는다.** entrypoint+schema만 해시하던 것이 **bin/lib 22개 모듈(이름+바이트)**을 포함한다. bash는 런타임이 파일 하나라 그걸로 충분했지만 Node의 동작은 lib에 있다 — lib만 다른 실제 커밋 쌍(f3b05f2·ef48366)이 같은 fingerprint를 보고했다. 값이 바뀌므로 릴리스 준비에서 golden 갱신.
+- **회귀 캐시 키가 두 런타임의 바이트 전부를 해시한다.** entrypoint만 해시하던 키는 **dirty lib 수정 후 `--resume`이 이전 결과를 재사용**할 수 있었다(HEAD는 커밋된 변경만 덮는다). 과잉 무효화는 있어도 과소 무효화는 없는 쪽으로.
+- **케이스 7건, 전부 red-first 확증** — 수정 전 런타임(stash)에 대해 7/7이 정확히 예상한 사유로 실패함을 확인하고 넣었다. 장애 주입은 consecrate의 선례대로 **연산 시임**(`tests/retag-faultinject.mjs`·`upgrade-faultinject.mjs`)으로 — PATH 심은 node:fs에 닿지 않는다. 읽기 전용 케이스는 §9의 조건을 **이중 판정**(완전 이전+rc≠0 또는 완전 이후+rc=0)으로 못 박아 플랫폼·런타임에 무관하게 성립한다. 롤백-실패 케이스는 백업 보존과 "rollback INCOMPLETE" 문구를 못 박는다.
+- **콜드 diff 리뷰(실행 기반)가 패치를 통과시키며 둘을 보탰다.** ① 단언 강화 — 사후조건은 세 번째 쓰기 표면(plan.md)과 verify.md까지 덮는데 케이스가 두 표면만 보고 있었다. plan.md 단언과 verify.md 바이트-복원 단언(verdict 단어를 벗겨 2단계가 실제로 그 파일을 편집하게 만든 뒤)을 추가. ② **"성공 경로 불변"의 정확한 범위** — LF 광산에서 성립(5개 시나리오 트리 바이트 동일 실측). CRLF **truth** 위의 retag는 이 패치 **이전부터** 갈려 있었다(bash: 봉인 불일치 → 롤백 rc 1 / Node: CR 벗김 → 커밋 rc 0 — 런타임만 HEAD로 되돌려 재실행으로 선재 확인). §11의 CRLF 공통 파서 결정 행에 인스턴스로 명명해 두었다.
+
 ## 2026-08-05.1
 
 **런타임이 Node다 — 재작성이 배포물이 된다.** 지금까지 이식은 저장소 안에만 있었다 — 번들 정의(`tests/make-manifest.sh`)가 `bin/weavedoc`(bash)만 담고 있어서, 설치본은 여전히 bash였다. 이번 라벨부터 `bin/weavedoc.mjs`와 `bin/lib/`가 번들에 들어간다(21개 → **44개 파일**, WD-REL-001 범위 변경). `bin/lib`는 **글로브로** 넣는다 — 나중에 추가되는 모듈이 manifest 밖으로 배포될 수 있으면 manifest가 존재할 이유가 없다.

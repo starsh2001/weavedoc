@@ -5,13 +5,24 @@
 // path is snapshotted once before its first edit, every created path recorded, and the whole thing
 // answers to the same full validation everything else answers to — fail and the mine is
 // byte-identical to before.
-import { existsSync, statSync, readFileSync, writeFileSync, appendFileSync, mkdirSync, renameSync, rmSync, cpSync, readdirSync } from 'node:fs'
+import { existsSync, statSync, readFileSync, appendFileSync, mkdirSync, rmSync, cpSync, readdirSync } from 'node:fs'
 import { splitLines, canonId, isFence, U, M } from './core.mjs'
 import { nocomment, sectionAll } from './sections.mjs'
 import { join, materialIds, docIds, fm } from './mine.mjs'
 import { fmvB, clearFileCaches } from './read.mjs'
 import { ledgerRows } from './verify.mjs'
 import { scanVerifiedUnits } from './cmd-scope.mjs'
+import { writeAtomic, writeAtomicX } from './write.mjs'
+
+// The two operations a fault can land on, injectable exactly the way consecrate's and retag's are.
+// `write` is stage+rename with false PROMOTED to a throw (§11 2026-08-05): the direct writeFileSync
+// this replaces threw EACCES out of the whole command mid-migration and left the mine MIXED —
+// review_legacy markers inserted, version still 1, the backup dir abandoned (measured, the v0.4.0
+// external review's P0). bash never had that failure shape: its writes replace files by rename.
+export const realOps = {
+  write: (p, buf) => writeAtomicX(p, buf),
+  restore: (from, to) => cpSync(from, to, { recursive: true })
+}
 
 const readB = p => { try { return readFileSync(p).toString('latin1') } catch { return '' } }
 const isFileAt = p => { try { return statSync(p).isFile() } catch { return false } }
@@ -22,7 +33,6 @@ const uniqSort = xs => [...new Set(xs)].filter(x => x !== '').sort(bytewise)
 const truthGlob = m => {
   try { return readdirSync(m.truths).filter(n => /^t[0-9].*\.md$/.test(n)).sort(bytewise) } catch { return [] }
 }
-const write = (p, s) => writeFileSync(p, Buffer.from(s, 'latin1'))
 
 // ---- the Verified units row reader, shared by the scan and the apply -------------------------
 // Success evidence means COMPLETE evidence: `passes 1/2` is a run that stopped short, and stamping
@@ -166,7 +176,7 @@ function historyWalk (text, rewriteFn) {
 const countHistoryBrackets = t => historyWalk(nocomment(t), null).n
 
 // ---- the command ------------------------------------------------------------------------------
-export function cmdUpgrade (m, out, argv, runReindex, runValidate) {
+export function cmdUpgrade (m, out, argv, runReindex, runValidate, ops = realOps) {
   let mode = '--check'
   let from = '0.1'
   for (let i = 0; i < argv.length; i++) {
@@ -214,15 +224,16 @@ export function cmdUpgrade (m, out, argv, runReindex, runValidate) {
     out(`  expected after apply: project at schema ${sv} · validate clean · history preserved as legacy-unbound, never back-stamped`)
     return 1
   }
-  return upgradeApply(m, out, n, runReindex, runValidate)
+  return upgradeApply(m, out, n, runReindex, runValidate, ops)
 }
 
 // ---- the staged, rollback-safe transaction ----------------------------------------------------
-function upgradeApply (m, out, nitems, runReindex, runValidate) {
+function upgradeApply (m, out, nitems, runReindex, runValidate, ops = realOps) {
   const today = new Date().toISOString().slice(0, 10)
   const bak = `${m.root}/.upgrade-backup-${today}.${process.pid}`
   const rel = p => (p.startsWith(`${m.root}/`) ? p.slice(m.root.length + 1) : p)
   const created = []; const touched = []
+  const write = (p, s) => ops.write(p, Buffer.from(s, 'latin1'))
 
   // Every touched path is snapshotted ONCE before its first edit; every created path is recorded.
   // Rollback = remove created, restore touched, in that order. A path this transaction CREATED is
@@ -238,13 +249,42 @@ function upgradeApply (m, out, nitems, runReindex, runValidate) {
     appendFileSync(`${bak}/.touched`, p + '\n')
   }
   const crtd = p => { created.push(p); appendFileSync(`${bak}/.created`, p + '\n') }
-  const rollback = () => {
-    for (const p of created) rmSync(`${m.root}/${p}`, { recursive: true, force: true })
-    for (const p of touched) {
-      rmSync(`${m.root}/${p}`, { recursive: true, force: true })
-      cpSync(`${bak}/${p}`, `${m.root}/${p}`, { recursive: true })
+
+  // Byte equality between a live path and its snapshot — file or whole directory (material folders
+  // are snapshotted as folders). The rollback POSTCONDITION runs on this: restored means verified
+  // equal, never assumed (§11 2026-08-05).
+  const samePath = (a, b) => {
+    let sa, sb
+    try { sa = statSync(a); sb = statSync(b) } catch { return false }
+    if (sa.isFile() && sb.isFile()) {
+      try { return readFileSync(a).equals(readFileSync(b)) } catch { return false }
     }
-    rmSync(bak, { recursive: true, force: true })
+    if (sa.isDirectory() && sb.isDirectory()) {
+      let na, nb
+      try { na = readdirSync(a).sort(); nb = readdirSync(b).sort() } catch { return false }
+      if (na.length !== nb.length || na.some((n, i) => n !== nb[i])) return false
+      return na.every(n => samePath(join(a, n), join(b, n)))
+    }
+    return false
+  }
+  // Restore everything, then VERIFY: every created path gone, every touched path byte-equal to its
+  // snapshot. Any miss preserves the backup and blocks loudly — this command never claims "as
+  // before" it did not check. Returns the list of paths that failed the postcondition.
+  const rollback = () => {
+    const failed = []
+    for (const p of created) {
+      try { rmSync(`${m.root}/${p}`, { recursive: true, force: true }) } catch { failed.push(p) }
+    }
+    for (const p of touched) {
+      try {
+        rmSync(`${m.root}/${p}`, { recursive: true, force: true })
+        ops.restore(`${bak}/${p}`, `${m.root}/${p}`)
+      } catch { failed.push(p) }
+    }
+    for (const p of created) { if (!failed.includes(p) && exists(`${m.root}/${p}`)) failed.push(p) }
+    for (const p of touched) { if (!failed.includes(p) && !samePath(`${m.root}/${p}`, `${bak}/${p}`)) failed.push(p) }
+    if (failed.length === 0) rmSync(bak, { recursive: true, force: true })
+    return failed
   }
 
   // Canonicalise STRICT reference fields and the ledgers — NEVER prose. Two passes, because a
@@ -308,6 +348,22 @@ function upgradeApply (m, out, nitems, runReindex, runValidate) {
   }
   try { mkdirSync(bak, { recursive: true }) } catch { out(`upgrade: cannot create backup dir ${bak}`); return 1 }
 
+  // One failure spelling for both failure shapes (post-validate red, a write that threw): roll
+  // back, VERIFY, and only then say "byte-identical". A rollback that cannot be verified keeps the
+  // backup and blocks — the alternative was measured in the v0.4.0 external review: an EACCES
+  // escaping mid-migration left review_legacy markers stamped on a mine still claiming version 1.
+  const failApply = (why, cleanMsg) => {
+    const failed = rollback()
+    if (failed.length) {
+      out(Buffer.from(M`upgrade --apply: ${why} — and the rollback is INCOMPLETE. Could not verify restored: ${failed.join(' ')}. The originals are preserved in ${rel(bak)}/ — restore them by hand, then run validate. Do NOT delete that directory until the mine validates clean.`, 'latin1'))
+      return 1
+    }
+    out(cleanMsg)
+    return 1
+  }
+
+  let vrc
+  try {
   // 1. canonical renames + strict-reference rewrite. Prose and changelog history stay untouched:
   //    lenient resolution reads old spellings, and consecrated bytes are never edited.
   for (const [kind, old, nw] of pairs) {
@@ -437,20 +493,29 @@ function upgradeApply (m, out, nitems, runReindex, runValidate) {
 
   // 8. the same full validation everything else answers to.
   clearFileCaches()
-  if (runValidate() === 0) {
+  vrc = runValidate()
+  } catch (e) {
+    // Everything between the backup dir and here is inside the boundary — a snapshot, a copy, a
+    // promoted write. Whatever threw, the mine must not stay half-migrated.
+    out(`upgrade: ${e.message}`)
+    return failApply('a write FAILED mid-migration',
+      'upgrade --apply: a write FAILED mid-migration — every change rolled back, the mine is byte-identical to before. Fix the write error above (permissions, disk), then re-run.')
+  }
+  if (vrc === 0) {
     // Written to disk through the byte-domain writer too, so its separators are byte-encoded and
-    // the bundle label (read as bytes) passes through untouched.
+    // the bundle label (read as bytes) passes through untouched. Best-effort ON PURPOSE, and
+    // OUTSIDE the boundary: the migration is already valid, and a manifest write failure must not
+    // roll back a mine that just validated clean — the backup line below still names the dir.
     const man = [M`upgrade applied: ${today} · bundle ${readB(`${m.root}/.weavedoc/VERSION`).replace(/\n+$/, '')} · ${nitems} item(s)`,
       'touched (originals preserved in this directory):',
       ...uniqSort(touched).map(p => `  ${p}`),
       'created:',
       ...uniqSort(created).map(p => `  ${p}`)]
-    write(`${bak}/MANIFEST.txt`, man.join('\n') + '\n')
+    writeAtomic(`${bak}/MANIFEST.txt`, Buffer.from(man.join('\n') + '\n', 'latin1'))
     out(`upgrade --apply: applied ${nitems} item(s) — schema ${m.schemaVer()}, validate clean.`)
     out(`  backup + manifest: ${rel(bak)}/ (originals; delete when you no longer want the restore point)`)
     return 0
   }
-  rollback()
-  out('upgrade --apply: post-apply validation FAILED — every change rolled back, the mine is byte-identical to before. Fix the problems above (they predate the migration), then re-run.')
-  return 1
+  return failApply('post-apply validation FAILED',
+    'upgrade --apply: post-apply validation FAILED — every change rolled back, the mine is byte-identical to before. Fix the problems above (they predate the migration), then re-run.')
 }

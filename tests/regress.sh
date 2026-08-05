@@ -47,7 +47,13 @@ KEY=$( { git -C "$REPO" rev-parse HEAD 2>/dev/null
          # commit are different configurations and must not share a result cache, or `--resume`
          # would hand one implementation's results to the other and call the rewrite green.
          printf '%s\n' "$WD_BIN"
-         sha256sum "$REPO/$WD_ENTRY" "$REPO/.weavedoc/schema" 2>/dev/null | awk '{print $1}'
+         # BOTH runtimes' bytes, always — not just the entrypoint. The Node entrypoint is a thin
+         # dispatcher whose behavior lives in bin/lib/, so a key that hashed only $WD_ENTRY let a
+         # dirty lib edit reuse the previous run's results under --resume (the v0.4.0 external
+         # review's finding; HEAD only covers COMMITTED edits). Hashing both runtimes for either
+         # arm over-invalidates a little and can never under-invalidate — one rule, one spelling.
+         sha256sum "$REPO/.weavedoc/bin/weavedoc" "$REPO/.weavedoc/bin/weavedoc.mjs" \
+                   "$REPO/.weavedoc/bin/lib/"* "$REPO/.weavedoc/schema" 2>/dev/null | awk '{print $1}'
          uname -sr; bash --version | head -1; awk --version 2>/dev/null | head -1; sed --version 2>/dev/null | head -1
          printf '%s' "${WD_REG_KEY_SALT:-}"
        } | sha256sum | awk '{print $1}' | cut -c1-12 )
@@ -2272,6 +2278,59 @@ acct_retag_rollback() {
   OUT=$(cat "$W/truths/t001.md"); RC=0
   expect_has "tags: [위약]"
 }
+acct_retag_readonly_target_no_partial_state() {
+  # §9's fault condition ("write failure injection leaves no partial state"), asserted as the DUAL
+  # OUTCOME it actually promises: fully-before with rc!=0, or fully-after with rc==0 — never half.
+  # Before §11 2026-08-05 the node runtime failed this exact probe: EACCES escaped mid-loop, t001
+  # kept the new tag, project.md kept the old one, and the backup dir sat abandoned (measured).
+  # NODE-gated: the transaction decision scopes to the shipped runtime; the frozen bash reference
+  # keeps its measured cp-fails-then-post-validate-rolls-back shape on Linux and an unpinned one on
+  # Windows, and pinning a frozen runtime's fault path buys nothing.
+  [ "$WD_RUNNER" = node ] || { ok; return; }
+  sed -i 's/^required_tags: \[\]$/required_tags: [위약]/' "$W/project.md"
+  chmod 444 "$W/project.md" 2>/dev/null
+  vrun retag 위약 벌칙
+  local rc=$RC t r
+  chmod 644 "$W/project.md" 2>/dev/null
+  t=$(grep -m1 '^tags:' "$W/truths/t001.md"); r=$(grep -m1 '^required_tags:' "$W/project.md")
+  local p; p=$(grep -m1 '^scope_tags:' "$W/documents/d1/plan.md")
+  if [ "$rc" -eq 0 ]; then
+    { [ "$t" = 'tags: [벌칙]' ] && [ "$r" = 'required_tags: [벌칙]' ] && [ "$p" = 'scope_tags: [벌칙]' ]; } || bad "rc 0 but not fully-after: t001='$t' project='$r' plan='$p'"
+  else
+    { [ "$t" = 'tags: [위약]' ] && [ "$r" = 'required_tags: [위약]' ] && [ "$p" = 'scope_tags: [위약]' ]; } || bad "rc $rc but not fully-before: t001='$t' project='$r' plan='$p'"
+  fi
+  [ -z "$(ls -d "$W"/.retag-bak.* 2>/dev/null)" ] || bad "backup dir left behind"
+  ok
+}
+acct_retag_write_fault_rolls_back() {
+  # Nth-write failure, injected through the operation seam (a PATH shim cannot reach node:fs):
+  # truths rewrite first, project.md second, and the fault lands on the SECOND write — so the
+  # boundary is entered with real half-applied state to roll back. Fully-before, rc!=0, no backup
+  # left, and the rollback is VERIFIED (byte equality), not assumed.
+  sed -i 's/^required_tags: \[\]$/required_tags: [위약]/' "$W/project.md"
+  OUT=$( ( cd "$W" && $TO node "$REPO/tests/retag-faultinject.mjs" 위약 벌칙 project.md ) 2>&1 ); RC=$?
+  [ "$RC" -eq 0 ] && bad "retag reported success around an injected write failure"
+  expect_has "rolled back"
+  [ "$(grep -m1 '^tags:' "$W/truths/t001.md")" = 'tags: [위약]' ] || bad "t001 tags not restored"
+  [ "$(grep -m1 '^required_tags:' "$W/project.md")" = 'required_tags: [위약]' ] || bad "project required_tags changed"
+  # The THIRD write surface too (cold review 2026-08-05): the code's postcondition covers plan.md,
+  # and an assertion that named only two surfaces would pass a half-state on the third.
+  [ "$(grep -m1 '^scope_tags:' "$W/documents/d1/plan.md")" = 'scope_tags: [위약]' ] || bad "plan scope_tags changed"
+  [ -z "$(ls -d "$W"/.retag-bak.* 2>/dev/null)" ] || bad "backup dir left after a verified rollback"
+}
+acct_retag_rollback_fault_preserves_backup() {
+  # The write fails AND the rollback's restore fails for the file that was already rewritten. The
+  # one honest outcome: keep the backup, name what could not be restored, refuse to say "as
+  # before". Deleting the backup here would be the only copy of the original going with it.
+  sed -i 's/^required_tags: \[\]$/required_tags: [위약]/' "$W/project.md"
+  OUT=$( ( cd "$W" && $TO node "$REPO/tests/retag-faultinject.mjs" 위약 벌칙 project.md t001.md ) 2>&1 ); RC=$?
+  [ "$RC" -eq 0 ] && bad "retag reported success around an injected write failure"
+  expect_has "rollback INCOMPLETE"
+  local b
+  b=$(ls -d "$W"/.retag-bak.* 2>/dev/null | head -1)
+  [ -n "$b" ] || { bad "backup dir was deleted though the rollback could not be verified"; return; }
+  grep -q '위약' "$b/truths__t001.md" || bad "backup does not hold the original t001"
+}
 block_plan_audience_invalid() {
   sed -i 's/^scope_tags: \[위약\]$/scope_tags: [위약]\naudience: 사외/' "$W/documents/d1/plan.md"
   vrun validate; expect_block "audience"
@@ -2848,6 +2907,56 @@ pass_upgrade_resume_mixed() {
   expect_pass
   vrun validate; expect_pass
 }
+acct_upgrade_readonly_target_no_partial_state() {
+  # §9's fault condition as the DUAL OUTCOME (fully-before + rc!=0, or fully-after + rc==0). Before
+  # §11 2026-08-05 the node runtime failed this probe in the worst shape: EACCES escaped at the
+  # version stamp, review_legacy already inserted, version still 1, backup abandoned (measured —
+  # the exact mixed state the marker discipline exists to prevent). NODE-gated, as retag's.
+  [ "$WD_RUNNER" = node ] || { ok; return; }
+  chmod 444 "$W/project.md" 2>/dev/null
+  vrun upgrade --apply
+  local rc=$RC pv cv
+  chmod 644 "$W/project.md" 2>/dev/null
+  pv=$(grep -m1 '^version:' "$W/project.md"); cv=$(grep -m1 '^version:' "$W/.weavedoc/config.yaml")
+  if [ "$rc" -eq 0 ]; then
+    { [ "$pv" = 'version: 2' ] && [ "$cv" = 'version: 2' ]; } || bad "rc 0 but not fully-after: project='$pv' config='$cv'"
+    [ -n "$(ls -d "$W"/.upgrade-backup-* 2>/dev/null)" ] || bad "success keeps the backup+manifest dir by design, and it is missing"
+  else
+    { [ "$pv" = 'version: 1' ] && [ "$cv" = 'version: 1' ]; } || bad "rc $rc but not fully-before: project='$pv' config='$cv'"
+    grep -q 'review_legacy' "$W/documents/d1/review.md" && bad "rc $rc but review_legacy marker left stamped"
+    [ -z "$(ls -d "$W"/.upgrade-backup-* 2>/dev/null)" ] || bad "failure left the backup dir with rollback claimed complete"
+  fi
+  ok
+}
+acct_upgrade_write_fault_rolls_back() {
+  # Nth-write failure through the operation seam: the fault lands on the version stamp, so every
+  # earlier phase (verify.md verdict words, the materialized ledger, review_legacy markers) has
+  # really happened when the boundary fires. Rollback restores the touched, REMOVES the created
+  # (the materialized ledger is born in this transaction), and is verified before "rolled back".
+  # The verdict word is stripped FIRST so phase 2 genuinely edits verify.md (cold review
+  # 2026-08-05) — otherwise the byte-restore assertion below would be guarding an untouched file.
+  sed -i 's/ · verified$//' "$W/truths/verify.md"
+  grep -q 'passes 2/2$' "$W/truths/verify.md" || { bad "fixture no-op: verify.md row still carries its verdict word"; return; }
+  cp "$W/truths/verify.md" "$W/.verify.before"
+  OUT=$( ( cd "$W" && $TO node "$REPO/tests/upgrade-faultinject.mjs" project.md ) 2>&1 ); RC=$?
+  [ "$RC" -eq 0 ] && bad "upgrade reported success around an injected write failure"
+  expect_has "rolled back"
+  [ "$(grep -m1 '^version:' "$W/project.md")" = 'version: 1' ] || bad "project version not restored"
+  [ "$(grep -m1 '^version:' "$W/.weavedoc/config.yaml")" = 'version: 1' ] || bad "config version not restored"
+  grep -q 'review_legacy' "$W/documents/d1/review.md" && bad "review_legacy marker left stamped"
+  cmp -s "$W/.verify.before" "$W/truths/verify.md" || bad "verify.md not byte-restored"
+  [ ! -f "$W/truths/verify-ledger.tsv" ] || bad "created ledger not removed by rollback"
+  [ -z "$(ls -d "$W"/.upgrade-backup-* 2>/dev/null)" ] || bad "backup dir left after a verified rollback"
+  ok
+}
+acct_upgrade_rollback_fault_preserves_backup() {
+  # Write fails at the stamp AND the rollback cannot restore verify.md. Keep the backup, name the
+  # file, never claim "byte-identical" — the backup is the only copy of the original left.
+  OUT=$( ( cd "$W" && $TO node "$REPO/tests/upgrade-faultinject.mjs" project.md verify.md ) 2>&1 ); RC=$?
+  [ "$RC" -eq 0 ] && bad "upgrade reported success around an injected write failure"
+  expect_has "rollback is INCOMPLETE"
+  [ -n "$(ls -d "$W"/.upgrade-backup-* 2>/dev/null)" ] || bad "backup dir was deleted though the rollback could not be verified"
+}
 acct_mat_digest_line_endings_stable() {
   # A material's digest must not depend on the platform that computed it. mat_digest passes the file
   # through awk, and MSYS gawk strips CR while Linux gawk keeps it — so the SAME material digested
@@ -3037,6 +3146,26 @@ meta_doc_sync() {
 
 # ---- command smoke floor (Phase 2: every CLI command has at least one covered run) ----
 acct_smoke_version() { vrun version; expect_pass; expect_has "fingerprint:"; }
+acct_fingerprint_covers_lib() {
+  # The fingerprint is the ONE spelling of "are these two installs the same runtime", and the Node
+  # runtime is a dispatcher plus the modules under lib/ — an entrypoint-only hash reported
+  # IDENTICAL for commit pairs differing solely in lib/ (v0.4.0 external review; f3b05f2 and
+  # ef48366 are such commits). Proven on a COPY of the runtime: the shipped one must not be edited
+  # by a test, and a copy is exactly what an install is. Runs the node runtime directly on both
+  # arms — the bash fingerprint hashes its own single file and was never blind this way.
+  cp -r "$REPO/.weavedoc/bin" "$W/.weavedoc/bin"
+  cp "$REPO/.weavedoc/VERSION" "$W/.weavedoc/VERSION"
+  local f1 f2 f3
+  f1=$( cd "$W" && node .weavedoc/bin/weavedoc.mjs version 2>/dev/null | grep -m1 'fingerprint:' )
+  [ -n "$f1" ] || { bad "no fingerprint line from the copied runtime — the fixture is broken, not the hash"; return; }
+  printf '\n' >> "$W/.weavedoc/bin/lib/core.mjs"
+  f2=$( cd "$W" && node .weavedoc/bin/weavedoc.mjs version 2>/dev/null | grep -m1 'fingerprint:' )
+  [ "$f1" != "$f2" ] || { bad "a lib byte change did not change the fingerprint — the hash does not cover lib/"; return; }
+  printf '\n' >> "$W/.weavedoc/bin/weavedoc.mjs"
+  f3=$( cd "$W" && node .weavedoc/bin/weavedoc.mjs version 2>/dev/null | grep -m1 'fingerprint:' )
+  [ "$f2" != "$f3" ] || { bad "an entrypoint byte change did not change the fingerprint"; return; }
+  ok
+}
 acct_smoke_lang()    { vrun lang;    expect_pass; expect_has "ko"; }
 acct_smoke_locale() {
   # `locale`'s contract has TWO documented outcomes: a short code + exit 0, or empty + exit 1

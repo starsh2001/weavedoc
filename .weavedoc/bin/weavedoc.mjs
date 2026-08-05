@@ -10,7 +10,7 @@
 // a case that reaches an unported command has to fail, and say which command it wanted.
 //
 // No npm dependencies, ever — node:fs, node:path, node:crypto are enough. Node 18+.
-import { existsSync, statSync, readFileSync } from 'node:fs'
+import { existsSync, statSync, readFileSync, readdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { createHash } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
@@ -80,19 +80,30 @@ const jsonEsc = s => s
 // ---- commands ----
 function cmdVersion (json) {
   // The date label alone cannot identify a bundle — two installs can share it while their runtime
-  // differs. The fingerprint is content, so comparing installs is real. It covers THIS runtime
-  // file plus the schema, which is why a bash install and a Node install of the same bundle date
-  // report different fingerprints: they are different runtimes, and the label cannot say so.
+  // differs. The fingerprint is content, so comparing installs is real. It covers the WHOLE
+  // runtime — this file, every file under lib/ (name + bytes, so a rename or a new module counts),
+  // and the schema. Hashing the entrypoint alone was enough for the bash runtime, which WAS one
+  // file; here the behavior lives in lib/, and the v0.4.0 external review found real commit pairs
+  // that differed only in lib/ while this fingerprint stayed the same — the exact comparison the
+  // field exists to make honest. A bash install and a Node install of the same bundle date still
+  // report different fingerprints: different runtimes, and the label cannot say so.
   let vf = join(ROOT, '.weavedoc', 'VERSION')
   if (!existsSync(vf)) vf = join(SCRIPT_DIR, '..', 'VERSION')
   if (!existsSync(vf)) { outln('(no VERSION file)'); return 1 }
   const body = readFileSync(vf, 'utf8')
   let fp = ''
   try {
-    fp = createHash('sha1')
-      .update(readFileSync(join(SCRIPT_DIR, 'weavedoc.mjs')))
-      .update(readFileSync(SCHEMA))
-      .digest('hex')
+    const h = createHash('sha1')
+    h.update(readFileSync(join(SCRIPT_DIR, 'weavedoc.mjs')))
+    const libDir = join(SCRIPT_DIR, 'lib')
+    for (const n of readdirSync(libDir).sort()) {
+      const p = join(libDir, n)
+      if (!statSync(p).isFile()) continue
+      h.update(n)
+      h.update(readFileSync(p))
+    }
+    h.update(readFileSync(SCHEMA))
+    fp = h.digest('hex')
   } catch { /* a runtime that cannot read itself still reports its label */ }
   if (json) {
     // `bundle` goes through command substitution in the bash version, which strips trailing

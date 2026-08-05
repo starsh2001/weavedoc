@@ -25,7 +25,7 @@ printf '# WeaveDoc %s\n\n' "$THIS"
 printf -- '- **runtime bundle**: `%s` (previous tag: `%s` = bundle `%s`)\n' "$bundle" "$PREV" "${prevbundle:-?}"
 printf -- '- **artifact schema**: `%s`\n' "$schema"
 printf -- '- **bundle manifest sha256**: `%s` — every behavior-deciding file (bin · schema · templates · READ · FORMATS · skills), hashed from git blob bytes; the attached `bundle.manifest` lists them\n' "$manifest_sha"
-printf -- '- **regression suite**: %s cases, tracked in `tests/` — the tallies for THIS tag are in this workflow'"'"'s regression jobs (Ubuntu + Windows required, macOS non-blocking)\n' "$cases"
+printf -- '- **regression suite**: %s cases, tracked in `tests/` — the tallies for THIS tag are in this workflow'"'"'s regression jobs (Ubuntu, Windows and macOS, all three required)\n' "$cases"
 if [ -n "${newcmds% }" ]; then
   printf -- '- **new commands since %s** *(generated from the dispatch diff — mechanically true)*: %s\n' "$PREV" "$newcmds"
 else
