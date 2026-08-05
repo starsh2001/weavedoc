@@ -4,6 +4,47 @@
 
 ---
 
+## 2026-08-06.2
+
+**v0.5.2 — 6차 외부 리뷰(아래 .1 번들의 커밋 3041881 검토) 후속: 잠금의 P0 2건을 닫는다. 태그는 이 번들에 온다.** 전 항목 실측 재현 → 수정 → red-first 8/8 — pre-fix 런타임이 HEAD 그대로라 각 케이스가 그 결함의 문구로 죽는 것을 컨테이너에서 확인했다("A's committed row did not survive — the live lock was stolen" 등).
+
+**P0-1: 자동 회수 제거 — 잠금은 사람이 지우기 전엔 잠금이다.** 첫 컷의 10초 시효 회수가 **살아있는 보유자에게서 잠금을 훔쳤다**(실측: 13s 보유 × 10.6s 진입 — 이웃 attest rc 0, 이어 원 보유자의 롤백이 이웃의 커밋된 행을 잘랐고, 신규 장부에선 unlink가 rc-0 행째 파일을 지웠으며 post-validate는 rc 0). 어떤 age 임계값도 시체와 SIGSTOP·절전 노트북·느린 디스크를 구분하지 못한다 — 구분하려면 하트비트가 필요하고 이 CLI에는 없다. 그래서 회수 분기 전체가 사라졌다: 잔여 잠금 앞에서 모든 writer는 **유한 대기 후 경로를 명명하며 거부**하고("will NEVER be reclaimed automatically … remove the lock yourself"), 크래시 뒤 수동 rmdir 한 번이 정직한 비용이다. 훔칠 수 없으니 소유권 토큰도 불필요해졌고(.1이 기록한 stat→rmdir TOCTOU 경계도 그 분기와 함께 소멸), 락 이름을 쓴 파일·내용물 있는 디렉터리 — 첫 컷의 무한-스핀 형태들 — 는 이제 그냥 "쥐어진 잠금"이다: mkdir가 양쪽 다 EEXIST(실측)라 같은 유한 거부로 나간다.
+
+**P0-2: 모든 장부 writer가 한 잠금을 쓴다 — lock.mjs.** `upgrade --apply`는 장부에서 계획을 읽고 6단계에서 **통째로 다시 쓰는** writer인데 잠금 프로토콜을 몰랐다. 실측: 나이 0초의 **살아있는** 락을 심어도 rc 0·장부 기록·락 언급 0 — 그 창에서 attest의 created-here 롤백이 upgrade가 방금 주조한 legacy 행째 파일을 unlink하고, upgrade는 이미 성공을 보고한 뒤다(6차 리뷰의 실측과 동일 결말: `upgrade_rc=0 · ledger=MISSING · post-validate rc 0`). 잠금이 attest 전용 함수에서 **공용 모듈**로 나왔고, --apply는 트랜잭션 전체(백업→rename→reindex→장부 주조→검증→커밋/롤백)를 그 잠금 아래서 돈다. attest↔upgrade의 완전 교차 케이스는 일관된 광산 위에서 구성 불가라(v1 광산은 attest가 rc 2로 거부하고, 이행이 끝난 광산엔 upgrade가 쓸 것이 없다) 프로토콜을 쌍별로 고정했다 — upgrade는 쥐어진 락 앞에서 바이트 하나 안 쓰고 거부(트리 해시 동일 단언), attest는 기존 경쟁 케이스들.
+
+**P1.** ① **`gaps.sections`의 값을 validate가 읽는다.** 첫 컷은 키를 로스터에 편입만 했다 — 삭제는 잡되 값은 안 읽는, "닫았다"고 주장한 바로 그 클래스의 잔여(실측: Pending|Waived 스키마에서 `# Open`이 **통과**하고 `# Pending`이 **차단**되는 정확한 역전). 절 이름과 메시지 전부 스키마 유래가 됐고, 값이 두 멤버가 아니면 SCHEMA-UNREADABLE. ② **이중 kind 차단** — 첫 브래킷만 판정해 `- [declared] [reference] …`가 rc 0이었다(실측). 두 번째 브래킷이 **kind 단어일 때만** 차단한다: `- [declared] [계약서 3조] …`의 브래킷 인용문은 본문이다. ③ release 게이트 둘: 정규식이 leading zero를 금지하고(`v01.2.3`이 통과했었다 — SemVer 위반), **태그는 CHANGELOG의 `**vX.Y.Z — ` 클레임 줄에 존재해야 발행된다**(`v9.9.9`가 현 번들을 발행하던 구조; 기존 기록에 대한 단언이라 제2의 진실원이 아니다).
+
+**커밋 전 실행-기반 콜드 리뷰(이 패치 자체): CRITICAL 0 — 두 P0가 전 공격 형태에서 유지.** kill -9 잔재는 나이와 무관하게 영구 거부(수동 rmdir 후 같은 attest가 성공), **거부당한 writer는 보유자의 락을 건드리지 않는다**(거부 직후 락 잔존·보유자 정상 완주 실측), 동시 대기자 둘 다 정결 거부, upgrade는 성공·롤백 양 경로 모두 락 잔존 0에 `--check`/`--dry-run`은 락과 무관(읽기 전용), 스키마로 이름을 바꾼 장부에서도 같은 락, Windows 슬로우-홀더 2회 무flake, KEY는 golden·templates·doccheck.sh의 1바이트 편집에 각각 반응, red-first 표시 문구 8/8 재검증. real 1 + nit 3은 전부 반영:
+
+- **real: placeholder 소음 가지가 kind 검사 전체를 우회했다.** `- [<kind>] [declared] x — r`이 무진단 rc 0(실측) — 소음 판정이 kind 분기보다 먼저 서서, 진짜 본문을 실은 placeholder-kind 불릿이 어휘 검사도 이중-kind 검사도 없이 Accepted의 "결정"이 됐다. 본문이 실재하면 그 불릿은 엔트리다: kind `[<kind>]`가 어휘 위반으로 명명·차단된다. 순수 스텁(본문까지 placeholder)은 그대로 소음이라 초기화 직후의 gaps.md는 여전히 green. .1이 경계로 기록한 remainder-decides의 남은 형태가 이것으로 닫혔고, validate-vs-CLI의 엔트리 계수 갈림도 이 형태가 오류가 되며 함께 소멸했다.
+- nit: `gaps.sections: Open|Open`(동일 두 멤버)이 유효한 로스터로 통과 — 열림과 수용을 구분 못 하는 로스터라 한 절짜리 파일이 완전한 등록부로 읽힌다 → **DISTINCT 요구**, SCHEMA-UNREADABLE.
+- nit: scope의 headless 문구가 찢긴 주석을 "row(s)"라 불렀다 → "line(s) … torn comment line"로 정직화.
+
+**저우선 6건.** 찢긴 최종 **주석** 줄이 양쪽 리더에서 무언급이던 것(실측 validate rc 0·scope rc 0) → validate가 명명하고 파서는 파일-수준 손상으로 계수(주석은 증거가 될 수 없지만 찢긴 쓰기는 찢긴 쓰기고, 두 리더는 같은 답을 해야 한다); `weavedoc gaps`의 'Accepted' 하드코딩 + h1/h2 한정 → 스키마 절 이름 + any-level(validate 계수기와 같은 관용 — `### Accepted`를 validate만 세고 CLI는 "records 0"이라 찍던 갈림 봉합); scope의 장부 **4회 재파싱 → 인덱스 1회에서 전 뷰 파생**(동시 append가 한 명령 안에 두 세대를 섞을 창 제거; 몸통이 재읽기뿐이던 ledgerRowsBadstruct·ledgerQuarantined 은퇴); `--resume` 키에 **케이스가 소비하는 전부** 편입 — tests/*.sh·*.mjs(doccheck.sh·ctlscan.mjs는 케이스가 실행한다)·golden(케이스가 비교한다)·.weavedoc/templates(pristine이 복사한다); ps-smoke에 실명령 1개(빈 디렉터리 validate가 `CFG-PATH-MISSING`을 명명하며 거부하는지 — 프로세스 기동이 아니라 검사 실행의 증거); IMPROVEMENT_PLAN 상태줄 현행화. manifest 44→45(lock.mjs).
+
+## 2026-08-06.1
+
+**v0.5.2(첫 컷 — 6차 리뷰가 태그 전에 잡아세웠고, 태그는 .2로 갔다) — v0.5.1 외부 리뷰 후속. 동시성 P0 2건과 진단·문법 P1들.** 전 항목 실측 → 수정 → red-first(12/12, 각각 정확히 그 결함의 문구로 — 콜드 리뷰 수정분 2건은 커밋 전 draft 런타임을 기준으로 red).
+
+**커밋 전 실행-기반 콜드 리뷰가 이 패치 자체에서 CRITICAL 1건 + real 1건 + nit 3건을 찾았고, 전부 반영했다** (P0 메커니즘 자체는 전 공격 형태에서 유지 — 겹친 실제 attest 둘 rc 0·행 2개·락 0, kill -9 잔재는 5s 거부 후 시효 회수, 보유 중 validate/scope/census/status 무간섭, Windows 락 케이스 2회 반복 무flake):
+
+- **CRITICAL: 지울 수 없는 시효 락이 attest를 핫루프로 영구 정지시켰다.** 회수 분기의 `continue`가 경계 검사와 sleep을 건너뛰어 — 락 이름을 쓴 파일(ENOTDIR)이나 내용물 있는 디렉터리(ENOTEMPTY)처럼 rmdir이 영영 실패하는 물체 앞에서 100% CPU 무한 스핀(양 플랫폼 timeout 실측 rc 124). "대기는 유한하다"는 자기 주석의 반증이었다. 이제 **모든 반복이 예외 없이 경계 검사와 sleep을 지나고**, 지울 수 없는 시효 락은 경로와 errno를 명명하며 즉시 거부한다("delete it by hand"). 수정 중 실측 하나 더: Windows의 rmdir은 파일에 대해 **파일이 그대로인데 ENOENT를 답한다** — 그래서 회수 성공조차 `continue`하지 않는다(그 형태는 유한 5s 대기로 나간다).
+- **real: non-EEXIST mkdir 실패가 남의 이야기를 했다.** truths/가 쓰기 불가면 acquireLock이 즉시 false였고, 호출부는 "다른 attest가 잠금을 쥐고 5s 내에 놓지 않았다"를 인쇄했다 — 존재하지 않는 락, 경과 0초. pre-fix 런타임은 같은 광산에서 진실("cannot create the ledger (EACCES)")을 말했으니 진실성 회귀였다. 거부가 자기 문장을 갖는다.
+- nit: **superseded 줄이 superseded 아닌 행에도 발화** — 격리된 id의 최신 오타 행(승자가 없는데 "winner still stands"), headless 행의 빈 id 매달림. 유효한 승자가 있는 id만 history다.
+- nit: **SemVer 게이트의 case-glob이 `v0.5.2yolo`·`v1x.2y.3z`를 통과** — 앵커드 정규식으로.
+- nit: 아래 P0-2의 pre-fix red 인용이 러너가 표시하지 않는 중간 단언 문구였다(`bad()`는 마지막 실패 단언으로 RESULT를 덮는다) — 표시되는 문구로 정정. red 사실 자체는 콜드 리뷰가 10/10으로 재확인.
+- **수정 케이스 작성이 추가로 잡은 P1: 6열 빈-id 행이 headless를 우회해 `''` 승자가 됐다.** headless 검사가 구조-실패 경로에만 있어, 여섯 열이 멀쩡하고 첫 열만 빈 행은 rowOk(f[0]을 아예 보지 않는다)를 지나 **아무의 것도 아닌 "승자"**로 계수되고 빈 id를 매단 채 표시됐다 — 한 화면 위에 적힌 무효화 계약("id 없는 행은 누구의 최신 verdict였을지 모른다")의 위반이고, v0.5.1 출하분에도 있던 구멍(실측: 그 행이 `[LEDGER-VERDICT]:  (typo)`로 인쇄되고 사이드카는 멀쩡히 계수). 이제 **귀속 검사가 구조 검사에 선행한다** — 열이 몇 개 살아남았든 id가 없으면 headless다.
+
+**인정한 경계 2건**(수정 아님, 기록): ① 시효 회수의 stat→rmdir 사이 TOCTOU — 신선한 락을 회수할 수 있는 sub-ms 창. 발동엔 ≥10s 시효 + 회수자 둘 + 그 틈새의 완전한 재획득이 겹쳐야 하고, rmdir엔 정체성 검사가 없으며, 정체성을 넣으면(락 안 토큰 파일) rmdir-회수 자체와 충돌한다. 도달 가능한 인터리빙은 전부 실측 무해(동시 대기자 둘 × 2회: 양쪽 rc 0, 행 보존, 락 잔존 0). ② `- [<kind>]` 리터럴 플레이스홀더 + 실제 본문은 통과 — remainder-decides 판정(v0.3.x)의 소음 가지가 여는 형태로, 이번에 닫은 3종 옆에 남는다.
+
+**P0-1: attest가 잠금 아래 돈다.** v0.5.1의 truncate-back은 **보상 쓰기**였고, 상호 배제 없는 보상 쓰기는 이웃의 성공을 지운다 — 시임으로 결정적으로 재현: A가 행을 붙이고 rc 0을 보고한 그 창에서, 실패한 B의 롤백이 **A의 행을 잘라냈다**(TSV는 멀쩡해서 validate도 몰랐다). 신규 장부에서는 B의 unlink가 **A의 커밋된 행째로 파일을 지웠다**. 이제 생성→꼬리검사→append→복구→미러 전체가 **하나의 임계구역**이다(장부 옆 디렉터리 락 — mkdir는 어디서나 원자적 — · 시효 초과 잠금은 회수 · 대기는 유한하고 초과 시 명시 거부). 경쟁 케이스 2건이 시임의 sleep으로 **결정적으로** 고정됐고(pre-fix red: "A's committed row did not survive"), 시효 회수 케이스는 `touch -d`로 나이를 만든다.
+
+**P0-2: upgrade 백업이 항상 새 디렉터리다.** 날짜+PID 이름을 `mkdirSync(recursive)`가 기존 디렉터리째 받았고, 그 순간 `bkup()`의 "이번 런에 이미 찍음" 중복 제거가 **낡은 파일을 이번 런의 스냅샷으로 오인** — 진짜 스냅샷을 건너뛰고, 롤백이 **낡은 바이트를 복원**하며 "byte-identical"을 인쇄하고, 기존 복구점을 지웠다(PID는 컨테이너에서 재활용된다). `mkdtempSync`는 존재하는 경로를 반환할 수 없다 — 좁히는 게 아니라 클래스를 제거. 드라이버의 `--collide-bak`이 자기 PID 경로에 미끼를 심어 red-first로 증명(pre-fix 표시: "the planted bait dir is gone entirely" — 미끼 디렉터리를 이번 런의 백업으로 소비한 뒤 "검증된" 롤백의 뒷정리가 지워, 유일한 복구점까지 가져간다).
+
+**P1들.** ① upgrade의 5단계 재생성 rc가 트랜잭션에 편입 — 무시하던 것이 이제 롤백을 발동한다(validate는 index의 id 존재만 보고 라벨 신선도는 못 봐서, 낡은 뷰가 "validate clean"으로 커밋됐었다). ② **대체된 unknown verdict를 파서가 담고 scope가 명명** — validate가 차단하는 바로 그 행이 장부를 서술하는 명령에서는 보이지 않았다. winner는 그대로 이긴다(복구된-장부 규칙); 단어가 옆에 적힐 뿐. ③ **gaps 문법 3종 봉합** — `- no-kind`(브래킷 필수), `- []`(sentinel이 ''라 빈 kind가 무-오류로 읽히던 것 → null), `- [declared|reference]`(`inList`의 파이프-부분문자열 트릭 → **정확 일치, 하나씩**). ④ `gaps.sections`·`gaps.enum.kind`가 SCH_KEYS에 편입 — 스키마에서 지워도 아무 일 없던 선언-미독 키. ⑤ release 잡에 **SemVer 형태 게이트**(`vfoo`가 발행되던 구조; 태그→번들 매핑은 규약이 없어 여전히 echo만 — CI grep으로 제2의 진실원을 만들지 않는다).
+
+**저우선 5건도**: 빈 광산에서 조기 반환이 dead-ledger 진단을 삼키던 것(먼저 인쇄), 캐시 키에 faultinject 드라이버 + lib 재귀(find), CI 구문·제어문자 검사 재귀화, tests/README의 manifest 개수 44 정정.
+
 ## 2026-08-05.7
 
 **v0.5.1 — v0.5.0 외부 리뷰 후속. P0 2건과 쓰기 내구성 P1들, 그리고 문서·식별자.** 전 항목 수정 전 실측 → 수정 → red-first 케이스 순서. **red-first가 없는 예외는 둘이고 이유가 적혀 있다**: attest 미러 경고와 upgrade MANIFEST 경고는 비특권 사용자가 필요해 스위트(컨테이너 root)에서 발동시킬 수 없다 — 콜드 리뷰가 컨테이너의 `nobody`로 손수 발동을 확인했다.

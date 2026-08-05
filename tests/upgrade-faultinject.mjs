@@ -15,16 +15,23 @@
 // registered before the first byte" from "after" (v0.5.1 P1-4). Exits with upgrade's own code.
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { readFileSync, writeFileSync } from 'node:fs'
+import { readFileSync, writeFileSync, mkdirSync } from 'node:fs'
 import { openMine } from '../.weavedoc/bin/lib/mine.mjs'
 import { cmdUpgrade, realOps } from '../.weavedoc/bin/lib/cmd-upgrade.mjs'
 import { cmdReindex } from '../.weavedoc/bin/lib/cmd-reindex.mjs'
 import { cmdValidate } from '../.weavedoc/bin/lib/cmd-validate.mjs'
 
 const SCRIPT_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', '.weavedoc', 'bin')
-const [wfailA = '-', rfailA = '-', cfailA = '-', mfailA = '-'] = process.argv.slice(2)
-if (process.argv.length < 3) {
-  process.stderr.write('usage: upgrade-faultinject.mjs <write-fail-suffix|-> [restore-fail-suffix|-] [copy-fail-suffix|-] [rm-fail-suffix|-]\n')
+const rawArgs = process.argv.slice(2)
+// v0.5.2 flags: --collide-bak pre-creates the OLD date+PID backup path with stale contents (the
+// exact shape mkdtempSync exists to make impossible — pre-fix, upgrade reused it and restored the
+// stale bytes); --reindex-fail makes the phase-5 regeneration return nonzero.
+const collideBak = rawArgs.includes('--collide-bak')
+const reindexFail = rawArgs.includes('--reindex-fail')
+const pos = rawArgs.filter(a => !a.startsWith('--'))
+const [wfailA = '-', rfailA = '-', cfailA = '-', mfailA = '-'] = pos
+if (rawArgs.length < 1) {
+  process.stderr.write('usage: upgrade-faultinject.mjs <write-fail-suffix|-> [restore-fail-suffix|-] [copy-fail-suffix|-] [rm-fail-suffix|-] [--collide-bak] [--reindex-fail]\n')
   process.exit(2)
 }
 const wfail = wfailA === '-' ? '' : wfailA
@@ -34,6 +41,16 @@ const mfail = mfailA === '-' ? '' : mfailA
 
 const mine = openMine(SCRIPT_DIR)
 const outln = s => process.stdout.write(Buffer.isBuffer(s) ? Buffer.concat([s, Buffer.from('\n')]) : s + '\n')
+
+if (collideBak) {
+  // The colliding path as the OLD naming scheme computed it, filled with a stale snapshot and a
+  // .touched manifest naming it — the exact bait bkup()'s dedup used to swallow.
+  const today = new Date().toISOString().slice(0, 10)
+  const stale = `${mine.root}/.upgrade-backup-${today}.${process.pid}`
+  mkdirSync(stale, { recursive: true })
+  writeFileSync(`${stale}/project.md`, 'STALE SNAPSHOT FROM A PREVIOUS LIFE\n')
+  writeFileSync(`${stale}/.touched`, 'project.md\n')
+}
 
 const ops = {
   write: (f, buf) => { if (wfail && String(f).endsWith(wfail)) throw new Error(`injected: write refused: ${f}`); realOps.write(f, buf) },
@@ -49,6 +66,6 @@ const ops = {
   rm: p => { if (mfail && String(p).endsWith(mfail)) throw new Error(`injected: removal refused: ${p}`); realOps.rm(p) }
 }
 process.exit(cmdUpgrade(mine, outln, ['--apply'],
-  () => cmdReindex(mine, () => {}, () => {}, []),
+  reindexFail ? () => 1 : () => cmdReindex(mine, () => {}, () => {}, []),
   () => cmdValidate(mine, outln, false),
   ops))

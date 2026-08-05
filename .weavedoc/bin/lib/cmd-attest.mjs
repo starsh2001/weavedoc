@@ -10,6 +10,13 @@ import { statSync, readFileSync, writeFileSync, appendFileSync, openSync, readSy
 export const realOps = {
   append: (f, buf) => appendFileSync(f, buf)
 }
+
+// THE LEDGER LOCK lives in lock.mjs since review #6: upgrade --apply writes this ledger too, and a
+// protocol only attest spoke was measured being walked straight through by upgrade. The WHY of the
+// lock — one critical section around create → tail-check → append → rollback → mirror, because a
+// compensating rollback without mutual exclusion erases a neighbour's rc-0 row — and why a lock is
+// NEVER auto-reclaimed both live there.
+import { acquireLedgerLock, releaseLedgerLock } from './lock.mjs'
 import { canonId, inList, splitLines } from './core.mjs'
 import { join, fm, tfileFor, unitDigest } from './mine.mjs'
 import { today, writeAtomic, readText, textBuf, U } from './write.mjs'
@@ -77,6 +84,19 @@ export function cmdAttest (m, out, argv, ops = realOps) {
   const lf = join(m.truths, m.ledgerFile())
   if (!isDir(m.truths)) { out('attest: no truths/ directory'); return 2 }
 
+  // Everything from here to the mirror runs under the ledger lock — see lock.mjs for why a
+  // compensating rollback without mutual exclusion erases a neighbour's committed row.
+  const lockPath = `${lf}.lock`
+  const lockRel = lockPath.startsWith(`${m.root}/`) ? lockPath.slice(m.root.length + 1) : lockPath
+  const lockWhy = acquireLedgerLock(lockPath, lockRel)
+  if (lockWhy) { out(`attest: ${lockWhy}. Nothing written`); return 1 }
+  try {
+    return attestLocked()
+  } finally {
+    releaseLedgerLock(lockPath)
+  }
+
+  function attestLocked () {
   // THE LEDGER IS APPENDED TO, NOT REWRITTEN (§11 2026-08-05). It used to be read whole, joined
   // with the new rows and renamed into place, which had two consequences the external review named:
   //   1. a read that FAILED on an existing file fell back to a fresh header — so an unreadable
@@ -85,9 +105,9 @@ export function cmdAttest (m, out, argv, ops = realOps) {
   //      nothing to fail to read and nothing to accidentally replace.
   //   2. read-then-rewrite is a lost-update window — two attests both read, both rewrite, and the
   //      later one drops the earlier's rows. An append is one operation; concurrent appends
-  //      interleave by row and cannot overwrite each other.
-  // The file is created with its header via 'wx' — atomic create-if-absent, so two processes racing
-  // to create it cannot both write a header.
+  //      interleave by row and cannot overwrite each other — and since v0.5.2 the whole sequence
+  //      sits under the lock anyway, because the truncate-back rollback is a rewrite in disguise.
+  // The file is created with its header via 'wx' — atomic create-if-absent.
   let createdHere = false
   try {
     writeFileSync(lf, LEDGER_HEADER, { flag: 'wx' })
@@ -177,4 +197,5 @@ export function cmdAttest (m, out, argv, ops = realOps) {
 
   out(`attest: ${verdict} — R${round} · ${standard} · ${day} — ${names.join(' ')}`)
   return 0
+  }
 }
