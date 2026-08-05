@@ -18,6 +18,16 @@
 # skill names, the command name) is expressly permitted.
 #
 # weavedoc — deterministic checks for a WeaveDoc project (the floor under the AI fidelity gate).
+#
+# ============================================================================================
+# THIS IS THE LEGACY REFERENCE RUNTIME. The shipped runtime is `weavedoc.mjs` beside this file.
+# Both are in the bundle for ONE release and they agree: the 349-case suite passes against each,
+# 349 broken mines match command by command, and every write command leaves identical bytes on
+# disk. This file is kept so that agreement can still be MEASURED if a report comes in — that is
+# its whole remaining job. It is scheduled for removal in the release after 0.4.0.
+# Do not add behaviour here. A change that lands in one runtime and not the other is the drift
+# class this rewrite existed to end.
+# ============================================================================================
 #   validate          format + truth coherence (exit non-zero on any problem)
 #   pull <term>       protocol-correct mine lookup for consumers outside the pipeline (see READ.md)
 #   impact <mID>      which truths were extracted from a material + which documents cite it (blast radius)
@@ -464,13 +474,25 @@ is_noise() { # blank / comment / untouched template entry
   esac
   return 1
 }
-material_ids() { # one folder name per line, zero per-item forks (basename per dir was ~30
-  # spawns per call on a real mine, and validate calls this three times)
-  local d
+# THE ORDER OF THESE TWO LISTS IS SPECIFIED, not left to the caller's locale. A glob sorts by
+# LC_COLLATE, and validate walks these lists to emit diagnostics, so the ORDER OF ITS OUTPUT was a
+# function of whatever locale the shell happened to inherit. Measured 2026-08-04 on folders
+# `m002 M003 m-004 m_005 mAA mzz`:
+#     C / POSIX          M003 m-004 m002 mAA m_005 mzz     (both platforms)
+#     en_US.UTF-8 MSYS   m_005 m002 M003 m-004 mAA mzz
+#     en_US.UTF-8 Linux  m002 M003 m-004 m_005 mAA mzz
+# The two platforms do not even agree with EACH OTHER under a UTF-8 locale, so there was no single
+# answer to reproduce — the same shape as the gawk hash order pinned in the truths pass, and settled
+# the same way: name the order instead of inheriting it. `local LC_ALL=C` and not LC_COLLATE, because
+# LC_ALL outranks LC_COLLATE and an assignment to the latter is silently ignored while the former is
+# set. The scope is this function; the caller's locale is untouched on return (verified).
+# Zero per-item forks is the other reason these exist: basename-per-dir was ~30 spawns per call.
+material_ids() {
+  local d LC_ALL=C
   for d in "$MATERIALS"/*/; do [ -d "$d" ] || continue; d=${d%/}; printf '%s\n' "${d##*/}"; done
 }
 doc_ids() {
-  local d
+  local d LC_ALL=C
   for d in "$DOCUMENTS"/*/; do [ -d "$d" ] || continue; d=${d%/}; printf '%s\n' "${d##*/}"; done
 }
 mstatus()      { [ -f "$MATERIALS/$1/converted.md" ] && fm "$MATERIALS/$1/converted.md" status; }
@@ -636,7 +658,15 @@ mat_digest() { # $1 = converted.md -> sha256 of the file MINUS its frontmatter `
   # LC_ALL=C (v0.3.6): this awk decides which bytes go into a DIGEST, over material bodies that are
   # Korean prose. A locale-dependent pass would make the same file hash differently under two
   # shells — every verification verdict downstream rides on this number.
+  # A trailing CR is stripped EXPLICITLY (v0.3.8), because leaving it to the platform meant the
+  # same material digested to two different numbers: MSYS gawk strips CR on read, Linux gawk keeps
+  # it (measured — Echo m001 gave ebf43fc9… on Windows and 5cf38845… on Linux). A digest is the
+  # spelling of "which bytes were verified", so a git autocrlf checkout on the other OS silently
+  # resurrected the entire verification debt. MSYS's answer is taken as canonical: deployed mines
+  # were digested there, so making it explicit changes no existing number. Must be the FIRST rule —
+  # it rewrites $0 for every rule below, including the fence and `status:` matches.
   LC_ALL=C awk '
+    { sub(/\r$/, "") }
     NR==1 && /^---[[:space:]]*$/  { infm=1; print; next }
     infm && /^---[[:space:]]*$/   { infm=0; print; next }
     infm && /^status[[:space:]]*:/ { next }
@@ -772,18 +802,54 @@ WD_JSON=${WD_JSON:-0}
 # contract, the English prose is presentation and may change. The single-arg form still works and
 # reports as UNCODED; meta_uncoded_ratchet pins how many such sites remain, so the number can only
 # fall. Human output prefixes the code; JSON output carries it as a field.
+# EVERY path in a diagnostic is PROJECT-RELATIVE, and this is the one place that is spelled.
+# Decision ② (2026-08-04) was applied to the truths awk first and stopped there; measuring validate
+# over all 345 case mines afterwards found TWENTY more codes still printing an absolute path
+# (FM-MISSING, MAT-*, CAT-*, PLAN-*, CFG-PATH-*, TRUTH-DIR, DATE-INVALID …). They were invisible
+# because a mine that passes prints no diagnostics at all, and the mine the first hunt used was
+# broken in only a few ways.
+#
+# It is done HERE, on the finished message, rather than at the ~30 construction sites, for the exact
+# reason the first round had to be repaired: `relf` is both the message text AND the key of the
+# frontmatter census, so relativising "the path" at a construction site risks moving a string some
+# lookup depends on. A message is consumed by nothing. Substituting last touches no variable any
+# check reads, so this rule cannot silently switch a check off — and there is one spelling of it,
+# so a diagnostic added later is relative without its author having to know that.
+# A path OUTSIDE the project (a redirected paths: value, a schema found beside the script) does not
+# begin with ROOT and is left whole — an escape must stay visible as an escape.
+# KNOWN LIMIT, and it is sharper than "the value reads shortened": the substitution is over the
+# whole message, so a mine VALUE that itself spells the project's absolute root is quoted back
+# shortened — and the shortened form can be a name that EXISTS. Measured: a truth whose
+# `source: <ROOT>/m001` sits next to a real `materials/m001` reports
+#   [TRUTH-SOURCE-DANGLING] truths/t001.md  source 'm001' → no material folder
+# The VERDICT is right (the value does not name a material folder), but the message now quotes a
+# string that is not in the file and blames an id that is fine. The alternative was relativising at
+# ~30 construction sites, which is the shape that let twenty codes sit absolute for months, and a
+# quote-aware rule was tried and rejected: CFG-PATH-MISSING prints its path inside quotes, so it
+# would exempt exactly the case that has to be covered. Revert condition is recorded in
+# IMPROVEMENT_PLAN.md §11.
+# Answers in RELMSG, deliberately NOT in the shared REPLY. REPLY is the zero-fork return channel of
+# fmv, canon_id, listfield, pipes, file_raw/file_stripped, count_headings and dup_section, and a
+# diagnostic can be emitted between one of those setting it and a caller reading it. Nothing in the
+# suite turned out to depend on that (checked by poisoning REPLY inside prob/warn and running all
+# 348 cases green), but "no case reaches it" is not the same as "no caller does", and a one-word
+# rename removes the class instead of measuring it.
+relmsg() { RELMSG=${1//"$ROOT/"/}; }
+RELMSG=""
 prob() {
   local code="UNCODED"
   if [ $# -ge 2 ]; then code="$1"; shift; fi
   PROBLEMS=$((PROBLEMS+1))
-  if [ "$WD_JSON" = 1 ]; then DIAGS+="${code}"$'\002'"$*"$'\001'
-  else printf '  [%s] %s\n' "$code" "$*"; fi
+  relmsg "$*"
+  if [ "$WD_JSON" = 1 ]; then DIAGS+="${code}"$'\002'"$RELMSG"$'\001'
+  else printf '  [%s] %s\n' "$code" "$RELMSG"; fi
 }
 warn() { # same shape, non-counting — surfaced, never failing
   local code="UNCODED"
   if [ $# -ge 2 ]; then code="$1"; shift; fi
-  if [ "$WD_JSON" = 1 ]; then WARNS+="${code}"$'\002'"$*"$'\001'
-  else printf '  warning: [%s] %s\n' "$code" "$*"; fi
+  relmsg "$*"
+  if [ "$WD_JSON" = 1 ]; then WARNS+="${code}"$'\002'"$RELMSG"$'\001'
+  else printf '  warning: [%s] %s\n' "$code" "$RELMSG"; fi
 }
 emit_probs() { # stdin: lines an awk pass emitted, each "[CODE] rest" (or bare → UNCODED)
   local line code
@@ -1046,9 +1112,12 @@ cmd_validate() {
     # verdict stops depending on which locale the shell happened to inherit. The same pin goes on
     # every content-parsing awk; retag's rewrite awk stays UNPINNED (documented: C broke its
     # Korean gsub).
-    qout=$(WD_REQTAGS="$reqtags" LC_ALL=C awk -v matids="$matlist" -v retids="$retlist" -v mroot="$MATERIALS" -v remids="$remlist" -v resids="$reslist" -v Q="'"       -v treq="${SCH[truth.fm.required]//|/ }"       -v tstenum="${SCH[truth.fm.enum.status]//|/ }"       -v tprenum="${SCH[truth.fm.enum.provenance]//|/ }"       -v rtypes="${SCH[truth.fm.resolution.type]//|/ }"       -v rkinds="${SCH[truth.fm.resolution.decision_kind]//|/ }"       -v rby="${SCH[truth.fm.resolution.decided_by]//|/ }"       -v ph="${SCH[fm.placeholder]}" '
+    qout=$(WD_REQTAGS="$reqtags" WD_ROOT="$ROOT/" LC_ALL=C awk -v matids="$matlist" -v retids="$retlist" -v mroot="${MATERIALS#"$ROOT"/}" -v remids="$remlist" -v resids="$reslist" -v Q="'"       -v treq="${SCH[truth.fm.required]//|/ }"       -v tstenum="${SCH[truth.fm.enum.status]//|/ }"       -v tprenum="${SCH[truth.fm.enum.provenance]//|/ }"       -v rtypes="${SCH[truth.fm.resolution.type]//|/ }"       -v rkinds="${SCH[truth.fm.resolution.decision_kind]//|/ }"       -v rby="${SCH[truth.fm.resolution.decided_by]//|/ }"       -v ph="${SCH[fm.placeholder]}" '
       function val(   s){ s=$0; sub(/^[^:]*:[[:space:]]*/,"",s); if(s !~ /^"/){ sub(/[[:space:]]+#.*$/,"",s); if(s ~ /^#/) s="" } sub(/[[:space:]]*$/,"",s); sub(/^"/,"",s); sub(/"$/,"",s); return s }
       function q(s){ return Q s Q }
+      # A path as the user would type it from the project root. WD_ROOT rides via ENVIRON, never
+      # `awk -v`: -v escape-processes its value, and a Windows path is exactly where that bites.
+      function rel(p,   r){ r=p; if(rootp!="" && substr(r,1,length(rootp))==rootp) r=substr(r,length(rootp)+1); return r }
       # Whitespace-collapsed so the seal does not fail on spacing. [[:space:]] covers the newline, so
       # this is the text as markdown renders it: an extra blank line is the same quote, a skipped line
       # is not.
@@ -1174,7 +1243,18 @@ cmd_validate() {
           for(ii=1;ii<=nn;ii++){ gsub(/^[[:space:]]+|[[:space:]]+$/,"",ta[ii]); if(ta[ii]!="") seentag[ta[ii]]=1 }
         }
       }
-      BEGIN { nreq=split(ENVIRON["WD_REQTAGS"], rt, "\n")
+      # THE ORDER OF THESE DIAGNOSTICS IS SPECIFIED, not left to gawk. Nine families here are
+      # emitted from `for (k in array)`, whose order gawk deliberately leaves unspecified — measured
+      # 2026-08-04: it is NOT sorted at any real scale (50, 300 and 2000 keys all came back
+      # unsorted), so a truth missing several required fields printed them as `status source claim
+      # tags id`, an artifact of the hash. That is unreproducible by anything that is not gawk, which
+      # makes it the one thing a rewrite cannot match, and it is a promise the tool never meant to
+      # make: the SET of problems is the contract, the hash order is not.
+      # Blast radius before changing it: all 345 case mines, both ways — output changed on ZERO of
+      # them. Nothing in the suite depended on the hash order; it simply was not specified.
+      BEGIN { PROCINFO["sorted_in"]="@ind_str_asc"
+              nreq=split(ENVIRON["WD_REQTAGS"], rt, "\n")
+              rootp=ENVIRON["WD_ROOT"]
               nm=split(treq,_r," ");    for(i=1;i<=nm;i++) if(_r[i]!="") reqkey[_r[i]]=1
               nm=split(tstenum,_s," ");  for(i=1;i<=nm;i++) if(_s[i]!="") okstatus[_s[i]]=1
               nm=split(tprenum,_p," ");  for(i=1;i<=nm;i++) if(_p[i]!="") okprov[_p[i]]=1
@@ -1189,9 +1269,16 @@ cmd_validate() {
       FNR==1 {
         infm = ($0 ~ /^---[[:space:]]*$/) ? 1 : 0
         n=split(FILENAME,pp,"/")
+        # PROJECT-RELATIVE, like every other diagnostic in this command. These few used FILENAME
+        # raw, so they alone printed an absolute path — an inconsistency inside the runtime, not a
+        # design. It also made the message depend on WHERE the mine sits, which is why the Node port
+        # cannot reach byte parity on these lines: MSYS spells the same directory /d/repo/x and a
+        # native runtime spells it D:/repo/x. relf is also the KEY for the frontmatter census below;
+        # the two must be the same string or the required-key lookup silently finds nothing.
+        relf = rel(FILENAME)
         if (FILENAME ~ /converted\.md$/) { ftype="m"; mid=pp[n-1]; if(!(mid in body)) body[mid]="" }
         else {
-          ftype="t"; ntruthfile++; tfile=FILENAME; fn=pp[n]; sub(/\.md$/,"",fn); tid=fn
+          ftype="t"; ntruthfile++; tfile=relf; fn=pp[n]; sub(/\.md$/,"",fn); tid=fn
           tidfield=""; tsrc=""; ttags=""; tstatus=""; tconflict=""; tresolution=""; tprov=""
           hasid=0; hasclaim=0; hassource=0; hastags=0; hasstatus=0; gotline=0; hasderivedfrom=0
           tsuperseded=""; tderivedfrom=""; tcorrob=""
@@ -1206,8 +1293,8 @@ cmd_validate() {
         # A list value whose bracket never closes reads as empty or as the rest of the line depending
         # on the reader, and retag cannot rewrite it. Named here so the user has a repair path.
         if($0 ~ /^[a-z_]+[[:space:]]*:[[:space:]]*\[/ && $0 !~ /\]/)
-          prob("[FM-DUPLICATE-KEY] " FILENAME "  frontmatter " q(substr($0,1,index($0,":")-1)) " opens a list with '[' that never closes on this line — readers disagree about where the value ends, and 'retag' cannot rewrite it. Close the bracket")
-        if($0 ~ /^[a-z_]+[[:space:]]*:/){ kk=$0; sub(/[[:space:]]*:.*$/,"",kk); kcount[FILENAME,kk]++; kval[FILENAME,kk]=val() }
+          prob("[FM-DUPLICATE-KEY] " relf "  frontmatter " q(substr($0,1,index($0,":")-1)) " opens a list with '[' that never closes on this line — readers disagree about where the value ends, and 'retag' cannot rewrite it. Close the bracket")
+        if($0 ~ /^[a-z_]+[[:space:]]*:/){ kk=$0; sub(/[[:space:]]*:.*$/,"",kk); kcount[relf,kk]++; kval[relf,kk]=val() }
         # Every field pattern below is `^key[[:space:]]*:` — the SAME shape the key census one line
         # up uses, and the same shape fm() uses. They used to read `^key:[[:space:]]`, which demands
         # no space BEFORE the colon and one AFTER it, so two spellings YAML calls legal (`source :
@@ -1530,6 +1617,7 @@ EOF
         # normalised: `source: m5`, `## m005` and `t1` must land on the same entry as their canonical forms.
         function norm(s){ sub(/^m0*/,"m",s); sub(/^t0*/,"t",s); return (s=="m"||s=="t") ? "" : s }
         BEGIN {
+          PROCINFO["sorted_in"]="@ind_str_asc"   # same reason as the truths pass: order is specified
           nm=split(matids,a," "); for(i=1;i<=nm;i++) if(a[i]!=""){ mat[a[i]]=1; if(norm(a[i])!="") mat[norm(a[i])]=1 }
           np=split(pairs,b," ")
           for(i=1;i<=np;i++){ if(b[i]=="") continue; split(b[i],c,":"); tsrc[c[1]]=c[2]; if(norm(c[1])!="") tid2file[norm(c[1])]=c[1] }
@@ -2059,7 +2147,12 @@ EOF
   # review next to a final is real history that binds no bytes — visible, never silently equal
   # to a sealed one.
   [ "$N_CONSEC" -gt 0 ] && echo "  review seals: $N_RSEAL digest-bound · $N_RLEGACY legacy-unbound"
-  [ "${SCHEMA_V1:-0}" = "1" ] && echo "  schema: v1 mine — readable (dual-reader), current format is v$(schema_ver); run 'bash .weavedoc/bin/weavedoc upgrade --check' to see the migration"
+  # The invocation this line NAMES is the Node one, from stage 6 on — it is the runtime the bundle
+  # ships and the one the skills call. Shell-neutral on purpose: `node <path> …` is the same words
+  # in bash and in PowerShell, and the plan forbids a `.ps1` wrapper (it would become subject to the
+  # execution policy). Both runtimes print the identical string, changed in the same commit, because
+  # this is output contract and the suite compares it byte for byte.
+  [ "${SCHEMA_V1:-0}" = "1" ] && echo "  schema: v1 mine — readable (dual-reader), current format is v$(schema_ver); run 'node .weavedoc/bin/weavedoc.mjs upgrade --check' to see the migration"
   if [ "$PROBLEMS" -eq 0 ]; then echo "✓ validate: all checks passed"; return 0
   else echo "✗ validate: $PROBLEMS problem(s)"; return 1; fi
 }
@@ -2080,11 +2173,18 @@ cmd_impact() {
     local fsrc; fsrc=$(canon_id "$(fm "$f" source)") || fsrc=$(fm "$f" source)
     [ "$fsrc" = "$ncanon" ] && printf '  %s: %s [%s]\n' "$(fm "$f" id)" "$(fm "$f" claim)" "$(fm "$f" status)"
   done
+  # PROJECT-RELATIVE, the same rule the diagnostics follow (see relmsg). These three lists were the
+  # last absolute paths the runtime printed — measured 2026-08-04 over all 345 case mines, after the
+  # diagnostics were relativised: `impact` was still absolute in 326 of them, because it prints these
+  # paths DIRECTLY and never goes through prob/warn. That is the whole §5-2 problem one door over:
+  # MSYS spells the same file /d/repo/x and a native runtime spells it D:/repo/x, so this output
+  # cannot be byte-compared between the two while it names the root. A relative path is also what a
+  # reader would type.
   echo "  -- documents citing it (by id) --"
-  grep -rlnE "\b$n\b" "$DOCUMENTS" 2>/dev/null | sed 's/^/  /' || true
+  grep -rlnE "\b$n\b" "$DOCUMENTS" 2>/dev/null | sed "s|^$ROOT/||; s/^/  /" || true
   if [ -n "$title" ]; then
     echo "  -- documents mentioning its title --"
-    grep -rlnF "$title" "$DOCUMENTS" 2>/dev/null | sed 's/^/  /' || true
+    grep -rlnF "$title" "$DOCUMENTS" 2>/dev/null | sed "s|^$ROOT/||; s/^/  /" || true
   fi
   # Through the truths: an external-audience document carries neither the material id nor its title,
   # so the greps above come back empty exactly when a retraction needs the radius. The
@@ -2104,7 +2204,7 @@ cmd_impact() {
       for cid in $(listfield "$(fm "$df" cited_truths)"); do
         cid=$(canon_id "$cid") || continue
         [ "$cid" = "$tid" ] || continue
-        hitdocs="$hitdocs $df"; printf '  %s\n' "$df"; break
+        hitdocs="$hitdocs $df"; printf '  %s\n' "${df#"$ROOT/"}"; break
       done
     done
   done
@@ -2614,14 +2714,18 @@ cmd_retag() {
     hitlist=$(WD_OLD="$old" WD_NEW="$new" awk -v key="tags" -v mode=s "$prog" "$TRUTHS"/t[0-9]*.md)
     while IFS= read -r f; do
       [ -n "$f" ] || continue
-      printf '  %s (tags)\n' "$f"; total=$((total+1)); truthhits=$((truthhits+1))
+      # PROJECT-RELATIVE, like every other path this runtime prints (decision ②, 2026-08-04). retag
+      # was the LAST surface still absolute, and it was found by sweeping every remaining command
+      # over the corpus rather than by fixing whichever one was in front of me — which is exactly
+      # how the first pass missed the shell diagnostics and the second missed `impact`.
+      printf '  %s (tags)\n' "${f#"$ROOT/"}"; total=$((total+1)); truthhits=$((truthhits+1))
       [ "$dry" -eq 0 ] && rewrite_file "$f" tags
     done <<< "$hitlist"
   fi
   if [ -f "$PROJECT" ]; then
     c=$(WD_OLD="$old" WD_NEW="$new" awk -v key="required_tags" -v mode=c "$prog" "$PROJECT")
     if [ "${c:-0}" -gt 0 ]; then
-      printf '  %s (required_tags)\n' "$PROJECT"; total=$((total+1))
+      printf '  %s (required_tags)\n' "${PROJECT#"$ROOT/"}"; total=$((total+1))
       [ "$dry" -eq 0 ] && rewrite_file "$PROJECT" required_tags
     fi
   fi
@@ -2629,14 +2733,14 @@ cmd_retag() {
     [ -f "$DOCUMENTS/$d/plan.md" ] || continue
     c=$(WD_OLD="$old" WD_NEW="$new" awk -v key="scope_tags" -v mode=c "$prog" "$DOCUMENTS/$d/plan.md")
     if [ "${c:-0}" -gt 0 ]; then
-      printf '  %s (scope_tags)\n' "$DOCUMENTS/$d/plan.md"; total=$((total+1))
+      printf '  %s (scope_tags)\n' "${DOCUMENTS#"$ROOT/"}/$d/plan.md"; total=$((total+1))
       [ "$dry" -eq 0 ] && rewrite_file "$DOCUMENTS/$d/plan.md" scope_tags
     fi
   done < <(doc_ids)
   if [ "$total" -eq 0 ]; then echo "  no list-field occurrences of '$old'"; fi
   local freetext=""
   for f in "$ROOT/gaps.md" "$ROOT/questions.md" "$TRUTHS/verify.md"; do
-    [ -f "$f" ] && grep -qF -- "$old" "$f" && freetext="$freetext $f"
+    [ -f "$f" ] && grep -qF -- "$old" "$f" && freetext="$freetext ${f#"$ROOT/"}"
   done
   [ -n "$freetext" ] && echo "  review manually (free-text mentions of '$old', not rewritten):$freetext"
   if [ "$dry" -eq 1 ]; then return 0; fi
@@ -3512,7 +3616,13 @@ cmd_attest() { # attest <verified|failed> <round> <standard> <id...> — the ver
     local mline mtmp
     mline=$(printf -- '- %s — R%s %s · %s · verified' "$(printf '%s' "$names" | sed 's/^ //; s/ / · /g')" "$round" "$today" "$standard")
     mtmp="$TRUTHS/verify.md.tmp.$$"
-    awk -v line="$mline" '{ print } !done && /^#+[[:space:]]*Verified units[[:space:]]*$/ { print line; done=1 }' \
+    # The line rides via ENVIRON, never `awk -v` — the same rule retag already follows, for the same
+    # reason: -v ESCAPE-PROCESSES its value. `standard` is free text a user supplies, so a Windows
+    # path landed in verify.md as `C:<TAB>oolsstd`, and a `\n` in it split the mirror entry into two
+    # lines and broke the markdown. The ledger row is built with printf -v and never had the problem,
+    # so the two surfaces disagreed about the same fact — and stdout, also correct, hid it.
+    WD_MLINE="$mline" awk 'BEGIN { line = ENVIRON["WD_MLINE"] }
+      { print } !done && /^#+[[:space:]]*Verified units[[:space:]]*$/ { print line; done=1 }' \
       "$TRUTHS/verify.md" > "$mtmp" && mv "$mtmp" "$TRUTHS/verify.md" || rm -f "$mtmp" 2>/dev/null
   fi
   printf 'attest: %s — R%s · %s · %s —%s\n' "$verdict" "$round" "$standard" "$today" "$names"

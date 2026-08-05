@@ -1,3 +1,4 @@
   examined: materials 1 · truths 1 (1 sealed) · documents 1 (1 consecrated, 1 gate-checked)
   review seals: 0 digest-bound · 1 legacy-unbound
+  schema: v1 mine — readable (dual-reader), current format is v2; run 'node .weavedoc/bin/weavedoc.mjs upgrade --check' to see the migration
 ✓ validate: all checks passed

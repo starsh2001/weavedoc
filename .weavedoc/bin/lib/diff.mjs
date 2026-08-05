@@ -1,0 +1,87 @@
+// GNU `diff` normal output format, reproduced.
+//
+// WHY THIS IS HERE AT ALL. `reindex --check` prints a real diff when the generated views have
+// drifted, and that text is stdout — which the port's contract says must be byte-identical. The bash
+// version gets it by forking `diff`; a port that shells out would reintroduce exactly the
+// external-tool dependency this rewrite exists to remove, and would make the answer depend on which
+// diff happens to be on PATH. So the format is produced here.
+//
+// The algorithm is a plain LCS, which is what GNU diff emits for inputs of this size and shape: it
+// departs from minimal output only when its large-input heuristics engage (thousands of lines with
+// many scattered changes), and a generated index is neither. tests/diff-parity.sh measures that
+// claim against the real `diff` over real and randomised inputs rather than asserting it.
+
+// Longest common subsequence over two key arrays -> the matched index pairs, in order.
+function lcs (ka, kb) {
+  const n = ka.length; const m = kb.length
+  // Row-major DP. A generated index is a few hundred lines, so n*m stays small enough that the
+  // simple table beats the complexity of a Myers implementation nobody would want to debug.
+  const t = new Int32Array((n + 1) * (m + 1))
+  for (let i = n - 1; i >= 0; i--) {
+    for (let j = m - 1; j >= 0; j--) {
+      t[i * (m + 1) + j] = ka[i] === kb[j]
+        ? t[(i + 1) * (m + 1) + j + 1] + 1
+        : Math.max(t[(i + 1) * (m + 1) + j], t[i * (m + 1) + j + 1])
+    }
+  }
+  const pairs = []
+  let i = 0; let j = 0
+  while (i < n && j < m) {
+    if (ka[i] === kb[j]) { pairs.push([i, j]); i++; j++ } else if (t[(i + 1) * (m + 1) + j] >= t[i * (m + 1) + j + 1]) i++
+    else j++
+  }
+  return pairs
+}
+
+// A GNU-style range: "3" when it is one line, "3,7" when it spans.
+const range = (s, e) => (s === e ? `${s}` : `${s},${e}`)
+
+const NO_EOL = '\\ No newline at end of file'
+
+// -> the lines of `diff a b` in normal format.
+//
+// aNoEol/bNoEol say that side's file does not end with a newline. That is not decoration: GNU diff
+// treats a final line WITHOUT a newline as different from the same text WITH one, so
+//     printf 'a\nb' vs printf 'a\nb\n'   ->   2c2 / < b / \ No newline… / --- / > b
+// even though the two "b" lines read identically. The flag is therefore folded into the line's
+// identity for matching, and rendered as GNU renders it — announced right after the line it is
+// about. (Measured against the real diff; a port that treated it as cosmetic reports "in sync" on
+// a file that differs.)
+export function diffNormal (a, b, aNoEol = false, bNoEol = false) {
+  const mark = (arr, noEol) => arr.map((l, k) => (noEol && k === arr.length - 1 ? `${l}\u0000<no-eol>` : l))
+  const pairs = lcs(mark(a, aNoEol), mark(b, bNoEol))
+  const out = []
+  let i = 0; let j = 0
+  const putA = k => { out.push(`< ${a[k]}`); if (aNoEol && k === a.length - 1) out.push(NO_EOL) }
+  const putB = k => { out.push(`> ${b[k]}`); if (bNoEol && k === b.length - 1) out.push(NO_EOL) }
+  // Each gap between consecutive matches is one hunk: lines of `a` with no partner are deletions,
+  // lines of `b` with no partner are additions, and a gap holding both is a change.
+  const emit = (di, dj) => {
+    const da = di - i; const db = dj - j
+    if (da === 0 && db === 0) return
+    if (da === 0) {
+      // Append AFTER line i of the first file (0 when the addition precedes everything).
+      out.push(`${i}a${range(j + 1, dj)}`)
+      for (let k = j; k < dj; k++) putB(k)
+    } else if (db === 0) {
+      out.push(`${range(i + 1, di)}d${j}`)
+      for (let k = i; k < di; k++) putA(k)
+    } else {
+      out.push(`${range(i + 1, di)}c${range(j + 1, dj)}`)
+      for (let k = i; k < di; k++) putA(k)
+      out.push('---')
+      for (let k = j; k < dj; k++) putB(k)
+    }
+  }
+  for (const [pi, pj] of pairs) { emit(pi, pj); i = pi + 1; j = pj + 1 }
+  emit(a.length, b.length)
+  return out
+}
+
+// Split a file's text the way this diff wants it: the lines, plus whether the final newline is
+// missing. An empty file is zero lines, not one empty one.
+export function diffLines (s) {
+  if (s === '') return { lines: [], noEol: false }
+  const noEol = !s.endsWith('\n')
+  return { lines: (noEol ? s : s.slice(0, -1)).split('\n'), noEol }
+}

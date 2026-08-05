@@ -14,6 +14,8 @@ The gate is the product; the panel is polish. Keep them separate.
 
 > **Language: read it first.** Read `language:` from `.weavedoc/config.yaml` and write **every** reply in that language (the cold reviewers' findings too). These skill files are English; your output is not.
 
+> **Running weavedoc: pick the shell by platform.** Commands below are written `node .weavedoc/bin/weavedoc.mjs …` and read the same in every shell. **On Windows run them through PowerShell; everywhere else through bash** — Git Bash pays ~290ms per process to emulate Unix (measured: 373ms vs 80ms for one invocation), and a mine-wide command spends most of its time there. Never create a `.ps1` wrapper: PowerShell's execution policy applies to `.ps1` files and a downloaded one is blocked under `RemoteSigned`, while `node script.mjs` is not subject to it at all.
+
 > **Thin context.** Don't read all truths for the whole document at once. For the fidelity gate, check each section against only its cited truths (grep by truth id from the draft's citations). For the advisory panel, reviewers receive only the draft + plan — not the full truth set.
 
 > **Write-scope.** This skill writes only to `documents/<doc-id>/review.md` (except two stage stamps: `status: reviewing` on this document's `plan.md` — step 5, and leaving it there on escalation — and `status: conflict` on truths when a new conflict is discovered). It does **not** otherwise modify `draft.md`, `truths/`, or `materials/`.
@@ -65,7 +67,7 @@ Fidelity violations **always block regardless of strength** — they are not adv
 - Round clean at the `strength` bar → `consecutive_passes` + 1.
 - Round has a blocking advisory finding → back to **0**, never decremented.
 - Record it in `review.md` next to the round number, after **every** round, so a cold session resumes the loop rather than restarting it.
-- After **every** round, run `bash .weavedoc/bin/weavedoc seal-review <doc-id> draft` — it pins the exact bytes and context this round reviewed (`reviewed_digest` + `review_context_digest`, computed by the tool, never by hand). Refine's edits will then show as a digest mismatch until the next round re-seals; that mismatch is precisely the staleness signal `consecrate` and `validate` obey.
+- After **every** round, run `node .weavedoc/bin/weavedoc.mjs seal-review <doc-id> draft` — it pins the exact bytes and context this round reviewed (`reviewed_digest` + `review_context_digest`, computed by the tool, never by hand). Refine's edits will then show as a digest mismatch until the next round re-seals; that mismatch is precisely the staleness signal `consecrate` and `validate` obey.
 - Count short of `repeat` → run another **fresh cold** panel (§2, new subagents, same adjudications) even though this round was clean. Reusing the panel measures reviewer fatigue, not the document.
 
 This lane is advisory, so the count never blocks `final.md` — the fidelity gate does that, and it is a separate mechanism. What the count decides is when `refine` may stop looping.

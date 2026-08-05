@@ -6,8 +6,16 @@
 set -u
 cd "$(dirname "$0")/.." || exit 2
 export LC_ALL=C
+# STAGE 6: the Node runtime joins the bundle, which is a WD-REL-001 scope change and the reason
+# this release is one tag rather than two. `bin/lib/` is globbed, never enumerated — a module added
+# later must not be able to ship outside the manifest, which is precisely what the manifest exists
+# to prevent. The bash runtime stays listed for one release: it is the parity reference the whole
+# rewrite was graded against, and dropping it in the same release that promotes its replacement
+# would leave nothing to compare against if a report comes in.
 git ls-files -- \
   '.weavedoc/bin/weavedoc' \
+  '.weavedoc/bin/weavedoc.mjs' \
+  '.weavedoc/bin/lib' \
   '.weavedoc/schema' \
   '.weavedoc/READ.md' \
   '.weavedoc/FORMATS.md' \

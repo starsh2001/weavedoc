@@ -9,6 +9,8 @@ The data mine's core engine — extract atomic truths from materials, tag them f
 
 > **Language: read it first.** Read `language:` from `.weavedoc/config.yaml` and write **every** reply in that language. These skill files are English; your output is not.
 
+> **Running weavedoc: pick the shell by platform.** Commands below are written `node .weavedoc/bin/weavedoc.mjs …` and read the same in every shell. **On Windows run them through PowerShell; everywhere else through bash** — Git Bash pays ~290ms per process to emulate Unix (measured: 373ms vs 80ms for one invocation), and a mine-wide command spends most of its time there. Never create a `.ps1` wrapper: PowerShell's execution policy applies to `.ps1` files and a downloaded one is blocked under `RemoteSigned`, while `node script.mjs` is not subject to it at all.
+
 > **Decisions: recommend + leave a way out.** When you ask the user to decide (conflict resolution, tag choices…): **mark your recommended option `(추천)`** with a one-line why, and **always allow a free-form answer.** Don't force a closed pick.
 
 > **Thin context.** Don't read all materials or all truths into context. Read `catalog.md` and `truths/index.md` as indexes; load individual files only when needed for extraction or conflict checking. The truth is on disk; re-read when you need it.
@@ -33,7 +35,7 @@ The data mine's core engine — extract atomic truths from materials, tag them f
    **Copy the body out of the source file, never type it.** Read the exact line from `converted.md`
    and paste it in — that is what makes "copy-paste, never compose" mechanical instead of a promise.
    Write the frontmatter fields in schema order (`.weavedoc/FORMATS.md`), then run
-   `bash .weavedoc/bin/weavedoc reindex` followed by `validate`. Hand-writing frontmatter is where
+   `node .weavedoc/bin/weavedoc.mjs reindex` followed by `validate`. Hand-writing frontmatter is where
    schema violations are born (~45% of a real map run's tool calls went to hand edits, and one
    corrupted an entry), so validate after **every** batch rather than at the end. IDs are stable
    once assigned — never renumber, and never reuse an id that appears in a changelog `removed:` line.
@@ -81,7 +83,7 @@ The data mine's core engine — extract atomic truths from materials, tag them f
      - **Exemption — the asking document (ruled 2026-08-01).** A truth extracted from an `origin: user-answer` material that was created by document D's own ask loop does **not** stale D. It is by construction inside D's scope (D asked because D needed it), so without this exemption *every question a document asks makes that document stale* and forces a cold round per question — a cost nothing documented and nobody would accept. The answer is being written INTO the draft in the same pass; it is not drift arriving from outside. Every OTHER document whose `scope_tags` overlap still goes stale normally, and D still goes stale if the answer changes later. Trace the exemption through `questions.md`, which records which document asked; when that link is absent, do not exempt.
    - Bias to marking stale — under-counting is the silent drift WeaveDoc exists to stop. The one exemption above is narrow on purpose: it names a single, identifiable material, not a category.
 
-7. **Regenerate indexes mechanically.** Run `bash .weavedoc/bin/weavedoc reindex` — it regenerates `truths/index.md` + `truths/tree.md` from frontmatter in one deterministic pass. **Never hand-edit these files** (a real run spent ~45% of its tool calls hand-patching them and corrupted an entry; `validate` now fails on index↔file drift). Mine statistics in your report (총/live/discarded 수) come from `bash .weavedoc/bin/weavedoc census` — never from your own counting (a real run reported 191/181 for a mine of 188/178).
+7. **Regenerate indexes mechanically.** Run `node .weavedoc/bin/weavedoc.mjs reindex` — it regenerates `truths/index.md` + `truths/tree.md` from frontmatter in one deterministic pass. **Never hand-edit these files** (a real run spent ~45% of its tool calls hand-patching them and corrupted an entry; `validate` now fails on index↔file drift). Mine statistics in your report (총/live/discarded 수) come from `node .weavedoc/bin/weavedoc.mjs census` — never from your own counting (a real run reported 191/181 for a mine of 188/178).
 
 8. **Log the run delta.** Append a block to `truths/changelog.md` (create it if absent; format per FORMATS.md): `added:` lines (id + `[provenance]` + one-line claim), `superseded:` lines (old id → winner, scope), `edited:` lines (id + what changed), `removed:` lines (id + why withdrawn). **This is the surface verify's human confirmation renders** — without it, the delta of a run can't be reviewed and confirmation degrades to an unanswerable "정확합니까?". The block's `## YYYY-MM-DD` header is also what bounds "what changed since the human last confirmed", so the date is load-bearing.
 

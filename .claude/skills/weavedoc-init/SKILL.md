@@ -11,6 +11,8 @@ Setup of a WeaveDoc data mine — the persistent, growing truth-source that docu
 
 > **Decisions: recommend + leave a way out.** When you ask the user to decide: **mark your recommended option `(추천)`** with a one-line why, and **always allow a free-form answer.** Don't force a closed pick.
 
+> **Running weavedoc: pick the shell by platform.** Commands are written `node .weavedoc/bin/weavedoc.mjs …` and read the same in every shell. **On Windows run them through PowerShell; everywhere else through bash** — Git Bash pays ~290ms per process to emulate Unix (measured: 373ms vs 80ms for one invocation), and a mine-wide command spends most of its time there. Never create a `.ps1` wrapper: PowerShell's execution policy applies to `.ps1` files and a downloaded one is blocked under `RemoteSigned`, while `node script.mjs` is not subject to it at all.
+
 ## Flow
 
 ### 1. Figure out what you have
@@ -61,7 +63,7 @@ Write the answers to `.weavedoc/config.yaml`. On a **reconfigure**, update confi
   This repo contains a WeaveDoc data mine (truths/, materials/). Before reading ANY data
   from it — for any purpose, including creative work — read and follow `.weavedoc/READ.md`
   (status filtering, as_of, provenance). For lookups, prefer:
-  `bash .weavedoc/bin/weavedoc pull <tag-or-keyword>`.
+  `node .weavedoc/bin/weavedoc.mjs pull <tag-or-keyword>`.
   Raw originals (inbox/, materials/*/source.*) are search-shielded by the root .ignore —
   they are the audit layer. Never quote them as current fact; open one only deliberately,
   by path, when auditing a conversion or a retraction.
