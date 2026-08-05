@@ -195,6 +195,16 @@ jobs:
           if (-not ($v -match 'fingerprint:')) { throw "no fingerprint line — the runtime did not answer" }
           node .weavedoc/bin/weavedoc.mjs bogus-command-name 2>$null
           if ($LASTEXITCODE -eq 0) { throw "an unknown command exited 0 under pwsh" }
+          # One REAL command beyond version (review #6: the smoke asserted only version + an
+          # unknown command). validate in an empty dir must refuse in its own words — a named
+          # diagnostic proves the checks ran under pwsh, not merely that the process started.
+          New-Item -ItemType Directory -Force smoke-empty | Out-Null
+          Push-Location smoke-empty
+          $val = node ..\.weavedoc\bin\weavedoc.mjs validate
+          $valrc = $LASTEXITCODE
+          Pop-Location
+          if ($valrc -eq 0) { throw "validate exited 0 in an empty non-mine directory" }
+          if (-not ($val -match 'CFG-PATH-MISSING')) { throw "validate's refusal did not name CFG-PATH-MISSING — the checks did not run" }
           exit 0
 
   manifest:
@@ -221,17 +231,26 @@ jobs:
       - uses: actions/checkout@v5
         with:
           fetch-depth: 0
-      - name: cohesion — the tag is SemVer-shaped, and VERSION, CHANGELOG and schema agree (doccheck)
+      - name: cohesion — the tag is SemVer-shaped and CHANGELOG-claimed; VERSION, CHANGELOG and schema agree (doccheck)
         # The SHAPE is asserted (v0.5.2, external review): before this, `vfoo` would have published a
         # release. Anchored regex, not a case-glob — the glob `v[0-9]*.[0-9]*.[0-9]*` accepted
-        # `v0.5.2yolo` and `v1x.2y.3z` (cold review), which are not vMAJOR.MINOR.PATCH either.
-        # The tag→bundle MAPPING stays echoed, not asserted — bundles are date labels and no
-        # formal rule links the two; inventing one in a CI grep would be a second source of truth.
+        # `v0.5.2yolo` and `v1x.2y.3z` (cold review), and the first regex accepted `v01.2.3`
+        # (review #6) — SemVer forbids leading zeros.
+        # The tag must also be a release the CHANGELOG CLAIMS (review #6): `v9.9.9` would otherwise
+        # publish the current bundle under a version nobody recorded. This asserts against the
+        # EXISTING record — the '**vX.Y.Z — ' line every release section opens with — so it links
+        # to the one source of truth instead of inventing a second. The tag→bundle-date MAPPING
+        # stays echoed, not asserted: bundles are date labels and no formal rule links the two.
         run: |
-          if [[ "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+          if [[ "$GITHUB_REF_NAME" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
             echo "tag shape ok: $GITHUB_REF_NAME"
           else
-            echo "tag '$GITHUB_REF_NAME' is not vMAJOR.MINOR.PATCH — refusing to publish"; exit 1
+            echo "tag '$GITHUB_REF_NAME' is not vMAJOR.MINOR.PATCH (leading zeros included) — refusing to publish"; exit 1
+          fi
+          if grep -qF "**${GITHUB_REF_NAME} — " CHANGELOG.md; then
+            echo "tag claimed by CHANGELOG: $GITHUB_REF_NAME"
+          else
+            echo "tag '$GITHUB_REF_NAME' is not claimed by any CHANGELOG section (no '**$GITHUB_REF_NAME — ' line) — refusing to publish"; exit 1
           fi
           bash tests/doccheck.sh
           echo "tag=$GITHUB_REF_NAME · bundle=$(cat .weavedoc/VERSION) · schema=$(grep -m1 '^schema.version:' .weavedoc/schema | sed 's/.*:[[:space:]]*//')"

@@ -13,6 +13,7 @@ import { fmvB, clearFileCaches } from './read.mjs'
 import { ledgerRows, ledgerIndex } from './verify.mjs'
 import { scanVerifiedUnits } from './cmd-scope.mjs'
 import { writeAtomic, writeAtomicX } from './write.mjs'
+import { acquireLedgerLock, releaseLedgerLock } from './lock.mjs'
 
 // The two operations a fault can land on, injectable exactly the way consecrate's and retag's are.
 // `write` is stage+rename with false PROMOTED to a throw (§11 2026-08-05): the direct writeFileSync
@@ -248,7 +249,21 @@ export function cmdUpgrade (m, out, argv, runReindex, runValidate, ops = realOps
     out(`  expected after apply: project at schema ${sv} · validate clean · history preserved as legacy-unbound, never back-stamped`)
     return 1
   }
-  return upgradeApply(m, out, n, runReindex, runValidate, ops)
+  // --apply holds THE ledger lock for its whole transaction (review #6 P0-2). This function reads
+  // the ledger to plan rows and REWRITES it whole in step 6; measured before the lock joined:
+  // upgrade --apply sailed straight through a LIVE lock (rc 0, ledger written, zero mentions), and
+  // a concurrent attest's created-here rollback then unlinked the file with upgrade's freshly
+  // minted legacy rows inside — upgrade had already reported success, and validate stayed green.
+  // One lock, one module, every writer: attest and this transaction take the same mkdir.
+  const lockPath = `${join(m.truths, m.ledgerFile())}.lock`
+  const lockRel = lockPath.startsWith(`${m.root}/`) ? lockPath.slice(m.root.length + 1) : lockPath
+  const lockWhy = acquireLedgerLock(lockPath, lockRel)
+  if (lockWhy) { out(`upgrade --apply: ${lockWhy}. Nothing written`); return 1 }
+  try {
+    return upgradeApply(m, out, n, runReindex, runValidate, ops)
+  } finally {
+    releaseLedgerLock(lockPath)
+  }
 }
 
 // ---- the staged, rollback-safe transaction ----------------------------------------------------

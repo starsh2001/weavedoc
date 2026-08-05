@@ -571,14 +571,21 @@ export function cmdValidate (m, out, json = false, consecOk = '') {
     // here while scope quarantined the row, and a leading tab made a `failed` row parse as valid
     // here while scope could not attribute it to any id (external review P0-1, both measured).
     for (const { raw: lline, terminated } of lr.lines) {
-      if (lline === '' || lline.startsWith('#')) continue
-      // A final line with content and no newline is the shape a crashed `attest` leaves. It is
+      // The terminator test comes BEFORE the comment skip (review #6): an unterminated final
+      // '# …' line rode the skip and validate said nothing — but a torn line is a torn write
+      // whatever its first byte, and '#' is exactly what a truncated header write starts with.
+      // A final line with content and no newline is the shape a crashed writer leaves. It is
       // named rather than skipped — the skip was the old reader's, and it made an interrupted
       // verification write look like a ledger that had simply not got there yet.
-      if (!terminated) {
-        prob('LEDGER-MALFORMED', M`truths/${lfName}  the last row has no line terminator: '${lline}' — a row written without its newline is the signature of a verification that died mid-write; re-run the attest that produced it, or delete the partial row`)
+      if (!terminated && lline !== '') {
+        if (lline.startsWith('#')) {
+          prob('LEDGER-MALFORMED', M`truths/${lfName}  the final comment line has no line terminator: '${lline}' — a torn line in the machine-owned ledger is the signature of a write that died mid-line; complete the line or delete it`)
+        } else {
+          prob('LEDGER-MALFORMED', M`truths/${lfName}  the last row has no line terminator: '${lline}' — a row written without its newline is the signature of a verification that died mid-write; re-run the attest that produced it, or delete the partial row`)
+        }
         continue
       }
+      if (lline === '' || lline.startsWith('#')) continue
       const f = lline.split('\t')
       const [lid = '', ldg = '', lvd = '', lrd = '', lst = '', ldt = ''] = f
       if (lid === '') {
@@ -864,6 +871,13 @@ export function cmdValidate (m, out, json = false, consecOk = '') {
   // open entries) = fail — a warranty nobody ran is not a warranty, the same rule as the gate's own
   // record. Accepted entries are decisions and never block.
   const gapsPath = `${m.root}/gaps.md`
+  // The register's SECTION NAMES come from the schema (`gaps.sections`), which declared them all
+  // along while this block spelled 'Open'/'Accepted' by hand — the declared-but-unread class, one
+  // level up from the kind enum that had it (review #6, measured: a schema saying Pending|Waived
+  // still PASSED a '# Open'/'# Accepted' file and BLOCKED a '# Pending'/'# Waived' one — the exact
+  // inversion of what the declaration promises). Order is contract: open first, accepted second.
+  const secNames = pipes(sch('gaps.sections') || 'Open|Accepted')
+  const [secOpen = '', secAcc = ''] = secNames
   if (nConsec > 0 && (cfgB.flat.get('completeness') ?? '') === 'required') {
     if (!isFileAt(gapsPath)) {
       prob('COMP-NO-REGISTER', U("completeness is 'required' and a consecrated output exists, but there is no gaps.md — the completeness register never ran. Run the weavedoc-gaps skill (fill-or-accept) before consecrating, or set fidelity.completeness: off to drop the warranty"))
@@ -871,21 +885,26 @@ export function cmdValidate (m, out, json = false, consecOk = '') {
       // The same rule review.md has: an unclosed '<!--' blanks everything after it BEFORE any reader
       // sees a line, so gaps hidden behind it would vanish into a clean register.
       prob('COMP-MALFORMED', U("completeness is 'required' but gaps.md ends inside an unterminated '<!--' — everything after it is invisible to the counter, so gaps behind it would read as zero; close the comment"))
+    } else if (secNames.length !== 2 || secOpen === '' || secAcc === '' || secOpen === secAcc) {
+      // A roster value that cannot name the two sections cannot judge a register against them —
+      // and two IDENTICAL members (cold review) cannot tell the open section from the accepted
+      // one, so a one-section file would count as a complete register.
+      prob('SCHEMA-UNREADABLE', M`schema 'gaps.sections' must name exactly two DISTINCT register sections as 'open|accepted' — it says '${sch('gaps.sections')}', and a register cannot be judged against section names the roster does not provide`)
     } else {
       // Both counts are taken BEFORE any of them is tested — the bash form is a compound `elif`
       // whose first two commands are assignments and whose third is the condition, so `gacc_` is
       // always set by the time the second branch reads it.
-      const gopen = dupSection(gapsPath, 'Open', 0)
-      const gacc = dupSection(gapsPath, 'Accepted', 0)
+      const gopen = dupSection(gapsPath, secOpen, 0)
+      const gacc = dupSection(gapsPath, secAcc, 0)
       if (gopen === 0) {
-        // A register with no readable Open section is a register that never ran, wearing a filename.
-        prob('COMP-MALFORMED', U("completeness is 'required' but gaps.md has no readable '# Open' section — the register format is '# Open' / '# Accepted' (weavedoc-gaps writes it); a file without them proves nothing and blocks like a missing one"))
+        // A register with no readable open section is a register that never ran, wearing a filename.
+        prob('COMP-MALFORMED', M`completeness is 'required' but gaps.md has no readable '# ${secOpen}' section — the register format is '# ${secOpen}' / '# ${secAcc}' (schema gaps.sections; weavedoc-gaps writes it); a file without them proves nothing and blocks like a missing one`)
       } else if (gacc === 0) {
-        prob('COMP-MALFORMED', U("completeness is 'required' but gaps.md has no readable '# Accepted' section — the register format is '# Open' / '# Accepted' (weavedoc-gaps writes both); a one-section file blocks like a malformed register"))
+        prob('COMP-MALFORMED', M`completeness is 'required' but gaps.md has no readable '# ${secAcc}' section — the register format is '# ${secOpen}' / '# ${secAcc}' (schema gaps.sections; weavedoc-gaps writes both); a one-section file blocks like a malformed register`)
       } else if (gopen > 1 || gacc > 1) {
         // A duplicated register section splits the ledger: a single-section counter reads only the
-        // first copy, so an empty first Open next to a populated second one read as "zero open gaps".
-        prob('COMP-MALFORMED', U("completeness is 'required' but gaps.md repeats a register section heading — exactly one '# Open' and one '# Accepted'; entries under a duplicated section are invisible to a single-section reader, so the copy blocks like a missing register"))
+        // first copy, so an empty first section next to a populated second one read as "zero open gaps".
+        prob('COMP-MALFORMED', M`completeness is 'required' but gaps.md repeats a register section heading — exactly one '# ${secOpen}' and one '# ${secAcc}'; entries under a duplicated section are invisible to a single-section reader, so the copy blocks like a missing register`)
       } else {
         // STATE-BASED entry scan: a continuation is legal only AFTER a bullet — an indented line with
         // no open entry above is prose the counter cannot see, not a continuation of nothing.
@@ -922,7 +941,7 @@ export function cmdValidate (m, out, json = false, consecOk = '') {
         const kindEnum = sch('gaps.enum.kind') || 'declared|reference|enumeration|symmetry'
         const kindSet = new Set(pipes(kindEnum))
         const scanRegister = (section) => {
-          let n = 0; let badline = ''; let badkind = null; let inb = false; let gnoise = false
+          let n = 0; let badline = ''; let badkind = null; let dblkind = null; let inb = false; let gnoise = false
           for (let gl of splitLines(sectionAll(nocomment(readOr(gapsPath)), section))) {
             gl = gl.replace(/\r$/, '')
             if (!/[^ \t]/.test(gl)) { inb = false; continue }
@@ -932,9 +951,23 @@ export function cmdValidate (m, out, json = false, consecOk = '') {
               gnoise = false
               if (grest.startsWith('- [<') || grest.startsWith('- [{')) {
                 if (strip(grest.includes(']') ? grest.slice(grest.indexOf(']') + 1) : grest) === '') gnoise = true
+                // A placeholder kind over a REAL body is an ENTRY whose kind is not in the
+                // vocabulary (cold review of this patch: this branch ran before the kind branch,
+                // so '- [<kind>] [declared] x — r' drew no diagnostic at all — an Accepted
+                // decision wearing template noise as its kind, with a routable kind word riding
+                // unjudged in the second bracket). A PURE stub stays what it was: noise — not an
+                // entry, not an error — which is what keeps a freshly-initialised gaps.md green.
+                else if (badkind === null) badkind = grest.includes(']') ? grest.slice(3, grest.indexOf(']')) : ''
               } else if (grest.startsWith('- [') && grest.includes(']')) {
                 const kw = grest.slice(3, grest.indexOf(']'))
                 if (badkind === null && !kindSet.has(kw)) badkind = kw
+                // ONE kind per entry (review #6): only the first bracket was judged, so
+                // '- [declared] [reference] …' rode through wearing TWO routable kinds. Blocked
+                // only when the second bracket IS a kind word — a bracketed citation right after
+                // the kind ('- [declared] [계약서 §3] …') is body, not a second kind.
+                const after = grest.slice(grest.indexOf(']') + 1)
+                const m2 = /^[ \t]*\[([^\]]*)\]/.exec(after)
+                if (dblkind === null && m2 && kindSet.has(m2[1])) dblkind = `[${kw}] [${m2[1]}]`
               } else if (badkind === null) {
                 badkind = ''   // no bracket at all — reported as a missing kind slot below
               }
@@ -944,20 +977,23 @@ export function cmdValidate (m, out, json = false, consecOk = '') {
               if (gnoise && strip(grest) !== '') { n++; gnoise = false }
             }
           }
-          return { n, badline, badkind }
+          return { n, badline, badkind, dblkind }
         }
-        const { n: nopen, badline, badkind: openKind } = scanRegister('Open')
-        const accepted = scanRegister('Accepted')
-        for (const [sec, kw] of [['Open', openKind], ['Accepted', accepted.badkind]]) {
+        const { n: nopen, badline, badkind: openKind, dblkind: openDbl } = scanRegister(secOpen)
+        const accepted = scanRegister(secAcc)
+        for (const [sec, kw] of [[secOpen, openKind], [secAcc, accepted.badkind]]) {
           if (kw === null) continue
           if (kw === '') prob('COMP-MALFORMED', M`completeness is 'required' but gaps.md '# ${sec}' holds an entry with no '[<kind>]' slot at all — entries open with exactly one kind from ${kindEnum} (schema gaps.enum.kind); a gap without a kind cannot be routed, and an ACCEPTED one is a decision about nothing nameable`)
           else prob('COMP-MALFORMED', M`completeness is 'required' but gaps.md '# ${sec}' holds an entry whose kind '[${kw}]' is not in the vocabulary — the enum is ${kindEnum}, matched exactly and one at a time (schema gaps.enum.kind); a kind outside it is usually a typo, and a typo'd ACCEPTED entry is a decision nobody made`)
         }
+        for (const [sec, dk] of [[secOpen, openDbl], [secAcc, accepted.dblkind]]) {
+          if (dk !== null) prob('COMP-MALFORMED', M`completeness is 'required' but gaps.md '# ${sec}' holds an entry carrying TWO kind brackets ${dk} — one '[<kind>]' per entry; an entry with two routable kinds cannot be routed (a second bracket that is not a kind word is ordinary body text)`)
+        }
         if (accepted.badline !== '') {
-          prob('COMP-MALFORMED', M`completeness is 'required' but gaps.md '# Accepted' holds a line the register grammar cannot read: '${accepted.badline}' — the same grammar as '# Open': entries are '- ' bullets and an indented line is a continuation ONLY under one. An accepted gap is a DECISION, so prose the counter cannot attribute to an entry is a decision nobody can point at`)
+          prob('COMP-MALFORMED', M`completeness is 'required' but gaps.md '# ${secAcc}' holds a line the register grammar cannot read: '${accepted.badline}' — the same grammar as '# ${secOpen}': entries are '- ' bullets and an indented line is a continuation ONLY under one. An accepted gap is a DECISION, so prose the counter cannot attribute to an entry is a decision nobody can point at`)
         }
         if (badline !== '') {
-          prob('COMP-MALFORMED', M`completeness is 'required' but gaps.md '# Open' holds a line the register grammar cannot read: '${badline}' — entries are '- [<kind>] …' bullets; an indented line is a continuation ONLY under a bullet, and prose anywhere is a gap no counter sees, so it blocks like a malformed register`)
+          prob('COMP-MALFORMED', M`completeness is 'required' but gaps.md '# ${secOpen}' holds a line the register grammar cannot read: '${badline}' — entries are '- [<kind>] …' bullets; an indented line is a continuation ONLY under a bullet, and prose anywhere is a gap no counter sees, so it blocks like a malformed register`)
         } else if (nopen > 0) {
           prob('COMP-OPEN-GAPS', M`completeness is 'required' but gaps.md holds ${nopen} open gap(s) next to a consecrated output — fill each (question → user-answer material → map) or move it to Accepted with a reason; under 'required' an open gap is a violation, not a note`)
         }

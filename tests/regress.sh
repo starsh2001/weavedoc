@@ -55,15 +55,17 @@ KEY=$( { git -C "$REPO" rev-parse HEAD 2>/dev/null
          { sha256sum "$REPO/.weavedoc/bin/weavedoc.mjs" "$REPO/.weavedoc/schema"
            # find, not a flat glob: a future lib/subdir/ must key too. Sorted for stability.
            find "$REPO/.weavedoc/bin/lib" -type f -print0 | sort -z | xargs -0 sha256sum
-           # The DRIVERS are configuration too (v0.5.2): a dirty faultinject edit changes what a
-           # case measures without changing the case, and --resume would reuse the stale result.
-           sha256sum "$REPO"/tests/*-faultinject.mjs; } 2>/dev/null | awk '{print $1}'
-         # The RUNNER's version and THIS HARNESS's own bytes (v0.5.1, external review): a dirty
-         # edit to a case body under an unchanged name could hand --resume the previous run's
-         # result, and a node upgrade is a different configuration the way a bash upgrade always
-         # was (bash/awk/sed versions are keyed below; node was not).
+           # EVERYTHING a case consumes is configuration (v0.5.2 keyed the faultinject drivers;
+           # review #6 named the rest of the class): doccheck.sh and ctlscan.mjs are RUN by cases,
+           # the golden files are COMPARED by one, and the pristine fixture copies a template out
+           # of .weavedoc/templates — a dirty edit to any of them changes what a case measures
+           # without changing the case, and --resume would hand back the stale result. The *.sh
+           # glob keys this harness's own bytes too (v0.5.1), so the separate self-hash is gone.
+           sha256sum "$REPO"/tests/*.sh "$REPO"/tests/*.mjs
+           find "$REPO/tests/baseline/golden" "$REPO/.weavedoc/templates" -type f -print0 | sort -z | xargs -0 sha256sum; } 2>/dev/null | awk '{print $1}'
+         # The RUNNER's version (v0.5.1, external review): a node upgrade is a different
+         # configuration the way a bash upgrade always was (bash/awk/sed are keyed below).
          node --version 2>/dev/null
-         sha256sum "$REPO/tests/regress.sh" 2>/dev/null | awk '{print $1}'
          uname -sr; bash --version | head -1; awk --version 2>/dev/null | head -1; sed --version 2>/dev/null | head -1
          printf '%s' "${WD_REG_KEY_SALT:-}"
        } | sha256sum | awk '{print $1}' | cut -c1-12 )
@@ -1864,38 +1866,63 @@ acct_attest_concurrent_new_ledger_survives_unlink() {
   [ "$(grep -c $'\tastd\t' "$W/truths/verify-ledger.tsv")" = 1 ] || bad "A's committed row did not survive"
   vrun validate; expect_pass
 }
-acct_attest_stale_lock_reclaimed() {
-  # A crashed attest leaves its lock behind; a sub-second command's lock older than the stale
-  # threshold belongs to a corpse and is reclaimed. Aged with touch -d, not by sleeping 10s.
+acct_attest_stale_lock_refuses_human_only() {
+  # NO AUTOMATIC RECLAIM (review #6, replacing the v0.5.2 first cut's age-based one). The reclaim
+  # was measured STEALING the lock from a slow-but-alive holder — no age threshold can tell a
+  # corpse from a suspended process or a sleeping laptop — so a leftover lock now refuses every
+  # writer until a HUMAN removes it, and the refusal says exactly that. Aged with touch -d to
+  # prove age buys nothing anymore. Red vs the reclaiming runtime: it reclaims and passes.
   mkdir -p "$W/truths/verify-ledger.tsv.lock"
   touch -d '1 hour ago' "$W/truths/verify-ledger.tsv.lock"
   vrun attest verified 1 std m001
+  expect_block "NEVER be reclaimed automatically"
+  expect_has "remove the lock yourself"
+  expect_has "Nothing written"
+  [ -d "$W/truths/verify-ledger.tsv.lock" ] || bad "the refusal removed a lock it promised never to touch"
+  [ ! -f "$W/truths/verify-ledger.tsv" ] || bad "a ledger appeared despite the refusal"
+  # ...and the HUMAN path works: remove the leftover, the same attest lands.
+  rmdir "$W/truths/verify-ledger.tsv.lock"
+  vrun attest verified 1 std m001
   expect_pass
-  [ ! -d "$W/truths/verify-ledger.tsv.lock" ] || bad "the stale lock survived a successful attest"
+  [ ! -d "$W/truths/verify-ledger.tsv.lock" ] || bad "the lock survived a successful attest"
 }
-acct_attest_undeletable_stale_lock_refuses() {
-  # v0.5.2 cold review, CRITICAL. The draft lock's stale-reclaim branch `continue`d past the bound
-  # check and the sleep, so a stale lock that rmdir cannot remove spun acquireLock hot and
-  # UNBOUNDED — every future attest hung at 100% CPU until a human deleted the object, falsifying
-  # the code's own "the wait is bounded" comment (measured: rc 124 under timeout, both platforms).
-  # Every iteration passes through the bound now, without exception, and an undeletable stale lock
-  # refuses loudly, naming the path and telling the human to delete it.
-  #
-  # The shape here is a lock DIRECTORY with a file inside — rmdir says ENOTEMPTY on every platform,
-  # so the loud refusal is deterministic cross-OS. A FILE wearing the lock's name splits: Linux
-  # rmdir says ENOTDIR (same loud refusal), Windows rmdir says ENOENT with the file still there
-  # (measured on the host) — that lie exits through the bounded 5s timeout instead. Bounded either
-  # way is the invariant; this case pins the spelling both OSes share.
-  # Red vs the draft: the suite timeout kills the spin — expect_block sees rc 124, no refusal text.
+acct_attest_lock_worn_by_alien_object_refuses() {
+  # The lock path occupied by something that is NOT a lock directory — a FILE wearing the name, or
+  # a directory with residue inside. Under the first cut these were the UNBOUNDED-SPIN shapes (the
+  # reclaim's rmdir could never succeed and its `continue` skipped the bound — measured rc 124 at
+  # 100% CPU, both platforms, cold review CRITICAL). With no reclaim there is nothing to spin on:
+  # mkdir says EEXIST for both shapes on every platform (measured), so they ride the bounded wait
+  # into the same human-only refusal, file intact, nothing written.
+  # Red vs the reclaiming runtime: it answers with its own "cannot be removed (ENOTEMPTY)" story.
   mkdir -p "$W/truths/verify-ledger.tsv.lock"
   touch "$W/truths/verify-ledger.tsv.lock/residue"
   touch -d '1 hour ago' "$W/truths/verify-ledger.tsv.lock"
   vrun attest verified 1 std m001
-  expect_block "cannot be removed"
-  expect_has "delete it by hand"
+  expect_block "NEVER be reclaimed automatically"
   expect_has "Nothing written"
-  [ -d "$W/truths/verify-ledger.tsv.lock" ] || bad "the refusal removed the object it said it could not remove"
-  grep -q 'm001' "$W/truths/verify-ledger.tsv" 2>/dev/null && bad "a row landed despite the refusal"; ok
+  [ -f "$W/truths/verify-ledger.tsv.lock/residue" ] || bad "the refusal touched the alien object"
+  [ ! -f "$W/truths/verify-ledger.tsv" ] || bad "a ledger appeared despite the refusal"
+}
+acct_attest_slow_holder_not_stolen() {
+  # THE review-#6 P0-1 regression: a LIVE holder past the old 10s threshold. B's injected append
+  # holds the critical section for 13s; A enters at 10.6s — under the first cut A reclaimed B's
+  # live lock, committed rc 0, and B's rollback then CHOPPED A's committed row (measured:
+  # astd_rows=0 with arc=0; on a fresh ledger B's unlink took the whole file). With no reclaim, A
+  # waits its bounded 5s, meets B's release at ~13s, and lands AFTER B's verified rollback — both
+  # rows of the story survive. Slow by construction (~14s): it is the only case that buys this.
+  vrun attest verified 1 seed m001
+  ( cd "$W" && node "$REPO/tests/attest-faultinject.mjs" --sleep-ms 13000 verified 2 bstd t001 ) > "$W/.b.out" 2>&1 &
+  local bpid=$!
+  sleep 10.6
+  vrun attest verified 2 astd m001
+  local arc=$RC
+  wait "$bpid"; local brc=$?
+  [ "$arc" -eq 0 ] || bad "the real attest failed (rc $arc) — its bounded wait should span the holder's release"
+  [ "$brc" -ne 0 ] || bad "the injected attest reported success"
+  [ "$(grep -c $'\tastd\t' "$W/truths/verify-ledger.tsv")" = 1 ] || bad "A's committed row did not survive — the live lock was stolen"
+  [ "$(grep -c $'\tseed\t' "$W/truths/verify-ledger.tsv")" = 1 ] || bad "the seed row is gone"
+  [ ! -d "$W/truths/verify-ledger.tsv.lock" ] || bad "the lock was not released"
+  vrun validate; expect_pass
 }
 acct_attest_ledger_accumulates_in_order() {
   # A REGRESSION GUARD, and it passes against the old writer too — said plainly because a case that
@@ -3240,6 +3267,33 @@ acct_upgrade_reindex_failure_rolls_back() {
   [ -f "$W/truths/t01.md" ] || bad "the rename was not rolled back"
   [ ! -e "$W/truths/t001.md" ] || bad "the renamed file survived the rollback"
 }
+acct_upgrade_refuses_held_ledger_lock() {
+  # Review #6 P0-2: upgrade --apply writes the ledger (it plans FROM it and REWRITES it whole in
+  # step 6) yet spoke no lock protocol — measured sailing straight through a LIVE age-0 lock
+  # (rc 0, ledger written, zero lock mentions), after which a concurrent attest's created-here
+  # rollback unlinked the file with upgrade's freshly minted legacy rows inside, upgrade having
+  # already reported success. Every ledger writer takes the ONE lock (lock.mjs) now: a held lock
+  # refuses the whole migration after the bounded wait, byte-identically.
+  # (The full attest-beside-upgrade interleave is not constructible on a coherent mine — a v1 mine
+  # refuses attest (ids unresolvable, rc 2) and a migrated mine gives upgrade nothing to write —
+  # so the protocol is pinned pairwise: this case for upgrade, the concurrent cases for attest.)
+  mkv1
+  mkdir -p "$W/truths/verify-ledger.tsv.lock"
+  local pre post
+  pre=$(cd "$W" && find . -type f | LC_ALL=C sort | xargs sha256sum 2>/dev/null | sha256sum | awk '{print $1}')
+  vrun upgrade --apply
+  expect_block "NEVER be reclaimed automatically"
+  expect_has "Nothing written"
+  post=$(cd "$W" && find . -type f | LC_ALL=C sort | xargs sha256sum 2>/dev/null | sha256sum | awk '{print $1}')
+  [ "$pre" = "$post" ] || bad "the refusal wrote something — the tree differs"
+  [ -d "$W/truths/verify-ledger.tsv.lock" ] || bad "the refusal removed the held lock"
+  # ...and the human path: remove the leftover, the same migration applies clean.
+  rmdir "$W/truths/verify-ledger.tsv.lock"
+  vrun upgrade --apply
+  expect_pass
+  vrun validate
+  expect_pass
+}
 acct_scope_names_superseded_odd_verdict() {
   # v0.5.2 (external review P1-2). A typo'd verdict with a LATER valid row: validate blocks on the
   # history row, but scope judged only the winner — so the very row the mine is blocked on was
@@ -3292,6 +3346,101 @@ block_completeness_kind_compound() {
   printf '# Open\n\n# Accepted\n\n- [declared|reference] 복합 — 근거\n' > "$W/gaps.md"
   vrun validate
   expect_block "matched exactly and one at a time"
+}
+block_completeness_kind_double() {
+  # Review #6 P1: only the FIRST bracket was judged — '- [declared] [reference] …' rode through
+  # wearing TWO routable kinds (measured rc 0). Blocked now, but ONLY when the second bracket IS a
+  # kind word: a bracketed citation right after the kind is body, not a second kind.
+  req_completeness
+  printf '# Open\n\n# Accepted\n\n- [declared] [reference] double-kind — reason\n' > "$W/gaps.md"
+  vrun validate
+  expect_block "TWO kind brackets"
+  printf '# Open\n\n# Accepted\n\n- [declared] [계약서 3조] citation-not-a-kind — reason\n' > "$W/gaps.md"
+  vrun validate
+  expect_pass
+}
+block_completeness_kind_placeholder_with_body() {
+  # Cold review of the .2 patch (real): '- [<kind>] [declared] x — r' passed with NO diagnostic —
+  # the placeholder branch is tested before the kind branch, so a bullet whose kind slot is
+  # literal template noise skipped the vocabulary check entirely, and a routable kind word riding
+  # in the SECOND bracket changed nothing. A pure stub still reads as noise (not an entry, not an
+  # error); but a placeholder kind on a bullet with REAL body is an entry whose kind is not in the
+  # vocabulary, and it is judged by exactly that rule now.
+  req_completeness
+  printf '# Open\n\n# Accepted\n\n- [<kind>] [declared] real body — reason\n' > "$W/gaps.md"
+  vrun validate
+  expect_block "not in the vocabulary"
+  # the freshly-initialised template stub stays inert — noise, not an entry, not an error
+  printf '# Open\n\n# Accepted\n\n- [<kind>] <설명> — <근거>\n' > "$W/gaps.md"
+  vrun validate
+  expect_pass
+}
+block_completeness_sections_degenerate_roster() {
+  # Cold review of the .2 patch (nit): 'gaps.sections: Open|Open' — two IDENTICAL members — passed
+  # the two-member check and judged a one-section register as complete. A roster that cannot tell
+  # its open section from its accepted one is unusable, and it is named now.
+  req_completeness
+  cp -r "$REPO/.weavedoc/bin" "$W/.weavedoc/bin"
+  cp "$REPO/.weavedoc/schema" "$W/.weavedoc/schema"
+  cp "$REPO/.weavedoc/VERSION" "$W/.weavedoc/VERSION"
+  sed -i 's/^gaps.sections: Open|Accepted$/gaps.sections: Open|Open/' "$W/.weavedoc/schema"
+  grep -q '^gaps.sections: Open|Open$' "$W/.weavedoc/schema" || { bad "fixture no-op: schema swap missed"; return; }
+  printf '# Open\n\n# Accepted\n' > "$W/gaps.md"
+  OUT=$( ( cd "$W" && $TO node .weavedoc/bin/weavedoc.mjs validate ) 2>&1 ); RC=$?
+  expect_block "SCHEMA-UNREADABLE"
+}
+block_completeness_sections_from_schema() {
+  # Review #6 P1: gaps.sections joined SCH_KEYS (presence) while the counter spelled
+  # 'Open'/'Accepted' by hand — measured: a runtime whose schema said Pending|Waived PASSED a
+  # '# Open'/'# Accepted' register and BLOCKED '# Pending'/'# Waived', the exact inversion of the
+  # declaration. The section names come from the schema VALUE now. On a runtime COPY, like the
+  # other schema-fixture cases: the shipped one is not a fixture.
+  req_completeness
+  cp -r "$REPO/.weavedoc/bin" "$W/.weavedoc/bin"
+  cp "$REPO/.weavedoc/schema" "$W/.weavedoc/schema"
+  cp "$REPO/.weavedoc/VERSION" "$W/.weavedoc/VERSION"
+  sed -i 's/^gaps.sections: Open|Accepted$/gaps.sections: Pending|Waived/' "$W/.weavedoc/schema"
+  grep -q '^gaps.sections: Pending|Waived$' "$W/.weavedoc/schema" || { bad "fixture no-op: schema swap missed"; return; }
+  printf '# Open\n\n# Accepted\n\n- [declared] entry — reason\n' > "$W/gaps.md"
+  OUT=$( ( cd "$W" && $TO node .weavedoc/bin/weavedoc.mjs validate ) 2>&1 ); RC=$?
+  expect_block "no readable '# Pending' section"
+  printf '# Pending\n\n# Waived\n\n- [declared] entry — reason\n' > "$W/gaps.md"
+  OUT=$( ( cd "$W" && $TO node .weavedoc/bin/weavedoc.mjs validate ) 2>&1 ); RC=$?
+  expect_pass
+}
+acct_gaps_cli_reads_schema_sections() {
+  # Review #6 low-pri, the CLI half of the same split: `weavedoc gaps` spelled 'Accepted' by hand
+  # and read h1/h2 only, so a schema-renamed section was invisible to it and a '### Accepted'
+  # register validate had just counted printed as "records 0 already accepted". It reads the
+  # schema's second member now, at any heading level (sectionAll — validate's own tolerance).
+  cp -r "$REPO/.weavedoc/bin" "$W/.weavedoc/bin"
+  cp "$REPO/.weavedoc/schema" "$W/.weavedoc/schema"
+  cp "$REPO/.weavedoc/VERSION" "$W/.weavedoc/VERSION"
+  sed -i 's/^gaps.sections: Open|Accepted$/gaps.sections: Pending|Waived/' "$W/.weavedoc/schema"
+  grep -q '^gaps.sections: Pending|Waived$' "$W/.weavedoc/schema" || { bad "fixture no-op: schema swap missed"; return; }
+  printf '# Pending\n\n# Waived\n\n- [declared] entry — reason\n' > "$W/gaps.md"
+  OUT=$( ( cd "$W" && $TO node .weavedoc/bin/weavedoc.mjs gaps ) 2>&1 ); RC=$?
+  expect_pass
+  expect_has "records 1 already accepted"
+  # ...and a deeper heading level is the SAME register to both readers (default schema restored).
+  cp "$REPO/.weavedoc/schema" "$W/.weavedoc/schema"
+  printf '### Open\n\n### Accepted\n\n- [declared] entry — reason\n' > "$W/gaps.md"
+  OUT=$( ( cd "$W" && $TO node .weavedoc/bin/weavedoc.mjs gaps ) 2>&1 ); RC=$?
+  expect_pass
+  expect_has "records 1 already accepted"
+}
+block_ledger_torn_comment() {
+  # Review #6 low-pri: an unterminated final COMMENT line rode validate's comment-skip (the
+  # terminator test came second) and the parser's isSkippable alike — a torn line in the
+  # machine-owned file said nothing anywhere (measured: validate rc 0, scope rc 0, no mention).
+  # It cannot be evidence — no row starts with '#' — but it IS a torn write, and the two readers
+  # answer alike now: validate names it, the parser counts it as file-level damage.
+  vrun attest verified 1 std m001
+  printf '# torn comment' >> "$W/truths/verify-ledger.tsv"
+  vrun validate
+  expect_block "the final comment line has no line terminator"
+  vrun scope
+  expect_has "carry no id"
 }
 acct_schema_missing_gaps_keys_named() {
   # v0.5.2 (external review P1-3d). gaps.sections and gaps.enum.kind were declared in the schema

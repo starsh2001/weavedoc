@@ -3,7 +3,7 @@
 // The digest is computed HERE and never by hand, so "which bytes were verified" has one spelling.
 // All-or-nothing: every id resolves, exists and is not a tombstone BEFORE one byte is written —
 // a partially applied attest would record coverage for units nobody checked.
-import { statSync, readFileSync, writeFileSync, appendFileSync, openSync, readSync, closeSync, truncateSync, unlinkSync, mkdirSync, rmdirSync } from 'node:fs'
+import { statSync, readFileSync, writeFileSync, appendFileSync, openSync, readSync, closeSync, truncateSync, unlinkSync } from 'node:fs'
 
 // The append, injectable (the consecrate/retag/upgrade precedent): node:fs cannot be reached by a
 // PATH shim, so the fault-injection driver is the only caller that ever passes anything else.
@@ -11,55 +11,12 @@ export const realOps = {
   append: (f, buf) => appendFileSync(f, buf)
 }
 
-// THE LEDGER LOCK (§11 2026-08-05, v0.5.2). The v0.5.1 truncate-back closed one hole and opened a
-// narrower one: rollback is a COMPENSATING write, and a compensating write without mutual exclusion
-// can erase a neighbour's success — measured deterministically through the seam: attest A appended
-// its row (rc 0) inside attest B's stat-to-truncate window, and B's rollback chopped it; on a
-// fresh ledger B's unlink took the whole file, A's committed row included. So the whole
-// create → tail-check → size → append → rollback → mirror sequence is ONE critical section.
-//
-// The lock is a DIRECTORY beside the ledger: mkdir is atomic on every platform this runs on, and a
-// directory cannot be half-created. Stale locks (a crashed attest) are reclaimed by age — attest is
-// a sub-second command, so a lock older than STALE_MS belongs to a corpse. The wait is bounded: a
-// tool that can hang on a lock nobody will release is worse than one that refuses loudly.
-const STALE_MS = 10_000
-const WAIT_MS = 5_000
-const sleep = ms => { try { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms) } catch { const t = Date.now(); while (Date.now() - t < ms) { /* spin */ } } }
-// -> '' on success, or the sentence explaining the refusal. EVERY loop iteration passes through the
-// bound check and the sleep — the first draft's stale-reclaim branch `continue`d past both, so an
-// UNDELETABLE stale lock (a file wearing the lock's name → ENOTDIR; a directory with something
-// inside → ENOTEMPTY) spun this loop hot and unbounded, falsifying its own "the wait is bounded"
-// comment (cold review, measured on both platforms with a timeout). And a non-EEXIST mkdir failure
-// returned plain false, which the caller narrated as "another attest holds the lock" — a story
-// about a lock that did not exist. Refusals carry their own true sentence now.
-function acquireLock (lockPath, rel) {
-  const start = Date.now()
-  for (;;) {
-    try { mkdirSync(lockPath); return '' } catch (e) {
-      if (e.code !== 'EEXIST') {
-        return `the ledger lock cannot be created at ${rel} (${e.code}) — fix the path (permissions, or something wearing the lock's name)`
-      }
-      let stale = false
-      try { stale = Date.now() - statSync(lockPath).mtimeMs > STALE_MS } catch { /* vanished — fall through to the bounded retry */ }
-      if (stale) {
-        try { rmdirSync(lockPath) } catch (e2) {
-          // ENOENT: another waiter reclaimed it first — retry below. Anything else means the lock
-          // object cannot be removed by rmdir, and no amount of waiting will change that.
-          if (e2.code !== 'ENOENT') return `a stale ledger lock at ${rel} cannot be removed (${e2.code} — a file wearing the lock's name, or a non-empty directory); delete it by hand, then re-run`
-        }
-        // NO `continue` here even on success — a `continue` that skips the bound is exactly the
-        // unbounded-spin bug this rewrite removes, and it would come back the moment an OS lies
-        // about rmdir (ENOENT for a still-present object). The retry happens via the loop, and
-        // EVERY iteration, without exception, passes through the bound check and the sleep.
-      }
-      if (Date.now() - start > WAIT_MS) {
-        return `another attest holds the ledger lock (${rel}) and did not release it within ${WAIT_MS / 1000}s — if no attest is running, the lock is a leftover from a crash; remove the directory and re-run`
-      }
-      sleep(50)
-    }
-  }
-}
-const releaseLock = lockPath => { try { rmdirSync(lockPath) } catch { /* reclaimed as stale, or never held */ } }
+// THE LEDGER LOCK lives in lock.mjs since review #6: upgrade --apply writes this ledger too, and a
+// protocol only attest spoke was measured being walked straight through by upgrade. The WHY of the
+// lock — one critical section around create → tail-check → append → rollback → mirror, because a
+// compensating rollback without mutual exclusion erases a neighbour's rc-0 row — and why a lock is
+// NEVER auto-reclaimed both live there.
+import { acquireLedgerLock, releaseLedgerLock } from './lock.mjs'
 import { canonId, inList, splitLines } from './core.mjs'
 import { join, fm, tfileFor, unitDigest } from './mine.mjs'
 import { today, writeAtomic, readText, textBuf, U } from './write.mjs'
@@ -127,16 +84,16 @@ export function cmdAttest (m, out, argv, ops = realOps) {
   const lf = join(m.truths, m.ledgerFile())
   if (!isDir(m.truths)) { out('attest: no truths/ directory'); return 2 }
 
-  // Everything from here to the mirror runs under the ledger lock — see acquireLock above for why
-  // a compensating rollback without mutual exclusion erases a neighbour's committed row.
+  // Everything from here to the mirror runs under the ledger lock — see lock.mjs for why a
+  // compensating rollback without mutual exclusion erases a neighbour's committed row.
   const lockPath = `${lf}.lock`
   const lockRel = lockPath.startsWith(`${m.root}/`) ? lockPath.slice(m.root.length + 1) : lockPath
-  const lockWhy = acquireLock(lockPath, lockRel)
+  const lockWhy = acquireLedgerLock(lockPath, lockRel)
   if (lockWhy) { out(`attest: ${lockWhy}. Nothing written`); return 1 }
   try {
     return attestLocked()
   } finally {
-    releaseLock(lockPath)
+    releaseLedgerLock(lockPath)
   }
 
   function attestLocked () {

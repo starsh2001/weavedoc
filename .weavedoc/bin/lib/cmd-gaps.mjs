@@ -7,7 +7,7 @@
 import { readFileSync, existsSync } from 'node:fs'
 import { basename } from 'node:path'
 import { splitLines } from './core.mjs'
-import { nocomment, sectionBody, sectionBody2 } from './sections.mjs'
+import { nocomment, sectionAll } from './sections.mjs'
 import { join, materialIds, truthFiles } from './mine.mjs'
 import { cmdCensus } from './cmd-census.mjs'
 
@@ -68,9 +68,13 @@ export function cmdGaps (m, out, err) {
   let nacc = 0
   const gapsPath = join(m.root, 'gaps.md')
   if (existsSync(gapsPath)) {
+    // The accepted section's NAME comes from the schema (gaps.sections, second member) and the
+    // reader is sectionAll — the same any-level tolerance validate's counter has. Before review #6
+    // this spelled 'Accepted' by hand and read h1/h2 only, so a '### Accepted' register validate
+    // had just counted printed here as "records 0 already accepted" — two readers, one file.
+    const secAcc = (m.sch.get('gaps.sections') || 'Open|Accepted').split('|')[1] || 'Accepted'
     const stripped = nocomment(readOr(gapsPath))
-    nacc = countLines(sectionBody(stripped, 'Accepted'), /^[ \t]*- /)
-    if (nacc === 0) nacc = countLines(sectionBody2(stripped, 'Accepted'), /^[ \t]*- /)
+    nacc = countLines(sectionAll(stripped, secAcc), /^[ \t]*- /)
   }
   out(`— ${n} marker line(s) + ${c} unchecked checkbox(es) — RAW scan, not an open count: gaps.md records ${nacc} already accepted. Non-blocking; run the weavedoc-gaps skill to reconcile these against gaps.md and to cover reference/enumeration/symmetry + fill-or-accept.`)
   return 0

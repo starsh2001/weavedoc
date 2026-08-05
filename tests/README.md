@@ -40,7 +40,7 @@ bash tests/in-container.sh sh '<셸 명령>'    # 그 외, /work가 트리
 | 파일 | 내용 |
 |---|---|
 | `case-manifest.txt` | Phase 0 시점 182개 케이스 ID (기준선 — 이후 케이스는 suite가 자체 열거) |
-| `bundle.manifest` (+`.sha256`) | Phase 0 시점 21개 동작 결정 파일의 SHA-256 (git blob 기준). 재생성: `bash tests/make-manifest.sh` (현재 44개 — VERSION 포함) |
+| `bundle.manifest` (+`.sha256`) | Phase 0 시점 21개 동작 결정 파일의 SHA-256 (git blob 기준). 재생성: `bash tests/make-manifest.sh` (현재 45개 — VERSION·lock.mjs 포함) |
 | `parity-final-2026-08-05.md` | **bash 판 삭제 직전의 마지막 대조** — 회귀·코퍼스·쓰기 명령 전수·실광산·장애 주입. 삭제하면 다시 잴 수단이 없으므로 이력에 고정했다 |
 | `fidtest-inventory.md` | 구 fidtest.sh 11개 실험의 판정 기록 — Phase 2에서 흡수 3 · 폐기 8로 완결, 파일 자체 제거 |
 | `golden/` | 최소 정상 fixture에 대한 각 명령의 human output 스냅샷 (동작 변경 시 커밋 단위로 갱신) |

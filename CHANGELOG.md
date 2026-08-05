@@ -4,9 +4,27 @@
 
 ---
 
+## 2026-08-06.2
+
+**v0.5.2 — 6차 외부 리뷰(아래 .1 번들의 커밋 3041881 검토) 후속: 잠금의 P0 2건을 닫는다. 태그는 이 번들에 온다.** 전 항목 실측 재현 → 수정 → red-first 8/8 — pre-fix 런타임이 HEAD 그대로라 각 케이스가 그 결함의 문구로 죽는 것을 컨테이너에서 확인했다("A's committed row did not survive — the live lock was stolen" 등).
+
+**P0-1: 자동 회수 제거 — 잠금은 사람이 지우기 전엔 잠금이다.** 첫 컷의 10초 시효 회수가 **살아있는 보유자에게서 잠금을 훔쳤다**(실측: 13s 보유 × 10.6s 진입 — 이웃 attest rc 0, 이어 원 보유자의 롤백이 이웃의 커밋된 행을 잘랐고, 신규 장부에선 unlink가 rc-0 행째 파일을 지웠으며 post-validate는 rc 0). 어떤 age 임계값도 시체와 SIGSTOP·절전 노트북·느린 디스크를 구분하지 못한다 — 구분하려면 하트비트가 필요하고 이 CLI에는 없다. 그래서 회수 분기 전체가 사라졌다: 잔여 잠금 앞에서 모든 writer는 **유한 대기 후 경로를 명명하며 거부**하고("will NEVER be reclaimed automatically … remove the lock yourself"), 크래시 뒤 수동 rmdir 한 번이 정직한 비용이다. 훔칠 수 없으니 소유권 토큰도 불필요해졌고(.1이 기록한 stat→rmdir TOCTOU 경계도 그 분기와 함께 소멸), 락 이름을 쓴 파일·내용물 있는 디렉터리 — 첫 컷의 무한-스핀 형태들 — 는 이제 그냥 "쥐어진 잠금"이다: mkdir가 양쪽 다 EEXIST(실측)라 같은 유한 거부로 나간다.
+
+**P0-2: 모든 장부 writer가 한 잠금을 쓴다 — lock.mjs.** `upgrade --apply`는 장부에서 계획을 읽고 6단계에서 **통째로 다시 쓰는** writer인데 잠금 프로토콜을 몰랐다. 실측: 나이 0초의 **살아있는** 락을 심어도 rc 0·장부 기록·락 언급 0 — 그 창에서 attest의 created-here 롤백이 upgrade가 방금 주조한 legacy 행째 파일을 unlink하고, upgrade는 이미 성공을 보고한 뒤다(6차 리뷰의 실측과 동일 결말: `upgrade_rc=0 · ledger=MISSING · post-validate rc 0`). 잠금이 attest 전용 함수에서 **공용 모듈**로 나왔고, --apply는 트랜잭션 전체(백업→rename→reindex→장부 주조→검증→커밋/롤백)를 그 잠금 아래서 돈다. attest↔upgrade의 완전 교차 케이스는 일관된 광산 위에서 구성 불가라(v1 광산은 attest가 rc 2로 거부하고, 이행이 끝난 광산엔 upgrade가 쓸 것이 없다) 프로토콜을 쌍별로 고정했다 — upgrade는 쥐어진 락 앞에서 바이트 하나 안 쓰고 거부(트리 해시 동일 단언), attest는 기존 경쟁 케이스들.
+
+**P1.** ① **`gaps.sections`의 값을 validate가 읽는다.** 첫 컷은 키를 로스터에 편입만 했다 — 삭제는 잡되 값은 안 읽는, "닫았다"고 주장한 바로 그 클래스의 잔여(실측: Pending|Waived 스키마에서 `# Open`이 **통과**하고 `# Pending`이 **차단**되는 정확한 역전). 절 이름과 메시지 전부 스키마 유래가 됐고, 값이 두 멤버가 아니면 SCHEMA-UNREADABLE. ② **이중 kind 차단** — 첫 브래킷만 판정해 `- [declared] [reference] …`가 rc 0이었다(실측). 두 번째 브래킷이 **kind 단어일 때만** 차단한다: `- [declared] [계약서 3조] …`의 브래킷 인용문은 본문이다. ③ release 게이트 둘: 정규식이 leading zero를 금지하고(`v01.2.3`이 통과했었다 — SemVer 위반), **태그는 CHANGELOG의 `**vX.Y.Z — ` 클레임 줄에 존재해야 발행된다**(`v9.9.9`가 현 번들을 발행하던 구조; 기존 기록에 대한 단언이라 제2의 진실원이 아니다).
+
+**커밋 전 실행-기반 콜드 리뷰(이 패치 자체): CRITICAL 0 — 두 P0가 전 공격 형태에서 유지.** kill -9 잔재는 나이와 무관하게 영구 거부(수동 rmdir 후 같은 attest가 성공), **거부당한 writer는 보유자의 락을 건드리지 않는다**(거부 직후 락 잔존·보유자 정상 완주 실측), 동시 대기자 둘 다 정결 거부, upgrade는 성공·롤백 양 경로 모두 락 잔존 0에 `--check`/`--dry-run`은 락과 무관(읽기 전용), 스키마로 이름을 바꾼 장부에서도 같은 락, Windows 슬로우-홀더 2회 무flake, KEY는 golden·templates·doccheck.sh의 1바이트 편집에 각각 반응, red-first 표시 문구 8/8 재검증. real 1 + nit 3은 전부 반영:
+
+- **real: placeholder 소음 가지가 kind 검사 전체를 우회했다.** `- [<kind>] [declared] x — r`이 무진단 rc 0(실측) — 소음 판정이 kind 분기보다 먼저 서서, 진짜 본문을 실은 placeholder-kind 불릿이 어휘 검사도 이중-kind 검사도 없이 Accepted의 "결정"이 됐다. 본문이 실재하면 그 불릿은 엔트리다: kind `[<kind>]`가 어휘 위반으로 명명·차단된다. 순수 스텁(본문까지 placeholder)은 그대로 소음이라 초기화 직후의 gaps.md는 여전히 green. .1이 경계로 기록한 remainder-decides의 남은 형태가 이것으로 닫혔고, validate-vs-CLI의 엔트리 계수 갈림도 이 형태가 오류가 되며 함께 소멸했다.
+- nit: `gaps.sections: Open|Open`(동일 두 멤버)이 유효한 로스터로 통과 — 열림과 수용을 구분 못 하는 로스터라 한 절짜리 파일이 완전한 등록부로 읽힌다 → **DISTINCT 요구**, SCHEMA-UNREADABLE.
+- nit: scope의 headless 문구가 찢긴 주석을 "row(s)"라 불렀다 → "line(s) … torn comment line"로 정직화.
+
+**저우선 6건.** 찢긴 최종 **주석** 줄이 양쪽 리더에서 무언급이던 것(실측 validate rc 0·scope rc 0) → validate가 명명하고 파서는 파일-수준 손상으로 계수(주석은 증거가 될 수 없지만 찢긴 쓰기는 찢긴 쓰기고, 두 리더는 같은 답을 해야 한다); `weavedoc gaps`의 'Accepted' 하드코딩 + h1/h2 한정 → 스키마 절 이름 + any-level(validate 계수기와 같은 관용 — `### Accepted`를 validate만 세고 CLI는 "records 0"이라 찍던 갈림 봉합); scope의 장부 **4회 재파싱 → 인덱스 1회에서 전 뷰 파생**(동시 append가 한 명령 안에 두 세대를 섞을 창 제거; 몸통이 재읽기뿐이던 ledgerRowsBadstruct·ledgerQuarantined 은퇴); `--resume` 키에 **케이스가 소비하는 전부** 편입 — tests/*.sh·*.mjs(doccheck.sh·ctlscan.mjs는 케이스가 실행한다)·golden(케이스가 비교한다)·.weavedoc/templates(pristine이 복사한다); ps-smoke에 실명령 1개(빈 디렉터리 validate가 `CFG-PATH-MISSING`을 명명하며 거부하는지 — 프로세스 기동이 아니라 검사 실행의 증거); IMPROVEMENT_PLAN 상태줄 현행화. manifest 44→45(lock.mjs).
+
 ## 2026-08-06.1
 
-**v0.5.2 — v0.5.1 외부 리뷰 후속. 동시성 P0 2건과 진단·문법 P1들.** 전 항목 실측 → 수정 → red-first(12/12, 각각 정확히 그 결함의 문구로 — 콜드 리뷰 수정분 2건은 커밋 전 draft 런타임을 기준으로 red).
+**v0.5.2(첫 컷 — 6차 리뷰가 태그 전에 잡아세웠고, 태그는 .2로 갔다) — v0.5.1 외부 리뷰 후속. 동시성 P0 2건과 진단·문법 P1들.** 전 항목 실측 → 수정 → red-first(12/12, 각각 정확히 그 결함의 문구로 — 콜드 리뷰 수정분 2건은 커밋 전 draft 런타임을 기준으로 red).
 
 **커밋 전 실행-기반 콜드 리뷰가 이 패치 자체에서 CRITICAL 1건 + real 1건 + nit 3건을 찾았고, 전부 반영했다** (P0 메커니즘 자체는 전 공격 형태에서 유지 — 겹친 실제 attest 둘 rc 0·행 2개·락 0, kill -9 잔재는 5s 거부 후 시효 회수, 보유 중 validate/scope/census/status 무간섭, Windows 락 케이스 2회 반복 무flake):
 

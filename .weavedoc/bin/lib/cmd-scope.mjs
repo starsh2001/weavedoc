@@ -11,7 +11,7 @@ import { splitLines } from './core.mjs'
 import { nocomment, sectionAll } from './sections.mjs'
 import { join, materialIds, truthFiles } from './mine.mjs'
 import { fmv, fmLoad } from './read.mjs'
-import { ledgerRows, ledgerRowsBadstruct, ledgerQuarantined, ledgerIndex, matDigest, truthDigest } from './verify.mjs'
+import { ledgerRowsOf, ledgerIndex, matDigest, truthDigest } from './verify.mjs'
 
 const readOr = p => { try { return readFileSync(p, 'utf8') } catch { return '' } }
 const lowerAscii = s => s.replace(/[A-Z]/g, c => c.toLowerCase())
@@ -92,10 +92,14 @@ export function cmdScope (m, out, json) {
   // Both are named below, validate blocks both, and the whole ledger contributes nothing until the
   // file is repaired. (v0.5.0 counted headless rows and read the counter nowhere — the review's
   // P0-1b walked a `failed` verdict straight through that hole.)
+  // ONE read. Every view below derives from this single index — ledgerRows/ledgerRowsBadstruct/
+  // ledgerQuarantined each re-read the file, and four reads of one ledger inside one command were
+  // four chances for a concurrent append to hand this narration two generations of the same bytes
+  // (review #6). Same bytes, one parse, every view.
   const lidx = ledgerIndex(lf)
   const ledgerDead = lidx.state === 'unreadable' || lidx.headless > 0
-  let ledger = ledgerDead ? [] : ledgerRows(lf).map(r => r.split('\t'))
-  const ledgerSbad = ledgerDead ? [...lidx.malformed].sort() : ledgerRowsBadstruct(lf)
+  let ledger = ledgerDead ? [] : ledgerRowsOf(lidx).map(r => r.split('\t'))
+  const ledgerSbad = [...lidx.malformed].sort()
 
   // Unknown verdicts are quarantined BEFORE classification — they cover nothing and are named.
   // Letting them fall through to the digest compare is how a typo once counted as verified.
@@ -109,7 +113,7 @@ export function cmdScope (m, out, json) {
   // (§11 2026-08-05). Both mean: no row wins, and the weaker v1 fallback does not open either —
   // otherwise a verification that broke while being written would resurrect the previous
   // `verified`, and this command would describe a state the mine is not in.
-  const LBAD = new Set([...ledgerBad.map(s => s.split(' ')[0]), ...ledgerQuarantined(lf)])
+  const LBAD = new Set([...ledgerBad.map(s => s.split(' ')[0]), ...lidx.quarantined])
   const LROW = new Map(ledger.map(f => [f[0], { dg: f[1], vd: f[2], std: f[3] ?? '' }]))
 
   // ---- materials: population = converted.md holders minus tombstones. Evidence precedence:
@@ -279,7 +283,7 @@ export function cmdScope (m, out, json) {
   if (lidx.state === 'unreadable') {
     out(`  ledger: truths/${m.ledgerFile()} exists but CANNOT BE READ (${lidx.code}) — the evidence is in an unknown state, so nothing counts as verified and no v1 fallback opens [LEDGER-UNREADABLE]`)
   } else if (lidx.headless > 0) {
-    out(`  ledger: ${lidx.headless} row(s) carry no id (a leading tab, or a truncated write) — an unattributable row could be ANY unit's latest verdict, so the sidecar contributes nothing and no v1 fallback opens [LEDGER-MALFORMED]`)
+    out(`  ledger: ${lidx.headless} line(s) carry no id (a leading tab, a truncated write, or a torn comment line) — unattributable damage could hide ANY unit's latest verdict, so the sidecar contributes nothing and no v1 fallback opens [LEDGER-MALFORMED]`)
   }
   if (ledgerBad.length) out(`  ledger: row(s) with unknown verdicts — they cover nothing [LEDGER-VERDICT]: ${ledgerBad.join(' ')}`)
   // SUPERSEDED odd verdicts too (v0.5.2, external review P1-2): a typo'd verdict with a later valid
