@@ -1,6 +1,10 @@
-version 0
-census 0
-scope 0
-status 0
-gaps 0
-validate 0
+# exit code per command on the minimal fixture (0 = clean, 1 = blocked, 2 = refused)
+validate             0
+census               0
+scope                0
+status               0
+gaps                 0
+version              0
+impact m001          0
+pull 위약          0
+reindex --check      0
