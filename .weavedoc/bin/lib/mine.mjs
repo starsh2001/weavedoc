@@ -61,6 +61,12 @@ export function openMine (scriptDir, cwd = process.cwd()) {
 }
 
 const lsOr = d => { try { return readdirSync(d) } catch { return [] } }
+
+// C-collation order, which is BYTE order — and not JS `.sort()`, which is UTF-16 code-unit order.
+// The two agree across the whole BMP and disagree above it: an emoji sorts by its surrogate pair
+// under `.sort()` and by its UTF-8 bytes under the shell. The bash side pins `LC_ALL=C` on the globs
+// that produce these lists (see material_ids), so this is the order it is pinned to.
+const bytewise = (a, b) => Buffer.compare(Buffer.from(a, 'utf8'), Buffer.from(b, 'utf8'))
 // `[ -f ]` and `[ -d ]`, spelled once. "Exists" is not either of them, and the difference decides
 // which refusal a caller prints — and whether a readFileSync throws instead of returning.
 const isDirAt = p => { try { return statSync(p).isDirectory() } catch { return false } }
@@ -69,17 +75,17 @@ const isFileAt = p => { try { return statSync(p).isFile() } catch { return false
 // One folder name per line, in the order the filesystem gives — the bash side globs, which sorts,
 // so these are sorted to match.
 export function materialIds (m) {
-  return lsOr(m.materials).filter(n => { try { return statSync(join(m.materials, n)).isDirectory() } catch { return false } }).sort()
+  return lsOr(m.materials).filter(n => { try { return statSync(join(m.materials, n)).isDirectory() } catch { return false } }).sort(bytewise)
 }
 
 export function docIds (m) {
-  return lsOr(m.documents).filter(n => { try { return statSync(join(m.documents, n)).isDirectory() } catch { return false } }).sort()
+  return lsOr(m.documents).filter(n => { try { return statSync(join(m.documents, n)).isDirectory() } catch { return false } }).sort(bytewise)
 }
 
 // Truth files are t<digits>.md ONLY: index.md, tree.md, verify.md and changelog.md live in the same
 // folder and are never truths.
 export function truthFiles (m) {
-  return lsOr(m.truths).filter(n => /^t[0-9]+\.md$/.test(n)).sort().map(n => join(m.truths, n))
+  return lsOr(m.truths).filter(n => /^t[0-9]+\.md$/.test(n)).sort(bytewise).map(n => join(m.truths, n))
 }
 
 // One resolver for every reference field, so `t5` cannot resolve in one place and dangle in another.

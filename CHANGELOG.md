@@ -24,6 +24,12 @@
 
 회귀 **348/348**(Linux 컨테이너). 신규 케이스 3건 포함. 코퍼스 파리티: 광산 346개 × 이식된 명령 7개 전부 일치(선언된 (광산,명령) 예외 2건 제외).
 
+**`validate`는 바이트 도메인에서 돈다.** 콜드 리뷰가 CRITICAL을 하나 잡았다: **봉인(seal)이 위조된 인용을 통과시켰다.** 파일을 UTF-8로 읽으면 유효하지 않은 바이트가 U+FFFD로 접혀 **서로 다른 두 바이트열이 같다고 비교**되는데, 봉인은 정확히 바이트 비교이고 이 광산의 위조 방지 보증 그 자체다. CP949 자료에서 truth 쪽 한 단어를 바꾼 실측: bash는 `SEAL-QUOTE-MISSING` + `0 sealed · 1 seal FAILED`, 포트는 `1 sealed`에 진단 없음. **아니라고 답해야 할 때 그렇다고 답하는 보증은 없는 보증보다 나쁘다.** 그래서 `validate`의 읽기·비교·메시지를 전부 바이트로 옮겼다(`U`/`M` · `fmvB` · `latin1` 리더 · Buffer 출력). 부수 발견: 비-ASCII 리터럴을 담은 정규식도 바이트로 다시 써야 하고, 그건 **바이트 클래스**다(`LC_ALL=C` sed에서 멀티바이트 멤버는 바이트별로 클래스에 들어간다) — 놓쳤더니 `pass_completeness_*` 2건이 즉시 빨개졌다. 경위는 `REWRITE_PLAN.md` §4d.
+
+**같은 리뷰가 잡은, 포트가 관대했던 두 자리** — 둘 다 양 플랫폼 bash가 **같은 답**을 내므로 선언된 CRLF 예외가 아니다. CRLF `verify-ledger.tsv`(bash `read`는 `\r`을 안 벗겨 모든 행이 `LEDGER-MALFORMED`)와 CRLF `.weavedoc/schema`(`sch_load`는 유지, `cfg_load`는 벗김 — bash 안에 규칙이 둘인데 포트가 하나로 합쳤다). **Windows 기본 `core.autocrlf=true`로 그냥 clone하면 나오는 파일이다.**
+
+**진단 순서도 명세로 만들었다**: `material_ids`/`doc_ids`가 글로브라 출력 순서가 `LC_COLLATE`의 함수였고, en_US.UTF-8에서 **MSYS와 Linux가 서로도 안 맞았다.** `local LC_ALL=C`로 고정했다(§4e).
+
 **이 라벨에는 `validate`의 Node 이식도 함께 들어 있다**(진단 92종). 배포 번들(`bin/weavedoc` + schema + 스킬)은 **바이트 그대로**라 라벨은 올리지 않는다 — Node 런타임은 6단계에서 번들에 들어간다. 실측: 광산 **349개**에 대해 `validate` 출력 전체 + 종료 코드 대조에서 선언된 CRLF 예외 1건 외 전부 일치. 회귀는 bash 채점 348/348, **Node 채점 304/348 — 실패 44건이 전부 `consecrate`·`retag`·`upgrade`(미이식, exit 3) 도달**이고 validate 귀책은 0. 자세한 경위는 `REWRITE_PLAN.md` §5.
 
 ---

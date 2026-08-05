@@ -7,7 +7,10 @@
 import { readFileSync, existsSync } from 'node:fs'
 import { fmKey, fmVal, isFence, isFmLine, splitLines } from './core.mjs'
 
-const readOr = (p, fb = '') => { try { return readFileSync(p, 'utf8') } catch { return fb } }
+// `enc` exists for validate, which works in the byte domain: 'latin1' gives one char per byte, so a
+// value holding invalid UTF-8 survives to be quoted back exactly as the runtime being replaced
+// quotes it. Every other caller takes the default and is unaffected.
+const readOr = (p, fb = '', enc = 'utf8') => { try { return readFileSync(p).toString(enc) } catch { return fb } }
 
 // ---- schema ------------------------------------------------------------------------------
 // Flat `key: value`, first spelling of a key wins. The value keeps its trailing whitespace — the
@@ -22,9 +25,9 @@ const readOr = (p, fb = '') => { try { return readFileSync(p, 'utf8') } catch { 
 // user's own mine carries no .gitattributes pin.
 const schemaLines = s => { const l = s.split('\n'); if (l.length && l[l.length - 1] === '') l.pop(); return l }
 
-export function loadSchema (schemaPath) {
+export function loadSchema (schemaPath, enc = 'utf8') {
   const m = new Map()
-  for (const line of schemaLines(readOr(schemaPath))) {
+  for (const line of schemaLines(readOr(schemaPath, '', enc))) {
     if (line === '' || line.startsWith('#')) continue
     const i = line.indexOf(':')
     if (i < 0) continue
@@ -44,11 +47,11 @@ export function loadSchema (schemaPath) {
 // side, so it is reproduced rather than harmonised: a trailing comment is stripped only when
 // preceded by whitespace, and a value that is ENTIRELY a comment (`key: #note`) keeps the literal
 // `#note`, because after the leading trim there is no whitespace left in front of the '#'.
-export function loadConfig (configPath) {
+export function loadConfig (configPath, enc = 'utf8') {
   const flat = new Map()
   const sect = new Map()
   let sec = ''
-  for (const line of splitLines(readOr(configPath))) {
+  for (const line of splitLines(readOr(configPath, '', enc))) {
     const t = line.replace(/^[ \t]+/, '')
     if (t === '' || t.startsWith('#')) continue
     const i = t.indexOf(':')
@@ -118,5 +121,30 @@ const FM_CACHE = new Map()
 export function fmv (file, key) {
   let m = FM_CACHE.get(file)
   if (m === undefined) { m = fmLoad(file); FM_CACHE.set(file, m) }
+  return m.get(key) ?? ''
+}
+
+// The same parse in the BYTE domain, for validate — which quotes frontmatter values back in its
+// diagnostics and must print the bytes the file holds, not their UTF-8 decoding. Separate cache,
+// because the same file yields different strings in the two domains and one map cannot hold both.
+// The parsing rules are shared: every pattern they use is ASCII, so they read a byte-domain line
+// exactly as they read a decoded one.
+const FM_CACHE_B = new Map()
+export function fmLoadBytes (file) {
+  const m = new Map()
+  let lines
+  try { lines = splitLines(readFileSync(file).toString('latin1')) } catch { return m }
+  if (lines.length === 0 || !isFence(lines[0])) return m
+  for (let i = 1; i < lines.length; i++) {
+    if (isFence(lines[i])) break
+    if (!isFmLine(lines[i])) continue
+    const k = fmKey(lines[i])
+    if (!m.has(k)) m.set(k, fmVal(lines[i]))
+  }
+  return m
+}
+export function fmvB (file, key) {
+  let m = FM_CACHE_B.get(file)
+  if (m === undefined) { m = fmLoadBytes(file); FM_CACHE_B.set(file, m) }
   return m.get(key) ?? ''
 }

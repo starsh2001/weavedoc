@@ -8,14 +8,24 @@
 import { readFileSync } from 'node:fs'
 import { nocomment } from './sections.mjs'
 
-const readOr = p => { try { return readFileSync(p, 'utf8') } catch { return '' } }
+// BYTES: the zone rule quotes the offending LINE back in its diagnostic, so the line must be the
+// bytes the file holds. Every pattern in this module is ASCII and reads a byte-domain line the same.
+const readOr = p => { try { return readFileSync(p).toString('latin1') } catch { return '' } }
 
 // The comment-stripped file as fid_mark sees it. `file_stripped` puts nocomment's output through a
 // command substitution, which eats EVERY trailing newline, and the here-string that feeds awk then
 // adds exactly one back. So a file whose stripped form is empty is ONE empty line, not zero lines —
 // which is why this cannot be splitLines(): that would return no lines at all and the walk below
 // would emit nothing where the original emits `O`.
-const strippedLines = file => nocomment(readOr(file)).replace(/\n+$/, '').split('\n')
+// A trailing CR is removed HERE TOO, and the count is the point: MSYS gawk strips one CR every time
+// it reads a record, and this data crosses TWO awks on the bash side — `nocomment`, then fid_mark's
+// own. So a heading written `# Fidelity violations\r\r\n` arrives with BOTH gone. The port stripped
+// once, which left the port disagreeing with itself: dupSection (splitLines + countHeadings, two
+// strips) found the heading while fidMark did not, so the gate reported the entry as OUTSIDE the
+// section instead of GATE-OPEN — it dropped the code that says a document shipped through an open
+// gate. Measured against MSYS, which is the answer this port follows for CR (REWRITE_PLAN §4).
+const stripCR = l => (l.endsWith('\r') ? l.slice(0, -1) : l)
+const strippedLines = file => nocomment(readOr(file)).replace(/\n+$/, '').split('\n').map(stripCR)
 
 // EVERY line marked I (inside the violations section) or O (outside), from ONE walk — so "inside"
 // and "outside" are complements of a single judge and cannot drift into a third state. The heading

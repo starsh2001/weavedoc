@@ -23,6 +23,19 @@ export function splitLines (s) {
   return l.map(x => (x.endsWith('\r') ? x.slice(0, -1) : x))
 }
 
+// ---- the byte domain --------------------------------------------------------------------------
+// A JS string cannot hold "raw bytes" and "decoded text" at once, so a command that must reproduce
+// bash's output BYTE for byte has to pick one domain and stay in it. validate picks BYTES: it quotes
+// mine values back in its diagnostics, and a value holding invalid UTF-8 (a CP949 material, a
+// Korean console's stray byte) decodes to U+FFFD and prints as something the runtime it replaces
+// never printed. Measured: bash prints `b0 cb c1 f5`, a UTF-8 reader prints `ef bf bd` four times.
+//
+// `U` lifts a UTF-8 SOURCE LITERAL into that domain; `M` is the template tag that does it for the
+// literal halves of a message while the interpolated values — already bytes — pass through
+// untouched. The pair is what lets a message be written normally and still come out as bytes.
+export const U = s => Buffer.from(s, 'utf8').toString('latin1')
+export const M = (strs, ...vals) => strs.reduce((a, s, i) => a + U(s) + (i < vals.length ? String(vals[i]) : ''), '')
+
 // ---- the frontmatter fence ----------------------------------------------------------------
 // ONE spelling, because there were ELEVEN and every one of them was narrower than the runtime it
 // ports (found 2026-08-04 by a cold review that ran the two side by side instead of reading them).

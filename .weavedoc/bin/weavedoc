@@ -464,13 +464,25 @@ is_noise() { # blank / comment / untouched template entry
   esac
   return 1
 }
-material_ids() { # one folder name per line, zero per-item forks (basename per dir was ~30
-  # spawns per call on a real mine, and validate calls this three times)
-  local d
+# THE ORDER OF THESE TWO LISTS IS SPECIFIED, not left to the caller's locale. A glob sorts by
+# LC_COLLATE, and validate walks these lists to emit diagnostics, so the ORDER OF ITS OUTPUT was a
+# function of whatever locale the shell happened to inherit. Measured 2026-08-04 on folders
+# `m002 M003 m-004 m_005 mAA mzz`:
+#     C / POSIX          M003 m-004 m002 mAA m_005 mzz     (both platforms)
+#     en_US.UTF-8 MSYS   m_005 m002 M003 m-004 mAA mzz
+#     en_US.UTF-8 Linux  m002 M003 m-004 m_005 mAA mzz
+# The two platforms do not even agree with EACH OTHER under a UTF-8 locale, so there was no single
+# answer to reproduce — the same shape as the gawk hash order pinned in the truths pass, and settled
+# the same way: name the order instead of inheriting it. `local LC_ALL=C` and not LC_COLLATE, because
+# LC_ALL outranks LC_COLLATE and an assignment to the latter is silently ignored while the former is
+# set. The scope is this function; the caller's locale is untouched on return (verified).
+# Zero per-item forks is the other reason these exist: basename-per-dir was ~30 spawns per call.
+material_ids() {
+  local d LC_ALL=C
   for d in "$MATERIALS"/*/; do [ -d "$d" ] || continue; d=${d%/}; printf '%s\n' "${d##*/}"; done
 }
 doc_ids() {
-  local d
+  local d LC_ALL=C
   for d in "$DOCUMENTS"/*/; do [ -d "$d" ] || continue; d=${d%/}; printf '%s\n' "${d##*/}"; done
 }
 mstatus()      { [ -f "$MATERIALS/$1/converted.md" ] && fm "$MATERIALS/$1/converted.md" status; }

@@ -6,7 +6,11 @@
 import { readFileSync } from 'node:fs'
 import { splitLines as toLines } from './core.mjs'
 
-const readOr = (p, fb = '') => { try { return readFileSync(p, 'utf8') } catch { return fb } }
+// BYTES. The only callers that read a file through this module are validate's dupSection and
+// commentBalanced, and validate works entirely in the byte domain so the values it quotes back are
+// the bytes the mine holds. The pure functions below (nocomment, sectionBody*, sectionAll,
+// countHeadings) take TEXT from their caller and are domain-agnostic — they only ever match ASCII.
+const readOr = (p, fb = '') => { try { return readFileSync(p).toString('latin1') } catch { return fb } }
 
 // ---- comments ------------------------------------------------------------------------------
 // Ledger files keep closed/audit history in HTML comments; counting those as live entries is a lie.
