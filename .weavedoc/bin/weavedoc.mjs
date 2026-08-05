@@ -1,13 +1,28 @@
 #!/usr/bin/env node
-// WeaveDoc runtime — Node.js port (REWRITE_PLAN.md). Stage 1: dispatch + version/lang/locale.
+// WeaveDoc runtime — the deterministic checker under the AI fidelity gate.
 //
-// CONTRACT: this file must be byte-identical to bin/weavedoc on stdout, and identical in exit
-// code, for every command it claims. The 342 regression cases are the specification; run them
-// against this file with:
-//     WD_BIN="node .weavedoc/bin/weavedoc.mjs" bash tests/regress.sh
+//   validate          format + truth coherence (exit non-zero on any problem)
+//   pull <term>       protocol-correct mine lookup for consumers outside the pipeline (see READ.md)
+//   impact <mID>      which truths were extracted from a material + which documents cite it (blast radius)
+//   status            each document's status + the next step
+//   scope             what a verify round still owes — unverified materials + truths, computed
+//   attest <verdict> <round> <standard> <id...>   record a verification: digest-bound sidecar row
+//   seal-review <doc-id> [draft|final]   pin the clean review to the reviewed bytes + context
+//   consecrate <doc-id>   stage candidate → verify seals → ONE full validation → atomic promote
+//   upgrade [--check|--dry-run|--apply]   v1 mine → schema 2 (default --check, read-only)
+//   gaps              mine census + declared-marker scan (non-blocking floor for the weavedoc-gaps skill)
+//   census            mine census only (truth files vs index, numbering holes, live/status tallies)
+//   reindex [--check] regenerate truths/index.md + truths/tree.md from truth frontmatter (--check: diff only)
+//   retag <old> <new> rename/merge a tag across truths·required_tags·scope_tags (--dry: report only)
+//   version           the installed runtime bundle version (.weavedoc/VERSION)
+//   lang              the project's reply/artifact language (config.language)
+//   locale            detect the OS language (for init); prints nothing if undetectable
 //
-// Commands not yet ported REFUSE loudly (exit 3). A port in progress must never look like a pass:
-// a case that reaches an unported command has to fail, and say which command it wanted.
+// THE SPECIFICATION IS tests/regress.sh — every case is a CLI black box (build a mine, run a
+// command, assert stdout and the exit code), which is what let this runtime be graded against the
+// bash implementation it replaced, case for case, without touching a case. That implementation was
+// deleted in bundle 2026-08-05.3; the last comparison between the two is pinned in
+// tests/baseline/parity-final-2026-08-05.md.
 //
 // No npm dependencies, ever — node:fs, node:path, node:crypto are enough. Node 18+.
 import { existsSync, statSync, readFileSync, readdirSync } from 'node:fs'

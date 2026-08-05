@@ -88,7 +88,7 @@ export function cmdReindex (m, out, errln, argv) {
   const check = a1 === '--check'
 
   // EVERY glob match on disk, including a DIRECTORY wearing a truth filename (fixed 2026-08-04,
-  // caught by tests/parity-corpus.sh). The bash side counts with `ls "$TRUTHS"/t[0-9]*.md`, the same
+  // caught by the corpus scale, since retired with the bash runtime it compared against). The bash side counted with `ls "$TRUTHS"/t[0-9]*.md`, the same
   // expression census uses, and a directory is in that list — so bash refuses with
   //   "N truth file(s) but only M produced a record"  (rc 1)
   // while an isFile() filter here dropped it from the population, made the counts agree, and

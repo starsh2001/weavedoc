@@ -73,9 +73,10 @@ gaps.md                 the mine completeness register (# Open / # Accepted)
 .weavedoc/config.yaml   language · paths · fidelity · review settings
 .weavedoc/schema         the format contract (machine SoT; FORMATS.md mirrors it)
 .weavedoc/READ.md        the read protocol — how ANY consumer safely reads the mine
-.weavedoc/bin/weavedoc   deterministic checks — validate · pull · impact · status · scope · attest ·
-                         seal-review · consecrate · upgrade · gaps · census · reindex · retag ·
-                         version · lang · locale
+.weavedoc/bin/weavedoc.mjs  deterministic checks — validate · pull · impact · status · scope ·
+                         attest · seal-review · consecrate · upgrade · gaps · census · reindex ·
+                         retag · version · lang · locale
+.weavedoc/bin/lib/       the runtime's modules (the behavior lives here, not in the entrypoint)
 .weavedoc/VERSION        runtime bundle label (date) — identity is `version`'s fingerprint, not the date
 ```
 
@@ -95,11 +96,11 @@ WeaveDoc is a set of Claude Code skills. To use it in a project:
 
 `.weavedoc/bin/weavedoc.mjs` ships a dependency-free checker — **the mechanical floor under the AI fidelity gate.** It needs **Node 18+** and nothing else: `node:fs`, `node:path` and `node:crypto` only, no `package.json`, no `npm install`. Deployment is unchanged — copy the folder.
 
-> **Two runtimes ship in this release, and one of them is the reference.** `.weavedoc/bin/weavedoc` is the original Bash implementation (Bash 4+ and GNU awk/sed). It is kept for **one release** as the parity reference the rewrite was graded against — the two agree on the whole 349-case suite, on 349 broken mines command by command, and on the resulting bytes on disk for every write command. **Call the Node one.** The Bash one is scheduled for removal in the release after this; it stays at its old path so existing invocations do not break in the same release that changes the runtime.
+> **One runtime now.** The original Bash implementation at `.weavedoc/bin/weavedoc` was the parity reference this one was graded against; it shipped alongside for exactly one release and was removed in bundle `2026-08-05.3`. The two agreed on the whole regression suite, on 350 broken mines command by command, and on the resulting bytes on disk for every write command — that last comparison is pinned in `tests/baseline/parity-final-2026-08-05.md`, so "were they really the same" has an answer that does not depend on anyone's memory.
 >
 > On Windows, invoke through **PowerShell** rather than Git Bash: Git Bash pays ~290ms per process to emulate Unix (373ms vs 80ms for one invocation). Never wrap it in a `.ps1` — the execution policy applies to `.ps1` files and a downloaded one is blocked under `RemoteSigned`, while `node script.mjs` is not subject to it at all.
 >
-> Linux, Windows and macOS all gate the release, and CI runs the suite against **both** runtimes on each.
+> Linux, Windows and macOS all gate the release.
 
 - `validate` — format + truth coherence: frontmatter/enums/ids, catalog ↔ materials orphans both ways, every truth `source` resolves to a material, `conflict` truths carry `conflict_with`, `discarded` truths carry a `resolution` (and the winner/loser stamps match the record — a winner stamped `discarded` or a loser stamped `ok` fails), `provenance` enum valid and `derived` truths show their `derived_from` chain, **each truth's body appears verbatim in its source** (the anti-laundering seal), every `required_tags` tag has at least one truth, `index.md` ↔ truth files in sync both ways, a `retracted` material grounds nothing (its truths `unsupported`/`discarded`, no resolution winner references it), `truths/coverage.md` cross-checks (sections resolve, ids exist, sectioned materials complete), `origin: research` materials carry `url`+`retrieved_at` and their truths are not `provenance: stated`, `corrects` references resolve, `retracted` truths have a `removed:` line and never strand the other side of an open conflict, every `[open]` Human queue entry carries an ownership tag, no `final.md` ships with a non-empty `# Fidelity violations`. Exits non-zero with the list.
 - `census` — the mine's authoritative statistics: truth files vs index entries, id numbering holes (split into *unexplained* and *explained by a changelog `removed:` line*), live/status tallies with `retracted` counted separately, and `coverage records N/M of TOTAL (K legacy-exempt)` — the raw total is always shown, because `16/26` and `16/16 (+10 exempt)` describe the same mine and a reader comparing two reports would otherwise see progress that never happened. **`coverage records` counts materials that hold at least one line in `truths/coverage.md`; it is a ledger count, not a completeness warranty** — one recorded element out of fifty still counts the material. "Is everything that should be extracted here?" is a different axis, owned by `weavedoc-gaps` and the truths verify lane. Skills report these numbers, never eye-counts.

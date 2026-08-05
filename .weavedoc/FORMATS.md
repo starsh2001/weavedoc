@@ -2,7 +2,7 @@
 
 Single source of truth for WeaveDoc's file formats. **Field names, section headers, and enum values are fixed English** — skills and tooling parse them. **Prose** (titles, summaries, role names, document text) is written in the project's language (`config.language`). Don't restate these formats elsewhere; point here.
 
-> **Machine source of truth:** the checkable lists (frontmatter fields · enums · sections) live in `.weavedoc/schema` and are enforced by `.weavedoc/bin/weavedoc validate`. This doc is the human-readable contract; if the two ever differ, `schema` (what `validate` reads) wins — edit it first.
+> **Machine source of truth:** the checkable lists (frontmatter fields · enums · sections) live in `.weavedoc/schema` and are enforced by `.weavedoc/bin/weavedoc.mjs validate`. This doc is the human-readable contract; if the two ever differ, `schema` (what `validate` reads) wins — edit it first.
 
 > **Trust boundary (v0.3.2):** WeaveDoc trusts the repository author and the runtime. Digests provide **change binding** — they catch mistakes, drift, and tool-mediated laundering — not authorship authentication and not protection against a deliberate forger, who can compute a valid sha256 or hand-type a marker as easily as any tool can. What the machine warrants is therefore two-sided: it never certifies what it did not check, and **no support command may create an automatic downgrade path** (a migration, repair, or convenience flow that turns enforced state back into exempt state — the v0.3.1 seal-laundering was exactly this class). A user deliberately lying in their own repository is outside the warranty; a tool that launders for them is a defect.
 

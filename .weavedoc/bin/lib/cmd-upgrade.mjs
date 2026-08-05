@@ -455,7 +455,7 @@ function upgradeApply (m, out, nitems, runReindex, runValidate, ops = realOps) {
     const head = isFileAt(lf)
       ? readB(lf)
       // U(): this header is WRITTEN through the byte-domain writer, so its em-dash has to BE bytes.
-      // Caught by parity-write comparing the resulting tree — the dash was silently dropped, and a
+      // Caught by the write scale comparing the resulting tree (retired with the bash runtime) — the dash was silently dropped, and a
       // ledger header is a file the next reader diffs.
       : U('# machine-owned verification ledger — append-only; LAST row per id wins. Written by `weavedoc attest`.\n# id\tsha256\tverdict\tround\tstandard\tdate\n')
     const ot = m.sch.get('verify.ledger.origin.truths') || 'v1-truths-ledger'

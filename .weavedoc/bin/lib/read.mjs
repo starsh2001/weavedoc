@@ -1,6 +1,6 @@
 // WeaveDoc foundations — the readers. Pure rules live in core.mjs; these turn files into values.
 //
-// Ported against the bash originals and checked by tests/foundation-parity.sh over a REAL mine
+// Ported against the bash originals and checked by the foundation differential over a REAL mine
 // (every truth and material in eclypse), not a table — because the interesting disagreements here
 // are in real data: a comment that is not a comment, a value that keeps its own '#', a key spelled
 // with a dot.

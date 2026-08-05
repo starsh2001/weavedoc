@@ -1,6 +1,6 @@
 # Store everything normalized; the runtime must check out LF everywhere —
-# bin/weavedoc is bash (CRLF breaks the shebang) and schema/templates are parsed
-# by grep/awk that treat a stray \r as part of the value.
+# bin/weavedoc.mjs carries a shebang (CRLF breaks it under a POSIX exec) and the
+# schema/templates are read as text where a stray \r would join the value.
 * text=auto
 .weavedoc/** text eol=lf
 # tests/ is bash + machine-read artifacts (manifest hashes, golden diffs) — same reason as above.

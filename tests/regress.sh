@@ -19,19 +19,20 @@
 set -u
 REPO=$(cd "$(dirname "$0")/.." >/dev/null 2>&1 && pwd)
 
-# ---- runtime under test (stage 0 of the rewrite — REWRITE_PLAN.md) ----
+# ---- runtime under test ----
 # Every case here is a CLI black box: it builds a mine, runs a command, and asserts stdout plus the
 # exit code. Nothing reads the runtime's internals. So the runtime can be swapped WITHOUT touching a
-# single case — which is what makes a rewrite verifiable against its predecessor's own suite.
-# WD_BIN is the invocation prefix: interpreter first, entrypoint second, both project-relative and
-# free of spaces (word splitting here is deliberate and safe for that reason). The default is the
-# shipped bash bundle, so an unset WD_BIN behaves exactly as this file always has.
-#   bash judges bash:   WD_BIN unset
-#   bash judges Node:   WD_BIN="node .weavedoc/bin/weavedoc.mjs" bash tests/regress.sh
-WD_BIN=${WD_BIN:-"bash .weavedoc/bin/weavedoc"}
+# single case — which is what made the bash→Node rewrite verifiable against its predecessor's own
+# suite, and what will make the next such change verifiable too. WD_BIN is the invocation prefix:
+# interpreter first, entrypoint second, both project-relative and free of spaces (word splitting
+# here is deliberate and safe for that reason).
+# The default is the SHIPPED runtime. It was `bash .weavedoc/bin/weavedoc` while both runtimes
+# shipped, which meant a plain local run graded the reference rather than the product — the v0.4.0
+# external review's finding. The bash runtime was deleted in bundle 2026-08-05.3; its last
+# comparison is pinned in tests/baseline/parity-final-2026-08-05.md.
+WD_BIN=${WD_BIN:-"node .weavedoc/bin/weavedoc.mjs"}
 read -r -a WDRUN <<< "$WD_BIN"
 [ "${#WDRUN[@]}" -ge 2 ] || { echo "WD_BIN must be '<interpreter> <entrypoint>' — got '$WD_BIN'"; exit 2; }
-WD_RUNNER=${WDRUN[0]}
 WD_ENTRY=${WDRUN[${#WDRUN[@]}-1]}
 [ -f "$REPO/$WD_ENTRY" ] || { echo "WD_BIN entrypoint not found: $REPO/$WD_ENTRY"; exit 2; }
 
@@ -43,16 +44,15 @@ WD_ENTRY=${WDRUN[${#WDRUN[@]}-1]}
 # unreachable, not filtered. WD_REG_KEY_SALT exists so a test can force a fresh key.
 KEY=$( { git -C "$REPO" rev-parse HEAD 2>/dev/null
          cat "$REPO/.weavedoc/VERSION" 2>/dev/null
-         # The ENTRYPOINT under test, plus WD_BIN itself: a bash run and a Node run of the same
-         # commit are different configurations and must not share a result cache, or `--resume`
-         # would hand one implementation's results to the other and call the rewrite green.
+         # WD_BIN itself: two different invocations of the same commit are different configurations
+         # and must not share a result cache, or `--resume` would hand one implementation's results
+         # to the other and call the run green.
          printf '%s\n' "$WD_BIN"
-         # BOTH runtimes' bytes, always — not just the entrypoint. The Node entrypoint is a thin
-         # dispatcher whose behavior lives in bin/lib/, so a key that hashed only $WD_ENTRY let a
-         # dirty lib edit reuse the previous run's results under --resume (the v0.4.0 external
-         # review's finding; HEAD only covers COMMITTED edits). Hashing both runtimes for either
-         # arm over-invalidates a little and can never under-invalidate — one rule, one spelling.
-         sha256sum "$REPO/.weavedoc/bin/weavedoc" "$REPO/.weavedoc/bin/weavedoc.mjs" \
+         # The WHOLE runtime's bytes, not just the entrypoint. The entrypoint is a thin dispatcher
+         # whose behavior lives in bin/lib/, so a key that hashed only $WD_ENTRY let a dirty lib
+         # edit reuse the previous run's results under --resume (the v0.4.0 external review's
+         # finding; HEAD only covers COMMITTED edits).
+         sha256sum "$REPO/.weavedoc/bin/weavedoc.mjs" \
                    "$REPO/.weavedoc/bin/lib/"* "$REPO/.weavedoc/schema" 2>/dev/null | awk '{print $1}'
          uname -sr; bash --version | head -1; awk --version 2>/dev/null | head -1; sed --version 2>/dev/null | head -1
          printf '%s' "${WD_REG_KEY_SALT:-}"
@@ -463,18 +463,11 @@ expect_has()   { printf '%s\n' "$OUT" | grep -qF -- "$1" || bad "output lacks [$
 expect_hasnt() { printf '%s\n' "$OUT" | grep -qF -- "$1" && bad "output must not contain [$1]"; ok; }
 
 vrun() { OUT=$( ( cd "$W" && $TO "${WDRUN[@]}" "$@" ) 2>&1 ); RC=$?; }
-# The three cases below read the runtime SOURCE rather than its output — the only ones in the suite
+# The two cases below read the runtime SOURCE rather than its output — the only ones in the suite
 # that do, and the reason they exist is that the invariants they pin (one judge per rule, every
-# emitted diagnostic code documented) cannot be seen from outside. They encode bash syntax, so a
-# different runtime needs its own spelling of the same invariant, not a path swap. Until that
-# spelling exists they FAIL rather than skip: a green 342/342 must never mean "and three invariants
-# went unwatched". (REWRITE_PLAN §4 — the port-me family.)
-src_shape_unported() {
-  [ "$WD_RUNNER" = bash ] && return 1
-  [ "$WD_RUNNER" = node ] && return 1
-  bad "source-shape case has no spelling for runner '$WD_RUNNER' yet — port the invariant, do not drop it"
-  return 0
-}
+# emitted diagnostic code documented, no uncoded diagnostic) cannot be seen from outside. They
+# encode the runtime's own syntax, so a future runtime needs its own spelling of the same
+# invariant, not a path swap: a green sweep must never mean "and these invariants went unwatched".
 # NAMED `nodeshape_`, not `meta_`, and that matters: the case selector picks up every function
 # matching ^(block|pass|acct|meta|e2e)_, so a helper called meta_..._node is SELECTED as a case of
 # its own and run under the bash runner too, where it inspects the wrong entrypoint. It reported
@@ -1016,26 +1009,11 @@ nodeshape_single_judges() {
 }
 meta_single_judges() {
   # The drift every round kept finding — "the rule was unified, one site was left out" — is now
-  # watched by the suite itself: each grep pins an invariant about the BINARY, so a new duplicate
-  # judge fails here before a cold reviewer has to find it.
-  [ "$WD_RUNNER" = node ] && { nodeshape_single_judges; return; }
-  src_shape_unported && return
-  local B="$REPO/$WD_ENTRY" bad="" fn n
-  for fn in is_noise has_fm fid_mark fid_body nocomment canon_id is_placeholder req_value \
-            truth_digest mat_digest unit_digest ledger_rows ledger_file \
-            artifact_digest context_digest doc_draft_path doc_final_path; do
-    n=$(grep -cE "^${fn}\(\)" "$B" || true)
-    [ "${n:-0}" -eq 1 ] || bad="$bad ${fn}=${n};"
-  done
-  # the opening-fence judge is has_fm ONLY — an inline exact-match comparison is a second judge
-  n=$(grep -c 'head -1.*= "---"' "$B" || true)
-  [ "${n:-0}" -eq 0 ] || bad="$bad inline-fence-judges=${n};"
-  # strict key spelling (`^key:` with nothing between key and colon) must not reappear in any
-  # frontmatter/flow reader — the lenient form is `^key[[:space:]]*:` (three rounds re-learned this)
-  n=$(grep -cE '\^(source|status|tags|claim|title|origin|role|topics|format|added|summary|resolution|conflict_with|provenance|derived_from|superseded|corroborated_by|winner|decided_by|decision_kind|scope):[^:]' "$B" || true)
-  [ "${n:-0}" -eq 0 ] || bad="$bad strict-key-patterns=${n};"
-  OUT="${bad:-ok}"; RC=0; [ -n "$bad" ] && RC=1
-  expect_pass
+  # watched by the suite itself: each grep pins an invariant about the RUNTIME SOURCE, so a new
+  # duplicate judge fails here before a cold reviewer has to find it. This is one of the two cases
+  # in the suite that read the source rather than the output, because the invariant it pins cannot
+  # be seen from outside.
+  nodeshape_single_judges
 }
 pass_hq_kind_mention() {
   # a Human-queue entry whose prose mentions a kind — first slot is [open], not a kind (kind-bearing filter)
@@ -1924,33 +1902,15 @@ block_consecrate_validate_fail_final_unremovable() {
   printf '개정판. <!-- t:t001 -->\n' > "$W/documents/d1/draft.md"
   vrun seal-review d1 draft
   rm -f "$W/truths/index.md"                          # fails validate AFTER staging — outside the context manifest
-  # The injection differs by runner and the INVARIANT does not. bash gets a PATH shim for `rm`;
-  # node:fs cannot be reached that way, so the node runner drives the module through the operation
-  # seam consecrate exposes for exactly this (REWRITE_PLAN §4: this case must not be dropped
-  # silently). Both make the SAME removal fail and both assert the same three things below.
-  if [ "$WD_RUNNER" = node ]; then
-    OUT=$( ( cd "$W" && $TO node "$REPO/tests/consecrate-faultinject.mjs" d1 documents/d1/final.md ) 2>&1 ); RC=$?
-    [ "$RC" -eq 0 ] && bad "consecrate reported success after the full validation failed"
-    expect_has "UNVALIDATED"
-    [ -e "$W/documents/d1/.consecrate.inflight" ] \
-      || bad "in-flight marker removed while the final slot still held the rejected candidate"
-    return
-  fi
-  mkdir -p "$W.shim"
-  cat > "$W.shim/rm" <<'EOF'
-#!/usr/bin/env bash
-# Fails ONLY for the final slot. Every other rm the transaction needs (candidate, marker) still
-# works, so the branch under test is reached with the rest of the machinery intact.
-for a in "$@"; do case "$a" in */documents/d1/final.md) exit 1 ;; esac; done
-exec /usr/bin/rm "$@"
-EOF
-  chmod +x "$W.shim/rm"
-  OUT=$( ( cd "$W" && PATH="$W.shim:$PATH" $TO "${WDRUN[@]}" consecrate d1 ) 2>&1 ); RC=$?
+  # node:fs cannot be reached by a PATH shim, so the removal is an injectable operation with a real
+  # default and this driver is the only caller that passes anything else — no runtime switch, no
+  # environment channel. (The bash arm used a PATH shim for `rm`; it went with the bash runtime in
+  # bundle 2026-08-05.3, and the invariant below is unchanged.)
+  OUT=$( ( cd "$W" && $TO node "$REPO/tests/consecrate-faultinject.mjs" d1 documents/d1/final.md ) 2>&1 ); RC=$?
   [ "$RC" -eq 0 ] && bad "consecrate reported success after the full validation failed"
   expect_has "UNVALIDATED"
   # Last, so this message is the one that surfaces: the marker is the whole postcondition.
-  [ -e "$W/documents/d1/.consecrate.inflight" ] \
-    || bad "in-flight marker removed while the final slot still held the rejected candidate"
+  [ -e "$W/documents/d1/.consecrate.inflight" ]     || bad "in-flight marker removed while the final slot still held the rejected candidate"
 }
 pass_gate_tree_seal_match() {
   mktree
@@ -2283,10 +2243,6 @@ acct_retag_readonly_target_no_partial_state() {
   # OUTCOME it actually promises: fully-before with rc!=0, or fully-after with rc==0 — never half.
   # Before §11 2026-08-05 the node runtime failed this exact probe: EACCES escaped mid-loop, t001
   # kept the new tag, project.md kept the old one, and the backup dir sat abandoned (measured).
-  # NODE-gated: the transaction decision scopes to the shipped runtime; the frozen bash reference
-  # keeps its measured cp-fails-then-post-validate-rolls-back shape on Linux and an unpinned one on
-  # Windows, and pinning a frozen runtime's fault path buys nothing.
-  [ "$WD_RUNNER" = node ] || { ok; return; }
   sed -i 's/^required_tags: \[\]$/required_tags: [위약]/' "$W/project.md"
   chmod 444 "$W/project.md" 2>/dev/null
   vrun retag 위약 벌칙
@@ -2911,8 +2867,7 @@ acct_upgrade_readonly_target_no_partial_state() {
   # §9's fault condition as the DUAL OUTCOME (fully-before + rc!=0, or fully-after + rc==0). Before
   # §11 2026-08-05 the node runtime failed this probe in the worst shape: EACCES escaped at the
   # version stamp, review_legacy already inserted, version still 1, backup abandoned (measured —
-  # the exact mixed state the marker discipline exists to prevent). NODE-gated, as retag's.
-  [ "$WD_RUNNER" = node ] || { ok; return; }
+  # the exact mixed state the marker discipline exists to prevent).
   chmod 444 "$W/project.md" 2>/dev/null
   vrun upgrade --apply
   local rc=$RC pv cv
@@ -3074,36 +3029,26 @@ acct_json_version() {
   expect_has '"fingerprint"'
   expect_has '"schema_version":2'
 }
-nodeshape_diag_code_table() {
-  # Same contract, one emission shape: `prob('CODE', …)` / `warn('CODE', …)`. Comment lines are
-  # skipped so a doc-comment quoting a code is not mistaken for an emitted one — the port's comments
-  # quote codes constantly.
-  local F="$REPO/.weavedoc/FORMATS.md" bad="" c emitted
+meta_diag_code_table() {
+  # FORMATS documents every code the runtime can emit, and documents no code it cannot — the table
+  # is the contract's published half, so drift in EITHER direction is a defect. One emission shape:
+  # `prob('CODE', …)` / `warn('CODE', …)`. Comment lines are skipped so a doc-comment quoting a code
+  # is not mistaken for an emitted one — this runtime's comments quote codes constantly.
+  #
+  # THE ORPHAN DIRECTION IS BACK ON. While the port was partial it was checked only on the bash arm,
+  # because a documented code whose only site was an unported command would have read as an orphan —
+  # an assertion about how far the port had got, not about the contract. The port is complete and
+  # the bash arm is gone, so leaving it off would mean nobody checks it at all, which is the
+  # "a check that quietly stopped running" class this suite exists to prevent.
+  local F="$REPO/.weavedoc/FORMATS.md" bad="" c emitted ne
   local -a SRC; mapfile -t SRC < <(node_sources)
   emitted=$(grep -hv "^[[:space:]]*//" "${SRC[@]}" | grep -oE "\b(prob|warn)\('[A-Z][A-Z0-9-]+'" \
             | sed -E "s/.*'([A-Z][A-Z0-9-]+)'/\1/" | LC_ALL=C sort -u)
-  for c in $emitted; do
-    grep -q "\`$c\`" "$F" || bad="$bad UNDOCUMENTED:$c"
-  done
-  # The ORPHAN direction is deliberately NOT checked for the node runner: the port is partial, so a
-  # documented code that `consecrate`/`retag`/`upgrade` emits has no site here YET. Reporting those
-  # as orphans would be an assertion about how far the port has got, not about the contract — and it
-  # would go green by itself as the port lands, which is a test that measures the wrong thing. The
-  # bash arm still checks both directions, so the table cannot grow an orphan unnoticed.
-  OUT="${bad:-all emitted codes documented (orphan direction: bash arm)}"; RC=0
-  if [ -z "$bad" ]; then ok; else bad "diagnostic code table drift:$bad"; fi
-}
-meta_diag_code_table() {
-  # FORMATS documents every code the binary can emit, and documents no code it cannot — the
-  # table is the contract's published half, so drift in either direction is a defect.
-  # Two emission shapes, both harvested: shell `prob CODE "…"` / `warn CODE "…"`, and awk
-  # `prob("[CODE] " …)`. Comment lines are skipped so the doc-comment's own `prob CODE` example
-  # is not mistaken for an emitted code.
-  [ "$WD_RUNNER" = node ] && { nodeshape_diag_code_table; return; }
-  src_shape_unported && return
-  local B="$REPO/$WD_ENTRY" F="$REPO/.weavedoc/FORMATS.md" bad="" c emitted
-  emitted=$( { grep -vE '^[[:space:]]*#' "$B" | grep -oE '\b(prob|warn) [A-Z][A-Z0-9-]+' | awk '{print $2}'
-               grep -oE 'prob\("\[[A-Z][A-Z0-9-]+' "$B" | sed 's/.*\[//'; } | grep -v '^CODE$' | LC_ALL=C sort -u)
+  # VACUITY GUARD. An earlier draft of this line lost its escapes and `emitted` came out EMPTY,
+  # which reported all 93 documented codes as orphans — loud, so it was caught. The quiet direction
+  # is what this guards: an empty set makes the UNDOCUMENTED loop run zero times and pass.
+  ne=$(printf '%s\n' "$emitted" | grep -c . || true)
+  [ "${ne:-0}" -ge 50 ] || bad="$bad EXTRACTED-ONLY-${ne:-0}-CODES(the parse is broken, not the table)"
   for c in $emitted; do
     grep -q "\`$c\`" "$F" || bad="$bad UNDOCUMENTED:$c"
   done
@@ -3114,26 +3059,16 @@ meta_diag_code_table() {
   if [ -z "$bad" ]; then ok; else bad "diagnostic code table drift:$bad"; fi
 }
 meta_uncoded_ratchet() {
-  # Every SHELL prob site carries a code; the two matches allowed are emit_probs' router lines.
-  # awk-emitted diagnostics are wave 11b — this ratchet keeps the shell side at zero meanwhile.
-  local n
-  if [ "$WD_RUNNER" = node ]; then
-    # The port makes the code a REQUIRED first parameter, so an uncoded site cannot be written by
-    # accident — but "cannot happen" is what the bash side believed too. Counted, not assumed: every
-    # prob/warn call must open with a quoted upper-case code.
-    local -a SRC; mapfile -t SRC < <(node_sources)
-    n=$(grep -hv "^[[:space:]]*//" "${SRC[@]}" | grep -oE "\b(prob|warn)\(" | wc -l)
-    local coded
-    coded=$(grep -hv "^[[:space:]]*//" "${SRC[@]}" | grep -oE "\b(prob|warn)\('[A-Z][A-Z0-9-]+'" | wc -l)
-    OUT="prob/warn call sites: $n · carrying a code: $coded"
-    RC=0
-    if [ "${n:-0}" -eq "${coded:-0}" ]; then ok; else bad "prob/warn sites without a code: $(( n - coded ))"; fi
-    return
-  fi
-  src_shape_unported && return
-  n=$(grep -E '\bprob "' "$REPO/$WD_ENTRY" | grep -cvE '\$code|\$line' || true)
-  OUT="uncoded shell prob sites: ${n:-?}"; RC=0
-  if [ "${n:-1}" -eq 0 ]; then ok; else bad "shell prob sites without a code: $n (the ratchet allows zero)"; fi
+  # Every diagnostic carries a code. The runtime makes the code a REQUIRED first parameter, so an
+  # uncoded site cannot be written by accident — but "cannot happen" is what the bash runtime
+  # believed too, and it was carrying uncoded sites. Counted, not assumed.
+  local n coded
+  local -a SRC; mapfile -t SRC < <(node_sources)
+  n=$(grep -hv "^[[:space:]]*//" "${SRC[@]}" | grep -oE "\b(prob|warn)\(" | wc -l)
+  coded=$(grep -hv "^[[:space:]]*//" "${SRC[@]}" | grep -oE "\b(prob|warn)\('[A-Z][A-Z0-9-]+'" | wc -l)
+  OUT="prob/warn call sites: $n · carrying a code: $coded"
+  RC=0
+  if [ "${n:-0}" -eq "${coded:-0}" ]; then ok; else bad "prob/warn sites without a code: $(( n - coded ))"; fi
 }
 
 meta_doc_sync() {
@@ -3146,6 +3081,31 @@ meta_doc_sync() {
 
 # ---- command smoke floor (Phase 2: every CLI command has at least one covered run) ----
 acct_smoke_version() { vrun version; expect_pass; expect_has "fingerprint:"; }
+acct_golden_outputs_current() {
+  # tests/baseline/golden/ is the record of what each command PRINTS on a clean minimal mine, and
+  # until now NOTHING read it — it sat a whole release out of date (bundle 2026-08-05.1 next to a
+  # 2026-08-05.2 runtime) while the suite stayed green. A snapshot nobody compares is a file, not a
+  # record. Found by a cold review, 2026-08-05.
+  #
+  # This makes an intentional output change SHOW UP: the case fails until `bash tests/refresh-golden.sh`
+  # is run, and the change then appears in that directory's diff where a reviewer can see it.
+  #
+  # version.txt is compared on its LABEL LINE ONLY. The fingerprint hashes the whole runtime, so
+  # asserting it would demand a golden refresh on every lib edit — friction with no signal, since
+  # what this case is for is OUTPUT drift, and doccheck already ties the label to the CHANGELOG.
+  local G="$REPO/tests/baseline/golden" c bad=""
+  for c in validate census scope status gaps; do
+    [ -f "$G/$c.txt" ] || { bad="$bad MISSING:$c.txt"; continue; }
+    ( cd "$W" && $TO "${WDRUN[@]}" "$c" ) > "$W/.g.$c" 2>&1
+    cmp -s "$W/.g.$c" "$G/$c.txt" || bad="$bad DRIFT:$c"
+  done
+  ( cd "$W" && $TO "${WDRUN[@]}" version ) > "$W/.g.version" 2>&1
+  local now golden
+  now=$(head -1 "$W/.g.version"); golden=$(head -1 "$G/version.txt")
+  [ "$now" = "$golden" ] || bad="$bad LABEL:golden='$golden' runtime='$now'"
+  OUT="${bad:-golden snapshots match the current runtime}"; RC=0
+  if [ -z "$bad" ]; then ok; else bad "golden drift —$bad (run 'bash tests/refresh-golden.sh' and review the diff)"; fi
+}
 acct_fingerprint_covers_lib() {
   # The fingerprint is the ONE spelling of "are these two installs the same runtime", and the Node
   # runtime is a dispatcher plus the modules under lib/ — an entrypoint-only hash reported
@@ -3424,12 +3384,8 @@ if [ -n "$FILTER" ]; then CASES=$(printf '%s\n' "$CASES" | grep -F "$FILTER" || 
 echo "weavedoc regression — $(cd "$REPO" && git rev-parse --short HEAD 2>/dev/null) / bundle $(cat "$REPO/.weavedoc/VERSION") / $(printf '%s\n' "$CASES" | wc -l | tr -d ' ') cases, -j$JOBS"
 echo "  env: $(uname -sr) · bash ${BASH_VERSION%%(*} · cache key $KEY"
 # Syntax-check the entrypoint before building a fixture: a runtime that does not parse fails every
-# case identically and buries the one line that says why. Runner-aware, since the check is.
-case "$WD_RUNNER" in
-  bash) bash -n "$REPO/$WD_ENTRY" || { echo "!! $WD_ENTRY does not parse"; exit 2; } ;;
-  node) node --check "$REPO/$WD_ENTRY" || { echo "!! $WD_ENTRY does not parse"; exit 2; } ;;
-  *)    echo "!! no syntax check known for runner '$WD_RUNNER' — add one before trusting a green run"; exit 2 ;;
-esac
+# case identically and buries the one line that says why.
+node --check "$REPO/$WD_ENTRY" || { echo "!! $WD_ENTRY does not parse"; exit 2; }
 mkpristine
 OUT=$( ( cd "$PRISTINE" && "${WDRUN[@]}" validate ) 2>&1 ) || {
   echo "!! the pristine fixture does not validate — every case below would be meaningless"

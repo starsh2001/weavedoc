@@ -7,8 +7,9 @@
 // the first; a zero-byte file is invisible to an awk and present to a directory listing. Each of
 // those was found by measurement after being got wrong by reading.
 //
-// The scale is tests/parity-corpus.sh over the mines the 345 regression cases build — whole-output
-// comparison, because a substring suite cannot grade a rewrite whose contract is bytes.
+// The scale was a whole-output comparison against the bash runtime over every mine the regression
+// cases build — a substring suite cannot grade a rewrite whose contract is bytes. Both that scale
+// and its reference are gone; the last run of it is in tests/baseline/parity-final-2026-08-05.md.
 import { statSync, realpathSync, readFileSync, readdirSync } from 'node:fs'
 import { canonId, isDate, isFence, isPlaceholder, inList, listField, fmVal, pipes, splitLines, U, M } from './core.mjs'
 import { join, materialIds, mdirFor, docIds, tfileFor, docFinalPath, contextDigest } from './mine.mjs'

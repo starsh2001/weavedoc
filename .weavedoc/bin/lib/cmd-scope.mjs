@@ -131,7 +131,7 @@ export function cmdScope (m, out, json) {
   // retracted materials follow).
   //
   // A file that yields NO LINE is not in this population (fixed 2026-08-04, caught by
-  // tests/parity-corpus.sh on `acct_zero_byte_truth` and `block_truth_shaped_directory`). The bash
+  // the corpus scale on `acct_zero_byte_truth` and `block_truth_shaped_directory`, since retired with the bash runtime it compared against). The bash
   // side classifies with one awk over the glob, and awk contributes nothing for an input it never
   // reads a record from — a zero-byte file, or a DIRECTORY wearing a truth filename, which gawk
   // refuses with a stderr warning. Both therefore leave scope's live count untouched there, while a
@@ -236,7 +236,7 @@ export function cmdScope (m, out, json) {
     out(`  ledger: ${scan.U.length} entry(s) name units but end in no "${m.sch.get('verify.units.verified') || 'verified'}" verdict — they cover nothing; add the verdict or leave the units owed:`)
     for (const l of scan.U) out(l.replace(/^[ \t]*/, '    '))
   }
-  // NO trailing space (fixed 2026-08-04, caught by tests/parity-corpus.sh). The bash line renders
+  // NO trailing space (fixed 2026-08-04, caught by the corpus scale, since retired with the bash runtime it compared against). The bash line rendered
   // `printf '%s' "$ledger_bad" | tr '\n' ' '` — a command substitution has already eaten the final
   // newline, so `tr` finds none to turn into a space and the line ends at the last ')'. The lists
   // that DO end in a space (the id runs below) come through compress_ids, which prints a separator
