@@ -272,6 +272,7 @@ Every problem and warning the checker emits carries a **stable code**. The code 
 | `GATE-SEAL-MARKER` | a seal and the `review_legacy` marker coexist on one review |
 | `HQ-UNTAGGED` | Human-queue entry without a valid ownership tag |
 | `LEDGER-MALFORMED` | a verify-ledger row the reader cannot parse (columns, id, digest, round, standard or date) |
+| `LEDGER-UNREADABLE` | the verify-ledger EXISTS but its bytes cannot be read (permissions, or a directory wearing its name) — unknown evidence is not absence, so nothing counts as verified until it is fixed |
 | `LEDGER-VERDICT` | a verify-ledger row carries a verdict outside verified|failed|legacy-unbound |
 | `IDX-MISSING` | `truths/index.md` or `tree.md` absent (run `reindex`) |
 | `IDX-SYNC` | index and truth files disagree (run `reindex`) |

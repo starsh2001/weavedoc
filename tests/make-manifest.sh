@@ -11,6 +11,7 @@ export LC_ALL=C
 # this list for one release as the parity reference; it was deleted in bundle 2026-08-05.3 and its
 # last comparison is pinned in tests/baseline/parity-final-2026-08-05.md.
 git ls-files -- \
+  '.weavedoc/VERSION' \
   '.weavedoc/bin/weavedoc.mjs' \
   '.weavedoc/bin/lib' \
   '.weavedoc/schema' \

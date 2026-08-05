@@ -8,8 +8,11 @@
 // The CLI always passes the default; there is no runtime switch and no environment channel.
 //
 //   node tests/consecrate-faultinject.mjs <doc-id> <path-suffix-whose-removal-fails>
+//   node tests/consecrate-faultinject.mjs <doc-id> --throw-validate
 //
-// Exits with consecrate's own exit code, so the case reads it exactly as it reads the CLI's.
+// The second form makes the in-process validator THROW instead of returning (v0.5.1): an exception
+// used to escape the command whole, skipping the restore — a crash where the contract promises an
+// automatic rollback. Exits with consecrate's own exit code either way.
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { openMine } from '../.weavedoc/bin/lib/mine.mjs'
@@ -29,7 +32,9 @@ const errln = s => process.stderr.write(s + '\n')
 // with the rest of the machinery intact.
 const ops = {
   ...realOps,
-  rmrf: p => { if (String(p).endsWith(failSuffix)) throw new Error('injected: removal refused'); realOps.rmrf(p) },
-  validate: d => cmdValidate(mine, outln, false, d)
+  rmrf: p => { if (failSuffix !== '--throw-validate' && String(p).endsWith(failSuffix)) throw new Error('injected: removal refused'); realOps.rmrf(p) },
+  validate: failSuffix === '--throw-validate'
+    ? () => { throw new Error('injected: the validator itself crashed') }
+    : d => cmdValidate(mine, outln, false, d)
 }
 process.exit(cmdConsecrate(mine, outln, errln, doc, ops))

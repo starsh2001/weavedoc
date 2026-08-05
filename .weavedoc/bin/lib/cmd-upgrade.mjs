@@ -10,7 +10,7 @@ import { splitLines, canonId, isFence, U, M } from './core.mjs'
 import { nocomment, sectionAll } from './sections.mjs'
 import { join, materialIds, docIds, fm } from './mine.mjs'
 import { fmvB, clearFileCaches } from './read.mjs'
-import { ledgerRows } from './verify.mjs'
+import { ledgerRows, ledgerIndex } from './verify.mjs'
 import { scanVerifiedUnits } from './cmd-scope.mjs'
 import { writeAtomic, writeAtomicX } from './write.mjs'
 
@@ -21,7 +21,12 @@ import { writeAtomic, writeAtomicX } from './write.mjs'
 // external review's P0). bash never had that failure shape: its writes replace files by rename.
 export const realOps = {
   write: (p, buf) => writeAtomicX(p, buf),
-  restore: (from, to) => cpSync(from, to, { recursive: true })
+  restore: (from, to) => cpSync(from, to, { recursive: true }),
+  // The rename phase's two primitives, injectable since v0.5.1: a copy that dies partway and a
+  // removal that fails are the faults that distinguish "intent registered before the first byte"
+  // from "registered after" — and only a seam can produce them on demand.
+  copy: (from, to) => cpSync(from, to, { recursive: true }),
+  rm: p => rmSync(p, { recursive: true, force: true })
 }
 
 const readB = p => { try { return readFileSync(p).toString('latin1') } catch { return '' } }
@@ -208,6 +213,25 @@ export function cmdUpgrade (m, out, argv, runReindex, runValidate, ops = realOps
   // migration writes, and running them on a v2 mine was the seal-laundering path — strip the seals,
   // run --apply, and the review_legacy marker stamped tamper as history.
   if (pv !== '1' && cv !== '1') { out(`upgrade: nothing to do — the mine is already at schema ${sv}`); return 0 }
+  // The scan and the apply both read the ledger to decide which rows the migration MINTS. On a
+  // ledger that exists but cannot be read, that read comes back empty, so every markdown-verified
+  // unit reads as missing its row — and the apply would mint duplicates into (or over) a file whose
+  // real contents are unknown. Migrating evidence you cannot read is not a migration (v0.5.1).
+  {
+    const li = ledgerIndex(join(m.truths, m.ledgerFile()))
+    if (li.state === 'unreadable') {
+      out(`upgrade: truths/${m.ledgerFile()} exists but cannot be read (${li.code}) — refusing every mode: the migration mints ledger rows from what the ledger already holds, and that is unknown. Fix the file first (permissions, or a directory wearing its name)`)
+      return 1
+    }
+    // The HEADLESS state voids the sidecar for the same reason (v0.5.1 cold review): scope and
+    // validate both declare a headless ledger contributes nothing, and this command's scan was a
+    // third consumer quietly computing a plan from rows the other two had ruled void — a wrong
+    // preview at best, and at --apply a mint over evidence in an undecidable state.
+    if (li.headless > 0) {
+      out(`upgrade: truths/${m.ledgerFile()} holds ${li.headless} row(s) with no id — an unattributable row could be any unit's latest verdict, so the sidecar is void and there is nothing sound to migrate from. Run validate (it names the row), repair it, then re-run`)
+      return 1
+    }
+  }
 
   const items = scanUpgrade(m)
   if (items.length === 0) { out(`upgrade: nothing to do — the mine is already at schema ${sv}`); return 0 }
@@ -366,19 +390,25 @@ function upgradeApply (m, out, nitems, runReindex, runValidate, ops = realOps) {
   try {
   // 1. canonical renames + strict-reference rewrite. Prose and changelog history stay untouched:
   //    lenient resolution reads old spellings, and consecrated bytes are never edited.
+  // `crtd` BEFORE the copy, never after (v0.5.1, external review P1-4): registration is a statement
+  // of INTENT, and intent must be on the rollback list before the first byte that acts on it. In
+  // the old order — copy, delete old, then register — a copy that died partway left a half-made new
+  // path that rollback did not know about: the old came back from its snapshot and the partial new
+  // sat beside it, which is the mixed state the whole transaction exists to prevent. Registering a
+  // path that then never gets created costs nothing: rollback's removal is force-tolerant.
   for (const [kind, old, nw] of pairs) {
     if (kind === 'm') {
       bkup(rel(join(m.materials, old)))
-      cpSync(join(m.materials, old), join(m.materials, nw), { recursive: true })
-      rmSync(join(m.materials, old), { recursive: true, force: true })
       crtd(rel(join(m.materials, nw)))
+      ops.copy(join(m.materials, old), join(m.materials, nw))
+      ops.rm(join(m.materials, old))
       const cf = join(m.materials, nw, 'converted.md')
       write(cf, splitLines(readB(cf)).map(l => (l === `id: ${old}` ? `id: ${nw}` : l)).join('\n') + '\n')
     } else {
       bkup(rel(join(m.truths, `${old}.md`)))
-      cpSync(join(m.truths, `${old}.md`), join(m.truths, `${nw}.md`))
-      rmSync(join(m.truths, `${old}.md`), { force: true })
       crtd(rel(join(m.truths, `${nw}.md`)))
+      ops.copy(join(m.truths, `${old}.md`), join(m.truths, `${nw}.md`))
+      ops.rm(join(m.truths, `${old}.md`))
       const tf = join(m.truths, `${nw}.md`)
       write(tf, splitLines(readB(tf)).map(l => (l === `id: ${old}` ? `id: ${nw}` : l)).join('\n') + '\n')
     }
@@ -511,7 +541,9 @@ function upgradeApply (m, out, nitems, runReindex, runValidate, ops = realOps) {
       ...uniqSort(touched).map(p => `  ${p}`),
       'created:',
       ...uniqSort(created).map(p => `  ${p}`)]
-    writeAtomic(`${bak}/MANIFEST.txt`, Buffer.from(man.join('\n') + '\n', 'latin1'))
+    if (!writeAtomic(`${bak}/MANIFEST.txt`, Buffer.from(man.join('\n') + '\n', 'latin1'))) {
+      out('upgrade: warning — the backup directory is intact but its MANIFEST.txt could not be written; the originals are still there, unlabelled')
+    }
     out(`upgrade --apply: applied ${nitems} item(s) — schema ${m.schemaVer()}, validate clean.`)
     out(`  backup + manifest: ${rel(bak)}/ (originals; delete when you no longer want the restore point)`)
     return 0

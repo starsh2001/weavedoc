@@ -194,8 +194,19 @@ export function cmdReindex (m, out, errln, argv) {
   const sti = join(m.truths, `.index.md.tmp.${process.pid}`)
   const stt = join(m.truths, `.tree.md.tmp.${process.pid}`)
   const idxPath = join(m.truths, 'index.md')
+  // ABSENT and UNREADABLE are different states here too (v0.5.1, external review P1-1). Folding a
+  // read failure into "no index yet" gave the undo path the WRONG null: after the first rename
+  // landed and the second failed, "restore the old bytes" became "delete the file", and the command
+  // reported "index.md was rolled back" over an index it had just destroyed. An existing index this
+  // command cannot read is an index it cannot promise to put back — so it refuses BEFORE touching
+  // anything, while both views are still exactly as they were.
   let oldIdx = null
-  try { oldIdx = readFileSync(idxPath) } catch { /* no index yet — then there is nothing to undo */ }
+  try { oldIdx = readFileSync(idxPath) } catch (e) {
+    if (e.code !== 'ENOENT') {
+      errln(`reindex: the existing truths/index.md cannot be read (${e.code}) — refusing: if the tree.md write then failed, the old index could not be put back. Fix the file first (permissions, or a directory wearing its name); nothing was touched`)
+      return 1
+    }
+  }
   let landed = 0
   let err = null
   try {

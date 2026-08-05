@@ -15,7 +15,7 @@ import { canonId, isDate, isFence, isPlaceholder, inList, listField, fmVal, pipe
 import { join, materialIds, mdirFor, docIds, tfileFor, docFinalPath, contextDigest } from './mine.mjs'
 import { nocomment, dupSection, commentBalanced, sectionAll } from './sections.mjs'
 import { hqFiles } from './cmd-status.mjs'
-import { artifactDigest, ledgerLines } from './verify.mjs'
+import { artifactDigest, ledgerRead } from './verify.mjs'
 import { fidMark, fidBody, isNoise, foldKinds, bearsKind, commentSpans } from './review.mjs'
 import { fmvB as fmv, loadSchema, loadConfig } from './read.mjs'
 import { validateTruths } from './validate-truths.mjs'
@@ -26,6 +26,7 @@ import { validateTruths } from './validate-truths.mjs'
 const readOr = p => { try { return readFileSync(p).toString('latin1') } catch { return '' } }
 const isDirAt = p => { try { return statSync(p).isDirectory() } catch { return false } }
 const isFileAt = p => { try { return statSync(p).isFile() } catch { return false } }
+const existsAt = p => { try { statSync(p); return true } catch { return false } }
 // `[ -e ]` — exists, whatever KIND. The consecration markers are detected by presence alone.
 const exists = p => { try { statSync(p); return true } catch { return false } }
 
@@ -125,35 +126,14 @@ function splitLinesBytes (p) {
 // and DISCARD a final line with no newline (so the row a crashed `attest` leaves behind vanished
 // instead of raising anything). Both were faithful to a runtime that no longer exists.
 
-// `IFS=$'\t' read -r v1 … vN` — and a plain `.split('\t')` is NOT that rule. Measured, after the
-// naive version disagreed with bash on a row whose `standard` column is empty:
-//
-//   t1<TAB>-<TAB>verified<TAB>1<TAB><TAB>2026-07-01
-//     split('\t')  -> [t1, -, verified, 1, '', 2026-07-01]   "standard column is empty"
-//     bash read    -> [t1, -, verified, 1, 2026-07-01, '']   "fewer than six columns"
-//
-// TAB is IFS *whitespace*, so bash collapses runs of it into ONE delimiter and ignores leading and
-// trailing ones; only a non-whitespace IFS makes every delimiter delimit. The last name then absorbs
-// the remainder of the line VERBATIM — inner tabs intact, trailing ones stripped — which is what
-// makes "more than six columns" detectable at all.
-//
-// A consequence worth stating: with runs collapsing, an interior field can never BE empty, so
-// validate's "standard column is empty" message is unreachable on a tab-separated file. It is kept,
-// not deleted, because it is the structure the original has and removing it would be a silent
-// divergence the moment either side's splitting changes.
-function readTabs (line, n) {
-  let s = line.replace(/^\t+/, '').replace(/\t+$/, '')
-  const out = []
-  for (let i = 0; i < n - 1; i++) {
-    if (s === '') { out.push(''); continue }
-    const j = s.indexOf('\t')
-    if (j < 0) { out.push(s); s = ''; continue }
-    out.push(s.slice(0, j))
-    s = s.slice(j).replace(/^\t+/, '')
-  }
-  out.push(s)
-  return out
-}
+// RETIRED (v0.5.1): readTabs lived here — a faithful model of bash's `IFS=$'\t' read`, which
+// collapses runs of tabs and ignores leading and trailing ones. Its reason to exist died with the
+// bash runtime, but the function outlived it, and that made this file the SECOND column parser of
+// the ledger: a row with an extra empty column read as six clean fields here (rc 0) while scope's
+// exact split quarantined it, and a row with a LEADING tab read as a valid row here while scope
+// could not attribute it to any id — so a `failed` verdict vanished from both surfaces at once
+// (external review P0-1, both shapes measured). The ledger section below now splits exactly the
+// way verify.mjs does: every tab delimits, every deviation is named.
 
 // truths/coverage.md — map-written (element → truth ids, skips with reasons: T2's audit surface).
 // FLOOR, not a warranty: every section resolves to a material, every mentioned id exists, and every
@@ -574,11 +554,22 @@ export function cmdValidate (m, out, json = false, consecOk = '') {
   // against, missed one door over.
   const lfName = m.ledgerFile()
   const lfv = join(m.truths, lfName)
-  if (isFileAt(lfv)) {
-    // Read as LATIN1, one char per byte. The `standard` column is free text a Korean console fills
-    // with CP949, and this is exactly where bash's own `read` loses lines under a multibyte locale
-    // (v0.3.7). Byte semantics here means the split lands on the same tabs whatever the content.
-    for (const { raw: lline, terminated } of ledgerLines(lfv) ?? []) {
+  // NOT `isFileAt` (v0.5.1): that guard skipped this whole section for anything that exists without
+  // being a readable file — a directory wearing the ledger's name, a chmod-000 sidecar — and a mine
+  // whose evidence is in an UNKNOWN state validated clean (external review P0-2, measured: last
+  // verdict `failed`, chmod 000, rc 0). Absence stays legal (a never-verified mine has no sidecar);
+  // existence in any unreadable shape blocks.
+  if (existsAt(lfv)) {
+    const lr = ledgerRead(lfv)
+    if (lr.state !== 'ok') {
+      prob('LEDGER-UNREADABLE', M`truths/${lfName} exists but cannot be read (${lr.code}) — the verification evidence is in an unknown state, which is not the same as absent: the last rows could be failures. Fix the file (permissions, or a directory wearing its name), and until then nothing counts as verified`)
+    }
+    // Every tab DELIMITS — the exact split verify.mjs uses, so scope and validate read one grammar.
+    // The bash-shaped reader this replaces collapsed tab runs and ignored leading tabs, which made
+    // this file the ledger's SECOND column parser: an extra empty column read as six clean fields
+    // here while scope quarantined the row, and a leading tab made a `failed` row parse as valid
+    // here while scope could not attribute it to any id (external review P0-1, both measured).
+    for (const { raw: lline, terminated } of lr.lines) {
       if (lline === '' || lline.startsWith('#')) continue
       // A final line with content and no newline is the shape a crashed `attest` leaves. It is
       // named rather than skipped — the skip was the old reader's, and it made an interrupted
@@ -587,8 +578,13 @@ export function cmdValidate (m, out, json = false, consecOk = '') {
         prob('LEDGER-MALFORMED', M`truths/${lfName}  the last row has no line terminator: '${lline}' — a row written without its newline is the signature of a verification that died mid-write; re-run the attest that produced it, or delete the partial row`)
         continue
       }
-      const [lid, ldg, lvd, lrd, lst, ldt, lex] = readTabs(lline, 7)
-      if (lvd === '') {
+      const f = lline.split('\t')
+      const [lid = '', ldg = '', lvd = '', lrd = '', lst = '', ldt = ''] = f
+      if (lid === '') {
+        prob('LEDGER-MALFORMED', M`truths/${lfName}  row has an EMPTY id column (a leading tab, or a truncated write): '${lline}' — a row that cannot be attributed to a unit could be anyone's, including a failed verdict; while it stands, no fallback evidence counts anywhere`)
+        continue
+      }
+      if (f.length < 3) {
         prob('LEDGER-MALFORMED', M`truths/${lfName}  row has fewer than three tab-separated columns: '${lline}' — id·sha256·verdict is the minimum; an unparseable row covers nothing and blocks`)
         continue
       }
@@ -598,16 +594,13 @@ export function cmdValidate (m, out, json = false, consecOk = '') {
       }
       // The row FORMAT is fail-closed too: attest writes exactly six columns, so any deviation is a
       // hand edit — and a garbage digest or date wears the shape of evidence while binding nothing.
-      if (ldt === '') {
+      if (f.length < 6) {
         prob('LEDGER-MALFORMED', M`truths/${lfName}  row for '${lid}' has fewer than six tab-separated columns — id·sha256·verdict·round·standard·date; attest writes all six`)
         continue
       }
-      if (lex !== '') prob('LEDGER-MALFORMED', M`truths/${lfName}  row for '${lid}' has more than six tab-separated columns`)
-      // A control byte INSIDE a field (a CR that is not the line ending, a stray NUL). This file
-      // applies the rule with its own diagnostics rather than through verify.mjs's rowOk, so the
-      // rule has to be spelled here too — and it was missed exactly that way when the shared parser
-      // landed: `scope` quarantined such a row and `validate` passed it, which is the two-readers
-      // split the shared parser existed to end, reappearing one level down. Measured, not assumed.
+      if (f.length > 6) prob('LEDGER-MALFORMED', M`truths/${lfName}  row for '${lid}' has more than six tab-separated columns (an EMPTY extra column counts — every tab delimits)`)
+      // A control byte INSIDE a field (a CR that is not the line ending, a stray NUL) corrupts the
+      // row for the next reader, which is how one fact ends up spelled two ways.
       if (/[\x00-\x08\x0a-\x1f\x7f]/.test(lline)) { // eslint-disable-line no-control-regex
         prob('LEDGER-MALFORMED', M`truths/${lfName}  row for '${lid}' holds a control byte inside a column — a CR or newline in free text corrupts the row for the next reader, which is how one fact ends up spelled two ways; re-run the attest that wrote it with a plain-text standard`)
       }
@@ -912,8 +905,15 @@ export function cmdValidate (m, out, json = false, consecOk = '') {
         // matched nothing at all here (this module is byte-domain), and a template stub stopped
         // reading as a stub: two pass_completeness_* cases went red the moment the domain changed.
         const strip = s => s.replace(/\{[^{}]*\}/g, '').replace(/<[^<>]*>/g, '').replace(/[[\](){}<>\xe2\x80\x94\xc2\xb7:,.-]+/g, '').replace(/[ \t]+/g, '')
+        // The kind vocabulary comes from the SCHEMA (`gaps.enum.kind`), which declared it all along
+        // while nothing read it — the declared-but-unread class the schema's own header warns
+        // about, found by the v0.5.0 external review with a typo'd `[declraed]` that passed. An
+        // entry whose bracket slot holds a word outside the enum is malformed in EITHER section:
+        // under Open a typo still counted as debt (safe direction), but under Accepted it silently
+        // became a decision nobody made about a kind that does not exist.
+        const kindEnum = sch('gaps.enum.kind') || 'declared|reference|enumeration|symmetry'
         const scanRegister = (section) => {
-          let n = 0; let badline = ''; let inb = false; let gnoise = false
+          let n = 0; let badline = ''; let badkind = ''; let inb = false; let gnoise = false
           for (let gl of splitLines(sectionAll(nocomment(readOr(gapsPath)), section))) {
             gl = gl.replace(/\r$/, '')
             if (!/[^ \t]/.test(gl)) { inb = false; continue }
@@ -923,6 +923,9 @@ export function cmdValidate (m, out, json = false, consecOk = '') {
               gnoise = false
               if (grest.startsWith('- [<') || grest.startsWith('- [{')) {
                 if (strip(grest.includes(']') ? grest.slice(grest.indexOf(']') + 1) : grest) === '') gnoise = true
+              } else if (grest.startsWith('- [') && grest.includes(']')) {
+                const kw = grest.slice(3, grest.indexOf(']'))
+                if (badkind === '' && !inList(kw, kindEnum)) badkind = kw
               }
               if (!gnoise) n++
             } else {
@@ -930,10 +933,13 @@ export function cmdValidate (m, out, json = false, consecOk = '') {
               if (gnoise && strip(grest) !== '') { n++; gnoise = false }
             }
           }
-          return { n, badline }
+          return { n, badline, badkind }
         }
-        const { n: nopen, badline } = scanRegister('Open')
+        const { n: nopen, badline, badkind: openKind } = scanRegister('Open')
         const accepted = scanRegister('Accepted')
+        for (const [sec, kw] of [['Open', openKind], ['Accepted', accepted.badkind]]) {
+          if (kw !== '') prob('COMP-MALFORMED', M`completeness is 'required' but gaps.md '# ${sec}' holds an entry whose kind '[${kw}]' is not in the vocabulary — the enum is ${kindEnum} (schema gaps.enum.kind); a kind outside it is usually a typo, and a typo'd ACCEPTED entry is a decision nobody made`)
+        }
         if (accepted.badline !== '') {
           prob('COMP-MALFORMED', M`completeness is 'required' but gaps.md '# Accepted' holds a line the register grammar cannot read: '${accepted.badline}' — the same grammar as '# Open': entries are '- ' bullets and an indented line is a continuation ONLY under one. An accepted gap is a DECISION, so prose the counter cannot attribute to an entry is a decision nobody can point at`)
         }
@@ -950,6 +956,14 @@ export function cmdValidate (m, out, json = false, consecOk = '') {
   // ABSENCE is not blocked, unlike catalog.md: `verify` is on-demand, so a never-verified mine has
   // no verify.md legitimately. `status` reports the absence instead.
   const vmd = join(m.truths, 'verify.md')
+  // The same absent-vs-unreadable split as the sidecar, found by sweeping the class rather than
+  // waiting for the next review (v0.5.1): verify.md's ABSENCE is legal, so a directory wearing its
+  // name used to fold into "never verified" and validate stayed green over a file it could not
+  // read. (A chmod-unreadable verify.md already blocks — the empty read fails FM-MISSING — so the
+  // directory spelling was the one silent shape.)
+  if (existsAt(vmd) && !isFileAt(vmd)) {
+    prob('VERIFY-SECTION', U('truths/verify.md exists but is not a readable file (a directory wearing its name) — its records are in an unknown state, which is not the same as never-verified; fix the path first'))
+  }
   if (isFileAt(vmd)) {
     for (const k of pipes(sch('verify.fm.required'))) {
       const v = fmv(vmd, k)

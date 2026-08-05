@@ -168,7 +168,13 @@ export function cmdConsecrate (m, out, errln, docId, ops = realOps) {
   // variable, which the environment can inject (v0.3.3, `WD_CONSEC_DOC=d1 weavedoc validate`).
   // The caches are dropped first: they were filled before this command's own writes.
   clearFileCaches()
-  const vrc = ops.validate(d)
+  // A validator that THROWS is a validator that did not pass (v0.5.1, external review P2): the
+  // exception used to escape this command whole, skipping the restore below — the candidate stayed
+  // at final with the marker and backup beside it. Fail-closed even so (the next validate blocks on
+  // the marker), but "crashed mid-promotion" is not the automatic-restore contract. A throw is a
+  // failed validation now, and the ordinary rollback branch handles it.
+  let vrc
+  try { vrc = ops.validate(d) } catch { vrc = 1 }
   untrap()
   if (vrc === 0) {
     if (oldfin !== '') {

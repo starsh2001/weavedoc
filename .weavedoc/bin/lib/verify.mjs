@@ -51,20 +51,38 @@ export function rowOk (f) {
 //     working tree, so refusing it would block mines nobody broke
 //   - a NON-EMPTY final line with no terminator is MALFORMED, never skipped: dropping it silently
 //     is how a half-written verification row disappears instead of raising an alarm
-// -> [{raw, terminated}] in file order, or null if the file cannot be read.
-export function ledgerLines (file) {
-  const b = readBytes(file)
-  if (b === null) return null
+//   - ABSENT and UNREADABLE are different states (v0.5.1, external review P0-2). Folding a read
+//     failure into "no ledger" is the reader-side twin of the attest fallback that deleted history:
+//     a chmod-000 sidecar whose last verdict was `failed` read as a mine with nothing owed, and
+//     the v1 fallbacks opened over it. A file that EXISTS but cannot be read as bytes — permission
+//     fault, or a directory wearing the ledger's name — is evidence in an unknown state, and
+//     unknown evidence is not absence.
+// -> {state: 'absent'|'unreadable'|'ok', code, lines: [{raw, terminated}]}
+export function ledgerRead (file) {
+  let b
+  try {
+    b = readFileSync(file)
+  } catch (e) {
+    return { state: e.code === 'ENOENT' ? 'absent' : 'unreadable', code: e.code ?? 'unknown', lines: [] }
+  }
   const parts = b.toString('latin1').split('\n')
   const dangling = parts[parts.length - 1] !== ''
   if (!dangling) parts.pop()
-  return parts.map((x, i) => ({
-    raw: x.endsWith('\r') ? x.slice(0, -1) : x,
-    terminated: !(dangling && i === parts.length - 1)
-  }))
+  return {
+    state: 'ok',
+    code: '',
+    lines: parts.map((x, i) => ({
+      raw: x.endsWith('\r') ? x.slice(0, -1) : x,
+      terminated: !(dangling && i === parts.length - 1)
+    }))
+  }
 }
 
-const isSkippable = raw => raw.startsWith('#') || /^[ \t]*$/.test(raw)
+// Truly-empty lines and comments skip; a line holding ONLY whitespace does not (v0.5.1 cold
+// review): validate never skipped those — a lone TAB parsed as an empty-id row and blocked — while
+// this predicate absorbed them, so the split the shared parser ended came back one predicate down.
+// A whitespace-bearing line now parses like any other and fails like any other.
+const isSkippable = raw => raw === '' || raw.startsWith('#')
 
 // THE evidence index. `LAST row per id wins` is the published contract (FORMATS.md), and this is
 // the whole of it — including what happens when that last row is unreadable.
@@ -78,33 +96,45 @@ const isSkippable = raw => raw.startsWith('#') || /^[ \t]*$/.test(raw)
 // broke WHILE BEING WRITTEN resurrects the previous `verified`, and scope then describes a state
 // the mine is not in. Unreadable evidence is not old evidence; it is no evidence — the same ruling
 // already applied to unreadable VERDICTS (2026-08-04), extended to unreadable STRUCTURE.
-// -> {win: Map<id,fields>, quarantined: Set<id>, malformed: Set<id>, headless: number}
+// -> {state, code, win: Map<id,fields>, quarantined: Set<id>, malformed: Set<id>, headless: number}
+//
+// `headless` rows — a first column that is EMPTY (a leading tab, a truncated write) — cannot be
+// attributed to any id, which is precisely what makes them dangerous: the row that vanished could
+// have been anyone's, including the `failed` verdict that was someone's latest. So a headless
+// count above zero, like an unreadable file, means NO fallback may open anywhere (the consumers
+// enforce that; this function reports the number, and v0.5.0 shipped it as a counter nobody read —
+// the external review's P0-1b walked straight through that hole).
 export function ledgerIndex (file) {
-  const lines = ledgerLines(file)
+  const r = ledgerRead(file)
   const win = new Map(); const quarantined = new Set(); const malformed = new Set()
   let headless = 0
-  if (lines === null) return { win, quarantined, malformed, headless }
-  for (const { raw, terminated } of lines) {
+  for (const { raw, terminated } of r.lines) {
     if (isSkippable(raw)) continue
     const f = raw.split('\t')
-    const id = f[0]
+    // Keyed CANONICALLY (v0.5.1 cold review): validate accepts a row whose id is a legal lenient
+    // spelling (`t1` canonicalizes to t001), and keying by raw bytes here meant that row could
+    // never match its on-disk unit — validate green, scope silently demoting the evidence, which is
+    // the two-readers split in its keying. One parser means one id space.
+    const id = canonId(f[0]) ?? f[0]
     if (rowOk(f) && terminated) {
       win.set(id, f)
       quarantined.delete(id)          // a later good row rehabilitates the id
       continue
     }
-    if (id === '') { headless++; continue }   // no id to attribute the damage to — file-level
+    if (f[0] === '') { headless++; continue }   // no id to attribute the damage to — file-level
     malformed.add(id)
     win.delete(id)
     quarantined.add(id)
   }
-  return { win, quarantined, malformed, headless }
+  return { state: r.state, code: r.code, win, quarantined, malformed, headless }
 }
 
 // -> "id\tdigest\tverdict\tstandard" per unit, sorted. Quarantined ids are ABSENT by construction.
 export function ledgerRows (file) {
-  return [...ledgerIndex(file).win.values()]
-    .map(f => `${f[0]}\t${f[1]}\t${f[2]}\t${f[4]}`)
+  // The CANONICAL key leads the emitted line, not the raw column — consumers match these ids
+  // against on-disk units, and disk ids are canonical.
+  return [...ledgerIndex(file).win.entries()]
+    .map(([id, f]) => `${id}\t${f[1]}\t${f[2]}\t${f[4]}`)
     .sort()
 }
 

@@ -39,6 +39,16 @@ for t in $toks; do
   printf '%s\n' "$cmds" | grep -qx "$t" || say "README summary names '$t' but dispatch has no such command"
 done
 
+# 4. The no-command USAGE line names every dispatch command. It is a fourth surface that can drift
+# — and it had: `upgrade` was in the dispatch, the README, and the header roster, and missing from
+# the one line a user actually sees on a typo (v0.5.1 external review). Same vacuity rule as the
+# others: an extraction that comes back empty is a broken parse, not agreeing docs.
+usage=$(sed -n "/^const USAGE = /,/^$/p" "$BIN" | grep -oE "'[^']*'" | tr -d "'" | tr -d '\n')
+[ -n "$usage" ] || say "USAGE extraction found nothing in $BIN — the parse is broken, not the docs"
+for c in $cmds; do
+  case "$usage" in *"$c"*) ;; *) say "command '$c' is in dispatch but not in the USAGE line" ;; esac
+done
+
 # 3. The VERSION label and CHANGELOG's newest entry are one fact.
 v=$(cat "$REPO/.weavedoc/VERSION" 2>/dev/null)
 top=$(grep -m1 '^## ' "$REPO/CHANGELOG.md" | sed 's/^## *//')
