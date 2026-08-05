@@ -15,7 +15,7 @@ import { canonId, isDate, isFence, isPlaceholder, inList, listField, fmVal, pipe
 import { join, materialIds, mdirFor, docIds, tfileFor, docFinalPath, contextDigest } from './mine.mjs'
 import { nocomment, dupSection, commentBalanced, sectionAll } from './sections.mjs'
 import { hqFiles } from './cmd-status.mjs'
-import { artifactDigest } from './verify.mjs'
+import { artifactDigest, ledgerLines } from './verify.mjs'
 import { fidMark, fidBody, isNoise, foldKinds, bearsKind, commentSpans } from './review.mjs'
 import { fmvB as fmv, loadSchema, loadConfig } from './read.mjs'
 import { validateTruths } from './validate-truths.mjs'
@@ -119,13 +119,11 @@ function splitLinesBytes (p) {
 //      `git clone` of a mine produces exactly this.
 //   2. there is no `|| [ -n "$line" ]`, so a final line with NO trailing newline is never read at
 //      all — bash's `read` returns non-zero on it and the loop ends.
-function ledgerLinesRaw (p) {
-  let b
-  try { b = readFileSync(p) } catch { return [] }
-  const l = b.toString('latin1').split('\n')
-  l.pop()          // whatever follows the last \n — the empty string, or an unterminated final line
-  return l
-}
+// REPLACED by verify.mjs's ledgerLines (§11 2026-08-05): one reader for one file. What this one
+// did, faithfully reproducing bash's `while IFS= read -r`, was KEEP a trailing CR (so a git
+// autocrlf checkout blocked as LEDGER-MALFORMED while `scope` called the same mine fully verified)
+// and DISCARD a final line with no newline (so the row a crashed `attest` leaves behind vanished
+// instead of raising anything). Both were faithful to a runtime that no longer exists.
 
 // `IFS=$'\t' read -r v1 … vN` — and a plain `.split('\t')` is NOT that rule. Measured, after the
 // naive version disagreed with bash on a row whose `standard` column is empty:
@@ -580,8 +578,15 @@ export function cmdValidate (m, out, json = false, consecOk = '') {
     // Read as LATIN1, one char per byte. The `standard` column is free text a Korean console fills
     // with CP949, and this is exactly where bash's own `read` loses lines under a multibyte locale
     // (v0.3.7). Byte semantics here means the split lands on the same tabs whatever the content.
-    for (const lline of ledgerLinesRaw(lfv)) {
+    for (const { raw: lline, terminated } of ledgerLines(lfv) ?? []) {
       if (lline === '' || lline.startsWith('#')) continue
+      // A final line with content and no newline is the shape a crashed `attest` leaves. It is
+      // named rather than skipped — the skip was the old reader's, and it made an interrupted
+      // verification write look like a ledger that had simply not got there yet.
+      if (!terminated) {
+        prob('LEDGER-MALFORMED', M`truths/${lfName}  the last row has no line terminator: '${lline}' — a row written without its newline is the signature of a verification that died mid-write; re-run the attest that produced it, or delete the partial row`)
+        continue
+      }
       const [lid, ldg, lvd, lrd, lst, ldt, lex] = readTabs(lline, 7)
       if (lvd === '') {
         prob('LEDGER-MALFORMED', M`truths/${lfName}  row has fewer than three tab-separated columns: '${lline}' — id·sha256·verdict is the minimum; an unparseable row covers nothing and blocks`)
@@ -598,6 +603,14 @@ export function cmdValidate (m, out, json = false, consecOk = '') {
         continue
       }
       if (lex !== '') prob('LEDGER-MALFORMED', M`truths/${lfName}  row for '${lid}' has more than six tab-separated columns`)
+      // A control byte INSIDE a field (a CR that is not the line ending, a stray NUL). This file
+      // applies the rule with its own diagnostics rather than through verify.mjs's rowOk, so the
+      // rule has to be spelled here too — and it was missed exactly that way when the shared parser
+      // landed: `scope` quarantined such a row and `validate` passed it, which is the two-readers
+      // split the shared parser existed to end, reappearing one level down. Measured, not assumed.
+      if (/[\x00-\x08\x0a-\x1f\x7f]/.test(lline)) { // eslint-disable-line no-control-regex
+        prob('LEDGER-MALFORMED', M`truths/${lfName}  row for '${lid}' holds a control byte inside a column — a CR or newline in free text corrupts the row for the next reader, which is how one fact ends up spelled two ways; re-run the attest that wrote it with a plain-text standard`)
+      }
       if (ldg !== '-' && !/^[0-9a-f]{64}$/.test(ldg)) prob('LEDGER-MALFORMED', M`truths/${lfName}  row for '${lid}' digest column '${ldg}' is neither a 64-hex sha256 nor '-'`)
       // `-` or all digits. `0` passes the shape even though the message says "positive" — the shape
       // is what is enforced, and saying otherwise here would be a second rule.

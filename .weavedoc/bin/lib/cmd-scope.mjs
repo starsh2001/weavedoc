@@ -11,7 +11,7 @@ import { splitLines } from './core.mjs'
 import { nocomment, sectionAll } from './sections.mjs'
 import { join, materialIds, truthFiles } from './mine.mjs'
 import { fmv, fmLoad } from './read.mjs'
-import { ledgerRows, ledgerRowsBadstruct, matDigest, truthDigest } from './verify.mjs'
+import { ledgerRows, ledgerRowsBadstruct, ledgerQuarantined, matDigest, truthDigest } from './verify.mjs'
 
 const readOr = p => { try { return readFileSync(p, 'utf8') } catch { return '' } }
 const lowerAscii = s => s.replace(/[A-Z]/g, c => c.toLowerCase())
@@ -92,7 +92,12 @@ export function cmdScope (m, out, json) {
   ledger = ledger.filter(f => ok(f[2]))
   // Quarantine is NOT absence: a row the machine cannot read must never REDUCE what a round owes,
   // so it does not open the weaker v1 fallbacks either (ruled 2026-08-04).
-  const LBAD = new Set(ledgerBad.map(s => s.split(' ')[0]))
+  // Two ways an id's evidence can be unreadable, ONE consequence. An unknown VERDICT word was
+  // already quarantined (2026-08-04); an unreadable STRUCTURE in the id's LAST row joins it here
+  // (§11 2026-08-05). Both mean: no row wins, and the weaker v1 fallback does not open either —
+  // otherwise a verification that broke while being written would resurrect the previous
+  // `verified`, and this command would describe a state the mine is not in.
+  const LBAD = new Set([...ledgerBad.map(s => s.split(' ')[0]), ...ledgerQuarantined(lf)])
   const LROW = new Map(ledger.map(f => [f[0], { dg: f[1], vd: f[2], std: f[3] ?? '' }]))
 
   // ---- materials: population = converted.md holders minus tombstones. Evidence precedence:

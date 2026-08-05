@@ -26,53 +26,97 @@ function realDate (s) {
   return dd <= ml
 }
 
+// A field may not carry a control byte. TAB cannot reach here (it is the separator) but CR and LF
+// can — a `standard` column holding one splits or corrupts the row for the next reader, which is
+// how the same fact ended up spelled two ways on two surfaces before. Not a display concern: this
+// is the structure test, so it fails the row.
+const CTL = /[\x00-\x08\x0a-\x1f\x7f]/  // eslint-disable-line no-control-regex
+
 export function rowOk (f) {
   return f.length === 6 &&
     (f[1] === '-' || /^[0-9a-f]{64}$/.test(f[1])) &&
     (f[3] === '-' || /^[0-9]+$/.test(f[3])) &&
-    f[4] !== '' && realDate(f[5])
+    f[4] !== '' && realDate(f[5]) &&
+    !f.some(x => CTL.test(x))
 }
 
-// Line splitting for the ledger is done on raw bytes decoded as latin1, so a row holding invalid
-// UTF-8 in its free-form `standard` column still splits on the same tabs the bash reader sees.
-// (v0.3.6: that column is exactly where CP949 bytes arrive from a Korean console.)
-function ledgerLines (file) {
+// THE ledger reader — one for every consumer (§11 decision 2026-08-05). Before this there were
+// three, and they disagreed about the same bytes: `scope` stripped a trailing CR and `validate`
+// kept it (so a git-autocrlf checkout read as *nothing unverified* to one and LEDGER-MALFORMED to
+// the other), and `scope` READ a final line with no newline while `validate` discarded it — which
+// is exactly the shape an interrupted `attest` leaves behind.
+//
+// Rules, all decided rather than inherited:
+//   - a trailing CRLF is a line ending like any other; autocrlf is the normal state of a Windows
+//     working tree, so refusing it would block mines nobody broke
+//   - a NON-EMPTY final line with no terminator is MALFORMED, never skipped: dropping it silently
+//     is how a half-written verification row disappears instead of raising an alarm
+// -> [{raw, terminated}] in file order, or null if the file cannot be read.
+export function ledgerLines (file) {
   const b = readBytes(file)
   if (b === null) return null
-  const l = b.toString('latin1').split('\n')
-  if (l.length && l[l.length - 1] === '') l.pop()
-  return l.map(x => (x.endsWith('\r') ? x.slice(0, -1) : x))
+  const parts = b.toString('latin1').split('\n')
+  const dangling = parts[parts.length - 1] !== ''
+  if (!dangling) parts.pop()
+  return parts.map((x, i) => ({
+    raw: x.endsWith('\r') ? x.slice(0, -1) : x,
+    terminated: !(dangling && i === parts.length - 1)
+  }))
 }
 
-// -> [{id, digest, verdict, standard}] — LAST VALID row per id wins, sorted by the emitted line.
-export function ledgerRows (file) {
+const isSkippable = raw => raw.startsWith('#') || /^[ \t]*$/.test(raw)
+
+// THE evidence index. `LAST row per id wins` is the published contract (FORMATS.md), and this is
+// the whole of it — including what happens when that last row is unreadable.
+//
+//   last row of an id is well-formed  -> it wins, whatever came before it
+//   last row of an id is MALFORMED    -> the id is QUARANTINED: no evidence at all, not even the
+//                                        earlier valid row, and not the v1 frontmatter fallback
+//   a malformed row with a later valid one -> the valid row wins (the row is still reported)
+//
+// The quarantine rule is the point. Reading "last VALID row wins" instead means a verification that
+// broke WHILE BEING WRITTEN resurrects the previous `verified`, and scope then describes a state
+// the mine is not in. Unreadable evidence is not old evidence; it is no evidence — the same ruling
+// already applied to unreadable VERDICTS (2026-08-04), extended to unreadable STRUCTURE.
+// -> {win: Map<id,fields>, quarantined: Set<id>, malformed: Set<id>, headless: number}
+export function ledgerIndex (file) {
   const lines = ledgerLines(file)
-  if (lines === null) return []
-  const d = new Map()
-  for (const line of lines) {
-    if (line.startsWith('#')) continue
-    const f = line.split('\t')
-    if (!rowOk(f)) continue
-    d.set(f[0], { id: f[0], digest: f[1], verdict: f[2], standard: f[4] })
+  const win = new Map(); const quarantined = new Set(); const malformed = new Set()
+  let headless = 0
+  if (lines === null) return { win, quarantined, malformed, headless }
+  for (const { raw, terminated } of lines) {
+    if (isSkippable(raw)) continue
+    const f = raw.split('\t')
+    const id = f[0]
+    if (rowOk(f) && terminated) {
+      win.set(id, f)
+      quarantined.delete(id)          // a later good row rehabilitates the id
+      continue
+    }
+    if (id === '') { headless++; continue }   // no id to attribute the damage to — file-level
+    malformed.add(id)
+    win.delete(id)
+    quarantined.add(id)
   }
-  return [...d.values()]
-    .map(r => `${r.id}\t${r.digest}\t${r.verdict}\t${r.standard}`)
+  return { win, quarantined, malformed, headless }
+}
+
+// -> "id\tdigest\tverdict\tstandard" per unit, sorted. Quarantined ids are ABSENT by construction.
+export function ledgerRows (file) {
+  return [...ledgerIndex(file).win.values()]
+    .map(f => `${f[0]}\t${f[1]}\t${f[2]}\t${f[4]}`)
     .sort()
 }
 
-// -> ids of rows the strict filter rejects. SHOWN by scope, never absorbed: a row that vanished
-// silently would look identical to a ledger that never held it.
+// -> ids holding any row the strict filter rejects. SHOWN by scope, never absorbed: a row that
+// vanished silently would look identical to a ledger that never held it.
 export function ledgerRowsBadstruct (file) {
-  const lines = ledgerLines(file)
-  if (lines === null) return []
-  const out = new Set()
-  for (const line of lines) {
-    if (line.startsWith('#')) continue
-    if (/^[ \t]*$/.test(line)) continue
-    const f = line.split('\t')
-    if (!rowOk(f)) out.add(f[0])
-  }
-  return [...out].sort()
+  return [...ledgerIndex(file).malformed].sort()
+}
+
+// -> ids whose LAST row is unreadable, so they carry no evidence and open no fallback.
+export function ledgerQuarantined (file) {
+  return ledgerIndex(file).quarantined
 }
 
 // ---- digests ------------------------------------------------------------------------------

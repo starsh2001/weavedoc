@@ -2933,6 +2933,68 @@ acct_mat_digest_line_endings_stable() {
   expect_has "materials  1 converted · 1 verified (digest-bound)"
   expect_hasnt "→ stale:"
 }
+acct_ledger_crlf_reads_as_verified() {
+  # ONE READER (§11 2026-08-05). A git checkout with core.autocrlf=true — the Windows default —
+  # turns the ledger CRLF, and the two readers then disagreed about the same file: `scope` stripped
+  # the CR and reported the material fully verified, `validate` kept it (so the date column read
+  # `2026-07-01\r`) and blocked every row as LEDGER-MALFORMED. A verdict that depends on which
+  # command asked is not a verdict. Now a trailing CRLF is a line ending, in both.
+  vrun attest verified 2 standard m001
+  # Rewritten in bash, not sed/awk: those are the tools whose CR handling differs by platform, so
+  # building the fixture with them would make the case prove nothing on one of them.
+  { while IFS= read -r l || [ -n "$l" ]; do printf '%s\r\n' "${l%$'\r'}"; done < "$W/truths/verify-ledger.tsv"; } > "$W/l.crlf"
+  mv "$W/l.crlf" "$W/truths/verify-ledger.tsv"
+  IFS= read -r l0 < "$W/truths/verify-ledger.tsv"
+  case "$l0" in *$'\r') ;; *) bad "fixture did not become CRLF — the case would prove nothing"; return ;; esac
+  vrun scope
+  expect_has "materials  1 converted · 1 verified (digest-bound)"
+  vrun validate; expect_pass
+}
+acct_ledger_unterminated_last_row_blocks() {
+  # The signature of an `attest` that died mid-write: a final row with no newline. `scope` READ it
+  # and `validate` DISCARDED it, so a half-written verification either counted or vanished
+  # depending on who asked — and vanishing is the dangerous half, since it looks exactly like a
+  # ledger that had simply not got there yet. It is now named.
+  vrun attest verified 2 standard m001
+  printf 't001\t-\tverified\t1\tstandard\t2026-07-01' >> "$W/truths/verify-ledger.tsv"
+  [ -n "$(tail -c 1 "$W/truths/verify-ledger.tsv")" ] || { bad "fixture ends in a newline — the case would prove nothing"; return; }
+  vrun validate
+  expect_block "no line terminator"
+}
+acct_ledger_malformed_last_row_quarantines_id() {
+  # `LAST row per id wins` is the published contract, and this is what it means when that last row
+  # is unreadable: the id carries NO evidence — not the earlier valid row, and not the v1
+  # frontmatter fallback. Reading it as "last VALID row wins" instead means a verification that
+  # broke while being written RESURRECTS the previous `verified`, and scope then describes a state
+  # the mine is not in. Same ruling as the unknown-verdict quarantine above, one layer down.
+  vrun attest verified 2 standard m001
+  vrun scope; expect_has "materials  1 converted · 1 verified (digest-bound)"   # the row really landed
+  printf 'm001\tbroken\n' >> "$W/truths/verify-ledger.tsv"
+  vrun scope
+  expect_has "materials  1 converted · 0 verified (digest-bound) · 0 legacy-unbound · 0 stale · 0 failed · 1 unverified"
+  vrun validate; expect_block "[LEDGER-MALFORMED]"
+}
+acct_ledger_malformed_then_valid_row_wins() {
+  # The OTHER direction, and it must not be quarantined: a malformed row followed by a good one for
+  # the same id is a repaired ledger. The good row wins — while the malformed one is still reported,
+  # because a row that vanished silently would look identical to a ledger that never held it.
+  printf 'm001\tbroken\n' >> "$W/truths/verify-ledger.tsv"
+  vrun attest verified 2 standard m001
+  vrun scope
+  expect_has "materials  1 converted · 1 verified (digest-bound)"
+  expect_has "[LEDGER-MALFORMED]"
+  vrun validate; expect_block "[LEDGER-MALFORMED]"
+}
+acct_ledger_control_byte_in_standard_blocks() {
+  # A control byte inside a field corrupts the row for the NEXT reader — the same fact then reads
+  # two ways on two surfaces, which is the class this parser exists to end. Structure, not display:
+  # the row fails the strict filter, so it covers nothing and blocks.
+  vrun attest verified 2 standard m001
+  printf 'm001\t-\tverified\t1\tstd\rwith-cr\t2026-07-01\n' >> "$W/truths/verify-ledger.tsv"
+  vrun scope
+  expect_has "materials  1 converted · 0 verified (digest-bound)"
+  vrun validate; expect_block "[LEDGER-MALFORMED]"
+}
 acct_scope_ledger_unknown_verdict() {
   # The fail-open the cold review found: a typo'd verdict fell through to the digest compare and
   # counted as digest-bound. Now it is quarantined, named, and validate blocks on it.
