@@ -27,6 +27,25 @@ import { join } from './mine.mjs'
 
 const readOr = p => { try { return readFileSync(p, 'utf8') } catch { return '' } }
 
+// TWO VIEWS OF ONE FILE, and the seal is why.
+//
+// The quote seal is a BYTE comparison — it is the mine's anti-laundering check, the thing that says
+// this truth's body really is in that material. Decoding as UTF-8 first replaces every invalid byte
+// with U+FFFD, so two DIFFERENT byte strings compare EQUAL, and the seal passes on a quote the
+// material does not contain. Measured on a CP949 material (the ordinary legacy Korean encoding) with
+// one word changed in the truth: bash reported SEAL-QUOTE-MISSING and `0 sealed · 1 seal FAILED`,
+// the port reported `1 sealed` and did not raise it. A warranty that answers yes to a forgery is
+// worse than no warranty, so the comparison runs on bytes.
+//
+// The MESSAGES still need the decoded text, or every Korean diagnostic renders as mojibake. So both
+// views are kept: index i is the same line in each, because decoding never changes how many \n
+// bytes there are. Bytes decide; text is printed.
+const readViews = p => {
+  let b
+  try { b = readFileSync(p) } catch { return { B: [], U: [] } }
+  return { B: splitLines(b.toString('latin1')), U: splitLines(b.toString('utf8')) }
+}
+
 // `[[:space:]]` in the C locale. A LINE never contains a newline, so the within-line class omits it;
 // SP is the class as it applies to text that spans lines (a material body, a quoted block).
 const W = '[ \\t\\v\\f\\r]'
@@ -126,7 +145,9 @@ export function validateTruths (m, ctx, truthPaths, matIds) {
   // ---- the materials, first: the bodies a truth is sealed against ---------------------------
   for (const id of matIds) {
     const f = join(m.materials, id, 'converted.md')
-    const lines = splitLines(readOr(f))
+    // The BYTE view: this body is only ever compared against, never printed.
+    const lines = readViews(join(m.materials, id, 'converted.md')).B
+    void f
     // A file yielding NO LINE never opens on the bash side (awk reads no record from it), so it
     // registers neither a body nor a closed frontmatter. `body` is still created — the original
     // does `if(!(mid in body)) body[mid]=""` at FNR==1 — so the distinction that matters downstream
@@ -144,14 +165,17 @@ export function validateTruths (m, ctx, truthPaths, matIds) {
 
   // ---- the truths ---------------------------------------------------------------------------
   for (const f of truthPaths) {
-    const lines = splitLines(readOr(f))
+    // TEXT for the frontmatter (its values are printed), BYTES for the body (it is compared).
+    const V = readViews(f)
+    const lines = V.U
+    const linesB = V.B
     if (lines.length === 0) continue      // invisible to an awk; invisible here
     ntruthfile++
     const base = f.slice(f.lastIndexOf('/') + 1)
     const tid = base.replace(/\.md$/, '')
     const relf = `${ctx.truthsRel}/${base}`
 
-    let tidfield = ''; let tsrc = ''; let ttags = ''; let tstatus = ''
+    let tidfield = ''; let tsrc = ''; let ttags = ''; let ttagsB = ''; let tstatus = ''
     let tconflict = ''; let tresolution = ''; let tprov = ''
     let tsuperseded = ''; let tderivedfrom = ''; let tcorrob = ''
     let hassource = false; let hasderivedfrom = false
@@ -192,7 +216,7 @@ export function validateTruths (m, ctx, truthPaths, matIds) {
         tsrc = tval(line); hassource = true
         // A source spelled leniently (`m5` for folder `m005`) resolves to the folder it names.
         if (tsrc !== '' && !mat.has(tsrc)) { const sn = normM(tsrc); if (matn.has(sn)) tsrc = matn.get(sn) }
-      } else if (keyRe('tags').test(line)) { ttags = tval(line) } else if (keyRe('status').test(line)) {
+      } else if (keyRe('tags').test(line)) { ttags = tval(line); ttagsB = tval(linesB[i]) } else if (keyRe('status').test(line)) {
         tstatus = tval(line)
       } else if (keyRe('conflict_with').test(line)) { tconflict = tval(line) } else if (keyRe('resolution').test(line)) {
         tresolution = tval(line)
@@ -208,7 +232,7 @@ export function validateTruths (m, ctx, truthPaths, matIds) {
     if (closed) {
       tfDone({
         tid, relf, tidfield, tsrc, ttags, tstatus, tconflict, tresolution, tprov,
-        tsuperseded, tderivedfrom, tcorrob, hassource, hasderivedfrom
+        tsuperseded, tderivedfrom, tcorrob, hassource, hasderivedfrom, ttagsB
       })
     }
 
@@ -219,9 +243,10 @@ export function validateTruths (m, ctx, truthPaths, matIds) {
     // the source render as one soft-wrapped sentence the source never contained.
     let started = false
     for (; i < lines.length; i++) {
-      const line = lines[i]
+      const line = lines[i]       // decoded — only ever printed
+      const lineB = linesB[i]     // bytes — everything the seal decides
       const nonblank = /[^ \t\v\f\r]/.test(line)
-      if (started || nonblank) { started = true; bblk.set(tid, (bblk.get(tid) ?? '') + line + '\n') }
+      if (started || nonblank) { started = true; bblk.set(tid, (bblk.get(tid) ?? '') + lineB + '\n') }
       if (!nonblank) continue
       nbody.set(tid, (nbody.get(tid) ?? 0) + 1)
       const bl = line.replace(new RegExp(`^${W}+`), '').replace(new RegExp(`${W}+$`), '')
@@ -234,7 +259,7 @@ export function validateTruths (m, ctx, truthPaths, matIds) {
       // unread; those fall to NOT checked instead.
       if (tsrc !== '' && body.has(tsrc) && mfmok.has(tsrc)) {
         sealsrc.set(tid, tsrc); sealfile.set(tid, relf); sealstat.set(tid, tstatus)
-        if (!body.get(tsrc).includes(line)) {
+        if (!body.get(tsrc).includes(lineB)) {
           sealbroken.add(tid)
           if (tstatus !== 'retracted' && !unsealed.has(tid)) {
             unsealed.add(tid)
@@ -369,7 +394,10 @@ export function validateTruths (m, ctx, truthPaths, matIds) {
     // discarded loser lives on in its winner. Otherwise retracting the last real extraction of a
     // mandatory topic would keep the mine green about it.
     if (v !== 'retracted' && v !== 'discarded') {
-      for (const tg of t.ttags.replace(/[[\]"]/g, '').split(',')) {
+      // The BYTE spelling: required_tags is matched byte for byte on the bash side (every reader
+      // there is LC_ALL=C), and folding two different tags onto one U+FFFD would answer "this
+      // required topic is covered" about a tag the mine does not hold.
+      for (const tg of t.ttagsB.replace(/[[\]"]/g, '').split(',')) {
         const s = tg.replace(new RegExp(`^${W}+`), '').replace(new RegExp(`${W}+$`), '')
         if (s !== '') seentag.add(s)
       }
@@ -377,8 +405,12 @@ export function validateTruths (m, ctx, truthPaths, matIds) {
   }
 
   // ---- END ----------------------------------------------------------------------------------
-  for (const rt of reqtags) {
-    if (rt !== '' && !seentag.has(rt)) prob('REQTAG-EMPTY', `required_tag ${q(rt)} has no live truths — retracted and discarded truths do not cover a topic (a tombstone is an extraction that never had standing); extract it from a material, queue the question (the ask loop turns the answer into a user-answer material), or remove the tag from project.md required_tags — removing it switches the completeness warranty off for that topic`)
+  // Compared in BYTES, printed as TEXT. The two arrays are one list read two ways, so index i is
+  // the same tag in each — a comma is a comma in both views, so the split lands identically.
+  for (let ri = 0; ri < reqtags.length; ri++) {
+    const rt = reqtags[ri]
+    const rtB = ctx.reqtagsB[ri] ?? rt
+    if (rt !== '' && !seentag.has(rtB)) prob('REQTAG-EMPTY', `required_tag ${q(rt)} has no live truths — retracted and discarded truths do not cover a topic (a tombstone is an extraction that never had standing); extract it from a material, queue the question (the ask loop turns the answer into a user-answer material), or remove the tag from project.md required_tags — removing it switches the completeness warranty off for that topic`)
   }
   for (const kx of sortedKeys(kcount)) {
     if (kcount.get(kx) <= 1) continue

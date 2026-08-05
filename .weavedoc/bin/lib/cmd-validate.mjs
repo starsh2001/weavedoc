@@ -10,9 +10,10 @@
 // The scale is tests/parity-corpus.sh over the mines the 345 regression cases build — whole-output
 // comparison, because a substring suite cannot grade a rewrite whose contract is bytes.
 import { statSync, realpathSync, readFileSync, readdirSync } from 'node:fs'
-import { canonId, isDate, isFence, isPlaceholder, inList, listField, pipes, splitLines } from './core.mjs'
+import { canonId, isDate, isFence, isPlaceholder, inList, listField, fmVal, pipes, splitLines } from './core.mjs'
 import { join, materialIds, mdirFor, docIds, tfileFor, docFinalPath, contextDigest } from './mine.mjs'
-import { nocomment, dupSection, commentBalanced } from './sections.mjs'
+import { nocomment, dupSection, commentBalanced, sectionAll } from './sections.mjs'
+import { hqFiles } from './cmd-status.mjs'
 import { artifactDigest } from './verify.mjs'
 import { fidMark, fidBody, isNoise, foldKinds, bearsKind, commentSpans } from './review.mjs'
 import { fmv } from './read.mjs'
@@ -103,6 +104,23 @@ function splitLinesBytes (p) {
   const l = b.toString('latin1').split('\n')
   if (l.length && l[l.length - 1] === '') l.pop()
   return l.map(x => (x.endsWith('\r') ? x.slice(0, -1) : x))
+}
+
+// The LEDGER's own reader, and it is deliberately neither of the two above.
+// bash reads that file with a bare `while IFS= read -r lline_ ... done < "$lfv_"`, which means two
+// things this file must copy and the general readers do not:
+//   1. a trailing CR is KEPT, so a CRLF ledger has a date column of `2026-07-30\r` and every row is
+//      LEDGER-MALFORMED. Measured: identical on MSYS and Linux, so there is one bash answer and the
+//      port was passing a file bash blocks. `core.autocrlf=true` is the Windows default and a plain
+//      `git clone` of a mine produces exactly this.
+//   2. there is no `|| [ -n "$line" ]`, so a final line with NO trailing newline is never read at
+//      all — bash's `read` returns non-zero on it and the loop ends.
+function ledgerLinesRaw (p) {
+  let b
+  try { b = readFileSync(p) } catch { return [] }
+  const l = b.toString('latin1').split('\n')
+  l.pop()          // whatever follows the last \n — the empty string, or an unterminated final line
+  return l
 }
 
 // `IFS=$'\t' read -r v1 … vN` — and a plain `.split('\t')` is NOT that rule. Measured, after the
@@ -220,6 +238,43 @@ function validateCoverage (m, { prob }, covPath, matIds, truthPaths) {
     if (hassec.has(s) && !mention.has(`${s},${norm(t)}`)) {
       prob('COVERAGE-SECTION', `truths/coverage.md  ${q(`## ${hassec.get(s)}`)} missing ${q(t)} — extracted from ${tsrc.get(t)} but absent from its coverage section (update at map)`)
     }
+  }
+}
+
+// json_esc: backslash, quote, newline and tab escaped; carriage return DROPPED, not escaped.
+const jsonEsc = s => s.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n').replace(/\t/g, '\\t').replace(/\r/g, '')
+
+// Human queue ownership tags, over a file that carries a "## Human queue" section.
+// Enforced ONLY where a [state] tag is already present: an untagged legacy entry is the audit
+// lane's job, not a hard failure — a spec change must not break a mine verified under the old shape.
+// And only `open` needs ownership: it drives the confirmation split, while a `ruled` entry is closed
+// and nothing reads its ownership, so requiring one there would be enforcement with no consumer.
+function checkHqTags (m, prob, file, sch) {
+  const rel = file.startsWith(`${m.root}/`) ? file.slice(m.root.length + 1) : file
+  const states = new Set(pipes(sch('humanqueue.enum.state')).filter(Boolean))
+  const owns = new Set(pipes(sch('humanqueue.enum.ownership')).filter(Boolean))
+  const lev = s => { const x = /^#+/.exec(s); return x ? x[0].length : 0 }
+  let on = false; let lv = 0
+  // The same section rules hq_body uses — EVERY matching section, either heading level. Reading only
+  // the first hid every later round's entries from the counter and from this check at once.
+  for (const raw of splitLines(nocomment(readOr(file)).replace(/\n+$/, ''))) {
+    if (/^#+[ \t\n\v\f\r]+Human queue[ \t\n\v\f\r]*$/.test(raw)) { on = true; lv = lev(raw); continue }
+    if (on && /^#+[ \t\n\v\f\r]/.test(raw) && lev(raw) <= lv) on = false
+    if (!on) continue
+    const line = raw.replace(/^[ \t\n\v\f\r]+/, '')
+    if (!line.startsWith('- [')) continue
+    const s = line.slice(3)
+    if (!s.includes(']')) continue
+    const st = s.slice(0, s.indexOf(']'))
+    if (!states.has(st)) continue
+    if (st !== 'open') continue
+    const rest = s.slice(s.indexOf(']') + 1).replace(/^[ \t\n\v\f\r]+/, '')
+    let ow = ''
+    if (rest.startsWith('[')) { const r2 = rest.slice(1); if (r2.includes(']')) ow = r2.slice(0, r2.indexOf(']')) }
+    if (owns.has(ow)) continue
+    const what = line.replace(/^[ \t\n\v\f\r]*- \[[^\]]*\][ \t\n\v\f\r]*/, '').replace(/[ \t\n\v\f\r]*—[\s\S]*$/, '')
+    if (what === '') continue
+    prob('HQ-UNTAGGED', `${rel}  Human queue '[open]' entry has no valid ownership tag → add [user-only|recommended|machine]: ${what}`)
   }
 }
 
@@ -411,6 +466,18 @@ export function cmdValidate (m, out, json = false, consecOk = '') {
     if (fmv(cf, 'origin') === 'research') research.add(id)
   }
   const reqtags = listField(fmv(m.project, 'required_tags'))
+  // The same list read as BYTES, for the coverage comparison in the truths pass — see the note
+  // there. Parsed independently rather than re-encoded, so a value the UTF-8 view has already
+  // folded cannot be un-folded here.
+  const reqtagsB = (() => {
+    const lines = splitLinesBytes(m.project)
+    if (lines.length === 0 || !isFence(lines[0])) return reqtags
+    for (let i = 1; i < lines.length; i++) {
+      if (isFence(lines[i])) break
+      if (/^required_tags[ \t\v\f\r]*:/.test(lines[i])) return listField(fmVal(lines[i]))
+    }
+    return reqtags
+  })()
   // All ids on the line, zero-padding normalised — the same rule census uses. Taking only the first
   // id made a truth listed second on a shared `removed:` line fail validate for having no record.
   const removedlog = new Set()
@@ -425,7 +492,7 @@ export function cmdValidate (m, out, json = false, consecOk = '') {
   let counts = { ntruthfile: 0, nsealed: 0, nsealfail: 0, ntomb: 0 }
   if (isDirAt(m.truths) && globbed.length > 0) {
     counts = validateTruths(m, {
-      prob, sch, retracted, research, removedlog, reqtags,
+      prob, sch, retracted, research, removedlog, reqtags, reqtagsB,
       mroot: m.materials.startsWith(`${m.root}/`) ? m.materials.slice(m.root.length + 1) : m.materials,
       truthsRel: m.truths.startsWith(`${m.root}/`) ? m.truths.slice(m.root.length + 1) : m.truths
     }, truthPaths, mids)
@@ -494,7 +561,7 @@ export function cmdValidate (m, out, json = false, consecOk = '') {
     // Read as LATIN1, one char per byte. The `standard` column is free text a Korean console fills
     // with CP949, and this is exactly where bash's own `read` loses lines under a multibyte locale
     // (v0.3.7). Byte semantics here means the split lands on the same tabs whatever the content.
-    for (const lline of splitLinesBytes(lfv)) {
+    for (const lline of ledgerLinesRaw(lfv)) {
       if (lline === '' || lline.startsWith('#')) continue
       const [lid, ldg, lvd, lrd, lst, ldt, lex] = readTabs(lline, 7)
       if (lvd === '') {
@@ -765,9 +832,176 @@ export function cmdValidate (m, out, json = false, consecOk = '') {
     }
   }
 
-  // UNIT BOUNDARY (stage 5a-4). The completeness warranty, verify.md, the Human queue tags, the
-  // config enums and the `examined:` accounting land in 5a-5; until then this function prints the
-  // diagnostics it owns and nothing else, and the CLI still refuses `validate`.
-  void nMat; void warns; void diags; void counts; void nDoc; void nGated; void nConsec; void nRseal; void nRlegacy
-  return problems > 0 ? 1 : 0
+  // --- completeness warranty wiring (WD-COR-004) ---
+  // `fidelity.completeness: required` turns the OPEN gap register into a gate input. The default
+  // (off) keeps fill-or-accept non-blocking. required + a consecrated output + (no register at all |
+  // open entries) = fail — a warranty nobody ran is not a warranty, the same rule as the gate's own
+  // record. Accepted entries are decisions and never block.
+  const gapsPath = `${m.root}/gaps.md`
+  if (nConsec > 0 && (m.cfg.flat.get('completeness') ?? '') === 'required') {
+    if (!isFileAt(gapsPath)) {
+      prob('COMP-NO-REGISTER', "completeness is 'required' and a consecrated output exists, but there is no gaps.md — the completeness register never ran. Run the weavedoc-gaps skill (fill-or-accept) before consecrating, or set fidelity.completeness: off to drop the warranty")
+    } else if (!commentBalanced(gapsPath)) {
+      // The same rule review.md has: an unclosed '<!--' blanks everything after it BEFORE any reader
+      // sees a line, so gaps hidden behind it would vanish into a clean register.
+      prob('COMP-MALFORMED', "completeness is 'required' but gaps.md ends inside an unterminated '<!--' — everything after it is invisible to the counter, so gaps behind it would read as zero; close the comment")
+    } else {
+      // Both counts are taken BEFORE any of them is tested — the bash form is a compound `elif`
+      // whose first two commands are assignments and whose third is the condition, so `gacc_` is
+      // always set by the time the second branch reads it.
+      const gopen = dupSection(gapsPath, 'Open', 0)
+      const gacc = dupSection(gapsPath, 'Accepted', 0)
+      if (gopen === 0) {
+        // A register with no readable Open section is a register that never ran, wearing a filename.
+        prob('COMP-MALFORMED', "completeness is 'required' but gaps.md has no readable '# Open' section — the register format is '# Open' / '# Accepted' (weavedoc-gaps writes it); a file without them proves nothing and blocks like a missing one")
+      } else if (gacc === 0) {
+        prob('COMP-MALFORMED', "completeness is 'required' but gaps.md has no readable '# Accepted' section — the register format is '# Open' / '# Accepted' (weavedoc-gaps writes both); a one-section file blocks like a malformed register")
+      } else if (gopen > 1 || gacc > 1) {
+        // A duplicated register section splits the ledger: a single-section counter reads only the
+        // first copy, so an empty first Open next to a populated second one read as "zero open gaps".
+        prob('COMP-MALFORMED', "completeness is 'required' but gaps.md repeats a register section heading — exactly one '# Open' and one '# Accepted'; entries under a duplicated section are invisible to a single-section reader, so the copy blocks like a missing register")
+      } else {
+        // STATE-BASED entry scan: a continuation is legal only AFTER a bullet — an indented line with
+        // no open entry above is prose the counter cannot see, not a continuation of nothing.
+        let nopen = 0; let badline = ''; let inb = false; let gnoise = false
+        // The placeholder filter judges the REMAINDER, the same ruling review entries follow.
+        const strip = s => s.replace(/\{[^{}]*\}/g, '').replace(/<[^<>]*>/g, '').replace(/[[\](){}<>—:·,.-]+/g, '').replace(/[ \t]+/g, '')
+        for (let gl of splitLines(sectionAll(nocomment(readOr(gapsPath)), 'Open'))) {
+          gl = gl.replace(/\r$/, '')
+          if (!/[^ \t]/.test(gl)) { inb = false; continue }
+          const grest = gl.replace(/^[ \t]*/, '')
+          if (grest.startsWith('- ')) {
+            inb = true
+            gnoise = false
+            if (grest.startsWith('- [<') || grest.startsWith('- [{')) {
+              if (strip(grest.includes(']') ? grest.slice(grest.indexOf(']') + 1) : grest) === '') gnoise = true
+            }
+            if (!gnoise) nopen++
+          } else {
+            if (grest === gl || !inb) { badline = gl; break }
+            // The noise verdict belongs to the ENTRY (bullet + its continuations), never to the
+            // bullet alone (v0.3.6): an entry that kept the shipped placeholder bullet and wrote its
+            // real content in the continuation counted as ZERO, so `required` passed over exactly the
+            // debt it is bought to surface. Judged with the bullet's OWN remainder spelling — a
+            // second, looser one here would be the two-parsers drift class itself. The flag flips so
+            // the entry counts ONCE however many continuations carry it.
+            if (gnoise && strip(grest) !== '') { nopen++; gnoise = false }
+          }
+        }
+        if (badline !== '') {
+          prob('COMP-MALFORMED', `completeness is 'required' but gaps.md '# Open' holds a line the register grammar cannot read: '${badline}' — entries are '- [<kind>] …' bullets; an indented line is a continuation ONLY under a bullet, and prose anywhere is a gap no counter sees, so it blocks like a malformed register`)
+        } else if (nopen > 0) {
+          prob('COMP-OPEN-GAPS', `completeness is 'required' but gaps.md holds ${nopen} open gap(s) next to a consecrated output — fill each (question → user-answer material → map) or move it to Accepted with a reason; under 'required' an open gap is a violation, not a note`)
+        }
+      }
+    }
+  }
+
+  // --- truths/verify.md frontmatter + sections ---
+  // ABSENCE is not blocked, unlike catalog.md: `verify` is on-demand, so a never-verified mine has
+  // no verify.md legitimately. `status` reports the absence instead.
+  const vmd = join(m.truths, 'verify.md')
+  if (isFileAt(vmd)) {
+    for (const k of pipes(sch('verify.fm.required'))) {
+      const v = fmv(vmd, k)
+      if (v === '') { prob('FM-MISSING', `truths/verify.md  frontmatter '${k}' missing`); continue }
+      if (k === 'verified_at' && !isDate(v)) prob('DATE-INVALID', `truths/verify.md  verified_at '${v}' is not a date (YYYY-MM-DD, zero-padded, real month and day) — a field the format calls a date and nobody reads as one is a field that can say anything`)
+    }
+    const vst = fmv(vmd, 'status')
+    if (vst !== '' && !inList(vst, sch('verify.fm.enum.status'))) prob('VERIFY-ENUM', `truths/verify.md  status '${vst}' invalid → use ${sch('verify.fm.enum.status')}`)
+    // Either heading level, read through the comment stripper — a section living only in a comment
+    // satisfies a raw grep but is unreadable. Emission keeps the DECLARED section order.
+    const want = new Set(pipes(sch('verify.sections')).filter(x => x !== ''))
+    for (const l of splitLines(nocomment(readOr(vmd)).replace(/\n+$/, ''))) {
+      if (!/^##?[ \t]/.test(l)) continue
+      want.delete(l.replace(/^##?[ \t]+/, '').replace(/[ \t\r]*$/, ''))
+    }
+    for (const k of pipes(sch('verify.sections'))) {
+      if (k !== '' && want.has(k)) prob('VERIFY-SECTION', `truths/verify.md  required section '${k}' missing (verify.sections)`)
+    }
+  }
+
+  // --- Human queue ownership tags (truths/verify.md AND documents/*/review.md) ---
+  // Both carry a Human queue; checking only verify.md let a semantic dismissal parked on the
+  // document side vanish from validate, status and audit alike.
+  for (const hqf of hqFiles(m)) checkHqTags(m, prob, hqf, sch)
+
+  // --- config enums ---
+  const cfl = k => m.cfg.flat.get(k) ?? ''
+  const cse = k => m.cfg.sect.get(k) ?? ''
+  for (const [k, sk, label] of [['completeness', 'config.enum.completeness', 'fidelity.completeness'],
+    ['detection', 'config.enum.detection', 'conflicts.detection'],
+    ['attribution', 'config.enum.attribution', 'conflicts.attribution']]) {
+    const v = cfl(k)
+    if (v !== '' && !inList(v, sch(sk))) prob('CFG-ENUM', `config ${label} '${v}' invalid`)
+  }
+
+  // --- schema version negotiation (WD-MIG-002) + full config contract (WD-CFG-001) ---
+  const sv = sch('schema.version') || '2'
+  const pv = fmv(m.project, 'version'); const cv = cfl('version')
+  if (pv === '' || /[^0-9]/.test(pv)) prob('VER-NOT-INT', `project.md version '${pv}' is not an integer — the schema version field is the negotiation handle`)
+  else if (Number(pv) > Number(sv)) prob('VER-FUTURE', `project.md declares schema version ${pv}, newer than this runtime supports (≤${sv}) — upgrade the runtime bundle, never guess at a future format`)
+  if (cv === '' || /[^0-9]/.test(cv)) prob('VER-NOT-INT', `config version '${cv}' is not an integer`)
+  if (pv !== '' && cv !== '' && pv !== cv) {
+    prob('VER-DISAGREE', `project.md version (${pv}) and config.yaml version (${cv}) disagree — two records of one fact must agree; upgrade stamps both`)
+  }
+  for (const sect of ['verify', 'review']) {
+    let v = cse(`${sect}.strength`)
+    if (v !== '' && !inList(v, sch('config.strength.range'))) prob('CFG-RANGE', `config ${sect}.strength '${v}' invalid → one of ${sch('config.strength.range')}`)
+    v = cse(`${sect}.max_rounds`)
+    // `0` is rejected here and only here: "exceeded → escalate" needs a ceiling that can be exceeded.
+    if (v !== '' && (v === '0' || /[^0-9]/.test(v))) prob('CFG-RANGE', `config ${sect}.max_rounds '${v}' must be a positive integer — 'exceeded → escalate' needs a ceiling that can be exceeded`)
+    v = cse(`${sect}.scale`)
+    if (v !== '' && !inList(v, sch('config.enum.scale'))) prob('CFG-ENUM', `config ${sect}.scale '${v}' invalid → ${sch('config.enum.scale')}`)
+    for (const ck of pipes(sch('config.repeat.scales'))) {
+      v = cse(`${sect}.${ck}`)
+      if (v !== '' && /[^0-9]/.test(v)) prob('CFG-RANGE', `config ${sect}.repeat.${ck} '${v}' must be a non-negative integer (clean rounds in a row)`)
+    }
+  }
+  // Unknown top-level keys: a NAMED warning, never a failure — extension vs typo is not
+  // machine-decidable, but silence would let a typo'd knob read as configured. Over the RAW config,
+  // not the parsed one: a key the parser rejects is exactly the sort that needs naming.
+  for (const l of splitLines(readOr(m.config))) {
+    if (!/^[A-Za-z_][A-Za-z0-9_]*:/.test(l)) continue
+    const ck = l.replace(/:[\s\S]*$/, '')
+    if (!inList(ck, sch('config.toplevel'))) warn('CFG-UNKNOWN-KEY', `unknown config key '${ck}' in .weavedoc/config.yaml — known top-level keys: ${sch('config.toplevel')}`)
+  }
+
+  // --- accounting, printed on both outcomes and BEFORE the verdict, so the verdict is never read
+  // --- without it.
+  // The truth FILE count comes from disk, not from the truths pass: that pass never opens a file it
+  // reads no record from, so a zero-byte truth would vanish from the denominator instead of showing
+  // up as unchecked. Same expression census uses, so the two commands cannot disagree.
+  const nTruth = globbed.length
+  // "NOT checked" fires on never-checked only, not on anything short of the file count — a
+  // legitimate tombstone stub must not raise it on a clean mine.
+  let nUnchk = nTruth - counts.ntomb - counts.nsealed - counts.nsealfail
+  if (nUnchk < 0) nUnchk = 0
+  let sealpart = `${counts.nsealed} sealed`
+  if (counts.nsealfail > 0) sealpart += ` · ${counts.nsealfail} seal FAILED`
+  if (counts.ntomb > 0) sealpart += ` · ${counts.ntomb} tombstone`
+  if (nUnchk > 0) sealpart += ` ← ${nUnchk} NOT checked`
+  const gatenote = nGated < nConsec ? ` ← ${nConsec - nGated} NOT gate-checked` : ''
+  if (json) {
+    // The machine contract (WD-CLI-002): stdout carries ONLY the JSON object; codes are the stable
+    // surface, messages are presentation; exit-code semantics unchanged (0 pass · 1 fail).
+    const bundle = readOr(`${m.root}/.weavedoc/VERSION`).replace(/\n+$/, '')
+    const arr = rs => `[${rs.map(([c, msg]) => `{"code":"${jsonEsc(c)}","message":"${jsonEsc(msg)}"}`).join(',')}]`
+    out(`{"output_schema_version":1,"command":"validate","bundle":"${jsonEsc(bundle)}","schema_version":${m.schemaVer()},"result":"${problems > 0 ? 'fail' : 'pass'}","problems":${problems},` +
+        `"examined":{"materials":${nMat},"truths":${nTruth},"sealed":${counts.nsealed},"seal_failed":${counts.nsealfail},"tombstones":${counts.ntomb},"not_checked":${nUnchk},"documents":${nDoc},"consecrated":${nConsec},"gate_checked":${nGated},"review_seals_bound":${nRseal},"review_seals_legacy":${nRlegacy}},` +
+        `"schema_v1_mine":${schemaV1 ? 'true' : 'false'},"diagnostics":${arr(diags)},"warnings":${arr(warns)}}`)
+    return problems > 0 ? 1 : 0
+  }
+  out(`  examined: materials ${nMat} · truths ${nTruth} (${sealpart}) · documents ${nDoc} (${nConsec} consecrated, ${nGated} gate-checked${gatenote})`)
+  // Review seals are counted out loud whenever anything is consecrated: a legacy (digest-less)
+  // review next to a final is real history that binds no bytes — visible, never silently equal to a
+  // sealed one.
+  if (nConsec > 0) out(`  review seals: ${nRseal} digest-bound · ${nRlegacy} legacy-unbound`)
+  // The command named here is the BASH one, and stays so until stage 6 moves the default runtime:
+  // the string is contract, and pointing a v1 mine at a runtime that cannot yet run `upgrade` would
+  // be worse than the inconsistency.
+  if (schemaV1) out(`  schema: v1 mine — readable (dual-reader), current format is v${m.schemaVer()}; run 'bash .weavedoc/bin/weavedoc upgrade --check' to see the migration`)
+  if (problems === 0) { out('✓ validate: all checks passed'); return 0 }
+  out(`✗ validate: ${problems} problem(s)`)
+  return 1
 }

@@ -33,7 +33,11 @@ export function openMine (scriptDir, cwd = process.cwd()) {
   const root = findRoot(scriptDir, cwd)
   const config = join(root, '.weavedoc', 'config.yaml')
   let schemaPath = join(root, '.weavedoc', 'schema')
-  if (!existsSync(schemaPath)) schemaPath = join(scriptDir, '..', 'schema')
+  // The fallback keeps its `..` UNRESOLVED, because SCHEMA-UNREADABLE prints this path and the bash
+  // spelling is a plain `$SCRIPT_DIR/../schema`. node:path's join() normalises the `..` away, so the
+  // diagnostic read `.weavedoc/schema` where bash reads `.weavedoc/bin/../schema` — the same file,
+  // two spellings, and the message is contract. Concatenated rather than joined for that reason.
+  if (!existsSync(schemaPath)) schemaPath = `${fwd(scriptDir)}/../schema`
   const sch = loadSchema(schemaPath)
   const cfg = loadConfig(config)
   // Two spellings of one folder are one folder: string-comparing `paths` once read `./materials`

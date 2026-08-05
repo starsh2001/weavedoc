@@ -41,7 +41,7 @@ shift
 # says the same thing whatever the code does. Add `validate` to this list in the same commit that
 # removes it from weavedoc.mjs's NOT_PORTED.
 CMDS=("$@")
-[ "${#CMDS[@]}" -gt 0 ] || CMDS=(census scope status gaps "impact m001" "pull 위약" "reindex --check")
+[ "${#CMDS[@]}" -gt 0 ] || CMDS=(validate "validate --json" census scope status gaps "impact m001" "pull 위약" "reindex --check")
 
 # Show at most this many differing lines per mine — enough to see the shape, not so much that one
 # systematic difference buries the other 300 mines.
@@ -64,6 +64,7 @@ EXCEPT=(
   "block_truth_shaped_directory|census|a directory wearing a truth filename: bash's ls prints it as a '<path>:' header, leaking 't009.md:' into the diagnostic and killing the numbering-holes line; the port prints 't009'. validate blocks on TRUTH-DIR either way"
   "block_truth_shaped_directory|gaps|the same census block, which gaps prints first — one cause, and it is listed twice rather than blanketing the mine, so every OTHER command on it is still graded"
   "pass_placeholder_shaped_tag_list|reindex --check|GNU diff's hunk grouping when several minimal edit scripts tie — the verdict (in sync/DIFFERS, the counts, the exit code) always agrees; 97.9% of 864 synthetic cases match byte for byte and no real-mine case diverges"
+  "pass_crlf_retag|validate --json|the same CRLF cause as the line below, through the machine surface. Listed SEPARATELY rather than by mine, and that is the scoping doing its job: the first full run held out the human form and correctly still reported the --json one as differing. NOTE for whoever edits this array: it is a DOUBLE-quoted bash string, so a backtick in the prose is command substitution — this entry ran 'validate' as a command on its first draft"
   "pass_crlf_retag|validate|a CRLF truth quoting an LF material. bash's own answer here depends on the platform — MSYS gawk strips the CR and seals, Linux gawk keeps it and reports SEAL-QUOTE-MISSING (measured, same mine, both ways) — so there is no single bash answer to match. The port strips, which is the MSYS answer and the one already ruled on in REWRITE_PLAN §4; the point of the rewrite is that this verdict stops depending on which OS ran it. Only 2 of 349 corpus mines mix line endings at all"
 )
 is_declared () { # $1=mine $2=command

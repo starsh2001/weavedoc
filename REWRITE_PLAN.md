@@ -229,7 +229,13 @@ config·schema·frontmatter 값 규칙·섹션/주석 리더·ledger 행 필터�
 > 롤백**하는 구조다. validate 없이는 그 경로가 성립하지 않는다(실측: `--dry` 2.5초 / 커밋 경로
 > 17.7초, 회귀 케이스 6건 중 3건이 이 경로). 5단계로 옮겼다 — §11 결정 행.
 
-**5단계 — 어려운 셋** · `validate`(진단 86종) → **`retag`**(129) → `consecrate`(158 · 상태 기계·in-flight marker·postcondition). 바닥과 읽기 명령이 검증된 뒤라야 실패 원인이 좁아진다. validate가 오는 순간 `regress.sh`가 Node를 전면 채점할 수 있게 되므로, 그 시점이 진짜 분기점이다.
+**5단계 — 어려운 셋** · `validate`(진단 92종) → **`retag`**(129) → `consecrate`(158 · 상태 기계·in-flight marker·postcondition). 바닥과 읽기 명령이 검증된 뒤라야 실패 원인이 좁아진다. validate가 오는 순간 `regress.sh`가 Node를 전면 채점할 수 있게 되므로, 그 시점이 진짜 분기점이다.
+
+> **`validate` 완료 2026-08-04** (5a-0 채점 수단 → 5a-1 척추 → 5a-2 truths 패스 → 5a-3 ledger·index·coverage → 5a-4 문서 루프 → 5a-5 꼬리·`--json`).
+> 실측: 광산 **349개**에 대해 `validate` **출력 전체 + 종료 코드** 대조 — 선언된 CRLF 예외 1건 외 전부 일치. 이식 명령 9개(`validate`·`validate --json`·`census`·`scope`·`status`·`gaps`·`impact`·`pull`·`reindex --check`) 전면 코퍼스도 같은 결과.
+> 회귀: bash 채점 **348/348**, Node 채점 **304/348** — **실패 44건이 전부** `consecrate`·`retag`·`upgrade`(미이식, exit 3) 도달이고 validate 귀책은 0.
+> `src_shape_unported()`가 지키던 세 케이스에 Node 철자를 썼다(§4의 "건너뛰면 안 된다"). `meta_diag_code_table`의 Node판은 **고아 방향을 의도적으로 검사하지 않는다**: 포트가 부분인 동안 미이식 명령의 코드는 사이트가 없고, 그걸 고아로 신고하면 계약이 아니라 이식 진척도를 재는 테스트가 되어 포트가 진행되면 저절로 녹색이 된다. bash 판이 양방향을 계속 본다.
+> `meta_single_judges`의 Node판은 첫 실행에서 **포트 안에 이미 있던 리터럴 제어문자 3개**를 잡았다(`cmd-pull.mjs`의 `replace(/<SOH>/g,' ')`, `diff.mjs`의 `<NUL>` 마커) — 화면에는 `replace(//g,' ')`로 보이는, bash에서 이 이식을 속인 것과 **같은 함정**. 이스케이프로 바꿨고 이제 상시 감시된다.
 
 **6단계 — 전환** · 기본 대상을 Node로 바꾸고 스킬·문서·CI를 같은 커밋에서 넘긴다. bash 판은 한 릴리스 동안 `legacy/`에 남겨 파리티 검증용으로만 쓴다.
 

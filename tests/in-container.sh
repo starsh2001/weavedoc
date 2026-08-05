@@ -12,6 +12,12 @@
 #   bash tests/in-container.sh build-corpus               # (re)harvest the case mines into $CORPUS
 #   bash tests/in-container.sh sh '<any shell>'           # anything else, /work is the tree
 #
+# ASCII ARGUMENTS ONLY. A non-ASCII argument does not survive the trip from MSYS bash into docker's
+# argv — `corpus "pull 위약"` reaches the driver as mojibake, which then matches nothing and reports
+# every mine as differing. Measured, after exactly that produced a 341-of-349 red run that was
+# entirely the invocation. Korean commands belong in the driver's own default list, which lives
+# inside a UTF-8 file and is never re-encoded.
+#
 # The image is built once by:
 #   docker build -t wd-test - <<'EOF'
 #   FROM debian:stable-slim

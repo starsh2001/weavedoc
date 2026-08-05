@@ -12,9 +12,19 @@ const readOr = (p, fb = '') => { try { return readFileSync(p, 'utf8') } catch { 
 // ---- schema ------------------------------------------------------------------------------
 // Flat `key: value`, first spelling of a key wins. The value keeps its trailing whitespace — the
 // bash reader does not strip it either, and a port that "tidied" that would be a silent change.
+// A CARRIAGE RETURN IS NOT STRIPPED HERE, and that is the bash reader, not an oversight. `sch_load`
+// is `while IFS= read -r line`, which keeps it; `cfg_load` one function over adds `line=${line%$'\r'}`
+// and strips it. Two readers, two rules, and the port had unified them — measured on a CRLF schema:
+// `project.fm.required` becomes `version|language|roles\r`, so bash reports SEVEN problems (the last
+// key of every schema list is unmatchable) while the port reported none. Both bash platforms agree
+// there, so this is not the declared CRLF divergence; it is the port being lenient where the runtime
+// it replaces blocks. A CRLF schema is reachable: `core.autocrlf=true` is the Windows default and a
+// user's own mine carries no .gitattributes pin.
+const schemaLines = s => { const l = s.split('\n'); if (l.length && l[l.length - 1] === '') l.pop(); return l }
+
 export function loadSchema (schemaPath) {
   const m = new Map()
-  for (const line of splitLines(readOr(schemaPath))) {
+  for (const line of schemaLines(readOr(schemaPath))) {
     if (line === '' || line.startsWith('#')) continue
     const i = line.indexOf(':')
     if (i < 0) continue

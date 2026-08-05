@@ -27,7 +27,7 @@ function pullVal (line) {
     s = s.replace(/[ \t]+#.*$/, '')
     if (s.startsWith('#')) s = ''
   }
-  return s.replace(/[ \t]*$/, '').replace(/^"/, '').replace(/"$/, '').replace(//g, ' ')
+  return s.replace(/[ \t]*$/, '').replace(/^"/, '').replace(/"$/, '').replace(/\u0001/g, ' ')
 }
 
 function extract (file) {
@@ -42,7 +42,7 @@ function extract (file) {
       // The first body line too, because the CLAIM is all pull has shown and the claim is the one
       // field nothing verifies — validate seals the BODY, not the claim. Printing them together puts
       // what the machine warranted next to what it did not.
-      if (r.bd1 === '' && /[^ \t]/.test(l)) r.bd1 = l.replace(/^[ \t]+/, '').replace(//g, ' ')
+      if (r.bd1 === '' && /[^ \t]/.test(l)) r.bd1 = l.replace(/^[ \t]+/, '').replace(/\u0001/g, ' ')
       if (/^\|/.test(r.bd1) && /^[ \t]*\|/.test(l)) tbl++
       continue
     }

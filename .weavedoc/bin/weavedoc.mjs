@@ -158,7 +158,7 @@ const usage2 = u => { errln(`usage: ${u}`); process.exit(2) }
 
 // Ported in a later stage. Refusing with a distinct code keeps a partial port honest: no case can
 // mistake "not written yet" for "ran and agreed".
-const NOT_PORTED = new Set(['validate', 'consecrate', 'retag', 'upgrade'])
+const NOT_PORTED = new Set(['consecrate', 'retag', 'upgrade'])
 
 const argv = process.argv.slice(2)
 const cmd = argv[0] ?? ''
@@ -174,6 +174,15 @@ switch (cmd) {
     // Top-level await (ESM): keeps node:child_process off the startup path — it is loaded only on
     // the Windows-registry fallback, which most runs never reach.
     rc = await cmdLocale(); break
+  case 'validate': {
+    let vjson = false
+    let va = rest
+    if (va[0] === '--json') { vjson = true; va = va.slice(1) }
+    if (va.length !== 0) usage2('weavedoc validate [--json]')
+    const { openMine } = await import('./lib/mine.mjs')
+    const { cmdValidate } = await import('./lib/cmd-validate.mjs')
+    rc = cmdValidate(openMine(SCRIPT_DIR), outln, vjson); break
+  }
   case 'scope': {
     let sjson = false
     let sa = rest

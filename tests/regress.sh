@@ -465,9 +465,24 @@ vrun() { OUT=$( ( cd "$W" && $TO "${WDRUN[@]}" "$@" ) 2>&1 ); RC=$?; }
 # went unwatched". (REWRITE_PLAN §4 — the port-me family.)
 src_shape_unported() {
   [ "$WD_RUNNER" = bash ] && return 1
+  [ "$WD_RUNNER" = node ] && return 1
   bad "source-shape case has no spelling for runner '$WD_RUNNER' yet — port the invariant, do not drop it"
   return 0
 }
+# NAMED `nodeshape_`, not `meta_`, and that matters: the case selector picks up every function
+# matching ^(block|pass|acct|meta|e2e)_, so a helper called meta_..._node is SELECTED as a case of
+# its own and run under the bash runner too, where it inspects the wrong entrypoint. It reported
+# `inline-fence-judges=31` against the bash file on the first run — the suite catching the author.
+# The mirror of "a case that cannot be selected does not exist" is "a helper that can be selected is
+# a case nobody wrote".
+# The Node runtime is a DIRECTORY of modules, not one file, so every source-shape invariant below
+# reads this list rather than a single entrypoint. Missing a module here would make a duplicate judge
+# invisible, which is the exact failure these cases exist to prevent — so the list is globbed, never
+# enumerated.
+# RECURSIVE, not `bin/lib/*.mjs`: a cold review proved that a duplicate judge in `bin/extra.mjs` or
+# `bin/lib/sub/mod.mjs` was invisible to every arm below. The set these invariants police is "the
+# runtime", and the runtime is whatever .mjs sits under bin/.
+node_sources() { find "$REPO/.weavedoc/bin" -name '*.mjs' -type f | LC_ALL=C sort; }
 
 # ---------------------------------------------------------------- gate: must block
 # Every one of these ships final.md next to an OPEN violation.
@@ -934,10 +949,70 @@ pass_gate_bare_kind_prose_outside() {
   printf -- '\n다음 라운드에서 contradiction 검출 규칙을 재검토한다.\n' >> "$W/documents/d1/review.md"
   vrun validate; expect_pass
 }
+nodeshape_single_judges() {
+  # The SAME invariant, spelled for a runtime that is modules rather than one file. Every judge is
+  # exported from exactly one place, so a second copy of a rule fails here instead of being found by
+  # a cold reviewer three rounds later.
+  local bad="" fn n
+  local -a SRC; mapfile -t SRC < <(node_sources)
+  for fn in isNoise hasFm fidMark fidBody nocomment canonId isPlaceholder isFence \
+            truthDigest matDigest unitDigest ledgerRows artifactDigest contextDigest \
+            docDraftPath docFinalPath splitLines fmVal fmKey; do
+    # Any binding form, at any indentation: `export const`, a bare `function`, a `let`, or a
+    # function-local `const`. The first spelling of this only matched a top-level `export const`,
+    # so `export let isFence = …` and an indented shadow both counted as ZERO definitions and the
+    # check went green on a second judge — proved by a cold review.
+    n=$(grep -hcE "^[[:space:]]*(export[[:space:]]+)?(async[[:space:]]+)?(function|const|let|var)[[:space:]]+${fn}\b" "${SRC[@]}" 2>/dev/null | awk '{s+=$1} END{print s+0}')
+    [ "${n:-0}" -eq 1 ] || bad="$bad ${fn}=${n};"
+  done
+  # THE FENCE JUDGE IS isFence ONLY. This is not hypothetical: the port carried ELEVEN inline
+  # spellings of `^---[ \t]*$`, every one of them narrower than the `[[:space:]]` the bash runtime
+  # uses, and a fence carrying a vertical tab closed the block for bash and not for Node — which
+  # then read frontmatter on into the document body. core.mjs holds the one spelling; an inline
+  # fence regex anywhere else is a second judge.
+  # Comments are skipped: the port's comments QUOTE the bash pattern constantly, and counting those
+  # made the check fail on its own documentation the first time it ran.
+  # Matches the `[class]` spelling AND the `\s` one. A cold review showed `/^---\s*$/` — the single
+  # most likely thing a porter reaches for — sailed past a grep that only looked for the bracket.
+  n=$(grep -hv "^[[:space:]]*//" "${SRC[@]}" | grep -cE '/\^---(\[|\\s|\\t| )' || true)
+  [ "${n:-0}" -le 1 ] || bad="$bad inline-fence-judges=${n};"
+  # A diagnostic must go through prob/warn. `out(\`  [CODE] …\`)` prints exactly what prob prints and
+  # is invisible to BOTH the code-table arm and the ratchet — a whole diagnostic outside the contract.
+  n=$(grep -hv "^[[:space:]]*//" "${SRC[@]}" | grep -cE 'out\(`[[:space:]]+\[[A-Z][A-Z0-9-]+\]' || true)
+  [ "${n:-0}" -eq 0 ] || bad="$bad diagnostics-bypassing-prob=${n};"
+  # Strict key spelling (`^key:` with nothing between the key and its colon) must not reappear in
+  # any frontmatter or flow reader — the lenient form is `^key[ \t\v\f\r]*:`, because `source : m001`
+  # and `source:m001` are both legal YAML and both were missed for a whole release.
+  n=$(grep -hcE '/\^(source|status|tags|claim|title|origin|role|topics|format|added|summary|resolution|conflict_with|provenance|derived_from|superseded|corroborated_by|winner|decided_by|decision_kind|scope):' "${SRC[@]}" 2>/dev/null | awk '{s+=$1} END{print s+0}')
+  [ "${n:-0}" -eq 0 ] || bad="$bad strict-key-patterns=${n};"
+  # No literal C0 control character may sit in the source. The bash runtime keeps its reference-index
+  # separator as a raw \001, which RENDERS AS NOTHING — read as text it says "split on the empty
+  # string, i.e. into characters", and porting that reading produced plausible garbage. The port
+  # spells both separators as escapes so the next reader cannot be misled the same way.
+  # Counted through a NAMED variable with a default at every step. The obvious spelling —
+  #   n=$(( n + $(node … | sed 's/[^0-9]//g') ))
+  # — is a trap: when the scanner prints nothing (node off PATH, ctlscan missing, a throw), the
+  # substitution is EMPTY and `$(( 0 +  ))` is a bash SYNTAX error, which aborts the enclosing
+  # command list rather than returning non-zero. Inside `--one` that skips the branch's own `exit`
+  # and execution falls through to the top-level sweep — which is `xargs -P6 bash "$0" --one {}`,
+  # i.e. this script forking itself without bound. Observed ~20 levels deep before it was killed.
+  # A check that cannot run must fail LOUD, never fall through into the runner.
+  local f one
+  n=0
+  for f in "$REPO/$WD_ENTRY" "$REPO"/.weavedoc/bin/lib/*.mjs; do
+    one=$(node "$REPO/tests/ctlscan.mjs" "$f" 2>/dev/null | tail -1 | sed 's/[^0-9]//g')
+    case "$one" in ''|*[!0-9]*) bad="$bad ctlscan-unusable:${f##*/};"; continue ;; esac
+    n=$(( n + one ))
+  done
+  [ "$n" -eq 0 ] || bad="$bad literal-control-chars=${n};"
+  OUT="${bad:-ok}"; RC=0; [ -n "$bad" ] && RC=1
+  expect_pass
+}
 meta_single_judges() {
   # The drift every round kept finding — "the rule was unified, one site was left out" — is now
   # watched by the suite itself: each grep pins an invariant about the BINARY, so a new duplicate
   # judge fails here before a cold reviewer has to find it.
+  [ "$WD_RUNNER" = node ] && { nodeshape_single_judges; return; }
   src_shape_unported && return
   local B="$REPO/$WD_ENTRY" bad="" fn n
   for fn in is_noise has_fm fid_mark fid_body nocomment canon_id is_placeholder req_value \
@@ -2867,12 +2942,32 @@ acct_json_version() {
   expect_has '"fingerprint"'
   expect_has '"schema_version":2'
 }
+nodeshape_diag_code_table() {
+  # Same contract, one emission shape: `prob('CODE', …)` / `warn('CODE', …)`. Comment lines are
+  # skipped so a doc-comment quoting a code is not mistaken for an emitted one — the port's comments
+  # quote codes constantly.
+  local F="$REPO/.weavedoc/FORMATS.md" bad="" c emitted
+  local -a SRC; mapfile -t SRC < <(node_sources)
+  emitted=$(grep -hv "^[[:space:]]*//" "${SRC[@]}" | grep -oE "\b(prob|warn)\('[A-Z][A-Z0-9-]+'" \
+            | sed -E "s/.*'([A-Z][A-Z0-9-]+)'/\1/" | LC_ALL=C sort -u)
+  for c in $emitted; do
+    grep -q "\`$c\`" "$F" || bad="$bad UNDOCUMENTED:$c"
+  done
+  # The ORPHAN direction is deliberately NOT checked for the node runner: the port is partial, so a
+  # documented code that `consecrate`/`retag`/`upgrade` emits has no site here YET. Reporting those
+  # as orphans would be an assertion about how far the port has got, not about the contract — and it
+  # would go green by itself as the port lands, which is a test that measures the wrong thing. The
+  # bash arm still checks both directions, so the table cannot grow an orphan unnoticed.
+  OUT="${bad:-all emitted codes documented (orphan direction: bash arm)}"; RC=0
+  if [ -z "$bad" ]; then ok; else bad "diagnostic code table drift:$bad"; fi
+}
 meta_diag_code_table() {
   # FORMATS documents every code the binary can emit, and documents no code it cannot — the
   # table is the contract's published half, so drift in either direction is a defect.
   # Two emission shapes, both harvested: shell `prob CODE "…"` / `warn CODE "…"`, and awk
   # `prob("[CODE] " …)`. Comment lines are skipped so the doc-comment's own `prob CODE` example
   # is not mistaken for an emitted code.
+  [ "$WD_RUNNER" = node ] && { nodeshape_diag_code_table; return; }
   src_shape_unported && return
   local B="$REPO/$WD_ENTRY" F="$REPO/.weavedoc/FORMATS.md" bad="" c emitted
   emitted=$( { grep -vE '^[[:space:]]*#' "$B" | grep -oE '\b(prob|warn) [A-Z][A-Z0-9-]+' | awk '{print $2}'
@@ -2890,6 +2985,19 @@ meta_uncoded_ratchet() {
   # Every SHELL prob site carries a code; the two matches allowed are emit_probs' router lines.
   # awk-emitted diagnostics are wave 11b — this ratchet keeps the shell side at zero meanwhile.
   local n
+  if [ "$WD_RUNNER" = node ]; then
+    # The port makes the code a REQUIRED first parameter, so an uncoded site cannot be written by
+    # accident — but "cannot happen" is what the bash side believed too. Counted, not assumed: every
+    # prob/warn call must open with a quoted upper-case code.
+    local -a SRC; mapfile -t SRC < <(node_sources)
+    n=$(grep -hv "^[[:space:]]*//" "${SRC[@]}" | grep -oE "\b(prob|warn)\(" | wc -l)
+    local coded
+    coded=$(grep -hv "^[[:space:]]*//" "${SRC[@]}" | grep -oE "\b(prob|warn)\('[A-Z][A-Z0-9-]+'" | wc -l)
+    OUT="prob/warn call sites: $n · carrying a code: $coded"
+    RC=0
+    if [ "${n:-0}" -eq "${coded:-0}" ]; then ok; else bad "prob/warn sites without a code: $(( n - coded ))"; fi
+    return
+  fi
   src_shape_unported && return
   n=$(grep -E '\bprob "' "$REPO/$WD_ENTRY" | grep -cvE '\$code|\$line' || true)
   OUT="uncoded shell prob sites: ${n:-?}"; RC=0
