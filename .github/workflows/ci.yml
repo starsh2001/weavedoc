@@ -28,7 +28,8 @@ jobs:
         run: |
           for f in tests/*.sh; do bash -n "$f"; done
           node --check .weavedoc/bin/weavedoc.mjs
-          for f in .weavedoc/bin/lib/*.mjs; do node --check "$f"; done
+          # find, not a flat glob: a future lib/subdir/ must not be able to ship unparsed
+          find .weavedoc/bin/lib -name '*.mjs' -print0 | xargs -0 -n1 node --check
       - name: no literal control character in a runtime module
         # The bash runtime this replaced kept its reference-index separator as a raw U+0001, which
         # RENDERS AS NOTHING — reading it as text says "split on the empty string", and the port did
@@ -36,7 +37,7 @@ jobs:
         run: |
           # This workflow scans ITSELF: the first draft of the comment above put a real U+0001
           # into the YAML, which is the same invisible-character trap one layer out.
-          for f in .weavedoc/bin/weavedoc.mjs .weavedoc/bin/lib/*.mjs .github/workflows/ci.yml; do
+          for f in .weavedoc/bin/weavedoc.mjs $(find .weavedoc/bin/lib -name '*.mjs') .github/workflows/ci.yml; do
             n=$(node tests/ctlscan.mjs "$f" | tail -1 | sed 's/[^0-9]//g')
             [ "$n" = 0 ] || { echo "$f holds $n line(s) with a literal control character"; exit 1; }
           done
@@ -220,8 +221,18 @@ jobs:
       - uses: actions/checkout@v5
         with:
           fetch-depth: 0
-      - name: cohesion — VERSION, CHANGELOG and schema agree (doccheck); the tag itself is echoed for the log, not asserted — no formal rule maps a SemVer tag to a date-labelled bundle
+      - name: cohesion — the tag is SemVer-shaped, and VERSION, CHANGELOG and schema agree (doccheck)
+        # The SHAPE is asserted (v0.5.2, external review): before this, `vfoo` would have published a
+        # release. Anchored regex, not a case-glob — the glob `v[0-9]*.[0-9]*.[0-9]*` accepted
+        # `v0.5.2yolo` and `v1x.2y.3z` (cold review), which are not vMAJOR.MINOR.PATCH either.
+        # The tag→bundle MAPPING stays echoed, not asserted — bundles are date labels and no
+        # formal rule links the two; inventing one in a CI grep would be a second source of truth.
         run: |
+          if [[ "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "tag shape ok: $GITHUB_REF_NAME"
+          else
+            echo "tag '$GITHUB_REF_NAME' is not vMAJOR.MINOR.PATCH — refusing to publish"; exit 1
+          fi
           bash tests/doccheck.sh
           echo "tag=$GITHUB_REF_NAME · bundle=$(cat .weavedoc/VERSION) · schema=$(grep -m1 '^schema.version:' .weavedoc/schema | sed 's/.*:[[:space:]]*//')"
       - name: build the bundle manifest

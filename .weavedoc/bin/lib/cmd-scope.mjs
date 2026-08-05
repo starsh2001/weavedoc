@@ -225,6 +225,14 @@ export function cmdScope (m, out, json) {
 
   out('scope — what a verify round still owes (computed from disk + the ledgers, not judged)')
   if (nMconv === 0 && ondisk.length === 0 && tomb.length === 0) {
+    // A dead ledger is stated even on an empty mine (v0.5.2, external review): this early return
+    // used to swallow the unreadable/headless line, so a mine with no units but a broken sidecar
+    // read as "nothing to verify" with no hint the sidecar needed repair.
+    if (lidx.state === 'unreadable') {
+      out(`  ledger: truths/${m.ledgerFile()} exists but CANNOT BE READ (${lidx.code}) — repair it before trusting this summary [LEDGER-UNREADABLE]`)
+    } else if (lidx.headless > 0) {
+      out(`  ledger: ${lidx.headless} row(s) carry no id — repair the sidecar before trusting this summary [LEDGER-MALFORMED]`)
+    }
     out('  nothing to verify yet — no converted material, no truths')
     return 0
   }
@@ -274,6 +282,17 @@ export function cmdScope (m, out, json) {
     out(`  ledger: ${lidx.headless} row(s) carry no id (a leading tab, or a truncated write) — an unattributable row could be ANY unit's latest verdict, so the sidecar contributes nothing and no v1 fallback opens [LEDGER-MALFORMED]`)
   }
   if (ledgerBad.length) out(`  ledger: row(s) with unknown verdicts — they cover nothing [LEDGER-VERDICT]: ${ledgerBad.join(' ')}`)
+  // SUPERSEDED odd verdicts too (v0.5.2, external review P1-2): a typo'd verdict with a later valid
+  // row used to be invisible here — the winner was judged, the history was not — while validate
+  // blocked the file on it. The winner still stands (the repaired-ledger rule); the word is named.
+  {
+    const winnersBad = new Set(ledgerBad.map(s => s.split(' ')[0]))
+    // Only ids with a VALID winning row are "superseded history" (v0.5.2 cold review): an odd word
+    // on a QUARANTINED id (typo'd last row, no later row) is that id's latest, not history — the
+    // malformed line already covers it — and a HEADLESS odd row keys to '' and belongs to no id.
+    const hist = [...lidx.oddVerdicts].filter(([id]) => lidx.win.has(id) && !winnersBad.has(id)).map(([id, w]) => `${id} (${w})`)
+    if (hist.length) out(`  ledger: superseded row(s) carry unknown verdicts — history, not evidence, and validate blocks on them [LEDGER-VERDICT]: ${hist.join(' ')}`)
+  }
   if (ledgerSbad.length) {
     // The shared strict filter dropped these before classification — shown here so a truncated or
     // hand-mangled row reads as "covers nothing" in scope AND blocks in validate, never one without

@@ -5,7 +5,7 @@
 // path is snapshotted once before its first edit, every created path recorded, and the whole thing
 // answers to the same full validation everything else answers to — fail and the mine is
 // byte-identical to before.
-import { existsSync, statSync, readFileSync, appendFileSync, mkdirSync, rmSync, cpSync, readdirSync } from 'node:fs'
+import { existsSync, statSync, readFileSync, appendFileSync, mkdirSync, mkdtempSync, rmSync, cpSync, readdirSync } from 'node:fs'
 import { splitLines, canonId, isFence, U, M } from './core.mjs'
 import { nocomment, sectionAll } from './sections.mjs'
 import { join, materialIds, docIds, fm } from './mine.mjs'
@@ -254,7 +254,14 @@ export function cmdUpgrade (m, out, argv, runReindex, runValidate, ops = realOps
 // ---- the staged, rollback-safe transaction ----------------------------------------------------
 function upgradeApply (m, out, nitems, runReindex, runValidate, ops = realOps) {
   const today = new Date().toISOString().slice(0, 10)
-  const bak = `${m.root}/.upgrade-backup-${today}.${process.pid}`
+  // The backup directory is ALWAYS FRESH (§11 2026-08-05, v0.5.2). It was date+PID, and
+  // mkdirSync(recursive) accepted an existing directory of that name — at which point bkup()'s
+  // "already snapshotted this run" dedup mistook the stale files inside for this run's snapshots,
+  // skipped the real ones, and a rollback then RESTORED THE STALE BYTES while printing
+  // "byte-identical to before" and deleting the old restore point (external review P0-2; PIDs
+  // recycle in containers, so date+PID collides for real). mkdtempSync cannot return an existing
+  // path, which removes the whole class rather than narrowing it.
+  const bakPrefix = `${m.root}/.upgrade-backup-${today}.`
   const rel = p => (p.startsWith(`${m.root}/`) ? p.slice(m.root.length + 1) : p)
   const created = []; const touched = []
   const write = (p, s) => ops.write(p, Buffer.from(s, 'latin1'))
@@ -370,7 +377,8 @@ function upgradeApply (m, out, nitems, runReindex, runValidate, ops = realOps) {
     out('  fix each row (complete the verification, or mark its real verdict), then re-run')
     return 1
   }
-  try { mkdirSync(bak, { recursive: true }) } catch { out(`upgrade: cannot create backup dir ${bak}`); return 1 }
+  let bak
+  try { bak = mkdtempSync(bakPrefix) } catch (e) { out(`upgrade: cannot create backup dir ${bakPrefix}* (${e.code})`); return 1 }
 
   // One failure spelling for both failure shapes (post-validate red, a write that threw): roll
   // back, VERIFY, and only then say "byte-identical". A rollback that cannot be verified keeps the
@@ -472,7 +480,11 @@ function upgradeApply (m, out, nitems, runReindex, runValidate, ops = realOps) {
   // 5. regenerate the generated views under the canonical spellings.
   bkup(rel(join(m.truths, 'index.md'))); bkup(rel(join(m.truths, 'tree.md')))
   clearFileCaches()
-  runReindex()
+  // The regeneration's rc is part of the transaction (v0.5.2, external review P1-1): this call ran
+  // bare, so a failed reindex left the OLD views beside the renamed truths and the migration still
+  // committed "validate clean" — stale index labels slip validate, which checks id presence, not
+  // label content. A nonzero rc throws into the boundary and the whole migration rolls back.
+  if (runReindex() !== 0) throw new Error('the index regeneration failed mid-migration (reindex returned nonzero) — the generated views would not match the migrated truths')
 
   // 6. materialize digest-less verified history as legacy-unbound sidecar rows — preserved, never
   //    back-stamped with a digest the verification never computed (§11 decision).

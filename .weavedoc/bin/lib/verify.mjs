@@ -107,6 +107,7 @@ const isSkippable = raw => raw === '' || raw.startsWith('#')
 export function ledgerIndex (file) {
   const r = ledgerRead(file)
   const win = new Map(); const quarantined = new Set(); const malformed = new Set()
+  const oddVerdicts = new Map()
   let headless = 0
   for (const { raw, terminated } of r.lines) {
     if (isSkippable(raw)) continue
@@ -116,17 +117,32 @@ export function ledgerIndex (file) {
     // never match its on-disk unit — validate green, scope silently demoting the evidence, which is
     // the two-readers split in its keying. One parser means one id space.
     const id = canonId(f[0]) ?? f[0]
+    // EVERY row's verdict word is recorded, not just the winner's (v0.5.2, external review P1-2):
+    // scope judged only the winning row, so a superseded typo'd verdict — which validate blocks —
+    // was invisible there, and "named in one, blocked in the other" split on the history axis.
+    // Recording is not quarantining: a later valid row still wins (the repaired-ledger rule), but
+    // the odd word is CARRIED so every consumer can name it.
+    if (f.length >= 3 && f[2] !== 'verified' && f[2] !== 'failed' && f[2] !== 'legacy-unbound') {
+      if (!oddVerdicts.has(id)) oddVerdicts.set(id, f[2])
+    }
+    // ATTRIBUTION PRECEDES STRUCTURE (v0.5.2 cold-review round). This test sat on the
+    // failed-structure path only, so a row with SIX well-formed columns and an EMPTY first one
+    // walked past it, passed rowOk (which never looks at f[0]) and WON under the key '' — a
+    // "winner" belonging to nobody, counted, displayed with a dangling empty id, while the
+    // headless-void contract ("an id-less row could be ANY unit's latest verdict") stood written
+    // one screen up. An id column emptied by an editor is exactly as unattributable as a
+    // truncated one; how many columns survived beside it changes nothing.
+    if (f[0] === '') { headless++; continue }   // no id to attribute the damage to — file-level
     if (rowOk(f) && terminated) {
       win.set(id, f)
       quarantined.delete(id)          // a later good row rehabilitates the id
       continue
     }
-    if (f[0] === '') { headless++; continue }   // no id to attribute the damage to — file-level
     malformed.add(id)
     win.delete(id)
     quarantined.add(id)
   }
-  return { state: r.state, code: r.code, win, quarantined, malformed, headless }
+  return { state: r.state, code: r.code, win, quarantined, malformed, headless, oddVerdicts }
 }
 
 // -> "id\tdigest\tverdict\tstandard" per unit, sorted. Quarantined ids are ABSENT by construction.

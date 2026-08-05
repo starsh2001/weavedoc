@@ -52,8 +52,12 @@ KEY=$( { git -C "$REPO" rev-parse HEAD 2>/dev/null
          # whose behavior lives in bin/lib/, so a key that hashed only $WD_ENTRY let a dirty lib
          # edit reuse the previous run's results under --resume (the v0.4.0 external review's
          # finding; HEAD only covers COMMITTED edits).
-         sha256sum "$REPO/.weavedoc/bin/weavedoc.mjs" \
-                   "$REPO/.weavedoc/bin/lib/"* "$REPO/.weavedoc/schema" 2>/dev/null | awk '{print $1}'
+         { sha256sum "$REPO/.weavedoc/bin/weavedoc.mjs" "$REPO/.weavedoc/schema"
+           # find, not a flat glob: a future lib/subdir/ must key too. Sorted for stability.
+           find "$REPO/.weavedoc/bin/lib" -type f -print0 | sort -z | xargs -0 sha256sum
+           # The DRIVERS are configuration too (v0.5.2): a dirty faultinject edit changes what a
+           # case measures without changing the case, and --resume would reuse the stale result.
+           sha256sum "$REPO"/tests/*-faultinject.mjs; } 2>/dev/null | awk '{print $1}'
          # The RUNNER's version and THIS HARNESS's own bytes (v0.5.1, external review): a dirty
          # edit to a case body under an unchanged name could hand --resume the previous run's
          # result, and a node upgrade is a different configuration the way a bash upgrade always
@@ -1821,6 +1825,78 @@ block_attest_onto_unterminated_ledger() {
   OUT=$(tail -c 40 "$W/truths/verify-ledger.tsv"); RC=0
   expect_has "2026-07-01"
 }
+acct_attest_concurrent_row_survives_rollback() {
+  # v0.5.2 (external review P0-1a). The v0.5.1 truncate-back rollback was a COMPENSATING write, and
+  # a compensating write without mutual exclusion erases a neighbour's success: attest A appended
+  # its row (rc 0) inside attest B's stat-to-truncate window, and B's rollback chopped it — A
+  # reported success for a row that no longer existed, and the resulting TSV was well-formed, so
+  # validate saw nothing. DETERMINISTIC via the seam: B's injected append holds the critical
+  # section for 1.2s before failing; A runs beside it. Under the lock, A waits and lands AFTER B's
+  # verified rollback. Without it (red-first), A lands inside the window and dies.
+  vrun attest verified 1 seed m001
+  ( cd "$W" && $TO node "$REPO/tests/attest-faultinject.mjs" --sleep-ms 1200 verified 2 bstd t001 ) > "$W/.b.out" 2>&1 &
+  local bpid=$!
+  sleep 0.4
+  vrun attest verified 2 astd m001
+  local arc=$RC
+  wait "$bpid"; local brc=$?
+  [ "$arc" -eq 0 ] || bad "the real attest failed (rc $arc) — the lock wait may be shorter than the injected hold"
+  [ "$brc" -ne 0 ] || bad "the injected attest reported success"
+  [ "$(grep -c $'\tastd\t' "$W/truths/verify-ledger.tsv")" = 1 ] || bad "A's committed row did not survive B's rollback"
+  [ "$(grep -c $'\tseed\t' "$W/truths/verify-ledger.tsv")" = 1 ] || bad "the seed row is gone"
+  [ ! -d "$W/truths/verify-ledger.tsv.lock" ] || bad "the lock was not released"
+  vrun validate; expect_pass
+}
+acct_attest_concurrent_new_ledger_survives_unlink() {
+  # The fresh-ledger twin (P0-1b), the worse half: B created the ledger, A landed a committed row
+  # in it, and B's created-here rollback UNLINKED the whole file — A's rc-0 row went with it. Under
+  # the lock, B's create-fail-unlink completes as a unit before A begins, so A creates a fresh
+  # ledger and its row survives.
+  ( cd "$W" && $TO node "$REPO/tests/attest-faultinject.mjs" --sleep-ms 1200 verified 1 bstd t001 ) > "$W/.b2.out" 2>&1 &
+  local bpid=$!
+  sleep 0.4
+  vrun attest verified 1 astd m001
+  local arc=$RC
+  wait "$bpid"; local brc=$?
+  [ "$arc" -eq 0 ] || bad "the real attest failed (rc $arc)"
+  [ "$brc" -ne 0 ] || bad "the injected attest reported success"
+  [ -f "$W/truths/verify-ledger.tsv" ] || { bad "the ledger was unlinked with A's committed row inside"; return; }
+  [ "$(grep -c $'\tastd\t' "$W/truths/verify-ledger.tsv")" = 1 ] || bad "A's committed row did not survive"
+  vrun validate; expect_pass
+}
+acct_attest_stale_lock_reclaimed() {
+  # A crashed attest leaves its lock behind; a sub-second command's lock older than the stale
+  # threshold belongs to a corpse and is reclaimed. Aged with touch -d, not by sleeping 10s.
+  mkdir -p "$W/truths/verify-ledger.tsv.lock"
+  touch -d '1 hour ago' "$W/truths/verify-ledger.tsv.lock"
+  vrun attest verified 1 std m001
+  expect_pass
+  [ ! -d "$W/truths/verify-ledger.tsv.lock" ] || bad "the stale lock survived a successful attest"
+}
+acct_attest_undeletable_stale_lock_refuses() {
+  # v0.5.2 cold review, CRITICAL. The draft lock's stale-reclaim branch `continue`d past the bound
+  # check and the sleep, so a stale lock that rmdir cannot remove spun acquireLock hot and
+  # UNBOUNDED — every future attest hung at 100% CPU until a human deleted the object, falsifying
+  # the code's own "the wait is bounded" comment (measured: rc 124 under timeout, both platforms).
+  # Every iteration passes through the bound now, without exception, and an undeletable stale lock
+  # refuses loudly, naming the path and telling the human to delete it.
+  #
+  # The shape here is a lock DIRECTORY with a file inside — rmdir says ENOTEMPTY on every platform,
+  # so the loud refusal is deterministic cross-OS. A FILE wearing the lock's name splits: Linux
+  # rmdir says ENOTDIR (same loud refusal), Windows rmdir says ENOENT with the file still there
+  # (measured on the host) — that lie exits through the bounded 5s timeout instead. Bounded either
+  # way is the invariant; this case pins the spelling both OSes share.
+  # Red vs the draft: the suite timeout kills the spin — expect_block sees rc 124, no refusal text.
+  mkdir -p "$W/truths/verify-ledger.tsv.lock"
+  touch "$W/truths/verify-ledger.tsv.lock/residue"
+  touch -d '1 hour ago' "$W/truths/verify-ledger.tsv.lock"
+  vrun attest verified 1 std m001
+  expect_block "cannot be removed"
+  expect_has "delete it by hand"
+  expect_has "Nothing written"
+  [ -d "$W/truths/verify-ledger.tsv.lock" ] || bad "the refusal removed the object it said it could not remove"
+  grep -q 'm001' "$W/truths/verify-ledger.tsv" 2>/dev/null && bad "a row landed despite the refusal"; ok
+}
 acct_attest_ledger_accumulates_in_order() {
   # A REGRESSION GUARD, and it passes against the old writer too — said plainly because a case that
   # cannot fail on the change it accompanies is not evidence for that change, and this suite has
@@ -3131,6 +3207,105 @@ acct_upgrade_rm_fault_leaves_no_partial() {
   expect_has "rolled back"
   [ -f "$W/truths/t01.md" ] || bad "the old path is gone"
   [ ! -e "$W/truths/t001.md" ] || bad "the copied new path survived the rollback"
+}
+acct_upgrade_backup_never_reused() {
+  # v0.5.2 (external review P0-2). The backup path was date+PID and mkdirSync(recursive) accepted an
+  # existing directory — at which point bkup()'s "already snapshotted this run" dedup mistook the
+  # STALE files inside for this run's snapshots, skipped the real ones, and the rollback RESTORED
+  # THE STALE BYTES while printing "byte-identical to before". The driver's --collide-bak plants
+  # exactly that bait at its own PID's path; mkdtempSync cannot return an existing path, so the
+  # bait is now inert. Asserted on the RESTORED BYTES, not the message.
+  cp "$W/project.md" "$W/.project.before"
+  OUT=$( ( cd "$W" && $TO node "$REPO/tests/upgrade-faultinject.mjs" config.yaml --collide-bak ) 2>&1 ); RC=$?
+  [ "$RC" -eq 0 ] && bad "upgrade reported success around an injected write failure"
+  expect_has "rolled back"
+  cmp -s "$W/.project.before" "$W/project.md" || bad "project.md is not the REAL original — the stale planted snapshot was restored"
+  grep -q 'STALE SNAPSHOT' "$W/project.md" && bad "the planted stale bytes are live in the mine"
+  # The bait dir itself must survive untouched — pre-fix it was consumed as this run's backup and
+  # then deleted by the "verified" rollback, taking the only restore point with it.
+  local baitd
+  baitd=$(ls -d "$W"/.upgrade-backup-* 2>/dev/null | head -1)
+  [ -n "$baitd" ] || { bad "the planted bait dir is gone entirely"; return; }
+  grep -q 'STALE SNAPSHOT' "$baitd/project.md" 2>/dev/null || bad "the planted bait dir was consumed: $baitd"
+}
+acct_upgrade_reindex_failure_rolls_back() {
+  # v0.5.2 (external review P1-1). Phase 5's regeneration ran BARE — a failed reindex left the old
+  # views beside the renamed truths and the migration still committed "validate clean", because
+  # validate checks id presence in the index, not label freshness. A nonzero rc now throws into the
+  # boundary and the whole migration rolls back.
+  mv "$W/truths/t001.md" "$W/truths/t01.md"
+  OUT=$( ( cd "$W" && $TO node "$REPO/tests/upgrade-faultinject.mjs" - --reindex-fail ) 2>&1 ); RC=$?
+  [ "$RC" -eq 0 ] && bad "upgrade committed around a failed index regeneration"
+  expect_has "rolled back"
+  [ -f "$W/truths/t01.md" ] || bad "the rename was not rolled back"
+  [ ! -e "$W/truths/t001.md" ] || bad "the renamed file survived the rollback"
+}
+acct_scope_names_superseded_odd_verdict() {
+  # v0.5.2 (external review P1-2). A typo'd verdict with a LATER valid row: validate blocks on the
+  # history row, but scope judged only the winner — so the very row the mine is blocked on was
+  # invisible in the one command that narrates the ledger. The winner still counts (the
+  # repaired-ledger rule); the word is named beside it.
+  vrun attest verified 1 std m001
+  sed -i 's/\tverified\t/\tverifed\t/' "$W/truths/verify-ledger.tsv"
+  vrun attest verified 2 std m001
+  vrun scope
+  expect_has "1 verified (digest-bound)"
+  expect_has "superseded row(s) carry unknown verdicts"
+  vrun validate
+  expect_block "[LEDGER-VERDICT]"
+}
+acct_scope_quarantined_odd_not_superseded() {
+  # v0.5.2 cold review. The superseded-history line fired on rows that are neither superseded nor
+  # history: an odd verdict on an id's LATEST row (the id is quarantined — there is no winner, so
+  # "the winner still stands" is false, and the malformed line already covers it) and a HEADLESS
+  # odd row, which printed a dangling empty id before its word. Only ids with a valid WINNING row
+  # are superseded history now. Red vs the draft: both weird entries print on the superseded line.
+  vrun attest verified 1 std m001
+  printf 't001\t-\tverifed\t1\tstd\n' >> "$W/truths/verify-ledger.tsv"
+  printf '\t-\ttypo\t9\tstd\t2026-01-01\n' >> "$W/truths/verify-ledger.tsv"
+  vrun scope
+  expect_hasnt "superseded row(s) carry unknown verdicts"
+  expect_has "carry no id"
+  expect_has "[LEDGER-MALFORMED]"
+}
+block_completeness_kind_missing_bracket() {
+  # v0.5.2 (external review P1-3a). A bare `- no-kind` bullet under Accepted was an accepted
+  # decision with no kind at all — FORMATS' entry format opens with exactly one bracketed kind.
+  req_completeness
+  printf '# Open\n\n# Accepted\n\n- no-kind 항목 — 근거\n' > "$W/gaps.md"
+  vrun validate
+  expect_block "no '[<kind>]' slot at all"
+}
+block_completeness_kind_empty_bracket() {
+  # v0.5.2 (external review P1-3b). `- []` slipped because the no-error sentinel was '' — the very
+  # value an empty bracket produces. The sentinel is null now, so "empty kind" is an error value.
+  req_completeness
+  printf '# Open\n\n# Accepted\n\n- [] 빈 브래킷 — 근거\n' > "$W/gaps.md"
+  vrun validate
+  expect_block "COMP-MALFORMED"
+}
+block_completeness_kind_compound() {
+  # v0.5.2 (external review P1-3c). '[declared|reference]' passed because inList is the
+  # pipe-substring trick and a compound of adjacent members IS a substring of the enum string. The
+  # match is exact and one-at-a-time now.
+  req_completeness
+  printf '# Open\n\n# Accepted\n\n- [declared|reference] 복합 — 근거\n' > "$W/gaps.md"
+  vrun validate
+  expect_block "matched exactly and one at a time"
+}
+acct_schema_missing_gaps_keys_named() {
+  # v0.5.2 (external review P1-3d). gaps.sections and gaps.enum.kind were declared in the schema
+  # and absent from SCH_KEYS — deleting them from a runtime's schema changed nothing, which is the
+  # declared-but-unread class the schema's own header warns about. On a COPY of the runtime, like
+  # the fingerprint case: the shipped one is not a fixture.
+  cp -r "$REPO/.weavedoc/bin" "$W/.weavedoc/bin"
+  cp "$REPO/.weavedoc/schema" "$W/.weavedoc/schema"
+  cp "$REPO/.weavedoc/VERSION" "$W/.weavedoc/VERSION"
+  sed -i '/^gaps\.sections:/d; /^gaps\.enum\.kind:/d' "$W/.weavedoc/schema"
+  grep -q '^gaps\.' "$W/.weavedoc/schema" && { bad "fixture no-op: gaps keys still present"; return; }
+  OUT=$( ( cd "$W" && $TO node .weavedoc/bin/weavedoc.mjs validate ) 2>&1 ); RC=$?
+  [ "$RC" -eq 0 ] && bad "validate passed with schema keys deleted"
+  expect_has "SCHEMA-UNREADABLE"
 }
 acct_upgrade_rollback_fault_preserves_backup() {
   # Write fails at the stamp AND the rollback cannot restore verify.md. Keep the backup, name the

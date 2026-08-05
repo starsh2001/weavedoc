@@ -49,7 +49,8 @@ plan.fm.enum.audience
 project.fm.required review.enum.kind review.enum.reviewed_kind review.sections schema.version truth.fm.enum.provenance
 truth.fm.enum.status truth.fm.required truth.fm.resolution.decided_by
 truth.fm.resolution.decision_kind truth.fm.resolution.type verify.fm.enum.status verify.fm.required
-verify.ledger.file verify.ledger.origin.material verify.ledger.origin.truths verify.ledger.verdicts verify.sections verify.units.verified`
+verify.ledger.file verify.ledger.origin.material verify.ledger.origin.truths verify.ledger.verdicts verify.sections verify.units.verified
+gaps.sections gaps.enum.kind`
 
 // Bash word splitting on unquoted `$var` with the default IFS: split on ANY run of space, tab or
 // newline, and drop the empty fields. Several loops below depend on this being the splitting rule
@@ -911,9 +912,17 @@ export function cmdValidate (m, out, json = false, consecOk = '') {
         // entry whose bracket slot holds a word outside the enum is malformed in EITHER section:
         // under Open a typo still counted as debt (safe direction), but under Accepted it silently
         // became a decision nobody made about a kind that does not exist.
+        // STRICT, in three ways the v0.5.1 review measured through (external review P1-3):
+        //   - the kind match is EXACT against the enum's members. `inList` is the pipe-substring
+        //     trick, under which '[declared|reference]' — a substring of the enum string — passed.
+        //   - the no-error sentinel is null, not ''. With '' the empty-bracket kind `- []` set the
+        //     sentinel to the very value that means "no error" and slipped through.
+        //   - the bracket is REQUIRED: a bare `- no-kind` bullet under Accepted was an accepted
+        //     decision with no kind at all, which FORMATS' entry format does not allow.
         const kindEnum = sch('gaps.enum.kind') || 'declared|reference|enumeration|symmetry'
+        const kindSet = new Set(pipes(kindEnum))
         const scanRegister = (section) => {
-          let n = 0; let badline = ''; let badkind = ''; let inb = false; let gnoise = false
+          let n = 0; let badline = ''; let badkind = null; let inb = false; let gnoise = false
           for (let gl of splitLines(sectionAll(nocomment(readOr(gapsPath)), section))) {
             gl = gl.replace(/\r$/, '')
             if (!/[^ \t]/.test(gl)) { inb = false; continue }
@@ -925,7 +934,9 @@ export function cmdValidate (m, out, json = false, consecOk = '') {
                 if (strip(grest.includes(']') ? grest.slice(grest.indexOf(']') + 1) : grest) === '') gnoise = true
               } else if (grest.startsWith('- [') && grest.includes(']')) {
                 const kw = grest.slice(3, grest.indexOf(']'))
-                if (badkind === '' && !inList(kw, kindEnum)) badkind = kw
+                if (badkind === null && !kindSet.has(kw)) badkind = kw
+              } else if (badkind === null) {
+                badkind = ''   // no bracket at all — reported as a missing kind slot below
               }
               if (!gnoise) n++
             } else {
@@ -938,7 +949,9 @@ export function cmdValidate (m, out, json = false, consecOk = '') {
         const { n: nopen, badline, badkind: openKind } = scanRegister('Open')
         const accepted = scanRegister('Accepted')
         for (const [sec, kw] of [['Open', openKind], ['Accepted', accepted.badkind]]) {
-          if (kw !== '') prob('COMP-MALFORMED', M`completeness is 'required' but gaps.md '# ${sec}' holds an entry whose kind '[${kw}]' is not in the vocabulary — the enum is ${kindEnum} (schema gaps.enum.kind); a kind outside it is usually a typo, and a typo'd ACCEPTED entry is a decision nobody made`)
+          if (kw === null) continue
+          if (kw === '') prob('COMP-MALFORMED', M`completeness is 'required' but gaps.md '# ${sec}' holds an entry with no '[<kind>]' slot at all — entries open with exactly one kind from ${kindEnum} (schema gaps.enum.kind); a gap without a kind cannot be routed, and an ACCEPTED one is a decision about nothing nameable`)
+          else prob('COMP-MALFORMED', M`completeness is 'required' but gaps.md '# ${sec}' holds an entry whose kind '[${kw}]' is not in the vocabulary — the enum is ${kindEnum}, matched exactly and one at a time (schema gaps.enum.kind); a kind outside it is usually a typo, and a typo'd ACCEPTED entry is a decision nobody made`)
         }
         if (accepted.badline !== '') {
           prob('COMP-MALFORMED', M`completeness is 'required' but gaps.md '# Accepted' holds a line the register grammar cannot read: '${accepted.badline}' — the same grammar as '# Open': entries are '- ' bullets and an indented line is a continuation ONLY under one. An accepted gap is a DECISION, so prose the counter cannot attribute to an entry is a decision nobody can point at`)
