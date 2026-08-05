@@ -181,6 +181,11 @@ jobs:
       - name: the documented Windows invocation answers under PowerShell
         shell: pwsh
         run: |
+          # The runner's pwsh wrapper promotes ANY native nonzero exit to a terminating error, so
+          # the deliberate bogus-command check below killed the step before its own assertion ran
+          # (measured on this job's first outing). The checks are explicit; the promotion is not
+          # wanted here.
+          $PSNativeCommandUseErrorActionPreference = $false
           $v = node .weavedoc/bin/weavedoc.mjs version
           $v
           if ($LASTEXITCODE -ne 0) { throw "version exited $LASTEXITCODE" }

@@ -3622,16 +3622,19 @@ pass_crlf_retag() {
   # validation (t002 missing from coverage), every run rolled back, and "CR survived" was true of
   # the RESTORED file. The success assertion below is what forced this to the surface.
   sed -i 's/^- 대금 조항: (아직 추출 안 함)$/- 대금 조항: t002/' "$W/truths/coverage.md"
-  # Counted with od+wc, not grep: MSYS grep reads files in text mode, so CR patterns never fire.
-  crcount() { od -c "$1" | grep -oF '\r' | wc -l; }
-  lfcount() { od -c "$1" | grep -oF '\n' | wc -l; }
+  # Counted with tr|wc -c, not grep (MSYS grep reads files in text mode, so CR patterns never fire)
+  # and not od (the od-token spelling miscounted on the macOS leg — cr=7 for a 9-CR file — and the
+  # fixture guard then failed the case for its own counter's sake). tr -cd is byte-exact on all
+  # three platforms; the redirect keeps MSYS text-mode out of the path.
+  crcount() { tr -cd '\r' < "$1" | wc -c | tr -d ' '; }
+  lfcount() { tr -cd '\n' < "$1" | wc -c | tr -d ' '; }
   local crb lfb; crb=$(crcount "$W/truths/t002.md"); lfb=$(lfcount "$W/truths/t002.md")
   [ "$crb" = "$lfb" ] || { bad "fixture is not uniformly CRLF (cr=$crb lf=$lfb) — the case would prove nothing"; return; }
   vrun retag 대금 금액
   expect_pass
   local cra lfa; cra=$(crcount "$W/truths/t002.md"); lfa=$(lfcount "$W/truths/t002.md")
   [ "$cra" = "$crb" ] && [ "$lfa" = "$lfb" ] || { OUT="$(cat -A "$W/truths/t002.md" | head -6)"; bad "line endings changed: cr $crb->$cra lf $lfb->$lfa — a mixed-EOL file is a whole-file diff waiting to happen"; return; }
-  od -c "$W/truths/t001.md" | grep -qF '\r' && { OUT="$(cat -A "$W/truths/t001.md" | head -4)"; bad "retag introduced CR into an LF file"; return; }
+  [ "$(crcount "$W/truths/t001.md")" = 0 ] || { OUT="$(cat -A "$W/truths/t001.md" | head -4)"; bad "retag introduced CR into an LF file"; return; }
   OUT="(line endings preserved both ways: cr=$cra lf=$lfa)"; ok
 }
 pass_space_in_path() {
