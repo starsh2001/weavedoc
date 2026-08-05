@@ -181,17 +181,20 @@ jobs:
       - name: the documented Windows invocation answers under PowerShell
         shell: pwsh
         run: |
-          # The runner's pwsh wrapper promotes ANY native nonzero exit to a terminating error, so
-          # the deliberate bogus-command check below killed the step before its own assertion ran
-          # (measured on this job's first outing). The checks are explicit; the promotion is not
-          # wanted here.
+          # Two traps this step has already sprung, both measured on its own first outings:
+          # the runner may promote native nonzero exits to terminating errors (flag off below), and
+          # under $ErrorActionPreference='Stop' a native command's STDERR line becomes an error
+          # record that terminates the script — the bogus command's usage text killed the step
+          # before the assertion about it ever ran. Its stderr is swallowed; the exit code is the
+          # assertion. The explicit `exit 0` keeps the last probe's rc from leaking into the step's.
           $PSNativeCommandUseErrorActionPreference = $false
           $v = node .weavedoc/bin/weavedoc.mjs version
           $v
           if ($LASTEXITCODE -ne 0) { throw "version exited $LASTEXITCODE" }
           if (-not ($v -match 'fingerprint:')) { throw "no fingerprint line — the runtime did not answer" }
-          node .weavedoc/bin/weavedoc.mjs bogus-command-name
+          node .weavedoc/bin/weavedoc.mjs bogus-command-name 2>$null
           if ($LASTEXITCODE -eq 0) { throw "an unknown command exited 0 under pwsh" }
+          exit 0
 
   manifest:
     runs-on: ubuntu-latest
