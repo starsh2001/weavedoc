@@ -2,9 +2,10 @@
 # Run a test command inside the Linux container, against the working tree as it stands.
 #
 # WHY. Windows is where this is developed and Linux is where it is graded. MSYS serialises process
-# creation globally, so a full sweep there starves the machine it is running on (36m47s measured);
-# the same sweep in a container is ~30s (487 cases -j6: 32·33s measured 2026-08-07 — the figure
-# tracks the case count, so re-measure it here and in tests/README.md when that grows).
+# creation globally, so what costs time there is the NUMBER of spawns, not the runtime: 487 cases
+# run in ~30s in the container and ~7min natively (both -j6, measured 2026-08-07; natively it was
+# 30min+ before v0.5.12 stopped re-computing the cache key and re-parsing this suite once per
+# case). Both figures track the case count — re-measure here and in tests/README.md when it grows.
 #
 #   bash tests/in-container.sh regress                    # the whole suite against the runtime
 #   bash tests/in-container.sh sh '<any shell>'           # anything else, /work is the tree

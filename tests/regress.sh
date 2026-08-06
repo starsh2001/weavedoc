@@ -49,6 +49,18 @@ WD_ENTRY=${WDRUN[${#WDRUN[@]}-1]}
 # class this suite keeps a name for).
 key_paths() { ( cd "$1" && find tests .weavedoc/templates .weavedoc/bin -type f -print0 | sort -z | tr '\0' '\n' ); }
 
+# WORKERS INHERIT THE KEY — they do not recompute it (v0.5.12). The block below spawns ~25
+# processes (git, find, sort, xargs, sha256sum ×6, node/uname/bash/awk/sed --version …), which is
+# free on Linux and is the single largest per-case cost on Windows, where MSYS emulates fork at
+# ~0.4s per spawn: measured 5.2s per case end to end, most of it here, for a key the PARENT already
+# computed and that cannot differ (same commit, same bytes, same tools — the worker is the same
+# process tree). The parent exports WD_REG_RES; a worker takes it and skips straight to the run.
+# Set only by this script for its own children, so a human running `--one` still keys normally.
+if [ -n "${WD_REG_RES:-}" ]; then
+  RES="$WD_REG_RES"
+  CACHE=$(dirname "$RES")
+  KEY="${WD_REG_KEY:-inherited}"
+else
 KEY=$( { git -C "$REPO" rev-parse HEAD 2>/dev/null
          cat "$REPO/.weavedoc/VERSION" 2>/dev/null
          # WD_BIN itself: two different invocations of the same commit are different configurations
@@ -92,6 +104,7 @@ KEY=$( { git -C "$REPO" rev-parse HEAD 2>/dev/null
 [ -n "$(key_paths "$REPO" 2>/dev/null)" ] || { echo "key_paths produced nothing — the resume key lost its path half"; exit 2; }
 CACHE="${TMPDIR:-/tmp}/wd-reg-$KEY"
 RES="$CACHE/res"
+fi
 # Workers inherit the parent's workspace via env; only the invocation that CREATED the mktemp
 # dir removes it (a worker must never delete the floor the other workers stand on).
 CREATED_WORK=0
@@ -114,6 +127,7 @@ CASE=""
 JOBS=6
 FILTER=""
 ONE=""
+BATCH=""
 RESUME=0
 LIMIT=0
 while [ $# -gt 0 ]; do
@@ -121,6 +135,9 @@ while [ $# -gt 0 ]; do
     -j*) JOBS=${1#-j} ;;
     -n*) LIMIT=${1#-n} ;;
     --one) ONE="$2"; shift ;;
+    # --batch takes EVERY remaining argument as a case name: one bash process runs the whole chunk
+    # instead of one per case (v0.5.12). Internal — the driver's fan-out uses it; humans use --one.
+    --batch) shift; BATCH="$*"; break ;;
     --resume) RESUME=1 ;;
     *) FILTER="$1" ;;
   esac
@@ -486,14 +503,21 @@ RESULT=""
 ok()  { [ -z "$RESULT" ] && RESULT="PASS"; return 0; }
 bad() { RESULT="FAIL $1"; }
 
+# SUBSTRING TESTS RUN IN THE SHELL, not in a grep (v0.5.12). These three fire 613 times across the
+# suite and each `printf | grep -qF` was two processes — free on Linux, ~330ms on Windows, where
+# MSYS emulates fork and serialises process creation globally. `case` with a QUOTED variable is a
+# literal match (no globbing of $1) over the whole string, which is what `grep -qF` did line by
+# line: identical for the single-line needles every caller passes, and the suite's own results are
+# the proof — 487/487 unchanged, byte for byte, before and after.
+has() { case "$OUT" in *"$1"*) return 0 ;; *) return 1 ;; esac; }
 expect_block() { # $1 = substring the rejection must name
   if [ "$RC" -eq 0 ]; then bad "expected rejection, got a pass"
-  elif ! printf '%s\n' "$OUT" | grep -qF -- "$1"; then bad "rejected, but not for [$1]"
+  elif ! has "$1"; then bad "rejected, but not for [$1]"
   else ok; fi
 }
 expect_pass() { if [ "$RC" -ne 0 ]; then bad "expected a pass, got rejection"; else ok; fi; }
-expect_has()   { printf '%s\n' "$OUT" | grep -qF -- "$1" || bad "output lacks [$1]"; ok; }
-expect_hasnt() { printf '%s\n' "$OUT" | grep -qF -- "$1" && bad "output must not contain [$1]"; ok; }
+expect_has()   { has "$1" || bad "output lacks [$1]"; ok; }
+expect_hasnt() { has "$1" && bad "output must not contain [$1]"; ok; }
 
 vrun() { OUT=$( ( cd "$W" && $TO "${WDRUN[@]}" "$@" ) 2>&1 ); RC=$?; }
 # The two cases below read the runtime SOURCE rather than its output — the only ones in the suite
@@ -5301,6 +5325,17 @@ runone() { # $1 = case name; runs in its own fixture copy, writes $RES/<case>
   } > "$RES/$CASE"
 }
 
+if [ -n "$BATCH" ]; then
+  # A WORKER: many cases, ONE bash. The startup this amortises is not small on Windows — MSYS
+  # emulates fork at ~0.4s a spawn, and every case used to pay a fresh bash + a re-parse of this
+  # 5,000-line script on top of the key block above. Results go to files exactly as --one writes
+  # them, so the driver's tally, --resume and the report are unchanged; only the process count is.
+  mkdir -p "$RES"
+  [ -d "$PRISTINE" ] || mkpristine
+  for CASE_NAME in $BATCH; do runone "$CASE_NAME"; done
+  exit 0
+fi
+
 if [ -n "$ONE" ]; then
   mkdir -p "$RES"
   # Standalone --one with no inherited workspace: build the fixture instead of failing on a
@@ -5345,7 +5380,13 @@ done
 if [ "$LIMIT" -gt 0 ]; then TODO=$(printf '%s\n' $TODO | head -"$LIMIT" | tr '\n' ' '); fi
 if [ -n "$TODO" ]; then
   echo "running:$(printf '%s\n' $TODO | wc -l | tr -d ' ') case(s)"
-  printf '%s\n' $TODO | xargs -P "$JOBS" -I{} bash "$0" --one {} >/dev/null 2>&1
+  # CHUNKED fan-out (v0.5.12): `-n 8` hands each worker eight cases, so 487 cases cost ~61 bash
+  # startups instead of 487, and the key block runs zero times in workers (WD_REG_RES/-KEY below).
+  # Eight is a balance point, not a magic number: large enough to amortise startup, small enough
+  # that the last worker cannot hold the run open for long. The children inherit the workspace the
+  # same way they always did (WD_REG_WORK) — this adds the result dir and the key label beside it.
+  WD_REG_RES="$RES" WD_REG_KEY="$KEY" \
+    xargs -P "$JOBS" -n 8 bash "$0" --batch < <(printf '%s\n' $TODO) >/dev/null 2>&1
 fi
 
 NPASS=0; NFAIL=0; NMISS=0
