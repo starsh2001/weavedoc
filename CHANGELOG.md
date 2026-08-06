@@ -4,6 +4,18 @@
 
 ---
 
+## 2026-08-06.8
+
+**v0.5.5 — 핸드오프 규칙과 그 기계적 소스.** 실사용 지적에서 출발한 마이너 릴리스: 확인할 항목이나 충돌이 남았는데 마지막 어시스턴트 메시지가 "파일을 확인하세요"로 끝났다 (2026-08-06 사용자 룰링: "파일을 안 열어봐도 어떤 부분이 문제인지 메시지로 명시"). 두 부분이다.
+
+**규칙: Surface, don't point.** run이 사용자 대기 항목 — 미해결 충돌 · 열린 질문 · Human-queue 항목 · 충실성 위반 · 열린 갭 — 을 남기고 끝나면, 마지막 메시지에 **항목 자체**를 명시한다: 항목당 한 줄(무엇인지 · 이슈 한 줄 · 필요한 결정), 많으면 상세만 압축하고 목록은 절대 줄이지 않는다. 파일 경로는 내용 **뒤의 참조**지 대체가 아니다 — verify의 "정확합니까?" 금지의 핸드오프 판. 8개 run 스킬 전부(init 제외 — 인터뷰가 원래 메시지 안에서 이뤄진다) + METHODOLOGY §7 + WORKFLOW §5에 명문화했고, review의 "Human queue가 곧 사용자가 읽는 것" 문장은 파일-포인터를 정당화할 여지가 있어 "파일은 기록, 메시지가 보고"로 정정했다.
+
+**기계: `status --open`.** 다섯 카테고리의 열린 항목 전문을 한 줄씩 찍는 읽기 전용 모드 — 스킬의 마지막 보고는 이 출력을 답변 언어로 렌더링하지, 기억으로 재작성하지 않는다(census 규율의 핸드오프 적용). 리더는 전부 기존 판정의 재사용이다: Human queue는 status 카운터와 **한 워크 두 렌더링**(같은 컬렉터에서 카운트와 목록이 나와 어긋날 수 없다 — 기존 `status` 출력은 바이트 동일 확인), 충실성 위반은 게이트의 fidBody+isNoise 그대로(sections/kinds 파생은 consecrate 철자를 재사용 — 세 번째 철자를 만들지 않는다), questions/gaps는 gaps CLI의 nocomment+defence 그대로. 리더가 못 보는 것은 침묵 대신 명명한다: 미종결 `<!--`·펜스는 경고 줄이 되고, 경고가 서 있는 동안 nothing-waiting 문장은 보류된다(리더가 정직하게 할 수 없는 주장). questions.md는 validate가 읽지 않는 유일한 장부라 enum 밖 상태(`[Open]`)를 unrecognized로 **목록에 올린다**(hq untagged 규칙의 적용) — enum은 schema `questions.enum.status`에서 읽는다(선언되고 안 읽히던 키). 신규 케이스 14(red-first 13/14 관측 — 14번째 unrecognized-state 케이스는 리뷰 수정과 동시 작성이라 red 관측이 없어, 컬렉터를 죽인 **변이로 물어** 확인: nothing-waiting 오출력에서 정확히 빨개진다) + 전체 437→451 green. golden에 status-open.txt 추가, refresh-golden/골든 케이스에 모드 항목 편입.
+
+**콜드 diff 리뷰(사후) 발견 4건 수정.** ① redirect된 광산에서 위반 라벨이 hq 라벨과 다른 철자를 찍던 것 — rel() 통일 + 죽은 warnComment 제거(모든 review.md는 hqFiles에 이미 있다), ② sections/kinds 파생을 consecrate 철자로(validate=latin1·CLI=utf8 갈림은 기존 known-issue 그대로 — 셋이 아니라 둘), ③ questions enum 하드코딩 3곳 → schema 파생, ④ 빈 `conflict_with`의 대롱거리는 화살표 → `(unrecorded)`. 테스트 보강 2건: 2번째 HQ 섹션 케이스에 **미끼 항목**(런투EOF 리더와 구분), 하위 불릿 케이스 주석 정정(들여쓴 `- [open]`은 카운터 관용대로 목록에 오른다).
+
+**Known issues.** ① --open의 hq·questions·gaps·충돌 줄은 utf8 도메인으로 인쇄된다(위반 줄만 게이트 리더를 타 byte-exact) — CLI=utf8·validate=latin1의 기존 갈림(.7 ④)을 상속하며, 비UTF-8 광산 바이트는 표시만 U+FFFD가 되고 계수·분류는 무손실(ASCII 구조 매칭). ② questions.md의 들여쓴 `- [open]`은 컬럼0 규칙(FORMATS 항목 문법)에 따라 목록에 오르지 않는다 — hq 카운터의 들여쓰기 관용과 장부 간 비대칭이지만, 항목 문법이 우선이고 unrecognized 장치는 컬럼0 줄만 다룬다.
+
 ## 2026-08-06.7
 
 **v0.5.4 — 11차 리뷰 후속이자, 리뷰-수정 루프의 종료 라운드.** 이 번들과 함께 **릴리스 기준이 §11에 결정으로 박혔다**: 태그를 막는 결함은 (a) 데이터 파괴 (b) 정상 사용 경로의 오차단/오통과 두 종류뿐이고, 그 밖의 발견은 known-issue로 기록해 다음 릴리스로 간다. 11라운드의 궤적(데이터 파괴 → 동시성 → 정합성 → 병적 입력)이 근거다 — 리뷰는 빈손으로 돌아오지 않으므로, "리뷰 클린 = 태그"는 종료 조건이 없는 루프였다. red-first 4/4(전부 942ccdc 기준).

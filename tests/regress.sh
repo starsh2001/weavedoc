@@ -4404,6 +4404,14 @@ acct_golden_outputs_current() {
     ( cd "$W" && $TO "${WDRUN[@]}" "$c" ) > "$W/.g.$c" 2>&1
     cmp -s "$W/.g.$c" "$G/$c.txt" || bad="$bad DRIFT:$c"
   done
+  # status --open is a MODE, not a command word — compared outside the loop for the same reason
+  # refresh-golden.sh writes it outside its loop.
+  if [ -f "$G/status-open.txt" ]; then
+    ( cd "$W" && $TO "${WDRUN[@]}" status --open ) > "$W/.g.status-open" 2>&1
+    cmp -s "$W/.g.status-open" "$G/status-open.txt" || bad="$bad DRIFT:status-open"
+  else
+    bad="$bad MISSING:status-open.txt"
+  fi
   ( cd "$W" && $TO "${WDRUN[@]}" version ) > "$W/.g.version" 2>&1
   local now golden
   now=$(head -1 "$W/.g.version"); golden=$(head -1 "$G/version.txt")
@@ -4675,6 +4683,162 @@ acct_impact_paths_are_relative() {
     *"$W"*) bad "impact printed the absolute mine root: $(printf '%s\n' "$OUT" | grep -F "$W" | head -1)" ;;
     *) ok ;;
   esac
+}
+
+# ---- status --open: the open-item listing (v0.5.5, "Surface, don't point") ----
+# The skill rule says a run's closing message must carry every item waiting on the user; this mode
+# is its mechanical source. What the cases pin: the listing and `status`'s counters are ONE walk
+# (a count the listing disagrees with is the two-readers drift class), closed states stay out, and
+# content a ledger reader cannot see is NAMED as invisible rather than silently absent.
+
+acct_openlist_hq_counts_agree() {
+  # The listing derives from the same collector as the `status` counter — both surfaces asserted
+  # on one fixture, so a drift between them is a red case here and not a discovery in the field.
+  printf -- '\n- [open] [user-only] 병기 허용 여부\n- [open] [machine] 재색인 필요\n- [ruled] [user-only] 지난 라운드 처리\n' >> "$W/truths/verify.md"
+  vrun status; expect_has "open 2"
+  vrun status --open
+  expect_pass
+  expect_has "human queue (2):"
+  expect_has "truths/verify.md: - [open] [user-only] 병기 허용 여부"
+  expect_has "truths/verify.md: - [open] [machine] 재색인 필요"
+  expect_hasnt "지난 라운드 처리"
+}
+acct_openlist_untagged_shown() {
+  # An entry with no state tag is outside the open count (validate rejects it), but a
+  # what-is-waiting listing that silently omits it hides exactly the debt the counter names.
+  printf -- '\n- [open] [user-only] 실제 열린 항목\n- 상태 태그가 없는 항목\n' >> "$W/truths/verify.md"
+  vrun status --open
+  expect_has "human queue (1 open, 1 untagged):"
+  expect_has "truths/verify.md (untagged): - 상태 태그가 없는 항목"
+}
+acct_openlist_conflict_pair() {
+  # A conflict names BOTH sides (the skill rule's wording), each with its claim. t002's status is
+  # QUOTED on purpose: scope once carried its own parser that read `status: "retracted"` as live —
+  # the listing must ride fmVal's quote peeling, not a parser of its own.
+  sed -i 's/^status: ok$/status: conflict\nconflict_with: [t002]/' "$W/truths/t001.md"
+  printf -- '---\nid: t002\nclaim: "위약금은 계약금액의 15%%다"\nsource: m001\ntags: [위약]\nstatus: "conflict"\nconflict_with: [t001]\nprovenance: stated\n---\n\n제7조 위약금은 계약금액의 15%%로 한다.\n' > "$W/truths/t002.md"
+  vrun status --open
+  expect_has "conflicts (2):"
+  expect_has "t001 ⇄ [t002] — 위약금은 계약금액의 10%다"
+  expect_has "t002 ⇄ [t001] — 위약금은 계약금액의 15%다"
+}
+acct_openlist_questions_states() {
+  # open + proposed are both waiting (proposed = candidates on the table, nothing confirmed);
+  # answered is closed and stays out of a listing of what is waiting.
+  cat > "$W/questions.md" <<'EOF'
+# 질문
+
+- [open] d1 §2 — 지체상금 상한 — 작성에 필요
+- [proposed] 학교명 — 후보 3안 제시됨
+- [answered] 위약금 요율 — 10% (사용자: "10%로 확정")
+EOF
+  vrun status --open
+  expect_has "questions (2):"
+  expect_has "- [open] d1 §2 — 지체상금 상한"
+  expect_has "- [proposed] 학교명"
+  expect_hasnt "위약금 요율"
+}
+acct_openlist_gaps_open_only() {
+  # Open entries list; Accepted entries are DECISIONS and stay out. The placeholder bullet is
+  # template noise to the counter and must be noise to the listing too.
+  cat > "$W/gaps.md" <<'EOF'
+# Open
+
+- [enumeration] 앨범 — 6곡 계획 vs 5곡 수록 — m002 대비
+- [<kind>] <where> — <what>
+
+# Accepted
+
+- [symmetry] 멤버 프로필 — 의도적 공백 — scope: [멤버] — recheck: 새 자료 — as-of: t001
+EOF
+  vrun status --open
+  expect_has "gaps (1):"
+  expect_has "- [enumeration] 앨범 — 6곡 계획 vs 5곡 수록"
+  expect_hasnt "의도적 공백"
+  expect_hasnt "<where>"
+}
+acct_openlist_fidelity_violation() {
+  # Violations are the gate's entries — listed through the gate's own readers (fidBody + isNoise),
+  # never a second parser, so the listing and the gate cannot answer differently about one file.
+  REV '- [contradiction] §2 — t001과 t002가 충돌'
+  vrun status --open
+  expect_has "fidelity violations (1):"
+  expect_has "documents/d1/review.md: - [contradiction] §2 — t001과 t002가 충돌"
+}
+acct_openlist_nothing_waiting() {
+  # The pristine mine has empty queues and no questions.md/gaps.md — the listing must say so
+  # PLAINLY rather than print nothing (emptiness that looks like success is the vacuity class).
+  vrun status --open
+  expect_pass
+  expect_has "nothing is waiting on you"
+}
+block_status_open_typo() {
+  # WD-CLI-001: an unknown flag is a typo'd intention, refused — not ignored.
+  vrun status --opne
+  expect_block "usage: weavedoc status [--open]"
+}
+acct_openlist_comment_hides_entry() {
+  # The same nocomment the counter uses: an entry archived inside <!-- --> is history, not waiting.
+  printf -- '\n<!--\n- [open] [user-only] 보관된 항목\n-->\n' >> "$W/truths/verify.md"
+  vrun status --open
+  expect_hasnt "보관된 항목"
+  expect_has "nothing is waiting on you"
+}
+acct_openlist_second_hq_section() {
+  # A Human queue is append-per-round: entries under a SECOND `## Human queue` are as open as the
+  # first's — reading only the first once hid every later round from the counter (R6-C2). The
+  # decoy under `## 다른 절` is what separates "reads both sections" from "never closes a section":
+  # a run-to-EOF reader would count 3 and print the decoy.
+  printf -- '\n- [open] [user-only] 라운드 1 항목\n\n## 다른 절\n\n- [open] [user-only] 미끼 항목\n\n## Human queue\n\n- [open] [recommended] 라운드 2 항목\n' >> "$W/truths/verify.md"
+  vrun status --open
+  expect_has "human queue (2):"
+  expect_has "라운드 1 항목"
+  expect_has "라운드 2 항목"
+  expect_hasnt "미끼 항목"
+}
+acct_openlist_subbullets_stay_detail() {
+  # One line per item: an entry's UNTAGGED indented sub-bullets are its detail, not entries of
+  # their own (R5-N3's counter rule, applied to the listing). An indented `- [open]` sub-bullet
+  # DOES list — counter parity: the open counter tolerates indentation, and the listing must not
+  # disagree with the count.
+  printf -- '\n- [open] [user-only] 병기 허용 여부\n  - 근거: 두 자료가 다른 값\n' >> "$W/truths/verify.md"
+  vrun status --open
+  expect_has "human queue (1):"
+  expect_hasnt "근거: 두 자료가"
+}
+acct_openlist_question_unknown_state() {
+  # questions.md is the one ledger no validator reads, so a state outside the enum has no check to
+  # fail — a listing that silently dropped it would print the nothing-waiting line over a visibly
+  # open question. The untagged-entry rule, applied to this ledger.
+  printf -- '# 질문\n\n- [Open] 대문자 상태 — 지체상금 상한\n' > "$W/questions.md"
+  vrun status --open
+  expect_has "questions (0 waiting, 1 unrecognized state):"
+  expect_has "대문자 상태"
+  expect_hasnt "nothing is waiting on you"
+}
+acct_openlist_unterminated_fence_warns() {
+  # gaps.md's readers share ONE fence judgment (defence); a fence nobody closed makes the tail
+  # invisible, and a listing that stays silent about that reads as "covered everything". The
+  # hidden entry must not print — and the silence must be named, which also forbids the
+  # nothing-waiting line (it would be a claim the reader cannot honestly make).
+  cat > "$W/gaps.md" <<'EOF'
+# Open
+
+```
+- [declared] 펜스 안 — 예시일 뿐
+EOF
+  vrun status --open
+  expect_has "unterminated code fence"
+  expect_hasnt "펜스 안"
+  expect_hasnt "nothing is waiting on you"
+}
+acct_openlist_unterminated_comment_warns() {
+  # The unterminated '<!--' blanks everything after it before any reader sees a line — same rule,
+  # named the same way.
+  printf -- '# 질문\n\n<!--\n- [open] 숨은 항목\n' > "$W/questions.md"
+  vrun status --open
+  expect_has "unterminated '<!--'"
+  expect_hasnt "숨은 항목"
 }
 
 # ---------------------------------------------------------------- driver

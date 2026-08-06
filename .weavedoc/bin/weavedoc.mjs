@@ -4,7 +4,7 @@
 //   validate          format + truth coherence (exit non-zero on any problem)
 //   pull <term>       protocol-correct mine lookup for consumers outside the pipeline (see READ.md)
 //   impact <mID>      which truths were extracted from a material + which documents cite it (blast radius)
-//   status            each document's status + the next step
+//   status [--open]   each document's status + the next step (--open: every item waiting on the user, one line each)
 //   scope             what a verify round still owes — unverified materials + truths, computed
 //   attest <verdict> <round> <standard> <id...>   record a verification: digest-bound sidecar row
 //   seal-review <doc-id> [draft|final]   pin the clean review to the reviewed bytes + context
@@ -180,7 +180,7 @@ async function cmdLocale () {
 // ---- dispatch ----
 // Every command validates its FULL argument list (WD-CLI-001): an extra argument or an unknown flag
 // is a typo'd intention, and a tool that ignores it does something other than what was asked.
-const USAGE = 'weavedoc — validate | pull <term> | impact <material-id> | status | scope | ' +
+const USAGE = 'weavedoc — validate | pull <term> | impact <material-id> | status [--open] | scope | ' +
   'attest <verdict> <round> <standard> <id...> | seal-review <doc-id> [draft|final] | ' +
   'consecrate <doc-id> | upgrade [--check|--dry-run|--apply] | gaps | census | ' +
   'reindex [--check] | retag <old> <new> [--dry] | version | lang | locale'
@@ -335,10 +335,15 @@ switch (cmd) {
     rc = cmdPull(openMine(SCRIPT_DIR), outln, rest[0]); break
   }
   case 'status': {
-    if (rest.length !== 0) usage2('weavedoc status')
+    // The --json shape validate/scope use, for the same reason: the flag is either first or a typo.
+    let sopen = false
+    let sa = rest
+    if (sa[0] === '--open') { sopen = true; sa = sa.slice(1) }
+    if (sa.length !== 0) usage2('weavedoc status [--open]')
     const { openMine } = await import('./lib/mine.mjs')
-    const { cmdStatus } = await import('./lib/cmd-status.mjs')
-    rc = cmdStatus(openMine(SCRIPT_DIR), outln); break
+    const { cmdStatus, cmdStatusOpen } = await import('./lib/cmd-status.mjs')
+    const mine = openMine(SCRIPT_DIR)
+    rc = sopen ? cmdStatusOpen(mine, outln) : cmdStatus(mine, outln); break
   }
   case 'gaps': {
     if (rest.length !== 0) usage2('weavedoc gaps')
