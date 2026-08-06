@@ -4719,8 +4719,8 @@ acct_openlist_conflict_pair() {
   printf -- '---\nid: t002\nclaim: "위약금은 계약금액의 15%%다"\nsource: m001\ntags: [위약]\nstatus: "conflict"\nconflict_with: [t001]\nprovenance: stated\n---\n\n제7조 위약금은 계약금액의 15%%로 한다.\n' > "$W/truths/t002.md"
   vrun status --open
   expect_has "conflicts (2):"
-  expect_has "t001 ⇄ [t002] — 위약금은 계약금액의 10%다"
-  expect_has "t002 ⇄ [t001] — 위약금은 계약금액의 15%다"
+  expect_has "t001 (m001) ⇄ [t002] — 위약금은 계약금액의 10%다"
+  expect_has "t002 (m001) ⇄ [t001] — 위약금은 계약금액의 15%다"
 }
 acct_openlist_questions_states() {
   # open + proposed are both waiting (proposed = candidates on the table, nothing confirmed);
@@ -4739,8 +4739,10 @@ EOF
   expect_hasnt "위약금 요율"
 }
 acct_openlist_gaps_open_only() {
-  # Open entries list; Accepted entries are DECISIONS and stay out. The placeholder bullet is
-  # template noise to the counter and must be noise to the listing too.
+  # Open entries list; Accepted entries are DECISIONS and stay out. A bullet that is placeholders
+  # THROUGHOUT is template noise. A bullet whose kind slot kept its placeholder but whose BODY is
+  # written out is a real gap (FORMATS: the remainder decides) — this case carried only the pure
+  # stub in v0.5.5 and so LOCKED the defect below in place; both shapes are pinned now.
   cat > "$W/gaps.md" <<'EOF'
 # Open
 
@@ -4756,6 +4758,148 @@ EOF
   expect_has "- [enumeration] 앨범 — 6곡 계획 vs 5곡 수록"
   expect_hasnt "의도적 공백"
   expect_hasnt "<where>"
+}
+acct_openlist_gaps_filled_placeholder() {
+  # P1 (external review, v0.5.5): the listing dropped every bullet whose kind slot opened with a
+  # placeholder — the PREFIX rule validate abandoned in v0.5.4 review #9 — so a gap validate counts
+  # and blocks on read as "nothing is waiting". FORMATS: only a line that is placeholders
+  # throughout is noise; the remainder decides.
+  printf '# Open\n\n- [<kind>] album — six-vs-five\n\n# Accepted\n' > "$W/gaps.md"
+  vrun status --open
+  expect_has "gaps (1):"
+  expect_has "album — six-vs-five"
+  expect_hasnt "nothing is waiting on you"
+}
+acct_openlist_gaps_continuation_realized() {
+  # The other half of the same rule: a held-back placeholder bullet is REALIZED by a continuation
+  # with real content. validate counts it as one open gap, so the listing must show one.
+  printf '# Open\n\n- [{kind}]\n  실제 내용이 이어짐 — 6곡 vs 5곡\n\n# Accepted\n' > "$W/gaps.md"
+  vrun status --open
+  expect_has "gaps (1):"
+  expect_hasnt "nothing is waiting on you"
+}
+acct_openlist_gaps_count_matches_validate() {
+  # THE ANTI-DRIFT GUARD, and the case this release exists for: one gaps.md, two readers, one
+  # answer. Every shape that ever split them rides in the same file — plain entry, filled
+  # placeholder, pure stub, realized continuation, sub-bullet, accepted entry — and the two counts
+  # are compared to EACH OTHER, so a future reader that drifts either way goes red without anyone
+  # having to predict which shape it will drift on.
+  sed -i 's/^  completeness: off/  completeness: required/' "$W/.weavedoc/config.yaml"
+  cat > "$W/gaps.md" <<'EOF'
+# Open
+
+- [enumeration] 앨범 — 6곡 계획 vs 5곡 수록 — m002 대비
+- [<kind>] album — six-vs-five
+- [<kind>] <where> — <what>
+- [{kind}]
+  실제 내용이 이어짐
+- [reference] 라온고 — 정의하는 truth 없음 — t001 언급
+  - 근거: 하위 불릿은 항목이 아니다
+
+# Accepted
+
+- [symmetry] 멤버 프로필 — 의도적 공백 — scope: [멤버] — recheck: 새 자료 — as-of: t001
+EOF
+  local vn ln
+  vrun validate
+  vn=$(printf '%s\n' "$OUT" | sed -n 's/.*holds \([0-9]*\) open gap(s).*/\1/p' | head -1)
+  vrun status --open
+  ln=$(printf '%s\n' "$OUT" | sed -n 's/^gaps (\([0-9]*\)):$/\1/p' | head -1)
+  # Neither may be empty: two blank strings compare equal, which is this suite's named vacuity trap.
+  if [ -z "$vn" ] || [ -z "$ln" ]; then
+    bad "one of the readers printed no count (validate='$vn' listing='$ln') — the comparison would be vacuous"
+  elif [ "$vn" != "$ln" ]; then
+    bad "validate counts $vn open gap(s), status --open lists $ln — one file, two answers"
+  else ok; fi
+}
+acct_openlist_gaps_localized_section() {
+  # THE DOMAIN DOOR (cold review, v0.5.6). The register section name is matched against the file's
+  # BYTES, so reading it out of the utf8 schema map found no heading at all and the listing went
+  # empty — the very "nothing is waiting over a blocking gap" this release repairs, re-entering
+  # sideways. gaps.sections is documented as project-configurable and this is a Korean-first
+  # product, so the non-ASCII spelling is a normal path, not a pathological one.
+  sed -i 's/^gaps\.sections:.*/gaps.sections: 미해결|수용/' "$W/.weavedoc/schema"
+  sed -i 's/^  completeness: off/  completeness: required/' "$W/.weavedoc/config.yaml"
+  printf '# 미해결\n\n- [enumeration] 앨범 — 6곡 계획 vs 5곡 수록\n\n# 수용\n' > "$W/gaps.md"
+  local vn ln
+  vrun validate
+  vn=$(printf '%s\n' "$OUT" | sed -n 's/.*holds \([0-9]*\) open gap(s).*/\1/p' | head -1)
+  vrun status --open
+  ln=$(printf '%s\n' "$OUT" | sed -n 's/^gaps (\([0-9]*\)):$/\1/p' | head -1)
+  if [ -z "$vn" ] || [ -z "$ln" ]; then
+    bad "one of the readers printed no count (validate='$vn' listing='$ln') — the comparison would be vacuous"
+  elif [ "$vn" != "$ln" ]; then
+    bad "localized section: validate counts $vn, status --open lists $ln — the schema-domain split"
+  else ok; fi
+}
+acct_openlist_paths_survive_encoding() {
+  # A path is TEXT and an entry is BYTES; encoding the two together truncates every code point
+  # above 255, and a redirected documents/ came out as bytes that were no longer a path.
+  # The label is only printed for a file that HAS an item, so the violation goes in before the
+  # move (review4 writes to documents/, which is about to become 산출물/).
+  REV '- [contradiction] §2 — 경로 라벨 확인'
+  sed -i 's|^  documents: documents|  documents: 산출물|' "$W/.weavedoc/config.yaml"
+  mv "$W/documents" "$W/산출물"
+  printf -- '\n- [open] [user-only] 경로 인코딩 확인\n' >> "$W/truths/verify.md"
+  vrun status --open
+  expect_has "산출물/d1/review.md: - [contradiction] §2 — 경로 라벨 확인"
+  expect_has "truths/verify.md: - [open] [user-only] 경로 인코딩 확인"
+}
+acct_openlist_gaps_badline_warns() {
+  # scanRegister stops at the first line the grammar cannot read, so everything after it is
+  # missing from the listing. Silence would print a short list as if it were the whole one.
+  # `-<TAB>[declared]` — the bullet marker is a hyphen followed by a TAB, so it is neither a
+  # column-0 `- ` entry nor an indented continuation: the grammar cannot read it and stops there.
+  printf '# Open\n\n- [declared] 첫 항목 — 실제 갭\n-\t[declared] 탭 불릿\n- [reference] 셋째 항목 — 안 보임\n\n# Accepted\n' > "$W/gaps.md"
+  vrun status --open
+  expect_has "the register grammar cannot read"
+  expect_hasnt "셋째 항목"
+}
+acct_openlist_question_pure_stub_silent() {
+  # The other side of the question rule, and the line that had ZERO coverage: a bullet that is
+  # placeholders THROUGHOUT is an untouched template and must stay silent — while a real question
+  # that merely MENTIONS a `<…>` token must not (isNoise's known limit, which is why the register's
+  # own stub test is used here instead).
+  printf -- '# 질문\n\n- [<status>] <where> — <what>\n' > "$W/questions.md"
+  vrun status --open
+  expect_has "nothing is waiting on you"
+  printf -- '# 질문\n\n- [<status>] d1 §2 — <미정> 값을 확정해 주세요\n' > "$W/questions.md"
+  vrun status --open
+  expect_hasnt "nothing is waiting on you"
+  expect_has "값을 확정해 주세요"
+}
+acct_openlist_question_stateless() {
+  # A question bullet with no state tag at all: validate never reads questions.md, so nothing else
+  # catches it, and dropping it silently prints "nothing is waiting" over a visibly open question.
+  printf -- '# 질문\n\n- 상태 태그가 없는 질문 — 지체상금 상한\n' > "$W/questions.md"
+  vrun status --open
+  expect_has "상태 태그가 없는 질문"
+  expect_hasnt "nothing is waiting on you"
+}
+acct_openlist_question_filled_placeholder() {
+  # The question-side twin of the gaps P1: a template state slot over a written-out body.
+  printf -- '# 질문\n\n- [<status>] d1 §2 — 지체상금 상한 — 작성에 필요\n' > "$W/questions.md"
+  vrun status --open
+  expect_has "지체상금 상한"
+  expect_hasnt "nothing is waiting on you"
+}
+acct_openlist_conflict_shows_source() {
+  # The skills' rule says a conflict names BOTH sides AND their sources; the v0.5.5 listing printed
+  # id + claim + conflict_with only, so the reader could not tell which materials disagree.
+  sed -i 's/^status: ok$/status: conflict\nconflict_with: [t002]/' "$W/truths/t001.md"
+  mkdir -p "$W/materials/m002"
+  printf -- '---\nid: m002\ntitle: 개정 계약서\norigin: file\nrole: 계약서\ntopics: [위약]\nformat: md\nsource_path: inbox/c2.md\nadded: 2026-07-02\nstatus: converted\nsummary: 개정본.\n---\n\n제7조 위약금은 계약금액의 15%%로 한다.\n' > "$W/materials/m002/converted.md"
+  printf -- '---\nid: t002\nclaim: "위약금은 계약금액의 15%%다"\nsource: m002\nlocation: "제7조"\ntags: [위약]\nstatus: conflict\nconflict_with: [t001]\nprovenance: stated\n---\n\n제7조 위약금은 계약금액의 15%%로 한다.\n' > "$W/truths/t002.md"
+  vrun status --open
+  expect_has "t001 (m001) ⇄ [t002] — 위약금은 계약금액의 10%다"
+  expect_has "t002 (m002) ⇄ [t001] — 위약금은 계약금액의 15%다"
+}
+block_schema_roster_questions_enum() {
+  # `questions.enum.status` decides which question states `status --open` treats as waiting, but it
+  # was not in SCH_KEYS — so deleting it passed validate while switching the classification over to
+  # a hardcoded fallback. The roster is the list of keys whose ABSENCE must be reported.
+  sed -i '/^questions\.enum\.status:/d' "$W/.weavedoc/schema"
+  vrun validate; expect_block "cannot read 'questions.enum.status'"
 }
 acct_openlist_fidelity_violation() {
   # Violations are the gate's entries — listed through the gate's own readers (fidBody + isNoise),
@@ -4812,8 +4956,8 @@ acct_openlist_question_unknown_state() {
   # open question. The untagged-entry rule, applied to this ledger.
   printf -- '# 질문\n\n- [Open] 대문자 상태 — 지체상금 상한\n' > "$W/questions.md"
   vrun status --open
-  expect_has "questions (0 waiting, 1 unrecognized state):"
-  expect_has "대문자 상태"
+  expect_has "questions (0 waiting, 1 unrecognized):"
+  expect_has "(unrecognized state — the enum is open|proposed|answered): - [Open] 대문자 상태"
   expect_hasnt "nothing is waiting on you"
 }
 acct_openlist_unterminated_fence_warns() {

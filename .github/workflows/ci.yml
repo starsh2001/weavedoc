@@ -231,6 +231,13 @@ jobs:
       - uses: actions/checkout@v5
         with:
           fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          # THE SAME FLOOR THE GATES RAN (external review, v0.5.5). Without this step the release
+          # job took ubuntu-latest's default node and the evidence block published `node=v22.23.1`
+          # while every gate — lint, regression-linux, the 3-OS matrix — ran on 18. The evidence
+          # named a runtime nothing was verified against.
+          node-version: '18'
       - name: cohesion — the tag is SemVer-shaped and CHANGELOG-claimed; VERSION, CHANGELOG and schema agree (doccheck)
         # The SHAPE is asserted (v0.5.2, external review): before this, `vfoo` would have published a
         # release. Anchored regex, not a case-glob — the glob `v[0-9]*.[0-9]*.[0-9]*` accepted
@@ -276,7 +283,10 @@ jobs:
             echo "bundle=$(cat .weavedoc/VERSION)"
             echo "schema=$(grep -m1 '^schema.version:' .weavedoc/schema | sed 's/.*:[[:space:]]*//')"
             echo "fingerprint=$(node .weavedoc/bin/weavedoc.mjs version | sed -n 's/^fingerprint:[[:space:]]*\([0-9a-f]*\).*/\1/p')"
-            echo "node=$(node --version)"
+            # `node_gate`, not `node`: this job pins the same '18' the gate jobs declare (the step
+            # above), so the field names the runtime the verdicts were produced on rather than
+            # whatever the release runner happened to ship.
+            echo "node_gate=$(node --version)"
             echo "manifest_sha256=$(bash tests/make-manifest.sh | sha256sum | awk '{print $1}')"
           } | tee release-evidence.txt
           # A field whose command failed comes out EMPTY, and `| tee` swallows the status — the
