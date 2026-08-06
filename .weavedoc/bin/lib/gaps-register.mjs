@@ -27,6 +27,25 @@ const strip = s => s.replace(/\{[^{}]*\}/g, '').replace(/<[^<>]*>/g, '').replace
 // a known limit that inverts in a listing: prose holding a `<…>` token reads as a placeholder
 // there, which is safe for the gate and a silent drop for a report. A bullet is a stub only when
 // its bracket slot is a placeholder AND what follows it is empty once template tokens are removed.
+// "Does this entry's own line carry no content?" — the one condition under which an indented line
+// below it is FOLDED INTO it rather than dropped as detail. Narrow on purpose (v0.5.7): folding
+// every continuation made `- [enumeration] 앨범` + `  - 근거: …` render as one line wearing two
+// entry tokens, and the Human queue deliberately drops an entry's sub-bullets as detail
+// (acct_openlist_subbullets_stay_detail). The defect being repaired is only the other shape — an
+// entry whose content lives ENTIRELY on its continuations, listed as a bare `- [declared]` that
+// tells the reader nothing. `tag` is the ledger's own prefix pattern (kind slot, state slot,
+// state+ownership tags): what remains after it is the entry's content.
+// gaps.md's entry prefix: the bullet plus its `[kind]` slot. Exported spellings for the twin
+// ledgers live with their readers, because each ledger's tag is its own grammar.
+export const ENTRY_TAG = /^- \[[^\]]*\]/
+
+export function emptyRemainder (line, tag) {
+  const s = line.replace(/^[ \t]*/, '')
+  const m = tag.exec(s)
+  if (m === null) return false
+  return strip(s.slice(m[0].length)) === ''
+}
+
 export function stubEntry (line) {
   const s = line.replace(/^[ \t]*/, '')
   if (!s.startsWith('- [') || !s.includes(']')) return false
@@ -55,9 +74,17 @@ export function scanRegister (gapsText, section, kindSet) {
   let n = 0; let badline = ''; let badkind = null; let dblkind = null; let unclosed = ''
   let inb = false; let gnoise = false; let gnoiseKind = ''; let gnoiseLine = ''
   const entries = []
+  // Which entry a continuation line extends, or -1 — set ONLY for an entry whose own line carries
+  // no content (emptyRemainder). A gap's content can live entirely on its continuations
+  // (`- [declared]` / `  penalty cap의 근거가 필요함`), and the first build appended them only in
+  // the placeholder-REALIZED branch, so such an entry was listed as a bare bullet and the reader
+  // had to open the file after all (external review, v0.5.6). Counting was never wrong; only what
+  // the reader was shown. Folding EVERY continuation was the first fix and it was too wide — see
+  // emptyRemainder.
+  let last = -1
   for (let gl of splitLines(sectionAll(gapsText, section))) {
     gl = gl.replace(/\r$/, '')
-    if (!/[^ \t]/.test(gl)) { inb = false; continue }
+    if (!/[^ \t]/.test(gl)) { inb = false; last = -1; continue }
     const grest = gl.replace(/^[ \t]*/, '')
     // AN ENTRY OPENS AT COLUMN ZERO (v0.5.4, review #9). The indentation used to be stripped before
     // the bullet test, so every indented bullet opened an entry: an orphan `  - [declared] …` under
@@ -106,7 +133,13 @@ export function scanRegister (gapsText, section, kindSet) {
       } else if (badkind === null) {
         badkind = ''   // no bracket at all — reported as a missing kind slot by the caller
       }
-      if (!gnoise) { n++; entries.push(gl) }
+      // A held-back stub gets `last = -1`: its continuation REALIZES it below rather than extending
+      // it, and the two must not both fire on one line.
+      if (!gnoise) {
+        n++
+        entries.push(gl)
+        last = emptyRemainder(gl, ENTRY_TAG) ? entries.length - 1 : -1
+      } else last = -1
     } else {
       if (grest === gl || !inb) { badline = gl; break }
       // A continuation with real content REALIZES the held-back bullet — it becomes an entry, and
@@ -119,8 +152,13 @@ export function scanRegister (gapsText, section, kindSet) {
       if (gnoise && strip(grest) !== '') {
         n++
         entries.push(`${gnoiseLine} ${grest}`)
+        last = entries.length - 1
         gnoise = false
         if (badkind === null) badkind = gnoiseKind
+      } else if (last >= 0) {
+        // ONE LINE PER ITEM is the listing's whole shape, so an entry's continuations fold into the
+        // line the entry already has rather than becoming lines of their own.
+        entries[last] += ` ${grest}`
       }
     }
   }

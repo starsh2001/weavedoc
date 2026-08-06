@@ -1,3 +1,3 @@
-2026-08-06.9
-fingerprint: 2aa86a17474f  (bin+schema — compare this, not just the date)
+2026-08-06.10
+fingerprint: 61b63f6a9166  (bin+schema — compare this, not just the date)
 schema: 2 (this runtime reads ≤2; a v1 mine migrates via 'upgrade')
