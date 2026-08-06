@@ -4419,6 +4419,37 @@ acct_golden_outputs_current() {
   OUT="${bad:-golden snapshots match the current runtime}"; RC=0
   if [ -z "$bad" ]; then ok; else bad "golden drift —$bad (run 'bash tests/refresh-golden.sh' and review the diff)"; fi
 }
+acct_gaps_accepted_tally_counts_filled_placeholder() {
+  # THE THIRD ANSWER, closed (v0.5.8). `weavedoc gaps`' accepted tally still ran the placeholder
+  # PREFIX rule validate abandoned in v0.5.4 review #9 — the same retired rule that made
+  # `status --open` report a blocking gap as "nothing is waiting" in v0.5.5. Here it under-counts
+  # accepted decisions instead: an entry whose kind slot kept its template but whose body is
+  # written out is a real decision (FORMATS: the remainder decides) and was tallied as nothing.
+  # Revert cmd-gaps.mjs's scanRegister call to countLines(…, ENTRY) → this goes red.
+  cat > "$W/gaps.md" <<'EOF'
+# Open
+
+# Accepted
+
+- [symmetry] 정상 항목 — 의도적 공백 — scope: [x] — recheck: y — as-of: t001
+- [<kind>] 실제로 수용된 결정 — scope: [x] — recheck: y — as-of: t001
+- [<kind>] <where> — <what>
+EOF
+  vrun gaps
+  expect_pass
+  # 2, not 3: the pure stub stays template noise in every reader.
+  expect_has "records 2 already accepted"
+}
+acct_gaps_accepted_tally_localized_section() {
+  # An OVER-BLOCKING GUARD (passes before and after — no red-first for this shape): the tally moves
+  # to the byte domain to share validate's scanner, and the section name must move WITH it. Reading
+  # a non-ASCII section name from the utf8 schema map against latin1 text is exactly how v0.5.6
+  # re-introduced the defect it was repairing, one command over.
+  sed -i 's/^gaps\.sections:.*/gaps.sections: 미해결|수용/' "$W/.weavedoc/schema"
+  printf '# 미해결\n\n# 수용\n\n- [symmetry] 정상 — 의도적 공백 — scope: [x] — recheck: y — as-of: t001\n' > "$W/gaps.md"
+  vrun gaps
+  expect_has "records 1 already accepted"
+}
 meta_manifest_baseline_current() {
   # tests/baseline/bundle.manifest is the release's own identity record, and NOTHING read it: CI
   # only checks that two consecutive GENERATIONS agree, which is true of a baseline a year stale.

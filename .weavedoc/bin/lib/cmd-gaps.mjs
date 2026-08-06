@@ -7,23 +7,26 @@
 import { readFileSync, existsSync } from 'node:fs'
 import { basename } from 'node:path'
 import { splitLines } from './core.mjs'
-import { nocomment, sectionAll, defence } from './sections.mjs'
+import { nocomment, defence } from './sections.mjs'
+import { loadSchema } from './read.mjs'
 import { join, materialIds, truthFiles } from './mine.mjs'
 import { cmdCensus } from './cmd-census.mjs'
+import { scanRegister } from './gaps-register.mjs'
 
 const readOr = p => { try { return readFileSync(p, 'utf8') } catch { return '' } }
+// gaps.md is read in the BYTE domain, and only gaps.md: the marker scan below prints lines out of
+// converted.md/truths and stays decoded, while the accepted tally feeds `scanRegister`, whose
+// `strip()` is a class of BYTES. Two domains in one command is fine as long as each reader and the
+// text it judges agree — which is why the section name and kind enum come from a latin1 schema map
+// here, the same pairing status --open needed (v0.5.6).
+const readBytes = p => { try { return readFileSync(p).toString('latin1') } catch { return '' } }
 
 const DEFAULT_MARKERS = '미정|미완성|미확정|미상|TBD|TODO|추후 보강|추후 작업|추후 결정|정해지지 않|미해결'
 
-// countlines: drops a bullet whose bracket still opens a placeholder, nothing more. The
-// placeholder-drop is what keeps a freshly-initialised gaps.md from reporting a gap that isn't there.
-const countLines = (text, re) => splitLines(text)
-  .filter(l => !/^[ \t]*- [[][{<]/.test(l))
-  .filter(l => re.test(l)).length
-// AN ENTRY OPENS AT COLUMN ZERO — the same rule validate's register scanner uses (v0.5.4 cold
-// review): validate moved to it and this counter did not, so a sub-bullet under an accepted entry
-// counted as a second accepted gap here and as a continuation there. One file, two answers, again.
-const ENTRY = /^- /
+// The local entry counter that used to live here is GONE (v0.5.8), not fixed in place: it kept
+// converging on validate's rules one review at a time — column-zero entries in v0.5.4, the fence
+// pass in review #11 — and stayed behind on the placeholder rule, which is the shape that made
+// this file's tally a third answer. `scanRegister` is called instead.
 
 // `grep -n` — every matching line with its 1-based number.
 function grepN (file, re) {
@@ -76,11 +79,20 @@ export function cmdGaps (m, out, err) {
     // reader is sectionAll — the same any-level tolerance validate's counter has. Before review #6
     // this spelled 'Accepted' by hand and read h1/h2 only, so a '### Accepted' register validate
     // had just counted printed here as "records 0 already accepted" — two readers, one file.
-    const secAcc = (m.sch.get('gaps.sections') || 'Open|Accepted').split('|')[1] || 'Accepted'
     // The SAME defence pass validate's readers use (review #11): fenced content is text, not
     // register — without this, an example register inside a code fence counted here.
-    const stripped = defence(nocomment(readOr(gapsPath))).text
-    nacc = countLines(sectionAll(stripped, secAcc), ENTRY)
+    //
+    // AND THE SAME SCANNER (v0.5.8). This was the last reader still running the placeholder PREFIX
+    // rule validate abandoned in v0.5.4 review #9 — the retired rule whose other consumer reported
+    // a blocking gap as "nothing is waiting" (v0.5.5). Here it under-counted instead: an accepted
+    // decision whose kind slot kept its template but whose body is written out tallied as nothing.
+    // `scanRegister` is the one judgment now; the schema is read in the TEXT'S OWN DOMAIN with it,
+    // because reading a non-ASCII section name from the utf8 map against latin1 text is exactly how
+    // v0.5.6 re-introduced the defect it was repairing.
+    const schB = loadSchema(m.schemaPath, 'latin1')
+    const secAcc = (schB.get('gaps.sections') || 'Open|Accepted').split('|')[1] || 'Accepted'
+    const kindSet = new Set((schB.get('gaps.enum.kind') || 'declared|reference|enumeration|symmetry').split('|').filter(Boolean))
+    nacc = scanRegister(defence(nocomment(readBytes(gapsPath))).text, secAcc, kindSet).n
   }
   out(`— ${n} marker line(s) + ${c} unchecked checkbox(es) — RAW scan, not an open count: gaps.md records ${nacc} already accepted. Non-blocking; run the weavedoc-gaps skill to reconcile these against gaps.md and to cover reference/enumeration/symmetry + fill-or-accept.`)
   return 0
