@@ -7,7 +7,7 @@
 import { readFileSync, existsSync } from 'node:fs'
 import { basename } from 'node:path'
 import { splitLines } from './core.mjs'
-import { nocomment, sectionAll } from './sections.mjs'
+import { nocomment, sectionAll, defence } from './sections.mjs'
 import { join, materialIds, truthFiles } from './mine.mjs'
 import { cmdCensus } from './cmd-census.mjs'
 
@@ -20,6 +20,10 @@ const DEFAULT_MARKERS = '미정|미완성|미확정|미상|TBD|TODO|추후 보�
 const countLines = (text, re) => splitLines(text)
   .filter(l => !/^[ \t]*- [[][{<]/.test(l))
   .filter(l => re.test(l)).length
+// AN ENTRY OPENS AT COLUMN ZERO — the same rule validate's register scanner uses (v0.5.4 cold
+// review): validate moved to it and this counter did not, so a sub-bullet under an accepted entry
+// counted as a second accepted gap here and as a continuation there. One file, two answers, again.
+const ENTRY = /^- /
 
 // `grep -n` — every matching line with its 1-based number.
 function grepN (file, re) {
@@ -73,8 +77,10 @@ export function cmdGaps (m, out, err) {
     // this spelled 'Accepted' by hand and read h1/h2 only, so a '### Accepted' register validate
     // had just counted printed here as "records 0 already accepted" — two readers, one file.
     const secAcc = (m.sch.get('gaps.sections') || 'Open|Accepted').split('|')[1] || 'Accepted'
-    const stripped = nocomment(readOr(gapsPath))
-    nacc = countLines(sectionAll(stripped, secAcc), /^[ \t]*- /)
+    // The SAME defence pass validate's readers use (review #11): fenced content is text, not
+    // register — without this, an example register inside a code fence counted here.
+    const stripped = defence(nocomment(readOr(gapsPath))).text
+    nacc = countLines(sectionAll(stripped, secAcc), ENTRY)
   }
   out(`— ${n} marker line(s) + ${c} unchecked checkbox(es) — RAW scan, not an open count: gaps.md records ${nacc} already accepted. Non-blocking; run the weavedoc-gaps skill to reconcile these against gaps.md and to cover reference/enumeration/symmetry + fill-or-accept.`)
   return 0

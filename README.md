@@ -90,6 +90,8 @@ WeaveDoc is a set of Claude Code skills. To use it in a project:
 2. Ask Claude: **"weavedoc init"** — it creates the workspace and `.weavedoc/config.yaml`.
 3. Drop materials into `inbox/`, then: **"gather"** → **"map"** (with **"verify"** after each to cold-check the hop, and **"gaps"** to check completeness) → **"plan the report"** → **"write it"** → **"review it"** (→ **"refine"** until clean).
 
+**One writer per mine.** WeaveDoc is a single-writer tool: run one mutating session (and one mutating command) against a mine at a time. Two writers can lose committed work silently — and a lost review seal or verification row is *evidence*, so re-running the command is not the repair (FORMATS.md states the contract and the recovery). The CLI refuses a second mutating command at the door; it cannot see an agent editing mine files directly, so don't point two working sessions at one mine.
+
 **Keeping installs in sync.** `node .weavedoc/bin/weavedoc.mjs version` prints three lines: the bundle date label, the **fingerprint** (bin+schema content hash — compare THIS, two installs can share a date while their bin differs), and the **schema version** this runtime reads. Releases add a SemVer tag whose bundle manifest covers every behavior-deciding file. If you evolve the skills/runtime *inside* a project (the testbed pattern), backport here and bump `VERSION` — the runtime once grew two weeks ahead inside a testbed while this repo went stale.
 
 ## Deterministic checks

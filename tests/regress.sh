@@ -42,6 +42,13 @@ WD_ENTRY=${WDRUN[${#WDRUN[@]}-1]}
 # commit + bundle bytes + OS + tool versions, so --resume can only ever reuse results produced by
 # THIS exact configuration. A different key is a different directory: stale results are
 # unreachable, not filtered. WD_REG_KEY_SALT exists so a test can force a fresh key.
+# The path half of the resume KEY: every keyed file's REPO-RELATIVE path, whole. The subshell cd
+# makes find emit relative paths, so nothing is stripped and nothing machine-specific leaks in.
+# DEFINED ABOVE the KEY computation on purpose — below it, the call inside KEY would fail into its
+# 2>/dev/null and the paths would silently vanish from the key (the emptiness-looks-like-success
+# class this suite keeps a name for).
+key_paths() { ( cd "$1" && find tests .weavedoc/templates .weavedoc/bin -type f -print0 | sort -z | tr '\0' '\n' ); }
+
 KEY=$( { git -C "$REPO" rev-parse HEAD 2>/dev/null
          cat "$REPO/.weavedoc/VERSION" 2>/dev/null
          # WD_BIN itself: two different invocations of the same commit are different configurations
@@ -65,13 +72,24 @@ KEY=$( { git -C "$REPO" rev-parse HEAD 2>/dev/null
            # ...and the DOCS those scripts read (review #7): the doccheck case greps README,
            # CHANGELOG and FORMATS — a dirty edit there changes what it measures too.
            sha256sum "$REPO/README.md" "$REPO/CHANGELOG.md" "$REPO/.weavedoc/FORMATS.md"
-           find "$REPO/tests/baseline/golden" "$REPO/.weavedoc/templates" -type f -print0 | sort -z | xargs -0 sha256sum; } 2>/dev/null | awk '{print $1}'
+           find "$REPO/tests/baseline/golden" "$REPO/.weavedoc/templates" -type f -print0 | sort -z | xargs -0 sha256sum
+           : ; } 2>/dev/null | awk '{print $1}'
+         # PATHS, not just contents (review #9) — and WHOLE repo-relative paths, not basenames
+         # (review #10): the first fix hashed `basename` output, so moving a file between
+         # directories — golden/version.txt into golden/z/ — kept the key while the fixed path
+         # the cases read went stale, and --resume reported 430 "passed" having run nothing
+         # (measured). Outside the awk so the lines survive whole; a FUNCTION so the case
+         # guarding it runs these same bytes rather than a copy that can drift.
+         key_paths "$REPO" 2>/dev/null
          # The RUNNER's version (v0.5.1, external review): a node upgrade is a different
          # configuration the way a bash upgrade always was (bash/awk/sed are keyed below).
          node --version 2>/dev/null
          uname -sr; bash --version | head -1; awk --version 2>/dev/null | head -1; sed --version 2>/dev/null | head -1
          printf '%s' "${WD_REG_KEY_SALT:-}"
        } | sha256sum | awk '{print $1}' | cut -c1-12 )
+# The key's own vacuity guard: the path half runs inside 2>/dev/null, so a broken key_paths would
+# not fail — it would just leave the key path-blind again. Checked loudly, once, here.
+[ -n "$(key_paths "$REPO" 2>/dev/null)" ] || { echo "key_paths produced nothing — the resume key lost its path half"; exit 2; }
 CACHE="${TMPDIR:-/tmp}/wd-reg-$KEY"
 RES="$CACHE/res"
 # Workers inherit the parent's workspace via env; only the invocation that CREATED the mktemp
@@ -1875,16 +1893,23 @@ acct_attest_stale_lock_refuses_human_only() {
   # corpse from a suspended process or a sleeping laptop — so a leftover lock now refuses every
   # writer until a HUMAN removes it, and the refusal says exactly that. Aged with touch -d to
   # prove age buys nothing anymore. Red vs the reclaiming runtime: it reclaims and passes.
+  # THE FIXTURE IS A REAL CRASH SHAPE (v0.5.4, review #8 P2): a crashed writer leaves the OWNER
+  # MARKER inside the directory, and this case used to plant a bare one — which is how the refusal
+  # went on telling users to do something (`rmdir`) that fails on the real thing, unnoticed.
   mkdir -p "$W/truths/verify-ledger.tsv.lock"
+  printf 'a-nonce-from-the-crashed-run' > "$W/truths/verify-ledger.tsv.lock/owner"
   touch -d '1 hour ago' "$W/truths/verify-ledger.tsv.lock"
   vrun attest verified 1 std m001
   expect_block "NEVER be reclaimed automatically"
-  expect_has "remove the lock yourself"
+  expect_has "delete that path AND ITS CONTENTS"
   expect_has "Nothing written"
   [ -d "$W/truths/verify-ledger.tsv.lock" ] || bad "the refusal removed a lock it promised never to touch"
+  [ -f "$W/truths/verify-ledger.tsv.lock/owner" ] || bad "the refusal ate the owner marker"
   [ ! -f "$W/truths/verify-ledger.tsv" ] || bad "a ledger appeared despite the refusal"
-  # ...and the HUMAN path works: remove the leftover, the same attest lands.
-  rmdir "$W/truths/verify-ledger.tsv.lock"
+  # The instruction must be TRUE: an empty-directory removal does NOT clear a real crash lock...
+  rmdir "$W/truths/verify-ledger.tsv.lock" 2>/dev/null && bad "the message's premise is false: rmdir cleared a marked lock"
+  # ...and the documented recovery does — after which the same attest lands.
+  rm -rf "$W/truths/verify-ledger.tsv.lock"
   vrun attest verified 1 std m001
   expect_pass
   [ ! -d "$W/truths/verify-ledger.tsv.lock" ] || bad "the lock survived a successful attest"
@@ -3365,6 +3390,404 @@ block_upgrade_version_flip_mid_wait() {
   grep -q 'rolled back' "$W/.v.out" && bad "the migration ran and rolled back instead of refusing up front"
   [ -z "$(ls -d "$W"/.upgrade-backup-* 2>/dev/null)" ] || bad "a backup dir appeared — writes happened"; ok
 }
+acct_resume_key_sees_directory_moves() {
+  # Review #10: the key's path half hashed BASENAMES, so moving golden/version.txt into golden/z/
+  # kept the key identical and --resume replayed 430 passes over inputs that were no longer where
+  # the cases read them (measured). This runs the SAME key_paths function the KEY computation
+  # uses — a case testing its own copy of the pipeline would be the drift class.
+  # Red vs 5999989: key_paths does not exist there; its absence IS the defect record.
+  local d="$W/.keyprobe"
+  mkdir -p "$d/tests" "$d/.weavedoc/templates" "$d/.weavedoc/bin"
+  printf 'same bytes\n' > "$d/tests/moved.txt"
+  local p1 p2
+  p1=$(key_paths "$d" | sha256sum | awk '{print $1}')
+  [ -n "$(key_paths "$d")" ] || { bad "key_paths produced nothing — the guard is vacuous"; return; }
+  mkdir -p "$d/tests/z"
+  mv "$d/tests/moved.txt" "$d/tests/z/moved.txt"
+  p2=$(key_paths "$d" | sha256sum | awk '{print $1}')
+  [ "$p1" != "$p2" ] || bad "a same-basename move between directories left the key's path half unchanged"
+  rm -rf "$d"; ok
+}
+block_gaps_fence_shapes() {
+  # Review #10: the fence rule was a bare toggle. Both directions were wrong and both are pinned:
+  # a 4-space-indented ``` is NOT a fence in Markdown, so the entry after it is REAL and must
+  # block (it was swallowed, rc 0 — fail-open); an inner ``` must not close a 4-backtick fence,
+  # so the example inside stays text and must pass (it blocked — false positive). Plus the tilde
+  # spelling and the unterminated-fence fail-open, which gets the '<!--' ruling.
+  req_completeness
+  printf '# Open\n\n# Accepted\n\n# Notes\n\n    ```\n- [declared] real entry after a fake fence — reason\n' > "$W/gaps.md"
+  vrun validate
+  expect_block "outside '# Open' and '# Accepted'"
+  printf '# Open\n\n# Accepted\n\n# Notes\n\n````\n```\n- [declared] example inside a 4-tick fence — reason\n````\n' > "$W/gaps.md"
+  vrun validate
+  expect_pass
+  printf '# Open\n\n# Accepted\n\n# Notes\n\n~~~\n- [declared] example in a tilde fence — reason\n~~~\n' > "$W/gaps.md"
+  vrun validate
+  expect_pass
+  printf '# Open\n\n# Accepted\n\n# Notes\n\n```\n- [declared] behind an unterminated fence — reason\n' > "$W/gaps.md"
+  vrun validate
+  expect_block "unterminated code fence"
+}
+block_gaps_fenced_fake_register() {
+  # Review #11 blocker 1: the WHOLE register lived inside a code fence — real Markdown has no
+  # register at all — and validate passed it, because only ONE of the four gaps readers knew
+  # fences (the heading counter and the register scanner counted the fenced lines, and the
+  # 2-space-indented closing fence even read as the fake entry's continuation). One defence()
+  # pass feeds every reader now. Red vs 942ccdc: rc 0.
+  req_completeness
+  printf '```text\n# Open\n# Accepted\n- [declared] fake accepted decision — reason\n  ```\n' > "$W/gaps.md"
+  vrun validate
+  expect_block "no readable '# Open' section"
+}
+pass_gaps_fenced_heading_example() {
+  # Review #11 blocker 1, the reverse: a VALID register plus a fenced example that shows the
+  # headings — the duplicate-heading check counted the example and blocked a fine file. Red vs
+  # 942ccdc: rc 1 "repeats a register section heading".
+  req_completeness
+  printf '# Open\n\n# Accepted\n\n- [declared] real — reason\n\n# Notes\n\n```\n# Open\n# Accepted\n- [declared] just an example — reason\n```\n' > "$W/gaps.md"
+  vrun validate
+  expect_pass
+  # ...and the gaps CLI agrees: the fenced example's bullet is not an accepted entry.
+  vrun gaps
+  expect_has "records 1 already accepted"
+}
+block_gaps_backtick_info_not_a_fence() {
+  # Review #11 blocker 2: a backtick opener whose info string contains a backtick is NOT a fence
+  # in CommonMark — reading it as one hid a REAL stray entry inside a fence that does not exist
+  # (rc 0, measured; the CHANGELOG's "fail-closed" note held only for the unterminated variant).
+  # Red vs 942ccdc: rc 0.
+  req_completeness
+  printf '# Open\n\n# Accepted\n\n# Notes\n\n```foo`bar\n- [declared] real stray entry — reason\n```\n' > "$W/gaps.md"
+  vrun validate
+  expect_block "outside '# Open' and '# Accepted'"
+}
+block_upgrade_same_mode_twice() {
+  # Review #11: "one mode per invocation" said one thing and the code allowed `--apply --apply`.
+  # The rule now matches the sentence — ANY second mode flag is a usage error, same or different.
+  # Red vs 942ccdc: `--apply --apply` ran the migration rc 0.
+  vrun upgrade --apply --apply
+  [ "$RC" -eq 2 ] || bad "expected usage rc 2 for a repeated mode, got $RC"
+  expect_has "one mode per invocation"
+  [ ! -d "$W/.weavedoc/mine.lock" ] || bad "the usage refusal left the mine lock behind"
+  vrun validate; expect_pass
+}
+block_upgrade_one_mode_only() {
+  # Review #10: mode was last-wins — a hidden rule the dispatcher's gate could not share, so
+  # `upgrade --apply --check` ran read-only but was refused by the mine lock. The ambiguous
+  # spelling is a usage error now, and the two parsers cannot disagree about it.
+  vrun upgrade --apply --check
+  [ "$RC" -eq 2 ] || bad "expected usage rc 2, got $RC"
+  expect_has "one mode per invocation"
+  vrun upgrade --check --apply
+  [ "$RC" -eq 2 ] || bad "expected usage rc 2 for the reversed spelling, got $RC"
+  [ ! -d "$W/.weavedoc/mine.lock" ] || bad "the usage refusal left the mine lock behind"
+  vrun validate; expect_pass
+}
+acct_mine_lock_admits_one_writer() {
+  # THE SINGLE-WRITER GATE (v0.5.4, review #9). Every mutating command takes .weavedoc/mine.lock
+  # at the dispatcher, before any command-specific judgment (one openMine resolves the root first
+  # — the lock lives under it); a second one is REFUSED, not queued. Simulated
+  # with a planted lock (a real second process would need a hold seam in every command, and the
+  # gate is one code path for all of them). Red vs the pre-gate runtime (4121109): every command
+  # below runs and writes.
+  mkdir -p "$W/.weavedoc/mine.lock"
+  printf 'someone-else' > "$W/.weavedoc/mine.lock/owner"
+  local before after
+  before=$(cd "$W" && find . -path ./.weavedoc/mine.lock -prune -o -type f -print | LC_ALL=C sort | xargs sha256sum 2>/dev/null | sha256sum | awk '{print $1}')
+  local c t0 t1
+  # ALL SIX writers, not a sample (review #10: consecrate and retag were missing, so the two
+  # commands most likely to gain a pre-gate read had no case watching them).
+  for c in "attest verified 1 std m001" "seal-review d1" "reindex" "upgrade --apply" "consecrate d1" "retag onetag twotag"; do
+    t0=$(date +%s)
+    # shellcheck disable=SC2086
+    vrun $c
+    t1=$(date +%s)
+    [ "$RC" -eq 0 ] && bad "[$c] ran while the mine lock was held"
+    printf '%s\n' "$OUT" | grep -qF 'ONE writing command per mine at a time' || bad "[$c] refused without naming the single-writer contract: $OUT"
+    # REFUSED, NOT QUEUED — and the elapsed time is what proves it (cold review: without this, a
+    # 5s queue that times out into the same sentence passed as a refusal). The contract sentence
+    # in FORMATS, README and the skills says "refused"; this is what makes that sentence testable.
+    [ "$(( t1 - t0 ))" -le 2 ] || bad "[$c] took $(( t1 - t0 ))s — it QUEUED behind the lock instead of refusing"
+  done
+  after=$(cd "$W" && find . -path ./.weavedoc/mine.lock -prune -o -type f -print | LC_ALL=C sort | xargs sha256sum 2>/dev/null | sha256sum | awk '{print $1}')
+  [ "$before" = "$after" ] || bad "a refused command still wrote — the tree differs"
+  [ -f "$W/.weavedoc/mine.lock/owner" ] || bad "a refusal removed the holder's lock"
+  # ...and the human path: remove the leftover, the same command lands.
+  rm -rf "$W/.weavedoc/mine.lock"
+  vrun attest verified 1 std m001
+  expect_pass
+  [ ! -d "$W/.weavedoc/mine.lock" ] || bad "the mine lock survived a successful command"
+}
+acct_mine_lock_never_gates_readers() {
+  # The gate is for WRITERS. Read-only commands, and the read-only MODES of writing commands,
+  # must run untouched while a mine lock is held — a report queueing behind a migration would be
+  # a worse tool, and --check/--dry-run/--dry promise to write nothing.
+  # Passes on the pre-gate runtime (4121109) too — no gate there, so nothing to be gated by; said
+  # plainly: it is the guard that keeps the gate from spreading, not evidence for it.
+  mkdir -p "$W/.weavedoc/mine.lock"
+  printf 'someone-else' > "$W/.weavedoc/mine.lock/owner"
+  local c
+  for c in validate scope status census gaps "upgrade --check" "upgrade --dry-run" "reindex --check"; do
+    # shellcheck disable=SC2086
+    vrun $c
+    printf '%s\n' "$OUT" | grep -qF 'mine lock' && bad "[$c] was gated by the mine lock"
+  done
+  vrun retag onetag twotag --dry
+  printf '%s\n' "$OUT" | grep -qF 'mine lock' && bad "[retag --dry] was gated by the mine lock"
+  rm -rf "$W/.weavedoc/mine.lock"; ok
+}
+acct_mine_lock_released_on_refusal() {
+  # A command that refuses for its OWN reasons must not leave the gate behind — the lock is
+  # released on every exit, including the ones that end deep inside a command.
+  # CANNOT BE RED against the pre-gate runtime, and that is said rather than hidden: with no gate
+  # there is no lock to leak. What it pins is the invariant the gate must not break — a refusing
+  # command leaves no lock — and it would catch a future exit path that forgets the release.
+  vrun attest verified 1 std t999
+  [ "$RC" -eq 0 ] && bad "a bogus id was accepted"
+  [ ! -d "$W/.weavedoc/mine.lock" ] || bad "the mine lock survived a refusal"
+  vrun attest verified 0 std m001
+  [ "$RC" -eq 0 ] && bad "round 0 was accepted"
+  [ ! -d "$W/.weavedoc/mine.lock" ] || bad "the mine lock survived a usage refusal"
+  vrun validate; expect_pass
+}
+block_upgrade_apply_without_truths_dir() {
+  # The lock's own precondition (v0.5.4 cold review). With the lock first, a mine that has no
+  # truths/ made mkdir fail ENOENT and the command talked about a lock the user never made, rc 1 —
+  # while every other "this mine is unusable" refusal is rc 2. The directory is checked before the
+  # lock (the exception cmd-attest already makes) and named for what it is.
+  # Red vs the pre-fix draft of this same patch: rc 1 and the ENOENT lock sentence.
+  rm -rf "$W/truths"
+  vrun upgrade --apply
+  [ "$RC" -eq 2 ] || bad "expected rc 2 for an unusable mine, got $RC"
+  expect_has "no truths/ directory"
+  expect_hasnt "the ledger lock cannot be created"
+  [ ! -e "$W/truths" ] || bad "the refusal created something where truths/ used to be"
+}
+acct_upgrade_judges_nothing_before_the_lock() {
+  # THE CLASS GUARD for upgrade (v0.5.4, review #8 P1-1), and it needs no instrumentation: on an
+  # ALREADY-MIGRATED mine a pre-lock judgment answers "nothing to do" INSTANTLY, while a
+  # lock-first command must wait out the bound and refuse. The elapsed time is the evidence, so
+  # this case fails the moment any decision moves back outside the lock — not just today's two.
+  # Red vs v0.5.3: rc 0 "nothing to do" in ~0s with the lock held by someone else.
+  vrun upgrade --apply
+  expect_pass
+  mkdir -p "$W/truths/verify-ledger.tsv.lock"
+  printf 'someone-else' > "$W/truths/verify-ledger.tsv.lock/owner"
+  local t0 t1
+  t0=$(date +%s)
+  vrun upgrade --apply
+  t1=$(date +%s)
+  expect_block "is held and was not released"
+  expect_has "Nothing written"
+  expect_hasnt "nothing to do"
+  [ "$(( t1 - t0 ))" -ge 4 ] || bad "returned in $(( t1 - t0 ))s — it judged the mine without holding the lock"
+  rm -rf "$W/truths/verify-ledger.tsv.lock"
+}
+acct_attest_judges_nothing_before_the_lock() {
+  # THE CLASS GUARD for attest (v0.5.4, review #8 P1-2), same shape: a BOGUS id is a judgment
+  # about the mine. Resolved before the lock it fails instantly with 'no truth file'; resolved
+  # under the lock the command waits out the bound and refuses for the lock. The digest lives in
+  # that same loop, which is what the review measured going stale across the wait.
+  # Red vs v0.5.3: rc 2 "no truth file for 't999'" in ~0s while the lock is held.
+  mkdir -p "$W/truths/verify-ledger.tsv.lock"
+  printf 'someone-else' > "$W/truths/verify-ledger.tsv.lock/owner"
+  local t0 t1
+  t0=$(date +%s)
+  vrun attest verified 1 std t999
+  t1=$(date +%s)
+  expect_block "is held and was not released"
+  expect_hasnt "no truth file"
+  [ "$(( t1 - t0 ))" -ge 4 ] || bad "returned in $(( t1 - t0 ))s — it resolved ids without holding the lock"
+  [ ! -f "$W/truths/verify-ledger.tsv" ] || bad "a ledger appeared despite the refusal"
+  rm -rf "$W/truths/verify-ledger.tsv.lock"
+}
+acct_attest_digest_is_taken_under_the_lock() {
+  # The consequence the class guard protects (review #8 P1-2): a truth CHANGED during attest's
+  # bounded wait must not be recorded as verified against the bytes it had before the wait. The
+  # holder mutates the truth mid-hold; the digest attest writes must match the mine AFTER it, so
+  # scope sees zero stale. Red vs v0.5.3: attest rc 0 and 'truths … 1 stale' the instant it lands.
+  vrun attest verified 1 seed m001
+  ( cd "$REPO" && node --input-type=module -e "
+    import { acquireLedgerLock, releaseLedgerLock } from './.weavedoc/bin/lib/lock.mjs'
+    import { appendFileSync } from 'node:fs'
+    const lk = process.argv[1], tf = process.argv[2]
+    if (acquireLedgerLock(lk, 'x') !== '') process.exit(2)
+    let t = Date.now(); while (Date.now() - t < 1200) { /* hold */ }
+    appendFileSync(tf, '\nA line added while attest waited.\n')
+    t = Date.now(); while (Date.now() - t < 1200) { /* keep holding */ }
+    releaseLedgerLock(lk)
+  " "$W/truths/verify-ledger.tsv.lock" "$W/truths/t001.md" ) &
+  local hpid=$!
+  sleep 0.3
+  vrun attest verified 2 std t001
+  local arc=$RC
+  wait "$hpid"
+  grep -q 'A line added while attest waited' "$W/truths/t001.md" || { bad "fixture no-op: the truth was never mutated"; return; }
+  [ "$arc" -eq 0 ] || bad "attest failed (rc $arc) — it should have waited out the hold and landed"
+  vrun scope
+  printf '%s\n' "$OUT" | grep -E '^[[:space:]]*truths ' | grep -q '0 stale' \
+    || bad "the row was stale on arrival: $(printf '%s\n' "$OUT" | grep -E '^[[:space:]]*truths ')"
+  ok
+}
+block_completeness_kind_bracket_unclosed() {
+  # v0.5.4 (review #8 P1-3). An opener with no ']' reached the placeholder branch, where strip()
+  # erased it along with the template word and left '' — so a broken kind slot read as noise and
+  # validate said nothing (measured rc 0 for both spellings). Now it is a malformed entry.
+  req_completeness
+  printf '# Open\n\n# Accepted\n\n- [{kind}\n' > "$W/gaps.md"
+  vrun validate
+  expect_block "kind bracket never closes"
+  printf '# Open\n\n# Accepted\n\n- [<kind>\n' > "$W/gaps.md"
+  vrun validate
+  expect_block "kind bracket never closes"
+  # ...and under Open too — the grammar is one grammar, both sections
+  printf '# Open\n\n- [declared 미폐합 — 근거\n\n# Accepted\n' > "$W/gaps.md"
+  vrun validate
+  expect_block "kind bracket never closes"
+  # a CLOSED placeholder stub is still inert
+  printf '# Open\n\n# Accepted\n\n- [<kind>] <설명>\n' > "$W/gaps.md"
+  vrun validate
+  expect_pass
+}
+block_completeness_kind_truth_table() {
+  # THE CLASS, not the reported instance (v0.5.4): opener × closure × body × continuation, every
+  # cell asserted in one place so the next shape cannot be "the one nobody enumerated". The three
+  # earlier rounds each closed ONE cell of this table (bullet body, continuation, closure) — this
+  # is the table itself, and it is the guard against a fourth round.
+  req_completeness
+  # cell → expected: PASS (inert stub) or a substring the refusal must name
+  local -a cells=(
+    '- [declared] real body — reason|PASS'
+    '- [<kind>] <설명> — <근거>|PASS'
+    '- [{kind}] {where} — {what}|PASS'
+    '- [<kind>] real body — reason|not in the vocabulary'
+    '- [{kind}] real body — reason|not in the vocabulary'
+    '- [declraed] real body — reason|not in the vocabulary'
+    '- [] real body — reason|COMP-MALFORMED'
+    '- [declared|reference] real body — reason|matched exactly and one at a time'
+    '- [declared] [reference] real body — reason|TWO kind brackets'
+    "- no-kind real body — reason|no '[<kind>]' slot at all"
+    '- [{kind}|kind bracket never closes'
+    '- [<kind>|kind bracket never closes'
+    '- [declared real body — reason|kind bracket never closes'
+    # v0.5.4 (review #9): real content sharing the kind slot with a template token. The slot was
+    # judged by PREFIX, so these read as noise and drew nothing. A slot that does not strip to
+    # empty is a kind, and a kind outside the enum blocks.
+    # NO body after the bracket — with one, v0.5.4 already blocked these through the "placeholder
+    # kind over a real body" rule. The open shape was the bullet whose ONLY content is the slot.
+    '- [{kind} real-content]|not in the vocabulary'
+    '- [<kind>real]|not in the vocabulary'
+    # ...while a slot that is ENTIRELY one placeholder group stays a stub — the same ruling the
+    # template's own line gets ("fill every placeholder" judges the WHOLE value).
+    '- [<kind real-content>]|PASS'
+  )
+  local spec entry want
+  for spec in "${cells[@]}"; do
+    # the LAST pipe separates cell from expectation, so the compound-kind cell's own pipe is safe
+    entry=${spec%|*}; want=${spec##*|}
+    printf '# Open\n\n# Accepted\n\n%s\n' "$entry" > "$W/gaps.md"
+    vrun validate
+    if [ "$want" = PASS ]; then
+      [ "$RC" -eq 0 ] || { bad "[$entry] should be inert, got rc $RC"; return; }
+    else
+      [ "$RC" -ne 0 ] || { bad "[$entry] passed — expected [$want]"; return; }
+      printf '%s\n' "$OUT" | grep -qF -- "$want" || { bad "[$entry] blocked, but not for [$want]"; return; }
+    fi
+  done
+  # ...and the continuation axis: a held stub REALIZED by real content is an entry (its
+  # placeholder kind is judged), while a stub continued by more noise stays inert.
+  printf -- '# Accepted\n\n- [{kind}] {where}\n  real continuation content\n\n# Open\n' > "$W/gaps.md"
+  vrun validate; expect_block "not in the vocabulary"
+  printf -- '# Accepted\n\n- [{kind}] {where}\n  {more placeholder}\n\n# Open\n' > "$W/gaps.md"
+  vrun validate; expect_pass
+}
+block_completeness_indent_axis() {
+  # v0.5.4 (review #9). The indentation was stripped BEFORE the bullet test, so the grammar had no
+  # column-zero rule: an ORPHAN indented bullet under no parent counted as an accepted decision
+  # (rc 0, measured), and a legitimate SUB-BULLET under a real entry was read as a second entry
+  # and blocked for having no kind. An entry opens at column zero; indented bullets are
+  # continuations, and a continuation needs an entry above it.
+  req_completeness
+  printf '# Open\n\n# Accepted\n\n  - [declared] orphan indented bullet — reason\n' > "$W/gaps.md"
+  vrun validate
+  expect_block "COMP-MALFORMED"
+  printf '# Open\n\n# Accepted\n\n- [declared] parent — reason\n  - sub bullet detail\n' > "$W/gaps.md"
+  vrun validate
+  expect_pass
+  # ...and a sub-bullet REALIZES a held stub, exactly as a prose continuation does
+  printf -- '# Accepted\n\n- [{kind}] {where}\n  - real sub bullet content\n\n# Open\n' > "$W/gaps.md"
+  vrun validate
+  expect_block "not in the vocabulary"
+}
+block_completeness_entry_outside_the_register() {
+  # v0.5.4 (review #9). The register is read section by section, so an entry parked under a THIRD
+  # heading — or above the first one — was invisible to every check (rc 0, measured) while looking
+  # to a human exactly like a recorded gap.
+  req_completeness
+  printf '# Open\n\n# Accepted\n\n# Deferred\n\n- [declared] parked in a third section — reason\n' > "$W/gaps.md"
+  vrun validate
+  expect_block "outside '# Open' and '# Accepted'"
+  printf -- '- [declared] above every heading — reason\n\n# Open\n\n# Accepted\n' > "$W/gaps.md"
+  vrun validate
+  expect_block "outside '# Open' and '# Accepted'"
+  # a third section with PROSE is fine — the register owns entries, not the whole file
+  printf '# Open\n\n# Accepted\n\n# Notes\n\n자유 서술은 등록부가 아니다.\n' > "$W/gaps.md"
+  vrun validate
+  expect_pass
+  # A DEEPER heading stays INSIDE its section — the same nesting sectionAll uses. Such a file still
+  # blocks (the register grammar reads a heading line as prose, as it always has), but it must
+  # block for THAT reason: reading every heading as a new section made this check say the entry was
+  # filed outside the register, which was false about the file (cold review).
+  printf '# Open\n\n# Accepted\n\n## 2026-08 라운드\n\n- [declared] entry — reason\n' > "$W/gaps.md"
+  vrun validate
+  expect_block "cannot read"
+  expect_hasnt "outside '# Open' and '# Accepted'"
+  # ...and a bullet drawn inside a fenced example is text, not a misfiled gap
+  printf '# Open\n\n# Accepted\n\n# Notes\n\n```\n- [declared] 예시일 뿐 — 근거\n```\n' > "$W/gaps.md"
+  vrun validate
+  expect_pass
+}
+acct_gaps_cli_counts_entries_like_validate() {
+  # v0.5.4 cold review: validate moved to "an entry opens at column zero" and this counter did not,
+  # so a sub-bullet under an accepted entry was a second accepted gap to the CLI and a continuation
+  # to validate — the same one-file-two-answers split the section-name fix closed one round ago.
+  # Red vs HEAD: 'records 2 already accepted'.
+  printf '# Open\n\n# Accepted\n\n- [declared] entry — reason\n  - a sub bullet of that entry\n' > "$W/gaps.md"
+  vrun gaps
+  expect_pass
+  expect_has "records 1 already accepted"
+  vrun validate
+  expect_pass
+}
+acct_scope_dead_ledger_says_nothing_superseded() {
+  # v0.5.4 (review #8 P2). A headless row voids the sidecar, which empties `ledgerBad` — and the
+  # superseded-history filter, reading that empty set, announced an id's OWN LATEST odd verdict as
+  # "superseded … history". The void lines already say the file counts for nothing; nothing may
+  # contradict them. Red vs v0.5.3: both lines print.
+  vrun attest verified 1 std m001
+  sed -i 's/\tverified\t/\tverifed\t/' "$W/truths/verify-ledger.tsv"
+  printf '\t-\tverified\t9\tstd\t2026-01-01\n' >> "$W/truths/verify-ledger.tsv"
+  vrun scope
+  expect_has "carry no id"
+  expect_hasnt "superseded row(s) carry unknown verdicts"
+}
+acct_gaps_heading_depth_agrees() {
+  # v0.5.4 (review #8 P2). sectionAll read any run of '#' while countHeadings stops at six, so a
+  # '####### Accepted' register was malformed to validate and one accepted entry to the gaps CLI —
+  # one file, two answers. Markdown agrees with the stricter reader, so the cap moved into
+  # sectionAll. Red vs v0.5.3: the CLI reports 'records 1 already accepted'.
+  req_completeness
+  printf '####### Open\n\n####### Accepted\n\n- [declared] entry — reason\n' > "$W/gaps.md"
+  vrun validate
+  expect_block "no readable '# Open' section"
+  vrun gaps
+  expect_pass
+  expect_has "records 0 already accepted"
+  # ...and six hashes stay a heading for both
+  printf '###### Open\n\n###### Accepted\n\n- [declared] entry — reason\n' > "$W/gaps.md"
+  vrun gaps
+  expect_has "records 1 already accepted"
+}
 acct_lock_release_only_own() {
   # Review #7 low-pri: releaseLedgerLock removes ONLY a lock whose on-disk mark this process
   # wrote. The one path that could break the exclusion without any code being wrong: a human
@@ -3527,6 +3950,19 @@ block_completeness_sections_from_schema() {
   expect_block "no readable '# Pending' section"
   printf '# Pending\n\n# Waived\n\n- [declared] entry — reason\n' > "$W/gaps.md"
   OUT=$( ( cd "$W" && $TO node .weavedoc/bin/weavedoc.mjs validate ) 2>&1 ); RC=$?
+  expect_pass
+}
+acct_shipped_gaps_template_passes_its_own_gate() {
+  # THE SHIPPED ARTIFACT, not a hand-written stand-in (v0.5.4 cold review). The template's Accepted
+  # line carried its field labels OUTSIDE the braces — 'scope:'/'recheck:'/'as-of:' survived strip(),
+  # so the line was not a stub, '{kind}' was judged as a kind, and a freshly-initialised gaps.md
+  # BLOCKED under `completeness: required`. The code comment claiming "a pure stub keeps a
+  # freshly-initialised gaps.md green" was tested against a stand-in that had no such labels.
+  # Red vs HEAD: COMP-MALFORMED naming '[{kind}]'.
+  req_completeness
+  cp "$REPO/.weavedoc/templates/gaps.md" "$W/gaps.md"
+  grep -q '{kind}' "$W/gaps.md" || { bad "fixture no-op: the shipped template has no placeholder kind"; return; }
+  vrun validate
   expect_pass
 }
 acct_gaps_cli_reads_schema_sections() {

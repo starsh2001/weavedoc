@@ -16,6 +16,8 @@ The gate is the product; the panel is polish. Keep them separate.
 
 > **Running weavedoc: pick the shell by platform.** Commands below are written `node .weavedoc/bin/weavedoc.mjs …` and read the same in every shell. **On Windows run them through PowerShell; everywhere else through bash** — Git Bash pays ~290ms per process to emulate Unix (measured: 373ms vs 80ms for one invocation), and a mine-wide command spends most of its time there. Never create a `.ps1` wrapper: PowerShell's execution policy applies to `.ps1` files and a downloaded one is blocked under `RemoteSigned`, while `node script.mjs` is not subject to it at all.
 
+> **One writer per mine.** WeaveDoc is single-writer: one mutating session, and one mutating command, against a mine at a time (FORMATS.md). The CLI refuses a second mutating command; it cannot see YOU editing mine files directly, so never run this skill against a mine another session is writing to. A lost seal or verification row is evidence, not a cache — re-running the command is not the repair.
+
 > **Thin context.** Don't read all truths for the whole document at once. For the fidelity gate, check each section against only its cited truths (grep by truth id from the draft's citations). For the advisory panel, reviewers receive only the draft + plan — not the full truth set.
 
 > **Write-scope.** This skill writes only to `documents/<doc-id>/review.md` (except two stage stamps: `status: reviewing` on this document's `plan.md` — step 5, and leaving it there on escalation — and `status: conflict` on truths when a new conflict is discovered). It does **not** otherwise modify `draft.md`, `truths/`, or `materials/`.

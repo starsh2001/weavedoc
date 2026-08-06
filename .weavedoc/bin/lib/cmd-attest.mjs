@@ -18,6 +18,7 @@ export const realOps = {
 // NEVER auto-reclaimed both live there.
 import { acquireLedgerLock, releaseLedgerLock } from './lock.mjs'
 import { canonId, inList, splitLines } from './core.mjs'
+import { clearFileCaches } from './read.mjs'
 import { join, fm, tfileFor, unitDigest } from './mine.mjs'
 import { today, writeAtomic, readText, textBuf, U } from './write.mjs'
 
@@ -56,6 +57,35 @@ export function cmdAttest (m, out, argv, ops = realOps) {
     out("attest: the standard column may not contain a tab, newline or other control character — it is one TSV field, and a control byte there splits or widens the row (write it as plain text; a Windows path is fine, an embedded newline is not)"); return 2
   }
 
+  const lf = join(m.truths, m.ledgerFile())
+  // Checked before the lock ON PURPOSE, and it is not a judgment about mine CONTENT: the lock
+  // lives inside truths/, so without the directory there is nothing to lock and this is the one
+  // true sentence for that state.
+  if (!isDir(m.truths)) { out('attest: no truths/ directory'); return 2 }
+
+  // Everything from here to the mirror runs under the ledger lock — see lock.mjs for why a
+  // compensating rollback without mutual exclusion erases a neighbour's committed row.
+  const lockPath = `${lf}.lock`
+  const lockRel = lockPath.startsWith(`${m.root}/`) ? lockPath.slice(m.root.length + 1) : lockPath
+  const lockWhy = acquireLedgerLock(lockPath, lockRel)
+  if (lockWhy) { out(`attest: ${lockWhy}. Nothing written`); return 1 }
+  try {
+    return attestLocked()
+  } finally {
+    releaseLedgerLock(lockPath)
+  }
+
+  function attestLocked () {
+  // THE UNITS ARE RESOLVED AND DIGESTED UNDER THE LOCK (v0.5.4, review #8 P1-2). This loop used to
+  // run BEFORE the acquire, so a bounded wait of up to 5s sat between "what these bytes are" and
+  // "this row says they were verified" — measured: a truth changed by the lock holder during that
+  // wait was recorded as verified against bytes that no longer existed, attest rc 0, and `scope`
+  // called the unit stale the moment the row landed. A digest is a claim about bytes AT A POINT IN
+  // TIME; taking it outside the section that protects it is the same class as planning a migration
+  // outside the lock. Only the ARGUMENT grammar (verdict, round, standard) is judged above — that
+  // is about the command line, not the mine, and it cannot go stale.
+  // The caches go with it: whatever this process read before the wait is not evidence about now.
+  clearFileCaches()
   const day = today()
   const rows = []
   const names = []
@@ -81,22 +111,6 @@ export function cmdAttest (m, out, argv, ops = realOps) {
     names.push(cid)
   }
 
-  const lf = join(m.truths, m.ledgerFile())
-  if (!isDir(m.truths)) { out('attest: no truths/ directory'); return 2 }
-
-  // Everything from here to the mirror runs under the ledger lock — see lock.mjs for why a
-  // compensating rollback without mutual exclusion erases a neighbour's committed row.
-  const lockPath = `${lf}.lock`
-  const lockRel = lockPath.startsWith(`${m.root}/`) ? lockPath.slice(m.root.length + 1) : lockPath
-  const lockWhy = acquireLedgerLock(lockPath, lockRel)
-  if (lockWhy) { out(`attest: ${lockWhy}. Nothing written`); return 1 }
-  try {
-    return attestLocked()
-  } finally {
-    releaseLedgerLock(lockPath)
-  }
-
-  function attestLocked () {
   // THE LEDGER IS APPENDED TO, NOT REWRITTEN (§11 2026-08-05). It used to be read whole, joined
   // with the new rows and renamed into place, which had two consequences the external review named:
   //   1. a read that FAILED on an existing file fell back to a fresh header — so an unreadable

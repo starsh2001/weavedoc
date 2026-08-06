@@ -252,14 +252,39 @@ jobs:
           # v0.5.1 against the v0.5.2 tree. Only the newest '## <bundle>' section speaks for THIS
           # tree; a legitimate re-run of an old tag checks out ITS OWN tree, whose top section
           # claims it. Line-anchored so a mid-sentence mention cannot satisfy the gate.
-          tag_re=$(printf '%s' "$GITHUB_REF_NAME" | sed 's/\./\\./g')
-          if awk '/^## /{n++} n==1' CHANGELOG.md | grep -qE "^\\*\\*${tag_re} — "; then
+          # And the top section declares EXACTLY ONE release (review #8): "any anchored claim
+          # matches" let a second claim line smuggled beside the real one revive an old tag —
+          # measured, v0.5.1 passing against the v0.5.3 tree. The claims are extracted, counted,
+          # and the single one must BE this tag.
+          claims=$(awk '/^## /{n++} n==1' CHANGELOG.md | sed -n 's/^\*\*\(v[0-9][0-9.]*\) — .*/\1/p')
+          nclaims=$(printf '%s\n' "$claims" | grep -c . || true)
+          if [ "$nclaims" -ne 1 ]; then
+            echo "the top CHANGELOG section declares $nclaims release claims ($(printf '%s' "$claims" | tr '\n' ' ')) — exactly one '**vX.Y.Z — ' line may open a bundle; refusing to publish"; exit 1
+          fi
+          if [ "$claims" = "$GITHUB_REF_NAME" ]; then
             echo "tag claimed by the top CHANGELOG section: $GITHUB_REF_NAME"
           else
-            echo "tag '$GITHUB_REF_NAME' is not claimed by the TOP CHANGELOG section (no leading '**$GITHUB_REF_NAME — ' line there) — refusing to publish"; exit 1
+            echo "the top CHANGELOG section claims '$claims', not the tag '$GITHUB_REF_NAME' — refusing to publish"; exit 1
           fi
           bash tests/doccheck.sh
-          echo "tag=$GITHUB_REF_NAME · bundle=$(cat .weavedoc/VERSION) · schema=$(grep -m1 '^schema.version:' .weavedoc/schema | sed 's/.*:[[:space:]]*//')"
+          # The evidence line names everything that identifies WHAT was published (review #8 P2):
+          # tag, bundle label, schema version, the runtime fingerprint (two installs can share a
+          # date label), the node that ran the gates, and the manifest digest that is the release
+          # asset's own identity. It is echoed into the job log AND the release notes below.
+          {
+            echo "tag=$GITHUB_REF_NAME"
+            echo "bundle=$(cat .weavedoc/VERSION)"
+            echo "schema=$(grep -m1 '^schema.version:' .weavedoc/schema | sed 's/.*:[[:space:]]*//')"
+            echo "fingerprint=$(node .weavedoc/bin/weavedoc.mjs version | sed -n 's/^fingerprint:[[:space:]]*\([0-9a-f]*\).*/\1/p')"
+            echo "node=$(node --version)"
+            echo "manifest_sha256=$(bash tests/make-manifest.sh | sha256sum | awk '{print $1}')"
+          } | tee release-evidence.txt
+          # A field whose command failed comes out EMPTY, and `| tee` swallows the status — the
+          # evidence would publish `fingerprint=` and nothing would notice (cold review). A check
+          # whose emptiness looks like success has to assert its own extraction.
+          while IFS= read -r kv; do
+            case "$kv" in *=) echo "release evidence field '${kv%=}' came out empty — the extraction broke; refusing to publish"; exit 1 ;; esac
+          done < release-evidence.txt
       - name: build the bundle manifest
         run: |
           bash tests/make-manifest.sh > bundle.manifest
@@ -267,7 +292,10 @@ jobs:
       - name: generate release notes
         run: |
           prev=$(git describe --tags --abbrev=0 "${GITHUB_REF_NAME}^" 2>/dev/null || echo v0.1.0)
-          bash tests/release-notes.sh "$prev" "$GITHUB_REF_NAME" | tee notes.md
+          bash tests/release-notes.sh "$prev" "$GITHUB_REF_NAME" > notes.md
+          # The identity block travels WITH the release, not only in a job log that expires.
+          { echo; echo '## release evidence'; echo; echo '```'; cat release-evidence.txt; echo '```'; } >> notes.md
+          cat notes.md
       - name: publish
         env:
           GH_TOKEN: ${{ github.token }}

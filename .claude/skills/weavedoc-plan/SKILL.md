@@ -9,6 +9,8 @@ Pull a document from the data mine — decide its structure, tone, and which tru
 
 > **Language: read it first.** Read `language:` from `.weavedoc/config.yaml` and write **every** reply in that language. These skill files are English; your output is not.
 
+> **One writer per mine.** WeaveDoc is single-writer: one mutating session, and one mutating command, against a mine at a time (FORMATS.md). The CLI refuses a second mutating command; it cannot see YOU editing mine files directly, so never run this skill against a mine another session is writing to. A lost seal or verification row is evidence, not a cache — re-running the command is not the repair.
+
 > **Decisions: recommend + leave a way out.** When you ask the user to decide: **mark your recommended option `(추천)`** with a one-line why, and **always allow a free-form answer.** Don't force a closed pick.
 
 > **Thin context.** Read `truths/index.md` for the tag list and truth overview. Do NOT load all truth files — grep by tag when you need specific truths. The truth is on disk; re-read when you need it.

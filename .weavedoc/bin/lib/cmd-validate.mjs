@@ -13,7 +13,7 @@
 import { statSync, realpathSync, readFileSync, readdirSync } from 'node:fs'
 import { canonId, isDate, isFence, isPlaceholder, inList, listField, fmVal, pipes, splitLines, U, M } from './core.mjs'
 import { join, materialIds, mdirFor, docIds, tfileFor, docFinalPath, contextDigest } from './mine.mjs'
-import { nocomment, dupSection, commentBalanced, sectionAll } from './sections.mjs'
+import { nocomment, dupSection, commentBalanced, sectionAll, countHeadings, defence } from './sections.mjs'
 import { hqFiles } from './cmd-status.mjs'
 import { artifactDigest, ledgerRead } from './verify.mjs'
 import { fidMark, fidBody, isNoise, foldKinds, bearsKind, commentSpans } from './review.mjs'
@@ -241,8 +241,12 @@ function checkHqTags (m, prob, file, sch) {
   // The same section rules hq_body uses — EVERY matching section, either heading level. Reading only
   // the first hid every later round's entries from the counter and from this check at once.
   for (const raw of splitLines(nocomment(readOr(file)).replace(/\n+$/, ''))) {
-    if (/^#+[ \t\n\v\f\r]+Human queue[ \t\n\v\f\r]*$/.test(raw)) { on = true; lv = lev(raw); continue }
-    if (on && /^#+[ \t\n\v\f\r]/.test(raw) && lev(raw) <= lv) on = false
+    // Six is the deepest heading, here as in sectionAll (v0.5.4, review #9): this walker is a
+    // second copy of those rules, and v0.5.4 moved the cap into only one of them — so a
+    // `####### Human queue` was a section to this check and to `status`'s hqBody, but not to any
+    // sectionAll consumer. One depth rule, every reader.
+    if (lev(raw) <= 6 && /^#+[ \t\n\v\f\r]+Human queue[ \t\n\v\f\r]*$/.test(raw)) { on = true; lv = lev(raw); continue }
+    if (on && /^#+[ \t\n\v\f\r]/.test(raw) && lev(raw) <= 6 && lev(raw) <= lv) on = false
     if (!on) continue
     const line = raw.replace(/^[ \t\n\v\f\r]+/, '')
     if (!line.startsWith('- [')) continue
@@ -891,11 +895,23 @@ export function cmdValidate (m, out, json = false, consecOk = '') {
       // one, so a one-section file would count as a complete register.
       prob('SCHEMA-UNREADABLE', M`schema 'gaps.sections' must name exactly two DISTINCT register sections as 'open|accepted' — it says '${sch('gaps.sections')}', and a register cannot be judged against section names the roster does not provide`)
     } else {
+      // ONE read, ONE fence pass, EVERY reader below (review #11): the fence rule used to live in
+      // the stray walker alone, so a whole fake register inside a code fence passed — the heading
+      // counter and the register scanner counted the fenced lines — while a fenced EXAMPLE of the
+      // headings blocked a fine file as a duplicate. defence() blanks fenced content (keeping the
+      // opener line: a fence opened INSIDE Open/Accepted must go on blocking as unreadable
+      // grammar) and reports a fence nobody closed, which blocks here exactly like the
+      // unterminated '<!--' above and for the same reason.
+      const gapsDf = defence(nocomment(readOr(gapsPath)))
+      const gapsText = gapsDf.text
+      if (gapsDf.open) {
+        prob('COMP-MALFORMED', U("completeness is 'required' but gaps.md ends inside an unterminated code fence — everything after it is invisible to the register checks, so entries behind it would count as nothing; close the fence"))
+      }
       // Both counts are taken BEFORE any of them is tested — the bash form is a compound `elif`
       // whose first two commands are assignments and whose third is the condition, so `gacc_` is
       // always set by the time the second branch reads it.
-      const gopen = dupSection(gapsPath, secOpen, 0)
-      const gacc = dupSection(gapsPath, secAcc, 0)
+      const gopen = countHeadings(gapsText, secOpen, 0)
+      const gacc = countHeadings(gapsText, secAcc, 0)
       if (gopen === 0) {
         // A register with no readable open section is a register that never ran, wearing a filename.
         prob('COMP-MALFORMED', M`completeness is 'required' but gaps.md has no readable '# ${secOpen}' section — the register format is '# ${secOpen}' / '# ${secAcc}' (schema gaps.sections; weavedoc-gaps writes it); a file without them proves nothing and blocks like a missing one`)
@@ -941,40 +957,57 @@ export function cmdValidate (m, out, json = false, consecOk = '') {
         const kindEnum = sch('gaps.enum.kind') || 'declared|reference|enumeration|symmetry'
         const kindSet = new Set(pipes(kindEnum))
         const scanRegister = (section) => {
-          let n = 0; let badline = ''; let badkind = null; let dblkind = null; let inb = false; let gnoise = false; let gnoiseKind = ''
-          for (let gl of splitLines(sectionAll(nocomment(readOr(gapsPath)), section))) {
+          let n = 0; let badline = ''; let badkind = null; let dblkind = null; let unclosed = ''; let inb = false; let gnoise = false; let gnoiseKind = ''
+          for (let gl of splitLines(sectionAll(gapsText, section))) {
             gl = gl.replace(/\r$/, '')
             if (!/[^ \t]/.test(gl)) { inb = false; continue }
             const grest = gl.replace(/^[ \t]*/, '')
-            if (grest.startsWith('- ')) {
+            // AN ENTRY OPENS AT COLUMN ZERO (v0.5.4, review #9). The indentation used to be
+            // stripped before the bullet test, so every indented bullet opened an entry: an
+            // orphan `  - [declared] …` under no parent counted as an accepted decision (rc 0),
+            // and a legitimate sub-bullet under a real entry was read as a second entry and
+            // blocked for having no kind. Indented bullets are CONTINUATIONS — they fall to the
+            // branch below, which already knows an entry must be open above them.
+            if (gl.startsWith('- ')) {
               inb = true
               gnoise = false
-              if (grest.startsWith('- [<') || grest.startsWith('- [{')) {
-                // The bracket word rides along with the noise flag (review #7 P1-1): a bullet held
-                // as noise can be REALIZED by a continuation below, and realization must carry the
-                // placeholder kind into the vocabulary judgment — before this, the continuation
-                // branch counted the entry and judged nothing.
-                if (strip(grest.includes(']') ? grest.slice(grest.indexOf(']') + 1) : grest) === '') {
-                  gnoise = true
-                  gnoiseKind = grest.includes(']') ? grest.slice(3, grest.indexOf(']')) : ''
-                }
-                // A placeholder kind over a REAL body is an ENTRY whose kind is not in the
-                // vocabulary (cold review of this patch: this branch ran before the kind branch,
-                // so '- [<kind>] [declared] x — r' drew no diagnostic at all — an Accepted
-                // decision wearing template noise as its kind, with a routable kind word riding
-                // unjudged in the second bracket). A PURE stub stays what it was: noise — not an
-                // entry, not an error — which is what keeps a freshly-initialised gaps.md green.
-                else if (badkind === null) badkind = grest.includes(']') ? grest.slice(3, grest.indexOf(']')) : ''
-              } else if (grest.startsWith('- [') && grest.includes(']')) {
+              // THE BRACKET MUST CLOSE, and that is tested BEFORE anything classifies the bullet
+              // (v0.5.4, review #8 P1-3). `- [{kind}` and `- [<kind>` reached the placeholder
+              // branch, where strip() erased the unclosed opener along with the template word and
+              // left '' — so an entry with a broken kind slot read as noise and validate said
+              // nothing (measured rc 0 under required + a consecrated output). An opener with no
+              // ']' is not a kind, not a placeholder and not prose: it is a malformed entry.
+              if (grest.startsWith('- [') && !grest.includes(']')) {
+                if (unclosed === '') unclosed = gl
+              } else if (grest.startsWith('- [')) {
                 const kw = grest.slice(3, grest.indexOf(']'))
-                if (badkind === null && !kindSet.has(kw)) badkind = kw
-                // ONE kind per entry (review #6): only the first bracket was judged, so
-                // '- [declared] [reference] …' rode through wearing TWO routable kinds. Blocked
-                // only when the second bracket IS a kind word — a bracketed citation right after
-                // the kind ('- [declared] [계약서 §3] …') is body, not a second kind.
                 const after = grest.slice(grest.indexOf(']') + 1)
-                const m2 = /^[ \t]*\[([^\]]*)\]/.exec(after)
-                if (dblkind === null && m2 && kindSet.has(m2[1])) dblkind = `[${kw}] [${m2[1]}]`
+                // THE KIND SLOT IS A PLACEHOLDER ONLY IF THE WHOLE SLOT IS ONE (v0.5.4, review
+                // #9). This was a PREFIX test — `- [` followed by `<` or `{` — so real words
+                // sharing the bracket with a template token (`- [{kind} real-content]`,
+                // `- [<kind>real]`) rode through as noise and drew no diagnostic. The slot is
+                // stripped now: what survives is real content, and real content in the kind slot
+                // makes it a kind — judged by the vocabulary like any other.
+                const kwStub = /^[<{]/.test(kw) && strip(kw) === ''
+                if (kwStub) {
+                  // The bracket word rides along with the noise flag (review #7 P1-1): a bullet
+                  // held as noise can be REALIZED by a continuation below, and realization must
+                  // carry the placeholder kind into the vocabulary judgment — before that, the
+                  // continuation branch counted the entry and judged nothing.
+                  if (strip(after) === '') { gnoise = true; gnoiseKind = kw }
+                  // A placeholder kind over a REAL body is an ENTRY whose kind is not in the
+                  // vocabulary (v0.5.4 cold review). A PURE stub stays what it was: noise — not
+                  // an entry, not an error — which keeps a freshly-initialised gaps.md green.
+                  else if (badkind === null) badkind = kw
+                } else {
+                  if (badkind === null && !kindSet.has(kw)) badkind = kw
+                  // ONE kind per entry (review #6): only the first bracket was judged, so
+                  // '- [declared] [reference] …' rode through wearing TWO routable kinds. Blocked
+                  // only when the second bracket IS a kind word — a bracketed citation right after
+                  // the kind ('- [declared] [계약서 §3] …') is body, not a second kind.
+                  const m2 = /^[ \t]*\[([^\]]*)\]/.exec(after)
+                  if (dblkind === null && m2 && kindSet.has(m2[1])) dblkind = `[${kw}] [${m2[1]}]`
+                }
               } else if (badkind === null) {
                 badkind = ''   // no bracket at all — reported as a missing kind slot below
               }
@@ -989,10 +1022,46 @@ export function cmdValidate (m, out, json = false, consecOk = '') {
               if (gnoise && strip(grest) !== '') { n++; gnoise = false; if (badkind === null) badkind = gnoiseKind }
             }
           }
-          return { n, badline, badkind, dblkind }
+          return { n, badline, badkind, dblkind, unclosed }
         }
-        const { n: nopen, badline, badkind: openKind, dblkind: openDbl } = scanRegister(secOpen)
+        const { n: nopen, badline, badkind: openKind, dblkind: openDbl, unclosed: openUnc } = scanRegister(secOpen)
         const accepted = scanRegister(secAcc)
+        // A GAP OUTSIDE THE TWO SECTIONS IS A GAP NOBODY COUNTS (v0.5.4, review #9). The register
+        // is read section by section, so an entry parked under a third heading — or above the
+        // first one — was invisible to every check while looking, to a human, exactly like a
+        // recorded gap (measured: rc 0 under required with a consecrated output). The register has
+        // two sections; a bullet anywhere else is misfiled, not accepted.
+        {
+          let cur = ''
+          let curLev = 0
+          let stray = ''
+          // No fence logic here anymore (review #11): this walker reads the SAME defenced text as
+          // every other register reader — fenced content arrives already blanked, and the fence
+          // machine that lived only here (leaving the other three readers fence-blind) moved to
+          // sections.mjs defence(). Kept opener lines are not '- ' and not headings, so they fall
+          // through untouched.
+          for (let gl of splitLines(gapsText)) {
+            gl = gl.replace(/\r$/, '')
+            const h = /^(#{1,6})[ \t]+(.*?)[ \t]*$/.exec(gl)
+            if (h) {
+              // The SAME nesting model sectionAll uses: a section ends at a same-or-shallower
+              // heading, and a DEEPER one stays inside it. Reading every heading as a new section
+              // made '## Sub of Accepted' eject the section and call its entries misfiled — a
+              // false sentence about a file that was fine (cold review), one line below the P2
+              // fix that exists to stop exactly this kind of split.
+              const lv = h[1].length
+              if (cur === '' || lv <= curLev) { cur = h[2]; curLev = lv }
+              continue
+            }
+            if (gl.startsWith('- ') && cur !== secOpen && cur !== secAcc && stray === '') stray = gl
+          }
+          if (stray !== '') {
+            prob('COMP-MALFORMED', M`completeness is 'required' but gaps.md holds an entry outside '# ${secOpen}' and '# ${secAcc}': '${stray}' — the register is those two sections (schema gaps.sections), and a gap filed anywhere else is counted by nobody while looking exactly like one that was`)
+          }
+        }
+        for (const [sec, u] of [[secOpen, openUnc], [secAcc, accepted.unclosed]]) {
+          if (u !== '') prob('COMP-MALFORMED', M`completeness is 'required' but gaps.md '# ${sec}' holds an entry whose kind bracket never closes: '${u}' — an entry opens with '[<kind>]' and the ']' is part of it; an unclosed opener names no kind at all`)
+        }
         for (const [sec, kw] of [[secOpen, openKind], [secAcc, accepted.badkind]]) {
           if (kw === null) continue
           if (kw === '') prob('COMP-MALFORMED', M`completeness is 'required' but gaps.md '# ${sec}' holds an entry with no '[<kind>]' slot at all — entries open with exactly one kind from ${kindEnum} (schema gaps.enum.kind); a gap without a kind cannot be routed, and an ACCEPTED one is a decision about nothing nameable`)

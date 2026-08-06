@@ -16,4 +16,4 @@
 
 # Accepted
 
-- [{kind}] {where} — {why intentionally left} — scope: {tags} — recheck: {condition} — as-of: {ids}
+- [{kind}] {where} — {why intentionally left} — {scope: tags} — {recheck: condition} — {as-of: ids}
