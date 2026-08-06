@@ -1022,16 +1022,26 @@ export function cmdValidate (m, out, json = false, consecOk = '') {
         {
           let cur = ''
           let curLev = 0
-          let fence = false
+          let fenceCh = ''   // '`' or '~' while inside a fence, '' outside
+          let fenceLen = 0
           let stray = ''
           for (let gl of splitLines(nocomment(readOr(gapsPath)))) {
             gl = gl.replace(/\r$/, '')
             // A fenced block is text, not structure — a bullet drawn inside an example is not a
-            // misfiled gap (cold review of this patch: it was). CODE fences, spelled here rather
-            // than through core's isFence, which tests the frontmatter '---' and would match
-            // neither of these.
-            if (/^[ \t]*(```|~~~)/.test(gl)) { fence = !fence; continue }
-            if (fence) continue
+            // misfiled gap. The opener's CHARACTER, LENGTH and INDENT are remembered (review #10:
+            // the first cut was a bare toggle, which read a 4-space-indented ``` — not a fence in
+            // Markdown — as one and swallowed the real entry after it, and let an inner ``` close
+            // a 4-backtick fence and call its example content misfiled). Markdown's rules, the
+            // part this walker needs: a fence opens at ≤3 spaces of indent with 3+ of one
+            // character, and closes only on the SAME character, AT LEAST as many, nothing after.
+            if (fenceCh === '') {
+              const f = /^ {0,3}(`{3,}|~{3,})/.exec(gl)
+              if (f) { fenceCh = f[1][0]; fenceLen = f[1].length; continue }
+            } else {
+              const f = new RegExp('^ {0,3}([' + fenceCh + ']{3,})[ \t]*$').exec(gl)
+              if (f && f[1].length >= fenceLen) { fenceCh = ''; fenceLen = 0 }
+              continue
+            }
             const h = /^(#{1,6})[ \t]+(.*?)[ \t]*$/.exec(gl)
             if (h) {
               // The SAME nesting model sectionAll uses: a section ends at a same-or-shallower
@@ -1047,6 +1057,12 @@ export function cmdValidate (m, out, json = false, consecOk = '') {
           }
           if (stray !== '') {
             prob('COMP-MALFORMED', M`completeness is 'required' but gaps.md holds an entry outside '# ${secOpen}' and '# ${secAcc}': '${stray}' — the register is those two sections (schema gaps.sections), and a gap filed anywhere else is counted by nobody while looking exactly like one that was`)
+          }
+          // The fence rule's own fail-open: a fence nobody closes swallows the rest of the file
+          // from this walker, so entries after it would hide behind an example. The same ruling
+          // the unterminated '<!--' already gets, for the same reason.
+          if (fenceCh !== '') {
+            prob('COMP-MALFORMED', U("completeness is 'required' but gaps.md ends inside an unterminated code fence — everything after it is invisible to the register checks, so entries behind it would count as nothing; close the fence"))
           }
         }
         for (const [sec, u] of [[secOpen, openUnc], [secAcc, accepted.unclosed]]) {

@@ -205,8 +205,12 @@ const rest = argv.slice(1)
 // Every command reads a snapshot and writes it back whole, so this is a data race the per-file
 // locks inside individual commands cannot close.
 //
-// The gate is taken HERE — before the command exists, before openMine reads anything — which is
-// why no command needed its decisions relocated for it. Internal reindex/validate calls go
+// The gate is taken HERE — before the command exists and before any COMMAND-SPECIFIC judgment.
+// One openMine call does run first (review #10 named the earlier "before openMine reads anything"
+// wording as false): the lock lives under the mine root, so the root must be resolved before
+// anything can be locked. That call's snapshot is used for its `root` and nothing else — every
+// gated command below opens its own mine AFTER the gate and reads fresh (loadConfig/loadSchema
+// read per call), so no decision rests on pre-lock bytes. Internal reindex/validate calls go
 // straight to their functions and never re-enter this dispatcher, so there is nothing reentrant
 // to solve. Read-only commands, and the read-only MODES of writing commands, are never gated:
 // a report has no reason to queue behind a migration, and `--check` promises to write nothing.

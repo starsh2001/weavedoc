@@ -184,11 +184,22 @@ const countHistoryBrackets = t => historyWalk(nocomment(t), null).n
 // ---- the command ------------------------------------------------------------------------------
 export function cmdUpgrade (m, out, argv, runReindex, runValidate, ops = realOps) {
   let mode = '--check'
+  let modeSet = false
   let from = '0.1'
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]
-    if (a === '--check' || a === '--dry-run' || a === '--apply') mode = a
-    else if (a === '--from') { i++; from = argv[i] ?? '' } else {
+    if (a === '--check' || a === '--dry-run' || a === '--apply') {
+      // ONE mode per invocation (review #10). Last-wins was a hidden rule that a second parser
+      // could not share: the dispatcher's admission gate reads "--apply anywhere" while this loop
+      // kept the LAST flag, so `upgrade --apply --check` ran read-only but was refused by the
+      // mine lock. Two parsers over one argv agree only when the ambiguous spelling is an error.
+      if (modeSet && mode !== a) {
+        out('usage: weavedoc upgrade [--check|--dry-run|--apply] [--from 0.1] — one mode per invocation')
+        return 2
+      }
+      mode = a
+      modeSet = true
+    } else if (a === '--from') { i++; from = argv[i] ?? '' } else {
       out('usage: weavedoc upgrade [--check|--dry-run|--apply] [--from 0.1]')
       return 2
     }

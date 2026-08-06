@@ -42,6 +42,13 @@ WD_ENTRY=${WDRUN[${#WDRUN[@]}-1]}
 # commit + bundle bytes + OS + tool versions, so --resume can only ever reuse results produced by
 # THIS exact configuration. A different key is a different directory: stale results are
 # unreachable, not filtered. WD_REG_KEY_SALT exists so a test can force a fresh key.
+# The path half of the resume KEY: every keyed file's REPO-RELATIVE path, whole. The subshell cd
+# makes find emit relative paths, so nothing is stripped and nothing machine-specific leaks in.
+# DEFINED ABOVE the KEY computation on purpose — below it, the call inside KEY would fail into its
+# 2>/dev/null and the paths would silently vanish from the key (the emptiness-looks-like-success
+# class this suite keeps a name for).
+key_paths() { ( cd "$1" && find tests .weavedoc/templates .weavedoc/bin -type f -print0 | sort -z | tr '\0' '\n' ); }
+
 KEY=$( { git -C "$REPO" rev-parse HEAD 2>/dev/null
          cat "$REPO/.weavedoc/VERSION" 2>/dev/null
          # WD_BIN itself: two different invocations of the same commit are different configurations
@@ -66,17 +73,23 @@ KEY=$( { git -C "$REPO" rev-parse HEAD 2>/dev/null
            # CHANGELOG and FORMATS — a dirty edit there changes what it measures too.
            sha256sum "$REPO/README.md" "$REPO/CHANGELOG.md" "$REPO/.weavedoc/FORMATS.md"
            find "$REPO/tests/baseline/golden" "$REPO/.weavedoc/templates" -type f -print0 | sort -z | xargs -0 sha256sum
-           # PATHS, not just contents (review #9): every line above is piped through `awk '{print
-           # $1}'`, which drops the file NAME — so a rename that lands in the same sorted slot
-           # left the key identical while the tree no longer had that file, and --resume handed
-           # back results for a configuration that no longer existed. The names ride separately.
-           find "$REPO/tests" "$REPO/.weavedoc/templates" "$REPO/.weavedoc/bin" -type f -print0 | sort -z | xargs -0 -n1 basename | sha256sum; } 2>/dev/null | awk '{print $1}'
+           : ; } 2>/dev/null | awk '{print $1}'
+         # PATHS, not just contents (review #9) — and WHOLE repo-relative paths, not basenames
+         # (review #10): the first fix hashed `basename` output, so moving a file between
+         # directories — golden/version.txt into golden/z/ — kept the key while the fixed path
+         # the cases read went stale, and --resume reported 430 "passed" having run nothing
+         # (measured). Outside the awk so the lines survive whole; a FUNCTION so the case
+         # guarding it runs these same bytes rather than a copy that can drift.
+         key_paths "$REPO" 2>/dev/null
          # The RUNNER's version (v0.5.1, external review): a node upgrade is a different
          # configuration the way a bash upgrade always was (bash/awk/sed are keyed below).
          node --version 2>/dev/null
          uname -sr; bash --version | head -1; awk --version 2>/dev/null | head -1; sed --version 2>/dev/null | head -1
          printf '%s' "${WD_REG_KEY_SALT:-}"
        } | sha256sum | awk '{print $1}' | cut -c1-12 )
+# The key's own vacuity guard: the path half runs inside 2>/dev/null, so a broken key_paths would
+# not fail — it would just leave the key path-blind again. Checked loudly, once, here.
+[ -n "$(key_paths "$REPO" 2>/dev/null)" ] || { echo "key_paths produced nothing — the resume key lost its path half"; exit 2; }
 CACHE="${TMPDIR:-/tmp}/wd-reg-$KEY"
 RES="$CACHE/res"
 # Workers inherit the parent's workspace via env; only the invocation that CREATED the mktemp
@@ -3377,6 +3390,56 @@ block_upgrade_version_flip_mid_wait() {
   grep -q 'rolled back' "$W/.v.out" && bad "the migration ran and rolled back instead of refusing up front"
   [ -z "$(ls -d "$W"/.upgrade-backup-* 2>/dev/null)" ] || bad "a backup dir appeared — writes happened"; ok
 }
+acct_resume_key_sees_directory_moves() {
+  # Review #10: the key's path half hashed BASENAMES, so moving golden/version.txt into golden/z/
+  # kept the key identical and --resume replayed 430 passes over inputs that were no longer where
+  # the cases read them (measured). This runs the SAME key_paths function the KEY computation
+  # uses — a case testing its own copy of the pipeline would be the drift class.
+  # Red vs 5999989: key_paths does not exist there; its absence IS the defect record.
+  local d="$W/.keyprobe"
+  mkdir -p "$d/tests" "$d/.weavedoc/templates" "$d/.weavedoc/bin"
+  printf 'same bytes\n' > "$d/tests/moved.txt"
+  local p1 p2
+  p1=$(key_paths "$d" | sha256sum | awk '{print $1}')
+  [ -n "$(key_paths "$d")" ] || { bad "key_paths produced nothing — the guard is vacuous"; return; }
+  mkdir -p "$d/tests/z"
+  mv "$d/tests/moved.txt" "$d/tests/z/moved.txt"
+  p2=$(key_paths "$d" | sha256sum | awk '{print $1}')
+  [ "$p1" != "$p2" ] || bad "a same-basename move between directories left the key's path half unchanged"
+  rm -rf "$d"; ok
+}
+block_gaps_fence_shapes() {
+  # Review #10: the fence rule was a bare toggle. Both directions were wrong and both are pinned:
+  # a 4-space-indented ``` is NOT a fence in Markdown, so the entry after it is REAL and must
+  # block (it was swallowed, rc 0 — fail-open); an inner ``` must not close a 4-backtick fence,
+  # so the example inside stays text and must pass (it blocked — false positive). Plus the tilde
+  # spelling and the unterminated-fence fail-open, which gets the '<!--' ruling.
+  req_completeness
+  printf '# Open\n\n# Accepted\n\n# Notes\n\n    ```\n- [declared] real entry after a fake fence — reason\n' > "$W/gaps.md"
+  vrun validate
+  expect_block "outside '# Open' and '# Accepted'"
+  printf '# Open\n\n# Accepted\n\n# Notes\n\n````\n```\n- [declared] example inside a 4-tick fence — reason\n````\n' > "$W/gaps.md"
+  vrun validate
+  expect_pass
+  printf '# Open\n\n# Accepted\n\n# Notes\n\n~~~\n- [declared] example in a tilde fence — reason\n~~~\n' > "$W/gaps.md"
+  vrun validate
+  expect_pass
+  printf '# Open\n\n# Accepted\n\n# Notes\n\n```\n- [declared] behind an unterminated fence — reason\n' > "$W/gaps.md"
+  vrun validate
+  expect_block "unterminated code fence"
+}
+block_upgrade_one_mode_only() {
+  # Review #10: mode was last-wins — a hidden rule the dispatcher's gate could not share, so
+  # `upgrade --apply --check` ran read-only but was refused by the mine lock. The ambiguous
+  # spelling is a usage error now, and the two parsers cannot disagree about it.
+  vrun upgrade --apply --check
+  [ "$RC" -eq 2 ] || bad "expected usage rc 2, got $RC"
+  expect_has "one mode per invocation"
+  vrun upgrade --check --apply
+  [ "$RC" -eq 2 ] || bad "expected usage rc 2 for the reversed spelling, got $RC"
+  [ ! -d "$W/.weavedoc/mine.lock" ] || bad "the usage refusal left the mine lock behind"
+  vrun validate; expect_pass
+}
 acct_mine_lock_admits_one_writer() {
   # THE SINGLE-WRITER GATE (v0.5.4, review #9). Every mutating command takes .weavedoc/mine.lock
   # at the dispatcher, before it reads anything; a second one is REFUSED, not queued. Simulated
@@ -3387,7 +3450,9 @@ acct_mine_lock_admits_one_writer() {
   local before after
   before=$(cd "$W" && find . -path ./.weavedoc/mine.lock -prune -o -type f -print | LC_ALL=C sort | xargs sha256sum 2>/dev/null | sha256sum | awk '{print $1}')
   local c t0 t1
-  for c in "attest verified 1 std m001" "seal-review d1" "reindex" "upgrade --apply"; do
+  # ALL SIX writers, not a sample (review #10: consecrate and retag were missing, so the two
+  # commands most likely to gain a pre-gate read had no case watching them).
+  for c in "attest verified 1 std m001" "seal-review d1" "reindex" "upgrade --apply" "consecrate d1" "retag onetag twotag"; do
     t0=$(date +%s)
     # shellcheck disable=SC2086
     vrun $c
