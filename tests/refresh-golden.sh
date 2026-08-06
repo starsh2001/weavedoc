@@ -27,5 +27,7 @@ P="$WORK/pristine"
 for c in validate census scope status gaps; do
   ( cd "$P" && "${WDRUN[@]}" "$c" ) > "$G/$c.txt" 2>&1
 done
+# status --open is a MODE, not a command word — spelled out so the loop's single-word contract stays.
+( cd "$P" && "${WDRUN[@]}" status --open ) > "$G/status-open.txt" 2>&1
 ( cd "$P" && "${WDRUN[@]}" version ) > "$G/version.txt" 2>&1
 echo "refresh-golden: rewrote $G — review with 'git diff tests/baseline/golden/'"

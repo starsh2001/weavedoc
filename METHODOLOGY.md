@@ -105,6 +105,7 @@ A human writer knows when they are guessing. An agent, isolated to what it sees 
 - **It can't feel a contradiction it didn't happen to notice** → so force the hunt (§5.1), and put a *deterministic* floor under it (`weavedoc validate`) that catches the graph-level misses the AI's judgment can't guarantee.
 - **It has no stake in "which source is right"** → so it must surface conflicts to you, never pick silently.
 - **It can't keep its own additions apart from yours** → so authorship is a *recorded field*, not a memory: a machine proposal the user adopted enters as `adopted`, a computed value as `derived` with its assumptions spelled out, and every run logs its delta. What the human confirms is that **change list** — never "is the whole mine correct?", a question with no reviewable surface. Saying "제안값 그대로 둘게요" in chat is not enough; the file must say it, or the next session reads a machine guess as a human decision.
+- **It parks the decision in a file and reports "done — check the file"** → so the closing report carries the open items *themselves*: every conflict, question, and queue entry stated in the message with what's needed from the human, the file path as reference only. A pointer whose substance lives only on disk re-creates the no-reviewable-surface failure at the handoff — the human has to open files just to learn what is being asked of them.
 
 The gate, the conflict rules, the provenance field, and the validator exist because "trust the agent to be careful" is not a warranty. Structure is.
 
