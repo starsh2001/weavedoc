@@ -4,6 +4,31 @@
 
 ---
 
+## 2026-08-07.1
+
+**v0.5.11 — 태그 사이의 공백을 한 번만 철자한다.** 외부 리뷰가 v0.5.10을 유효 판정(above-bar 0)하면서 **같은 계열 below-bar 3건**을 실측했다. 셋 다 뿌리가 하나다: "항목의 두 태그 사이 공백"이 **세 군데에서 다르게** 적혀 있었다 — validate는 `[ 	
+
+]`, status의 소유권 버킷은 `[ 	]`, 접기를 결정하는 `HQ_TAG`는 `[ 	]`. 쌍마다 어딘가에서 어긋났다.
+
+- **`` 구분자 + continuation → 본문이 목록에서 사라진다.** HQ_TAG가 ``를 모르니 "태그뿐인 줄"로 안 읽혀 접기가 안 걸리고, `status --open`이 태그 줄만 찍고 결정 본문을 버렸다(실측).
+- **행 내부 `
+` → status가 validate에 대해 거짓말한다.** `- [open]<CR>[user-only] …`를 status는 "missing an ownership tag **(validate rejects these)**"로 세고 validate는 rc 0으로 통과시켰다 — 이 릴리스 줄기가 계속 잡아 온 그 문장. 코드 주석의 "`
+`은 splitLines를 통과하지 못한다"도 **행 끝에만 참**이고 행 내부에는 거짓이었다.
+- 수정: `core.mjs`에 **`TAG_SEP` 하나**를 두고 validate·버킷·HQ_TAG가 전부 그것을 쓴다. `
+`은 줄 안에 있을 수 없지만 클래스에 남긴다 — 이 상수가 validate 규칙의 *사본*이 아니라 **그 규칙 자체**여야 하기 때문.
+
+**세 번째: placeholder continuation을 내용으로 오인한다.** `- [<status>]` 아래 `  <where> — <what>` — 출하 템플릿의 **자기 둘째 줄**이 held stub을 실재화시켜, 템플릿뿐인 장부가 "1 unrecognized"(questions)·"1 untagged"(HQ)로 보고됐다. 안전 방향이지만 **거짓 대기**다. gaps는 처음부터 옳은 질문을 했다(템플릿 토큰을 걷어내고 뭐가 남는가). 이제 `hasContent`를 세 장부가 공유한다 — 그리고 hold는 placeholder-only continuation을 **넘겨서 살아남아**, 아래의 진짜 줄이 여전히 실재화한다(gaps와 같은 동작).
+
+**"세 장부가 같은 기계"라는 v0.5.10의 설명은 그때 사실이 아니었다** — 실재화 조건이 달랐다. 이제 **실재화 판정은** 셋이 같고(콜드 리뷰가 continuation 텍스트 18종을 세 장부에 전수 대조: HEAD 9/18 갈림 → 0/18), 그 차이를 케이스로 고정했다. **여전히 같지 않은 것도 적어 둔다**: 빈 장부 관용구 `- (없음)`을 Q·HQ는 관용구로 넘기고 register는 항목으로 세며, 문법이 못 읽는 줄은 gaps만 경고한다 — 장부별로 정당한 차이지만 "같은 기계"는 **실재화 축에 한정된 말**이다.
+
+**콜드 리뷰(커밋 전) 발견 6건 — 절반이 이 패치가 만든 것.** ① **TAG_SEP가 태그 *사이*만 닫고 불릿 *앞*은 두 철자로 남아 있었다**: ``로 들여쓴 `- [open]`이 validate에겐 항목이고 status 두 표면 모두에겐 안 보였다(rc 1 옆에 "nothing is waiting on you"). 같은 클래스, 한 자리 앞 — 선행 공백도 TAG_SEP로 통일(단 untagged 규칙은 컬럼0 유지: 거기서 들여쓴 불릿은 하위 detail이다). ② **내가 이번에 폐기한 문장이 내가 편집한 줄 바로 위에 그대로 있었다** — 버킷 주석의 "`[ 	]` … `
+
+`은 splitLines를 통과 못 한다". ③ "single walk" 잔존이 1곳이 아니라 3곳이었다(2곳 더 정정) ④ 타이밍 문구도 사본이 하나 더 있었다(`tests/in-container.sh`) ⑤ 번들 라벨 날짜와 발행일 불일치(→ `2026-08-07.1`) ⑥ CHANGELOG의 계수·범위 과장 2건. **동작 변화 1건 명시**: `- [{state}][{ownership}]` 단독은 이제 표시되지 않는다(공백 구분 쌍둥이와 동일 — 순수 stub은 소음, 초기 장부가 green으로 유지된다).
+
+**문서 드리프트 4건.** ① IMPROVEMENT_PLAN 현행 표기(v0.5.9 → v0.5.11) ② `isNoise` 설명 주석이 현행 코드(`stubEntry` + hold)와 불일치 ③ "single walk" 잔존 1곳 → single classifier ④ **tests/README의 "컨테이너 20초 미만"** — 실측 32·33초(486케이스 -j6, 2026-08-07). 케이스가 430대이던 시절의 값이 그대로 남아 있었다; 케이스가 늘면 갱신하라는 문장을 함께 넣었다.
+
+신규 4케이스(matrix 2칸 + 구분자 축 1 + 선행 공백 축 1; red-first 3 + 양방향 가드 1 — 가드는 "hold가 placeholder continuation을 넘겨 살아남는가"를 잡고, 수정이 hold를 실재화 불가로 만드는 식으로 "달성"되는 것을 막는다).
+
 ## 2026-08-06.13
 
 **v0.5.10 — 두 축의 조합이 빠져 있었다.** 외부 리뷰가 v0.5.9에서 above-bar 2건을 실측했다. 공통 뿌리: placeholder와 continuation을 **각각은** 시험했지만 그 **조합**을 시험하지 않았다.
@@ -14,7 +39,7 @@
 
 **Below-bar 일괄.** ① cmd-gaps가 `scanRegister.badline`을 버려 Accepted 절의 산문 뒤 항목이 경고 없이 계수에서 빠지던 것 → 경고 추가 ② `meta_manifest_baseline_current`가 이름과 달리 **manifest 본문을 읽지 않던 것**(fresh digest vs .sha256만 비교 — 본문 변조 + .sha256 방치가 통과) → 3-way로 보강(본문↔fresh cmp + .sha256=hash(본문)), 본문 변조 변이로 kill 확인 ③ README·WORKFLOW의 "single walk" 잔존 2곳 → "single classifier"(하나인 것은 판정이다) ④ FORMATS questions.md 절에 continuation·빈 장부 관용구 명문화 ⑤ **.12 절의 "미결 전수 = 1+3+4" 주장 정정**: 그 수는 *직전 리뷰가 거론한 항목*의 분류였고, 저장소 전체 미결(§11 잔여 — attest Verified units 정규식, gaps 전처리 단 공유, truth_digest CRLF 등)은 별도로 남아 있다 — "전수"는 과장이었다.
 
-**테스트.** placeholder/정상 태그 × inline/continuation 행렬 신규 6케이스(red-first 5 + full-template 침묵 가드 1 — 가드는 양방향 통과가 정답임을 주석에 선언). 세 장부 대칭이 이제 케이스로 고정된다.
+**테스트.** placeholder/정상 태그 × inline/continuation 행렬 신규 6케이스 — **행렬이 이때 완결됐다는 주장은 과했다: `2026-08-07.1`에서 두 칸이 더 나왔다**(red-first 5 + full-template 침묵 가드 1 — 가드는 양방향 통과가 정답임을 주석에 선언). 세 장부 대칭이 이제 케이스로 고정된다.
 
 **콜드 리뷰(커밋 전)가 이 패치 자신의 critical 1건을 잡았다 — 접기와 계약의 경계.** `- [open]` + continuation에 **ownership 태그가 다음 줄에** 오는 형태에서, status는 접힌 표시 줄로 분류해 "machine can just do 1"이라 하고 validate는 물리 항목 줄을 판정해 거부했다 — 한 항목, 두 답, 이 릴리스가 잡던 클래스가 P1-2 수정 **때문에** 새 조합으로 열린 것. 계약대로 태그는 **항목 줄**의 것이므로(FORMATS: two fixed tags, then prose — defender가 쓰면서 단다), 버킷 분류는 접히지 않은 원본 줄(`raw`)로 옮기고 접기는 표시 전용으로 남겼다. FORMATS에 "fold는 display, 판정은 entry line"을 명문화. 함께: ② 태그 사이 구분자 latitude를 validate와 정렬(`[ 	]` —  구분 항목이 "validate rejects these"로 세어지며 validate는 통과하던 병적 형태) ③ **새로 넣은 badline 경고가 두-인코더 함정을 또 밟았다** — latin1 섹션명을 UTF-8 템플릿에 보간해 지역화 스키마에서 mojibake(cmd-gaps + status --open 쌍둥이 모두 바이트 방출로) ④ 미닫힘 placeholder 브래킷의 untagged 표면화와 template-state+실ownership의 침묵 유지를 케이스로 고정. 신규 4케이스(red-first 3 + 핀 1).
 
