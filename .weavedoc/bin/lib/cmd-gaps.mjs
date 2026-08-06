@@ -99,7 +99,15 @@ export function cmdGaps (m, out, err) {
     // too, and non-blocking is a reason to print it, not a reason to stay quiet.
     const df = defence(nocomment(readBytes(gapsPath)))
     if (df.open) out("gaps.md ends inside an unterminated code fence — entries behind it are invisible to the accepted tally below; close the fence (validate blocks on this under 'completeness: required')")
-    nacc = scanRegister(df.text, secAcc, kindSet).n
+    const reg = scanRegister(df.text, secAcc, kindSet)
+    // The scanner stops at a line the register grammar cannot read, so entries after it are missing
+    // from the count — named, not silent (v0.5.10; status --open has said this since v0.5.7, and
+    // v0.5.8 wired the shared scanner here and dropped its badline on the floor).
+    // The section name is latin1-domain (it is matched against byte text) — emitted as its own
+    // BYTES, not re-encoded through a UTF-8 template: interpolating it printed mojibake for a
+    // localized `gaps.sections`, the two-encoders trap again (cold review, v0.5.10).
+    if (reg.badline !== '') out(Buffer.concat([Buffer.from("gaps.md '# ", 'utf8'), Buffer.from(secAcc, 'latin1'), Buffer.from("' holds a line the register grammar cannot read, so nothing after it is tallied (validate names it under 'completeness: required')", 'utf8')]))
+    nacc = reg.n
   }
   out(`— ${n} marker line(s) + ${c} unchecked checkbox(es) — RAW scan, not an open count: gaps.md records ${nacc} already accepted. Non-blocking; run the weavedoc-gaps skill to reconcile these against gaps.md and to cover reference/enumeration/symmetry + fill-or-accept.`)
   return 0

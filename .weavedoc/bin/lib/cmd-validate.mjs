@@ -264,8 +264,14 @@ function checkHqTags (m, prob, file, sch) {
     // matches it inside an `LC_ALL=C awk`, where a multibyte literal in a pattern is a literal
     // SEQUENCE of bytes. A JS regex holding the CHARACTER U+2014 never matches a byte-domain string.
     const what = line.replace(/^[ \t\n\v\f\r]*- \[[^\]]*\][ \t\n\v\f\r]*/, '').replace(/[ \t\n\v\f\r]*\xe2\x80\x94[\s\S]*$/, '')
-    if (what === '') continue
-    prob('HQ-UNTAGGED', M`${rel}  Human queue '[open]' entry has no valid ownership tag → add [user-only|recommended|machine]: ${what}`)
+    // AN EMPTY BODY IS NOT AN EXEMPTION (v0.5.10, external review P1). `what === '' → continue`
+    // stood here uncommented, and it let `- [open]` with its content on a CONTINUATION line — a
+    // legal entry since v0.5.7 documented continuations — bypass the ownership contract entirely,
+    // while plain `status` counted the same entry as "missing an ownership tag (validate rejects
+    // these)": one entry, one command claiming validate rejects it, validate passing it. The
+    // ownership requirement is about the [open] STATE, not about where the body happens to sit;
+    // when the body line is empty the diagnostic shows the entry line itself.
+    prob('HQ-UNTAGGED', M`${rel}  Human queue '[open]' entry has no valid ownership tag → add [user-only|recommended|machine]: ${what === '' ? line : what}`)
   }
 }
 

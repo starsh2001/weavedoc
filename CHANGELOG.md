@@ -4,6 +4,22 @@
 
 ---
 
+## 2026-08-06.13
+
+**v0.5.10 — 두 축의 조합이 빠져 있었다.** 외부 리뷰가 v0.5.9에서 above-bar 2건을 실측했다. 공통 뿌리: placeholder와 continuation을 **각각은** 시험했지만 그 **조합**을 시험하지 않았다.
+
+**P1-1 — placeholder 불릿 + continuation이 통째로 사라진다(questions·Human queue).** `- [<status>]` / 들여쓴 실제 질문 → "nothing is waiting"(실측; HQ의 `- [{state}] [{ownership}]` + continuation도, **인라인** `- [{state}] [{ownership}] 실내용`도 동일). 원인: gaps는 scanRegister의 **hold-and-realize**(순수 stub을 쥐고 있다가 continuation이 실재화)를 처음부터 갖고 있었는데, 쌍둥이 장부 둘은 stub을 **즉시 버려** continuation이 붙을 자리가 없었다 — 그리고 HQ의 untagged 필터에는 v0.5.5의 **폐기된 prefix 규칙이 아직 살아 있었다**(remainder가 실내용이어도 통째 드롭). 수정: `stubLine(line, tag)`을 일반화(각 장부의 태그 프리픽스는 자기 문법 — HQ는 state+ownership 두 슬롯)하고 세 장부가 같은 기계를 돈다. 실재화된 stub은 unrecognized/untagged로 표면화된다(인라인 쌍둥이와 같은 버킷).
+
+**P1-2 — 본문 없는 `[open]` 항목이 ownership 계약을 우회한다(validate).** `- [open]` + continuation 본문 → validate 통과, 같은 항목을 plain `status`는 "missing an ownership tag **(validate rejects these)**"로 셌다 — 한 항목, 한 명령은 validate가 거부한다고 말하고, validate는 통과시켰다. 원인은 checkHqTags의 **주석 없는** `what === '' → continue`. ownership 요구는 [open] **상태**에 대한 것이지 본문이 어느 줄에 있는지와 무관하므로 스킵을 제거했다(본문이 빈 줄이면 진단에 항목 줄 자체를 보여준다). eclypse 실광산 재검증: 통과(전 항목 ownership 보유).
+
+**Below-bar 일괄.** ① cmd-gaps가 `scanRegister.badline`을 버려 Accepted 절의 산문 뒤 항목이 경고 없이 계수에서 빠지던 것 → 경고 추가 ② `meta_manifest_baseline_current`가 이름과 달리 **manifest 본문을 읽지 않던 것**(fresh digest vs .sha256만 비교 — 본문 변조 + .sha256 방치가 통과) → 3-way로 보강(본문↔fresh cmp + .sha256=hash(본문)), 본문 변조 변이로 kill 확인 ③ README·WORKFLOW의 "single walk" 잔존 2곳 → "single classifier"(하나인 것은 판정이다) ④ FORMATS questions.md 절에 continuation·빈 장부 관용구 명문화 ⑤ **.12 절의 "미결 전수 = 1+3+4" 주장 정정**: 그 수는 *직전 리뷰가 거론한 항목*의 분류였고, 저장소 전체 미결(§11 잔여 — attest Verified units 정규식, gaps 전처리 단 공유, truth_digest CRLF 등)은 별도로 남아 있다 — "전수"는 과장이었다.
+
+**테스트.** placeholder/정상 태그 × inline/continuation 행렬 신규 6케이스(red-first 5 + full-template 침묵 가드 1 — 가드는 양방향 통과가 정답임을 주석에 선언). 세 장부 대칭이 이제 케이스로 고정된다.
+
+**콜드 리뷰(커밋 전)가 이 패치 자신의 critical 1건을 잡았다 — 접기와 계약의 경계.** `- [open]` + continuation에 **ownership 태그가 다음 줄에** 오는 형태에서, status는 접힌 표시 줄로 분류해 "machine can just do 1"이라 하고 validate는 물리 항목 줄을 판정해 거부했다 — 한 항목, 두 답, 이 릴리스가 잡던 클래스가 P1-2 수정 **때문에** 새 조합으로 열린 것. 계약대로 태그는 **항목 줄**의 것이므로(FORMATS: two fixed tags, then prose — defender가 쓰면서 단다), 버킷 분류는 접히지 않은 원본 줄(`raw`)로 옮기고 접기는 표시 전용으로 남겼다. FORMATS에 "fold는 display, 판정은 entry line"을 명문화. 함께: ② 태그 사이 구분자 latitude를 validate와 정렬(`[ 	]` —  구분 항목이 "validate rejects these"로 세어지며 validate는 통과하던 병적 형태) ③ **새로 넣은 badline 경고가 두-인코더 함정을 또 밟았다** — latin1 섹션명을 UTF-8 템플릿에 보간해 지역화 스키마에서 mojibake(cmd-gaps + status --open 쌍둥이 모두 바이트 방출로) ④ 미닫힘 placeholder 브래킷의 untagged 표면화와 template-state+실ownership의 침묵 유지를 케이스로 고정. 신규 4케이스(red-first 3 + 핀 1).
+
+**Known issues(이 릴리스가 새로 남기는 것만).** ① stub + 빈 줄 + continuation의 고아 continuation은 gaps에서만 명명되고(badline 경고) HQ·questions에서는 조용히 버려진다 — 빈 줄이 hold를 죽이는 규칙 자체는 세 장부 동일하나, "못 읽는 것은 명명한다"가 두 장부에 미적용(기존 클래스, 이번 변경 무관). ②  들여쓰기 등 더 깊은 공백 병리는 §11 기준 밖.
+
 ## 2026-08-06.12
 
 **v0.5.9 — 미결 목록을 실측한다.** "또 안 한 거 있어?"라는 물음에 저장소의 미결을 전수로 세어 본 결과, 세 종류가 나왔다: **정말 안 한 것 1건 · 이미 해소됐는데 목록에 미결로 남아 있던 것 3건 · 근거 있게 미룬 것 4건**. 앞의 둘을 여기서 닫는다.
