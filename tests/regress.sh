@@ -3428,6 +3428,49 @@ block_gaps_fence_shapes() {
   vrun validate
   expect_block "unterminated code fence"
 }
+block_gaps_fenced_fake_register() {
+  # Review #11 blocker 1: the WHOLE register lived inside a code fence — real Markdown has no
+  # register at all — and validate passed it, because only ONE of the four gaps readers knew
+  # fences (the heading counter and the register scanner counted the fenced lines, and the
+  # 2-space-indented closing fence even read as the fake entry's continuation). One defence()
+  # pass feeds every reader now. Red vs 942ccdc: rc 0.
+  req_completeness
+  printf '```text\n# Open\n# Accepted\n- [declared] fake accepted decision — reason\n  ```\n' > "$W/gaps.md"
+  vrun validate
+  expect_block "no readable '# Open' section"
+}
+pass_gaps_fenced_heading_example() {
+  # Review #11 blocker 1, the reverse: a VALID register plus a fenced example that shows the
+  # headings — the duplicate-heading check counted the example and blocked a fine file. Red vs
+  # 942ccdc: rc 1 "repeats a register section heading".
+  req_completeness
+  printf '# Open\n\n# Accepted\n\n- [declared] real — reason\n\n# Notes\n\n```\n# Open\n# Accepted\n- [declared] just an example — reason\n```\n' > "$W/gaps.md"
+  vrun validate
+  expect_pass
+  # ...and the gaps CLI agrees: the fenced example's bullet is not an accepted entry.
+  vrun gaps
+  expect_has "records 1 already accepted"
+}
+block_gaps_backtick_info_not_a_fence() {
+  # Review #11 blocker 2: a backtick opener whose info string contains a backtick is NOT a fence
+  # in CommonMark — reading it as one hid a REAL stray entry inside a fence that does not exist
+  # (rc 0, measured; the CHANGELOG's "fail-closed" note held only for the unterminated variant).
+  # Red vs 942ccdc: rc 0.
+  req_completeness
+  printf '# Open\n\n# Accepted\n\n# Notes\n\n```foo`bar\n- [declared] real stray entry — reason\n```\n' > "$W/gaps.md"
+  vrun validate
+  expect_block "outside '# Open' and '# Accepted'"
+}
+block_upgrade_same_mode_twice() {
+  # Review #11: "one mode per invocation" said one thing and the code allowed `--apply --apply`.
+  # The rule now matches the sentence — ANY second mode flag is a usage error, same or different.
+  # Red vs 942ccdc: `--apply --apply` ran the migration rc 0.
+  vrun upgrade --apply --apply
+  [ "$RC" -eq 2 ] || bad "expected usage rc 2 for a repeated mode, got $RC"
+  expect_has "one mode per invocation"
+  [ ! -d "$W/.weavedoc/mine.lock" ] || bad "the usage refusal left the mine lock behind"
+  vrun validate; expect_pass
+}
 block_upgrade_one_mode_only() {
   # Review #10: mode was last-wins — a hidden rule the dispatcher's gate could not share, so
   # `upgrade --apply --check` ran read-only but was refused by the mine lock. The ambiguous
@@ -3442,9 +3485,11 @@ block_upgrade_one_mode_only() {
 }
 acct_mine_lock_admits_one_writer() {
   # THE SINGLE-WRITER GATE (v0.5.4, review #9). Every mutating command takes .weavedoc/mine.lock
-  # at the dispatcher, before it reads anything; a second one is REFUSED, not queued. Simulated
+  # at the dispatcher, before any command-specific judgment (one openMine resolves the root first
+  # — the lock lives under it); a second one is REFUSED, not queued. Simulated
   # with a planted lock (a real second process would need a hold seam in every command, and the
-  # gate is one code path for all of them). Red vs v0.5.4: every command below runs and writes.
+  # gate is one code path for all of them). Red vs the pre-gate runtime (4121109): every command
+  # below runs and writes.
   mkdir -p "$W/.weavedoc/mine.lock"
   printf 'someone-else' > "$W/.weavedoc/mine.lock/owner"
   local before after
@@ -3477,8 +3522,8 @@ acct_mine_lock_never_gates_readers() {
   # The gate is for WRITERS. Read-only commands, and the read-only MODES of writing commands,
   # must run untouched while a mine lock is held — a report queueing behind a migration would be
   # a worse tool, and --check/--dry-run/--dry promise to write nothing.
-  # Passes on v0.5.4 too (there is no gate there) — said plainly: it is the guard that keeps the
-  # gate from spreading, not evidence for it.
+  # Passes on the pre-gate runtime (4121109) too — no gate there, so nothing to be gated by; said
+  # plainly: it is the guard that keeps the gate from spreading, not evidence for it.
   mkdir -p "$W/.weavedoc/mine.lock"
   printf 'someone-else' > "$W/.weavedoc/mine.lock/owner"
   local c

@@ -7,7 +7,7 @@
 import { readFileSync, existsSync } from 'node:fs'
 import { basename } from 'node:path'
 import { splitLines } from './core.mjs'
-import { nocomment, sectionAll } from './sections.mjs'
+import { nocomment, sectionAll, defence } from './sections.mjs'
 import { join, materialIds, truthFiles } from './mine.mjs'
 import { cmdCensus } from './cmd-census.mjs'
 
@@ -77,7 +77,9 @@ export function cmdGaps (m, out, err) {
     // this spelled 'Accepted' by hand and read h1/h2 only, so a '### Accepted' register validate
     // had just counted printed here as "records 0 already accepted" — two readers, one file.
     const secAcc = (m.sch.get('gaps.sections') || 'Open|Accepted').split('|')[1] || 'Accepted'
-    const stripped = nocomment(readOr(gapsPath))
+    // The SAME defence pass validate's readers use (review #11): fenced content is text, not
+    // register — without this, an example register inside a code fence counted here.
+    const stripped = defence(nocomment(readOr(gapsPath))).text
     nacc = countLines(sectionAll(stripped, secAcc), ENTRY)
   }
   out(`— ${n} marker line(s) + ${c} unchecked checkbox(es) — RAW scan, not an open count: gaps.md records ${nacc} already accepted. Non-blocking; run the weavedoc-gaps skill to reconcile these against gaps.md and to cover reference/enumeration/symmetry + fill-or-accept.`)

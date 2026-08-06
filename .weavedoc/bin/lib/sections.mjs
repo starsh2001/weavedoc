@@ -117,6 +117,44 @@ export function sectionAll (text, h) {
   return out.length ? out.join('\n') + '\n' : ''
 }
 
+// ---- code fences ---------------------------------------------------------------------------
+// ONE fence judgment for every reader of a file (review #11): the fence rule lived in ONE of the
+// four gaps readers, so a whole fake register inside a code fence passed validate — the heading
+// counter and the register scanner counted the fenced lines — while a fenced EXAMPLE of the
+// headings blocked a fine file as a duplicate. This pass blanks what a fence encloses (content
+// and the closing line) and reports a fence nobody closed; callers block that the way they block
+// an unterminated '<!--', for the same reason (everything after it is invisible).
+//
+// The OPENER LINE IS KEPT. That is a decision, not an accident: a fence opened inside a
+// fail-closed grammar (the register's Open/Accepted sections) must go on BLOCKING as a line the
+// grammar cannot read — blanking it would let an "accepted decision" hide inside a code block in
+// the one file whose whole point is that nothing hides. Readers that ignore non-entry lines
+// (heading counters, the stray walker) ignore the opener anyway.
+//
+// The rules are the part of CommonMark these readers need: a fence opens at up to three spaces of
+// indent with 3+ backticks or tildes — and a BACKTICK opener's info string may not contain a
+// backtick (review #11: '```foo`bar' is NOT a fence, and reading it as one hid a real entry
+// inside a fence that does not exist) — and closes only on the same character, at least as many,
+// with nothing but blanks after.
+export function defence (text) {
+  const out = []
+  let ch = ''
+  let len = 0
+  for (const line of toLines(text)) {
+    const l = line.replace(/\r$/, '')
+    if (ch === '') {
+      const f = /^ {0,3}(`{3,})([^`]*)$/.exec(l) || /^ {0,3}(~{3,})/.exec(l)
+      if (f) { ch = f[1][0]; len = f[1].length; out.push(line); continue }
+      out.push(line)
+    } else {
+      const f = new RegExp('^ {0,3}([' + ch + ']{3,})[ \t]*$').exec(l)
+      if (f && f[1].length >= len) { ch = ''; len = 0 }
+      out.push('')
+    }
+  }
+  return { text: out.length ? out.join('\n') + '\n' : '', open: ch !== '' }
+}
+
 // ---- heading counting ----------------------------------------------------------------------
 // ASCII space/tab ONLY, never a general whitespace class (v0.3.1): under a UTF-8 locale NBSP joins
 // that class, so `# Fidelity violations<NBSP>` would read as the real heading on one machine and not

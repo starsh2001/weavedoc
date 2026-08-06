@@ -13,7 +13,7 @@
 import { statSync, realpathSync, readFileSync, readdirSync } from 'node:fs'
 import { canonId, isDate, isFence, isPlaceholder, inList, listField, fmVal, pipes, splitLines, U, M } from './core.mjs'
 import { join, materialIds, mdirFor, docIds, tfileFor, docFinalPath, contextDigest } from './mine.mjs'
-import { nocomment, dupSection, commentBalanced, sectionAll } from './sections.mjs'
+import { nocomment, dupSection, commentBalanced, sectionAll, countHeadings, defence } from './sections.mjs'
 import { hqFiles } from './cmd-status.mjs'
 import { artifactDigest, ledgerRead } from './verify.mjs'
 import { fidMark, fidBody, isNoise, foldKinds, bearsKind, commentSpans } from './review.mjs'
@@ -895,11 +895,23 @@ export function cmdValidate (m, out, json = false, consecOk = '') {
       // one, so a one-section file would count as a complete register.
       prob('SCHEMA-UNREADABLE', M`schema 'gaps.sections' must name exactly two DISTINCT register sections as 'open|accepted' — it says '${sch('gaps.sections')}', and a register cannot be judged against section names the roster does not provide`)
     } else {
+      // ONE read, ONE fence pass, EVERY reader below (review #11): the fence rule used to live in
+      // the stray walker alone, so a whole fake register inside a code fence passed — the heading
+      // counter and the register scanner counted the fenced lines — while a fenced EXAMPLE of the
+      // headings blocked a fine file as a duplicate. defence() blanks fenced content (keeping the
+      // opener line: a fence opened INSIDE Open/Accepted must go on blocking as unreadable
+      // grammar) and reports a fence nobody closed, which blocks here exactly like the
+      // unterminated '<!--' above and for the same reason.
+      const gapsDf = defence(nocomment(readOr(gapsPath)))
+      const gapsText = gapsDf.text
+      if (gapsDf.open) {
+        prob('COMP-MALFORMED', U("completeness is 'required' but gaps.md ends inside an unterminated code fence — everything after it is invisible to the register checks, so entries behind it would count as nothing; close the fence"))
+      }
       // Both counts are taken BEFORE any of them is tested — the bash form is a compound `elif`
       // whose first two commands are assignments and whose third is the condition, so `gacc_` is
       // always set by the time the second branch reads it.
-      const gopen = dupSection(gapsPath, secOpen, 0)
-      const gacc = dupSection(gapsPath, secAcc, 0)
+      const gopen = countHeadings(gapsText, secOpen, 0)
+      const gacc = countHeadings(gapsText, secAcc, 0)
       if (gopen === 0) {
         // A register with no readable open section is a register that never ran, wearing a filename.
         prob('COMP-MALFORMED', M`completeness is 'required' but gaps.md has no readable '# ${secOpen}' section — the register format is '# ${secOpen}' / '# ${secAcc}' (schema gaps.sections; weavedoc-gaps writes it); a file without them proves nothing and blocks like a missing one`)
@@ -946,7 +958,7 @@ export function cmdValidate (m, out, json = false, consecOk = '') {
         const kindSet = new Set(pipes(kindEnum))
         const scanRegister = (section) => {
           let n = 0; let badline = ''; let badkind = null; let dblkind = null; let unclosed = ''; let inb = false; let gnoise = false; let gnoiseKind = ''
-          for (let gl of splitLines(sectionAll(nocomment(readOr(gapsPath)), section))) {
+          for (let gl of splitLines(sectionAll(gapsText, section))) {
             gl = gl.replace(/\r$/, '')
             if (!/[^ \t]/.test(gl)) { inb = false; continue }
             const grest = gl.replace(/^[ \t]*/, '')
@@ -1022,26 +1034,14 @@ export function cmdValidate (m, out, json = false, consecOk = '') {
         {
           let cur = ''
           let curLev = 0
-          let fenceCh = ''   // '`' or '~' while inside a fence, '' outside
-          let fenceLen = 0
           let stray = ''
-          for (let gl of splitLines(nocomment(readOr(gapsPath)))) {
+          // No fence logic here anymore (review #11): this walker reads the SAME defenced text as
+          // every other register reader — fenced content arrives already blanked, and the fence
+          // machine that lived only here (leaving the other three readers fence-blind) moved to
+          // sections.mjs defence(). Kept opener lines are not '- ' and not headings, so they fall
+          // through untouched.
+          for (let gl of splitLines(gapsText)) {
             gl = gl.replace(/\r$/, '')
-            // A fenced block is text, not structure — a bullet drawn inside an example is not a
-            // misfiled gap. The opener's CHARACTER, LENGTH and INDENT are remembered (review #10:
-            // the first cut was a bare toggle, which read a 4-space-indented ``` — not a fence in
-            // Markdown — as one and swallowed the real entry after it, and let an inner ``` close
-            // a 4-backtick fence and call its example content misfiled). Markdown's rules, the
-            // part this walker needs: a fence opens at ≤3 spaces of indent with 3+ of one
-            // character, and closes only on the SAME character, AT LEAST as many, nothing after.
-            if (fenceCh === '') {
-              const f = /^ {0,3}(`{3,}|~{3,})/.exec(gl)
-              if (f) { fenceCh = f[1][0]; fenceLen = f[1].length; continue }
-            } else {
-              const f = new RegExp('^ {0,3}([' + fenceCh + ']{3,})[ \t]*$').exec(gl)
-              if (f && f[1].length >= fenceLen) { fenceCh = ''; fenceLen = 0 }
-              continue
-            }
             const h = /^(#{1,6})[ \t]+(.*?)[ \t]*$/.exec(gl)
             if (h) {
               // The SAME nesting model sectionAll uses: a section ends at a same-or-shallower
@@ -1057,12 +1057,6 @@ export function cmdValidate (m, out, json = false, consecOk = '') {
           }
           if (stray !== '') {
             prob('COMP-MALFORMED', M`completeness is 'required' but gaps.md holds an entry outside '# ${secOpen}' and '# ${secAcc}': '${stray}' — the register is those two sections (schema gaps.sections), and a gap filed anywhere else is counted by nobody while looking exactly like one that was`)
-          }
-          // The fence rule's own fail-open: a fence nobody closes swallows the rest of the file
-          // from this walker, so entries after it would hide behind an example. The same ruling
-          // the unterminated '<!--' already gets, for the same reason.
-          if (fenceCh !== '') {
-            prob('COMP-MALFORMED', U("completeness is 'required' but gaps.md ends inside an unterminated code fence — everything after it is invisible to the register checks, so entries behind it would count as nothing; close the fence"))
           }
         }
         for (const [sec, u] of [[secOpen, openUnc], [secAcc, accepted.unclosed]]) {

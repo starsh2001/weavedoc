@@ -193,7 +193,7 @@ export function cmdUpgrade (m, out, argv, runReindex, runValidate, ops = realOps
       // could not share: the dispatcher's admission gate reads "--apply anywhere" while this loop
       // kept the LAST flag, so `upgrade --apply --check` ran read-only but was refused by the
       // mine lock. Two parsers over one argv agree only when the ambiguous spelling is an error.
-      if (modeSet && mode !== a) {
+      if (modeSet) {
         out('usage: weavedoc upgrade [--check|--dry-run|--apply] [--from 0.1] — one mode per invocation')
         return 2
       }
