@@ -26,12 +26,21 @@ const rawArgs = process.argv.slice(2)
 // v0.5.2 flags: --collide-bak pre-creates the OLD date+PID backup path with stale contents (the
 // exact shape mkdtempSync exists to make impossible — pre-fix, upgrade reused it and restored the
 // stale bytes); --reindex-fail makes the phase-5 regeneration return nonzero.
+// v0.5.3: --slow-write N makes the FIRST write hold the critical section for N ms before landing
+// normally — which turns the concurrent-apply race (review #7 P1-2) deterministic: this process
+// applies slowly under the lock while a real `upgrade --apply` preflights beside it and must
+// RESCAN after acquiring, finding nothing to do.
 const collideBak = rawArgs.includes('--collide-bak')
 const reindexFail = rawArgs.includes('--reindex-fail')
+let slowMs = 0
+{
+  const si = rawArgs.indexOf('--slow-write')
+  if (si >= 0) { slowMs = Number(rawArgs[si + 1]) || 0; rawArgs.splice(si, 2) }
+}
 const pos = rawArgs.filter(a => !a.startsWith('--'))
 const [wfailA = '-', rfailA = '-', cfailA = '-', mfailA = '-'] = pos
 if (rawArgs.length < 1) {
-  process.stderr.write('usage: upgrade-faultinject.mjs <write-fail-suffix|-> [restore-fail-suffix|-] [copy-fail-suffix|-] [rm-fail-suffix|-] [--collide-bak] [--reindex-fail]\n')
+  process.stderr.write('usage: upgrade-faultinject.mjs <write-fail-suffix|-> [restore-fail-suffix|-] [copy-fail-suffix|-] [rm-fail-suffix|-] [--collide-bak] [--reindex-fail] [--slow-write N]\n')
   process.exit(2)
 }
 const wfail = wfailA === '-' ? '' : wfailA
@@ -52,8 +61,13 @@ if (collideBak) {
   writeFileSync(`${stale}/.touched`, 'project.md\n')
 }
 
+let slowed = false
 const ops = {
-  write: (f, buf) => { if (wfail && String(f).endsWith(wfail)) throw new Error(`injected: write refused: ${f}`); realOps.write(f, buf) },
+  write: (f, buf) => {
+    if (slowMs > 0 && !slowed) { slowed = true; const t = Date.now(); while (Date.now() - t < slowMs) { /* hold the lock mid-apply */ } }
+    if (wfail && String(f).endsWith(wfail)) throw new Error(`injected: write refused: ${f}`)
+    realOps.write(f, buf)
+  },
   restore: (from, to) => { if (rfail && String(to).endsWith(rfail)) throw new Error(`injected: restore refused: ${to}`); realOps.restore(from, to) },
   copy: (from, to) => {
     if (cfail && String(to).endsWith(cfail)) {

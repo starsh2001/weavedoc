@@ -10,39 +10,73 @@
 // a heartbeat could, and a single-file CLI does not carry one. So the rule is the honest one:
 // A LOCK HOLDS UNTIL ITS HOLDER REMOVES IT — OR A HUMAN DOES. A crashed writer leaves its lock
 // behind, and every later writer refuses loudly, naming the exact path to delete; one manual
-// rmdir is the price of never destroying a live neighbour's committed write. With no reclaim
-// there is nothing to steal, so ownership tokens are unnecessary (the only process that can
-// release a lock is the one whose mkdir created it), and the first cut's recorded stat→rmdir
-// TOCTOU boundary is gone with the branch that carried it.
+// removal is the price of never destroying a live neighbour's committed write.
 //
 // The lock is a DIRECTORY beside the ledger: mkdir is atomic on every platform this runs on, and
 // a directory cannot be half-created. EVERY writer that touches the ledger file — attest, and
 // upgrade --apply's migration transaction — acquires THIS lock through THIS module; a second
 // spelling of the protocol would be the two-writers drift class in its locking clothes.
-import { mkdirSync, rmdirSync } from 'node:fs'
+import { mkdirSync, rmdirSync, writeFileSync, readFileSync, unlinkSync } from 'node:fs'
+import { randomUUID } from 'node:crypto'
+import { join } from 'node:path'
 
 const WAIT_MS = 5_000
 const sleep = ms => { try { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms) } catch { const t = Date.now(); while (Date.now() - t < ms) { /* spin */ } } }
+
+// Which locks THIS process marked, and with what nonce. `releaseLedgerLock` removes a lock only
+// when the on-disk mark still matches — the one path that could otherwise break the exclusion
+// without any code being wrong (review #7): a human deletes a LIVE lock against the refusal's own
+// instruction, a second writer acquires, and the first holder's release then removed the SECOND
+// holder's lock, reopening the overlap this module exists to prevent. The mark changes nothing on
+// the honest paths, and it is NOT a reclaim channel: a leftover lock — marked, foreign-marked, or
+// empty (a crash between mkdir and the mark) — refuses everyone until a human removes it.
+const owned = new Map()
 
 // -> '' on success, or the sentence explaining the refusal (the caller prefixes its own name).
 // EVERY loop iteration passes through the bound check and the sleep — no branch skips them; the
 // branch that did (the reclaim's `continue`) is how the first cut spun hot and unbounded on an
 // undeletable lock object. A FILE wearing the lock's name is just a held lock here: mkdir says
 // EEXIST for it on every platform (measured), so it rides the bounded wait into the refusal that
-// tells a human to look.
+// tells a human to look. The clock is MONOTONIC (performance.now) — a wall clock stepping
+// backwards must not stretch the bounded wait (review #7).
 export function acquireLedgerLock (lockPath, rel) {
-  const start = Date.now()
+  const start = performance.now()
   for (;;) {
-    try { mkdirSync(lockPath); return '' } catch (e) {
+    try {
+      mkdirSync(lockPath)
+    } catch (e) {
       if (e.code !== 'EEXIST') {
         return `the ledger lock cannot be created at ${rel} (${e.code}) — fix the path (permissions, or a missing truths/ directory)`
       }
-      if (Date.now() - start > WAIT_MS) {
+      if (performance.now() - start > WAIT_MS) {
         return `the ledger lock at ${rel} is held and was not released within ${WAIT_MS / 1000}s — another ledger writer (attest, upgrade --apply) may be running; if none is, the lock is a leftover from a crash (or a stray file wearing its name) and will NEVER be reclaimed automatically: check for a running writer, then remove the lock yourself and re-run`
       }
       sleep(50)
+      continue
     }
+    const nonce = randomUUID()
+    try { writeFileSync(join(lockPath, 'owner'), nonce) } catch (e) {
+      // A lock this process cannot mark is a lock it must not hold: back out of our own mkdir and
+      // refuse. If even the back-out fails, the leftover refuses everyone — the no-reclaim rule
+      // already covers it.
+      try { rmdirSync(lockPath) } catch { /* the leftover blocks until a human removes it */ }
+      return `the ledger lock at ${rel} was created but could not be marked (${e.code}) — fix the path (permissions), then re-run`
+    }
+    owned.set(lockPath, nonce)
+    return ''
   }
 }
 
-export const releaseLedgerLock = lockPath => { try { rmdirSync(lockPath) } catch { /* acquire failed and nothing is held, or a human removed it mid-run */ } }
+export const releaseLedgerLock = lockPath => {
+  const nonce = owned.get(lockPath)
+  if (nonce === undefined) return // never acquired by this process — nothing here is ours to remove
+  owned.delete(lockPath)
+  try {
+    // Match before removing: if the mark is gone or different, a human broke the seal mid-run and
+    // someone else may hold the path now — leave THEIR lock standing (measured red: the old
+    // release removed the new holder's lock).
+    if (readFileSync(join(lockPath, 'owner'), 'utf8') !== nonce) return
+    unlinkSync(join(lockPath, 'owner'))
+    rmdirSync(lockPath)
+  } catch { /* already gone, or unreadable — either way not ours to force */ }
+}
