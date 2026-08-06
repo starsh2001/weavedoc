@@ -941,7 +941,7 @@ export function cmdValidate (m, out, json = false, consecOk = '') {
         const kindEnum = sch('gaps.enum.kind') || 'declared|reference|enumeration|symmetry'
         const kindSet = new Set(pipes(kindEnum))
         const scanRegister = (section) => {
-          let n = 0; let badline = ''; let badkind = null; let dblkind = null; let inb = false; let gnoise = false; let gnoiseKind = ''
+          let n = 0; let badline = ''; let badkind = null; let dblkind = null; let unclosed = ''; let inb = false; let gnoise = false; let gnoiseKind = ''
           for (let gl of splitLines(sectionAll(nocomment(readOr(gapsPath)), section))) {
             gl = gl.replace(/\r$/, '')
             if (!/[^ \t]/.test(gl)) { inb = false; continue }
@@ -949,7 +949,15 @@ export function cmdValidate (m, out, json = false, consecOk = '') {
             if (grest.startsWith('- ')) {
               inb = true
               gnoise = false
-              if (grest.startsWith('- [<') || grest.startsWith('- [{')) {
+              // THE BRACKET MUST CLOSE, and that is tested BEFORE anything classifies the bullet
+              // (v0.5.4, review #8 P1-3). `- [{kind}` and `- [<kind>` reached the placeholder
+              // branch, where strip() erased the unclosed opener along with the template word and
+              // left '' — so an entry with a broken kind slot read as noise and validate said
+              // nothing (measured rc 0 under required + a consecrated output). An opener with no
+              // ']' is not a kind, not a placeholder and not prose: it is a malformed entry.
+              if (grest.startsWith('- [') && !grest.includes(']')) {
+                if (unclosed === '') unclosed = gl
+              } else if (grest.startsWith('- [<') || grest.startsWith('- [{')) {
                 // The bracket word rides along with the noise flag (review #7 P1-1): a bullet held
                 // as noise can be REALIZED by a continuation below, and realization must carry the
                 // placeholder kind into the vocabulary judgment — before this, the continuation
@@ -989,10 +997,13 @@ export function cmdValidate (m, out, json = false, consecOk = '') {
               if (gnoise && strip(grest) !== '') { n++; gnoise = false; if (badkind === null) badkind = gnoiseKind }
             }
           }
-          return { n, badline, badkind, dblkind }
+          return { n, badline, badkind, dblkind, unclosed }
         }
-        const { n: nopen, badline, badkind: openKind, dblkind: openDbl } = scanRegister(secOpen)
+        const { n: nopen, badline, badkind: openKind, dblkind: openDbl, unclosed: openUnc } = scanRegister(secOpen)
         const accepted = scanRegister(secAcc)
+        for (const [sec, u] of [[secOpen, openUnc], [secAcc, accepted.unclosed]]) {
+          if (u !== '') prob('COMP-MALFORMED', M`completeness is 'required' but gaps.md '# ${sec}' holds an entry whose kind bracket never closes: '${u}' — an entry opens with '[<kind>]' and the ']' is part of it; an unclosed opener names no kind at all`)
+        }
         for (const [sec, kw] of [[secOpen, openKind], [secAcc, accepted.badkind]]) {
           if (kw === null) continue
           if (kw === '') prob('COMP-MALFORMED', M`completeness is 'required' but gaps.md '# ${sec}' holds an entry with no '[<kind>]' slot at all — entries open with exactly one kind from ${kindEnum} (schema gaps.enum.kind); a gap without a kind cannot be routed, and an ACCEPTED one is a decision about nothing nameable`)

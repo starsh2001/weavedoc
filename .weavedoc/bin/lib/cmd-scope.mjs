@@ -289,7 +289,11 @@ export function cmdScope (m, out, json) {
   // SUPERSEDED odd verdicts too (v0.5.2, external review P1-2): a typo'd verdict with a later valid
   // row used to be invisible here — the winner was judged, the history was not — while validate
   // blocked the file on it. The winner still stands (the repaired-ledger rule); the word is named.
-  {
+  if (!ledgerDead) {
+    // Silent on a DEAD ledger (review #8): with the sidecar void, `ledger` is empty, so ledgerBad
+    // is empty, so the winner-filter passed and an id's own LATEST odd verdict was announced as
+    // "superseded … history" — describing a row that is neither. The lines above already say the
+    // whole file counts for nothing; nothing here may contradict them.
     const winnersBad = new Set(ledgerBad.map(s => s.split(' ')[0]))
     // Only ids with a VALID winning row are "superseded history" (v0.5.2 cold review): an odd word
     // on a QUARANTINED id (typo'd last row, no later row) is that id's latest, not history — the

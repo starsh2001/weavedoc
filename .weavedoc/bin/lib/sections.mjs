@@ -103,9 +103,15 @@ export function sectionAll (text, h) {
   let on = false
   let lv = 0
   const lev = s => { const m = /^#+/.exec(s); return m ? m[0].length : 0 }
+  // SIX IS THE DEEPEST HEADING (v0.5.4, review #8). This function accepted any run of '#', while
+  // countHeadings — which decides whether validate can SEE a section — stops at six, so a
+  // `####### Accepted` register was malformed to validate and one accepted entry to `weavedoc
+  // gaps`: same file, two answers, the drift class again. Markdown agrees with the stricter
+  // reader (a seventh '#' is not a heading), so the cap moves here rather than the other way.
+  const head = s => /^#+[ \t\n\v\f\r]/.test(s) && lev(s) <= 6
   for (const line of toLines(text)) {
-    if (new RegExp(`^#+[ \t\n\v\f\r]+${rx(h)}[ \t\n\v\f\r]*$`).test(line)) { on = true; lv = lev(line); continue }
-    if (on && /^#+[ \t\n\v\f\r]/.test(line) && lev(line) <= lv) on = false
+    if (lev(line) <= 6 && new RegExp(`^#+[ \t\n\v\f\r]+${rx(h)}[ \t\n\v\f\r]*$`).test(line)) { on = true; lv = lev(line); continue }
+    if (on && head(line) && lev(line) <= lv) on = false
     if (on) out.push(line)
   }
   return out.length ? out.join('\n') + '\n' : ''

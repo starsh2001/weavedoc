@@ -1875,16 +1875,23 @@ acct_attest_stale_lock_refuses_human_only() {
   # corpse from a suspended process or a sleeping laptop — so a leftover lock now refuses every
   # writer until a HUMAN removes it, and the refusal says exactly that. Aged with touch -d to
   # prove age buys nothing anymore. Red vs the reclaiming runtime: it reclaims and passes.
+  # THE FIXTURE IS A REAL CRASH SHAPE (v0.5.4, review #8 P2): a crashed writer leaves the OWNER
+  # MARKER inside the directory, and this case used to plant a bare one — which is how the refusal
+  # went on telling users to do something (`rmdir`) that fails on the real thing, unnoticed.
   mkdir -p "$W/truths/verify-ledger.tsv.lock"
+  printf 'a-nonce-from-the-crashed-run' > "$W/truths/verify-ledger.tsv.lock/owner"
   touch -d '1 hour ago' "$W/truths/verify-ledger.tsv.lock"
   vrun attest verified 1 std m001
   expect_block "NEVER be reclaimed automatically"
-  expect_has "remove the lock yourself"
+  expect_has "delete that path AND ITS CONTENTS"
   expect_has "Nothing written"
   [ -d "$W/truths/verify-ledger.tsv.lock" ] || bad "the refusal removed a lock it promised never to touch"
+  [ -f "$W/truths/verify-ledger.tsv.lock/owner" ] || bad "the refusal ate the owner marker"
   [ ! -f "$W/truths/verify-ledger.tsv" ] || bad "a ledger appeared despite the refusal"
-  # ...and the HUMAN path works: remove the leftover, the same attest lands.
-  rmdir "$W/truths/verify-ledger.tsv.lock"
+  # The instruction must be TRUE: an empty-directory removal does NOT clear a real crash lock...
+  rmdir "$W/truths/verify-ledger.tsv.lock" 2>/dev/null && bad "the message's premise is false: rmdir cleared a marked lock"
+  # ...and the documented recovery does — after which the same attest lands.
+  rm -rf "$W/truths/verify-ledger.tsv.lock"
   vrun attest verified 1 std m001
   expect_pass
   [ ! -d "$W/truths/verify-ledger.tsv.lock" ] || bad "the lock survived a successful attest"
@@ -3364,6 +3371,176 @@ block_upgrade_version_flip_mid_wait() {
   grep -q 'refusing to touch a format this code cannot read' "$W/.v.out" || bad "the future version was not refused"
   grep -q 'rolled back' "$W/.v.out" && bad "the migration ran and rolled back instead of refusing up front"
   [ -z "$(ls -d "$W"/.upgrade-backup-* 2>/dev/null)" ] || bad "a backup dir appeared — writes happened"; ok
+}
+block_upgrade_apply_without_truths_dir() {
+  # The lock's own precondition (v0.5.4 cold review). With the lock first, a mine that has no
+  # truths/ made mkdir fail ENOENT and the command talked about a lock the user never made, rc 1 —
+  # while every other "this mine is unusable" refusal is rc 2. The directory is checked before the
+  # lock (the exception cmd-attest already makes) and named for what it is.
+  # Red vs the pre-fix draft of this same patch: rc 1 and the ENOENT lock sentence.
+  rm -rf "$W/truths"
+  vrun upgrade --apply
+  [ "$RC" -eq 2 ] || bad "expected rc 2 for an unusable mine, got $RC"
+  expect_has "no truths/ directory"
+  expect_hasnt "the ledger lock cannot be created"
+  [ ! -e "$W/truths" ] || bad "the refusal created something where truths/ used to be"
+}
+acct_upgrade_judges_nothing_before_the_lock() {
+  # THE CLASS GUARD for upgrade (v0.5.4, review #8 P1-1), and it needs no instrumentation: on an
+  # ALREADY-MIGRATED mine a pre-lock judgment answers "nothing to do" INSTANTLY, while a
+  # lock-first command must wait out the bound and refuse. The elapsed time is the evidence, so
+  # this case fails the moment any decision moves back outside the lock — not just today's two.
+  # Red vs v0.5.3: rc 0 "nothing to do" in ~0s with the lock held by someone else.
+  vrun upgrade --apply
+  expect_pass
+  mkdir -p "$W/truths/verify-ledger.tsv.lock"
+  printf 'someone-else' > "$W/truths/verify-ledger.tsv.lock/owner"
+  local t0 t1
+  t0=$(date +%s)
+  vrun upgrade --apply
+  t1=$(date +%s)
+  expect_block "is held and was not released"
+  expect_has "Nothing written"
+  expect_hasnt "nothing to do"
+  [ "$(( t1 - t0 ))" -ge 4 ] || bad "returned in $(( t1 - t0 ))s — it judged the mine without holding the lock"
+  rm -rf "$W/truths/verify-ledger.tsv.lock"
+}
+acct_attest_judges_nothing_before_the_lock() {
+  # THE CLASS GUARD for attest (v0.5.4, review #8 P1-2), same shape: a BOGUS id is a judgment
+  # about the mine. Resolved before the lock it fails instantly with 'no truth file'; resolved
+  # under the lock the command waits out the bound and refuses for the lock. The digest lives in
+  # that same loop, which is what the review measured going stale across the wait.
+  # Red vs v0.5.3: rc 2 "no truth file for 't999'" in ~0s while the lock is held.
+  mkdir -p "$W/truths/verify-ledger.tsv.lock"
+  printf 'someone-else' > "$W/truths/verify-ledger.tsv.lock/owner"
+  local t0 t1
+  t0=$(date +%s)
+  vrun attest verified 1 std t999
+  t1=$(date +%s)
+  expect_block "is held and was not released"
+  expect_hasnt "no truth file"
+  [ "$(( t1 - t0 ))" -ge 4 ] || bad "returned in $(( t1 - t0 ))s — it resolved ids without holding the lock"
+  [ ! -f "$W/truths/verify-ledger.tsv" ] || bad "a ledger appeared despite the refusal"
+  rm -rf "$W/truths/verify-ledger.tsv.lock"
+}
+acct_attest_digest_is_taken_under_the_lock() {
+  # The consequence the class guard protects (review #8 P1-2): a truth CHANGED during attest's
+  # bounded wait must not be recorded as verified against the bytes it had before the wait. The
+  # holder mutates the truth mid-hold; the digest attest writes must match the mine AFTER it, so
+  # scope sees zero stale. Red vs v0.5.3: attest rc 0 and 'truths … 1 stale' the instant it lands.
+  vrun attest verified 1 seed m001
+  ( cd "$REPO" && node --input-type=module -e "
+    import { acquireLedgerLock, releaseLedgerLock } from './.weavedoc/bin/lib/lock.mjs'
+    import { appendFileSync } from 'node:fs'
+    const lk = process.argv[1], tf = process.argv[2]
+    if (acquireLedgerLock(lk, 'x') !== '') process.exit(2)
+    let t = Date.now(); while (Date.now() - t < 1200) { /* hold */ }
+    appendFileSync(tf, '\nA line added while attest waited.\n')
+    t = Date.now(); while (Date.now() - t < 1200) { /* keep holding */ }
+    releaseLedgerLock(lk)
+  " "$W/truths/verify-ledger.tsv.lock" "$W/truths/t001.md" ) &
+  local hpid=$!
+  sleep 0.3
+  vrun attest verified 2 std t001
+  local arc=$RC
+  wait "$hpid"
+  grep -q 'A line added while attest waited' "$W/truths/t001.md" || { bad "fixture no-op: the truth was never mutated"; return; }
+  [ "$arc" -eq 0 ] || bad "attest failed (rc $arc) — it should have waited out the hold and landed"
+  vrun scope
+  printf '%s\n' "$OUT" | grep -E '^[[:space:]]*truths ' | grep -q '0 stale' \
+    || bad "the row was stale on arrival: $(printf '%s\n' "$OUT" | grep -E '^[[:space:]]*truths ')"
+  ok
+}
+block_completeness_kind_bracket_unclosed() {
+  # v0.5.4 (review #8 P1-3). An opener with no ']' reached the placeholder branch, where strip()
+  # erased it along with the template word and left '' — so a broken kind slot read as noise and
+  # validate said nothing (measured rc 0 for both spellings). Now it is a malformed entry.
+  req_completeness
+  printf '# Open\n\n# Accepted\n\n- [{kind}\n' > "$W/gaps.md"
+  vrun validate
+  expect_block "kind bracket never closes"
+  printf '# Open\n\n# Accepted\n\n- [<kind>\n' > "$W/gaps.md"
+  vrun validate
+  expect_block "kind bracket never closes"
+  # ...and under Open too — the grammar is one grammar, both sections
+  printf '# Open\n\n- [declared 미폐합 — 근거\n\n# Accepted\n' > "$W/gaps.md"
+  vrun validate
+  expect_block "kind bracket never closes"
+  # a CLOSED placeholder stub is still inert
+  printf '# Open\n\n# Accepted\n\n- [<kind>] <설명>\n' > "$W/gaps.md"
+  vrun validate
+  expect_pass
+}
+block_completeness_kind_truth_table() {
+  # THE CLASS, not the reported instance (v0.5.4): opener × closure × body × continuation, every
+  # cell asserted in one place so the next shape cannot be "the one nobody enumerated". The three
+  # earlier rounds each closed ONE cell of this table (bullet body, continuation, closure) — this
+  # is the table itself, and it is the guard against a fourth round.
+  req_completeness
+  # cell → expected: PASS (inert stub) or a substring the refusal must name
+  local -a cells=(
+    '- [declared] real body — reason|PASS'
+    '- [<kind>] <설명> — <근거>|PASS'
+    '- [{kind}] {where} — {what}|PASS'
+    '- [<kind>] real body — reason|not in the vocabulary'
+    '- [{kind}] real body — reason|not in the vocabulary'
+    '- [declraed] real body — reason|not in the vocabulary'
+    '- [] real body — reason|COMP-MALFORMED'
+    '- [declared|reference] real body — reason|matched exactly and one at a time'
+    '- [declared] [reference] real body — reason|TWO kind brackets'
+    "- no-kind real body — reason|no '[<kind>]' slot at all"
+    '- [{kind}|kind bracket never closes'
+    '- [<kind>|kind bracket never closes'
+    '- [declared real body — reason|kind bracket never closes'
+  )
+  local spec entry want
+  for spec in "${cells[@]}"; do
+    # the LAST pipe separates cell from expectation, so the compound-kind cell's own pipe is safe
+    entry=${spec%|*}; want=${spec##*|}
+    printf '# Open\n\n# Accepted\n\n%s\n' "$entry" > "$W/gaps.md"
+    vrun validate
+    if [ "$want" = PASS ]; then
+      [ "$RC" -eq 0 ] || { bad "[$entry] should be inert, got rc $RC"; return; }
+    else
+      [ "$RC" -ne 0 ] || { bad "[$entry] passed — expected [$want]"; return; }
+      printf '%s\n' "$OUT" | grep -qF -- "$want" || { bad "[$entry] blocked, but not for [$want]"; return; }
+    fi
+  done
+  # ...and the continuation axis: a held stub REALIZED by real content is an entry (its
+  # placeholder kind is judged), while a stub continued by more noise stays inert.
+  printf -- '# Accepted\n\n- [{kind}] {where}\n  real continuation content\n\n# Open\n' > "$W/gaps.md"
+  vrun validate; expect_block "not in the vocabulary"
+  printf -- '# Accepted\n\n- [{kind}] {where}\n  {more placeholder}\n\n# Open\n' > "$W/gaps.md"
+  vrun validate; expect_pass
+}
+acct_scope_dead_ledger_says_nothing_superseded() {
+  # v0.5.4 (review #8 P2). A headless row voids the sidecar, which empties `ledgerBad` — and the
+  # superseded-history filter, reading that empty set, announced an id's OWN LATEST odd verdict as
+  # "superseded … history". The void lines already say the file counts for nothing; nothing may
+  # contradict them. Red vs v0.5.3: both lines print.
+  vrun attest verified 1 std m001
+  sed -i 's/\tverified\t/\tverifed\t/' "$W/truths/verify-ledger.tsv"
+  printf '\t-\tverified\t9\tstd\t2026-01-01\n' >> "$W/truths/verify-ledger.tsv"
+  vrun scope
+  expect_has "carry no id"
+  expect_hasnt "superseded row(s) carry unknown verdicts"
+}
+acct_gaps_heading_depth_agrees() {
+  # v0.5.4 (review #8 P2). sectionAll read any run of '#' while countHeadings stops at six, so a
+  # '####### Accepted' register was malformed to validate and one accepted entry to the gaps CLI —
+  # one file, two answers. Markdown agrees with the stricter reader, so the cap moved into
+  # sectionAll. Red vs v0.5.3: the CLI reports 'records 1 already accepted'.
+  req_completeness
+  printf '####### Open\n\n####### Accepted\n\n- [declared] entry — reason\n' > "$W/gaps.md"
+  vrun validate
+  expect_block "no readable '# Open' section"
+  vrun gaps
+  expect_pass
+  expect_has "records 0 already accepted"
+  # ...and six hashes stay a heading for both
+  printf '###### Open\n\n###### Accepted\n\n- [declared] entry — reason\n' > "$W/gaps.md"
+  vrun gaps
+  expect_has "records 1 already accepted"
 }
 acct_lock_release_only_own() {
   # Review #7 low-pri: releaseLedgerLock removes ONLY a lock whose on-disk mark this process

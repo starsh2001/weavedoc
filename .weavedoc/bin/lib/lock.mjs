@@ -49,7 +49,10 @@ export function acquireLedgerLock (lockPath, rel) {
         return `the ledger lock cannot be created at ${rel} (${e.code}) — fix the path (permissions, or a missing truths/ directory)`
       }
       if (performance.now() - start > WAIT_MS) {
-        return `the ledger lock at ${rel} is held and was not released within ${WAIT_MS / 1000}s — another ledger writer (attest, upgrade --apply) may be running; if none is, the lock is a leftover from a crash (or a stray file wearing its name) and will NEVER be reclaimed automatically: check for a running writer, then remove the lock yourself and re-run`
+        // The recovery sentence names what actually works: a crashed writer leaves the owner
+        // marker INSIDE the directory, so a plain `rmdir` fails with ENOTEMPTY (review #8 —
+        // introduced when the marker did, and the instruction was never updated with it).
+        return `the ledger lock at ${rel} is held and was not released within ${WAIT_MS / 1000}s — another ledger writer (attest, upgrade --apply) may be running; if none is, the lock is a leftover from a crash (or a stray file wearing its name) and will NEVER be reclaimed automatically: check for a running writer, then delete that path AND ITS CONTENTS yourself (it holds an owner marker, so an empty-directory removal will not do it) and re-run`
       }
       sleep(50)
       continue

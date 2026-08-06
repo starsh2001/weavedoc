@@ -195,29 +195,12 @@ export function cmdUpgrade (m, out, argv, runReindex, runValidate, ops = realOps
   }
   const sv = m.schemaVer()
   if (from !== '0.1') { out(`upgrade: only --from 0.1 is supported (v1 → schema ${sv})`); return 2 }
-  // The version matrix is CLOSED (v0.3.3): each record is 1 or the current schema and nothing else.
-  // `version: banana` used to skip the numeric future-check and read as "already at schema 2" with
-  // exit 0 — a success report over a mine this migration cannot even classify.
-  // ONE spelling of the closed-matrix refusal, TWO call sites — here, and again under the apply
-  // lock (the .3 cold review measured the rerun skipping this loop: a mine flipped to version: 3
-  // mid-wait was STAGED into and rolled back by post-validate instead of being refused up front,
-  // which contradicts "refusing to touch a format this code cannot read").
   const badVersionWhy = v => {
     if (v === '1' || v === sv) return ''
     if (v === '' || /[^0-9]/.test(v)) return `version record '${v === '' ? '<missing>' : v}' is not a version this migration understands — a v1 mine says 1, a current mine says ${sv}; fix the version: fields in project.md/config.yaml first`
     if (Number(v) > Number(sv)) return `this mine declares schema ${v}, newer than this runtime (schema ${sv}) — refusing to touch a format this code cannot read; use a newer runtime`
     return `version record '${v}' is not a version this migration understands — supported records are 1 and ${sv}`
   }
-  const pv = fmvB(m.project, 'version')
-  const cv = m.cfg.flat.get('version') ?? ''
-  for (const v of [pv, cv]) {
-    const w = badVersionWhy(v)
-    if (w) { out(`upgrade: ${w}`); return 2 }
-  }
-  // A mine already at schema 2 gets "nothing to do" WITHOUT scanning: the scan's items are
-  // migration writes, and running them on a v2 mine was the seal-laundering path — strip the seals,
-  // run --apply, and the review_legacy marker stamped tamper as history.
-  if (pv !== '1' && cv !== '1') { out(`upgrade: nothing to do — the mine is already at schema ${sv}`); return 0 }
   // The scan and the apply both read the ledger to decide which rows the migration MINTS. On a
   // ledger that exists but cannot be read, that read comes back empty, so every markdown-verified
   // unit reads as missing its row — and the apply would mint duplicates into (or over) a file whose
@@ -225,68 +208,89 @@ export function cmdUpgrade (m, out, argv, runReindex, runValidate, ops = realOps
   // The HEADLESS state voids the sidecar for the same reason (v0.5.1 cold review): scope and
   // validate both declare a headless ledger contributes nothing, and this command's scan was a
   // third consumer quietly computing a plan from rows the other two had ruled void.
-  // ONE helper, TWO call sites (here, and again UNDER the apply lock) — two spellings of this
-  // refusal would be the drift class this file keeps meeting.
   const ledgerVoidWhy = mm => {
     const li = ledgerIndex(join(mm.truths, mm.ledgerFile()))
     if (li.state === 'unreadable') return `truths/${mm.ledgerFile()} exists but cannot be read (${li.code}) — refusing every mode: the migration mints ledger rows from what the ledger already holds, and that is unknown. Fix the file first (permissions, or a directory wearing its name)`
     if (li.headless > 0) return `truths/${mm.ledgerFile()} holds ${li.headless} row(s) with no id — an unattributable row could be any unit's latest verdict, so the sidecar is void and there is nothing sound to migrate from. Run validate (it names the row), repair it, then re-run`
     return ''
   }
-  {
-    const why = ledgerVoidWhy(m)
-    if (why) { out(`upgrade: ${why}`); return 1 }
+
+  // ONE PREFLIGHT, CALLED ONCE PER INVOCATION (v0.5.4, review #8 P1-1). Every judgment this
+  // command makes about the mine lives here: the closed version matrix, the already-migrated exit,
+  // the ledger-void refusals, and the scan. It used to be written out TWICE — once before the lock
+  // and once inside it (v0.5.3's answer to "the plan was stale") — and the copies were not equal:
+  // the schema-2 and empty-plan exits stayed OUTSIDE, so a second `--apply` reading the winner's
+  // MID-TRANSACTION schema 2 answered "nothing to do" rc 0 in ZERO seconds, never waiting for the
+  // lock, and the winner then rolled back — a success report over a migration that never happened
+  // (measured). Two spellings of one decision is the drift class this file keeps meeting; there is
+  // one spelling now, and for --apply it runs UNDER the lock.
+  // -> { rc } when the command is finished, or { items } when the migration may proceed.
+  const preflight = mm => {
+    // The version matrix is CLOSED (v0.3.3): each record is 1 or the current schema and nothing
+    // else. `version: banana` used to skip the numeric future-check and read as "already at schema
+    // 2" with exit 0 — a success report over a mine this migration cannot even classify.
+    const pvx = fmvB(mm.project, 'version')
+    const cvx = mm.cfg.flat.get('version') ?? ''
+    for (const v of [pvx, cvx]) {
+      const w = badVersionWhy(v)
+      if (w) { out(`upgrade: ${w}`); return { rc: 2 } }
+    }
+    // A mine already at schema 2 gets "nothing to do" WITHOUT scanning: the scan's items are
+    // migration writes, and running them on a v2 mine was the seal-laundering path — strip the
+    // seals, run --apply, and the review_legacy marker stamped tamper as history.
+    if (pvx !== '1' && cvx !== '1') { out(`upgrade: nothing to do — the mine is already at schema ${sv}`); return { rc: 0 } }
+    const why = ledgerVoidWhy(mm)
+    if (why) { out(`upgrade: ${why}`); return { rc: 1 } }
+    const items = scanUpgrade(mm)
+    if (items.length === 0) { out(`upgrade: nothing to do — the mine is already at schema ${sv}`); return { rc: 0 } }
+    return { items }
   }
 
-  const items = scanUpgrade(m)
-  if (items.length === 0) { out(`upgrade: nothing to do — the mine is already at schema ${sv}`); return 0 }
-  const n = items.length
-  if (mode === '--check') {
-    out(`upgrade --check: ${n} migration item(s) v1 → schema ${sv}  (read-only — nothing written)`)
-    for (const [k, disp] of items) out(Buffer.from(`  [${k}] ${disp}`, 'latin1'))
-    out('  next: weavedoc upgrade --dry-run (full plan) · weavedoc upgrade --apply (staged, rollback-safe)')
-    return 1
-  }
-  if (mode === '--dry-run') {
+  // The READ-ONLY modes take no lock — they write nothing, and a report that had to queue behind a
+  // migration would be a worse tool. They read what is there when they run, and say so.
+  if (mode !== '--apply') {
+    const pf = preflight(m)
+    if (pf.rc !== undefined) return pf.rc
+    const n = pf.items.length
+    if (mode === '--check') {
+      out(`upgrade --check: ${n} migration item(s) v1 → schema ${sv}  (read-only — nothing written)`)
+      for (const [k, disp] of pf.items) out(Buffer.from(`  [${k}] ${disp}`, 'latin1'))
+      out('  next: weavedoc upgrade --dry-run (full plan) · weavedoc upgrade --apply (staged, rollback-safe)')
+      return 1
+    }
     out(`upgrade --dry-run: ${n} item(s), 0 write(s) — the plan:`)
-    for (const [, disp] of items) out(Buffer.from(`  would: ${disp}`, 'latin1'))
+    for (const [, disp] of pf.items) out(Buffer.from(`  would: ${disp}`, 'latin1'))
     out(`  expected after apply: project at schema ${sv} · validate clean · history preserved as legacy-unbound, never back-stamped`)
     return 1
   }
-  // --apply holds THE ledger lock for its whole transaction (review #6 P0-2). This function reads
-  // the ledger to plan rows and REWRITES it whole in step 6; measured before the lock joined:
+
+  // --apply: THE LOCK COMES FIRST, before this command has looked at the mine at all (v0.5.4).
+  // It holds the ledger lock for its whole transaction (review #6 P0-2) because this command
+  // plans FROM the ledger and REWRITES it whole in step 6; measured before the lock joined:
   // upgrade --apply sailed straight through a LIVE lock (rc 0, ledger written, zero mentions), and
   // a concurrent attest's created-here rollback then unlinked the file with upgrade's freshly
   // minted legacy rows inside — upgrade had already reported success, and validate stayed green.
   // One lock, one module, every writer: attest and this transaction take the same mkdir.
+  // The ONE precondition checked before the lock, and it is not a judgment about mine CONTENT —
+  // it is about the lock's own path (cmd-attest.mjs makes the same exception for the same reason).
+  // Without it, a mine with no truths/ answered a question nobody asked: mkdir failed ENOENT and
+  // the command talked about a lock the user never made, at rc 1, where every other refusal about
+  // an unusable mine is rc 2 (cold review of this patch — the one shape that changed with no
+  // concurrent writer anywhere).
+  if (!isDirAt(m.truths)) { out('upgrade --apply: no truths/ directory — there is no ledger to migrate into and nothing to lock; fix the mine layout first'); return 2 }
   const lockPath = `${join(m.truths, m.ledgerFile())}.lock`
   const lockRel = lockPath.startsWith(`${m.root}/`) ? lockPath.slice(m.root.length + 1) : lockPath
   const lockWhy = acquireLedgerLock(lockPath, lockRel)
   if (lockWhy) { out(`upgrade --apply: ${lockWhy}. Nothing written`); return 1 }
   try {
-    // THE PREFLIGHT RERUNS UNDER THE LOCK (review #7 P1-2). Everything above ran before the lock,
-    // so two applies racing both planned the same items from the v1 state, the loser waited
-    // politely, then applied its STALE plan onto the migrated mine — measured: both rc 0
-    // "applied 4 item(s)", two backup dirs, the second one snapshotting v2 files under a MANIFEST
-    // claiming a v1 restore point. The caches are cleared and the CONFIG SNAPSHOT REBUILT first
-    // (m.cfg is parsed at open time — without the rebuild the rescan reads the same stale bytes
-    // the plan did), and the loser now finds nothing to do and says so.
+    // Caches cleared and the CONFIG SNAPSHOT REBUILT before the preflight reads anything: m.cfg is
+    // parsed at open time, so without the rebuild the judgment under the lock would read the same
+    // stale bytes as one taken before it.
     clearFileCaches()
     const mf = { ...m, cfg: loadConfig(m.config) }
-    const pv2 = fmvB(mf.project, 'version')
-    const cv2 = mf.cfg.flat.get('version') ?? ''
-    // The CLOSED MATRIX reruns too (.3 cold review): without it, a record that turned garbage or
-    // future between the plan and the lock was staged into and only post-validate rolled it back.
-    for (const v of [pv2, cv2]) {
-      const w = badVersionWhy(v)
-      if (w) { out(`upgrade: ${w}`); return 2 }
-    }
-    if (pv2 !== '1' && cv2 !== '1') { out(`upgrade: nothing to do — the mine is already at schema ${sv}`); return 0 }
-    const why2 = ledgerVoidWhy(mf)
-    if (why2) { out(`upgrade: ${why2}`); return 1 }
-    const fresh = scanUpgrade(mf)
-    if (fresh.length === 0) { out(`upgrade: nothing to do — the mine is already at schema ${sv}`); return 0 }
-    return upgradeApply(mf, out, fresh.length, runReindex, runValidate, ops)
+    const pf = preflight(mf)
+    if (pf.rc !== undefined) return pf.rc
+    return upgradeApply(mf, out, pf.items.length, runReindex, runValidate, ops)
   } finally {
     releaseLedgerLock(lockPath)
   }
