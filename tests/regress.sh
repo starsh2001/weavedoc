@@ -4469,13 +4469,24 @@ meta_manifest_baseline_current() {
   # v0.5.7) — a record nobody compares is a file, not a record (the same finding golden/ drew).
   # Compares the COMMITTED tree, not the working tree: make-manifest hashes git blobs, so an
   # uncommitted edit is legitimately absent until it is staged.
-  local now
-  now=$(cd "$REPO" && bash tests/make-manifest.sh 2>/dev/null | sha256sum | awk '{print $1}')
-  local rec
+  # THREE-WAY, not two (external review, v0.5.10): comparing the fresh digest to .sha256 alone
+  # never reads the committed manifest BODY — a hand-edited bundle.manifest with an untouched
+  # .sha256 passed while describing files that do not exist. The body is compared to the fresh
+  # generation, and .sha256 is checked as the hash OF that body, so each of the three artifacts
+  # is pinned to the other two.
+  local fresh="$W/.fresh.manifest"
+  ( cd "$REPO" && bash tests/make-manifest.sh 2>/dev/null ) > "$fresh"
+  local now rec bodysha
+  now=$(sha256sum "$fresh" | awk '{print $1}')
   rec=$(cd "$REPO" && cat tests/baseline/bundle.manifest.sha256 2>/dev/null | tr -d '[:space:]')
-  OUT="manifest now=$now recorded=$rec"; RC=0
-  if [ -z "$now" ] || [ -z "$rec" ]; then bad "manifest digest missing (now='$now' recorded='$rec') — the comparison would be vacuous"
-  elif [ "$now" != "$rec" ]; then bad "tests/baseline/bundle.manifest is stale — regenerate it ('bash tests/make-manifest.sh > tests/baseline/bundle.manifest' + its .sha256) and commit"
+  bodysha=$(cd "$REPO" && sha256sum tests/baseline/bundle.manifest 2>/dev/null | awk '{print $1}')
+  OUT="manifest now=$now recorded=$rec body=$bodysha"; RC=0
+  if [ ! -s "$fresh" ] || [ -z "$rec" ] || [ -z "$bodysha" ]; then
+    bad "manifest artifact missing (fresh=$([ -s "$fresh" ] && echo ok || echo EMPTY) recorded='$rec' body='$bodysha') — the comparison would be vacuous"
+  elif ! cmp -s "$fresh" "$REPO/tests/baseline/bundle.manifest"; then
+    bad "tests/baseline/bundle.manifest BODY differs from a fresh generation — regenerate it ('bash tests/make-manifest.sh > tests/baseline/bundle.manifest' + its .sha256) and commit"
+  elif [ "$bodysha" != "$rec" ]; then
+    bad "bundle.manifest.sha256 is not the hash of bundle.manifest — the two artifacts drifted apart; regenerate both"
   else ok; fi
 }
 acct_fingerprint_covers_lib() {
@@ -4996,6 +5007,117 @@ acct_openlist_question_pure_stub_silent() {
   vrun status --open
   expect_hasnt "nothing is waiting on you"
   expect_has "값을 확정해 주세요"
+}
+# ---- the placeholder × continuation matrix (v0.5.10, external review P1) ----
+# The two axes were each tested alone — placeholder+inline and tagged+continuation — and their
+# COMBINATION vanished: a placeholder bullet was dropped before any hold state existed, so the
+# continuation carrying the actual content had nothing to realize. gaps.md had the hold-and-realize
+# machine all along (scanRegister's gnoise); the twin ledgers lacked it.
+
+acct_openlist_q_stub_realized() {
+  # questions.md: a pure template stub is HELD, and an indented line with real content REALIZES it
+  # — same machine as gaps. Unrealized, it stays template noise (the case below pins that side).
+  # Revert the `qheld` hold in the questions loop → this goes red.
+  printf -- '# 질문\n\n- [<status>]\n  실제 질문이 필요함\n' > "$W/questions.md"
+  vrun status --open
+  expect_has "실제 질문이 필요함"
+  expect_hasnt "nothing is waiting on you"
+}
+acct_openlist_hq_stub_realized() {
+  # Human queue: same shape, same machine. Revert the `held` hold in hqEntries → this goes red.
+  printf -- '\n- [{state}] [{ownership}]\n  실제 결정이 필요함\n' >> "$W/truths/verify.md"
+  vrun status --open
+  expect_has "실제 결정이 필요함"
+  expect_hasnt "nothing is waiting on you"
+}
+acct_openlist_hq_placeholder_inline() {
+  # The v0.5.5 prefix rule was still alive in the untagged filter: a placeholder-opening bullet
+  # with REAL content after its tags was dropped wholesale. The remainder decides (FORMATS) — this
+  # is an entry with no valid state tag, and it surfaces as one.
+  # Revert the stubLine branch in hqEntries to the bare /^- \[[<{]/ drop → this goes red.
+  printf -- '\n- [{state}] [{ownership}] 실제 결정이 필요함\n' >> "$W/truths/verify.md"
+  vrun status --open
+  expect_has "human queue (0 open, 1 untagged):"
+  expect_has "실제 결정이 필요함"
+}
+acct_status_hq_ownership_is_judged_on_the_entry_line() {
+  # THE FOLD IS DISPLAY, THE CONTRACT IS THE ENTRY LINE (cold review, v0.5.10 — critical). Folding
+  # a continuation into an empty-remainder `- [open]` made the bucket regexes see
+  # `- [open] [machine] …` and classify the entry as OWNED, while validate judges the physical
+  # line and rejects it — one entry, "machine can just do 1" on one surface and HQ-UNTAGGED on the
+  # other. Ownership lives on the entry line (FORMATS: two fixed tags, then prose; the defender
+  # writes both tags as it writes the entry), so classification runs on the RAW line and the two
+  # surfaces agree: this entry is missing its tag, and validate really does reject it.
+  # Revert the raw-line classification (buckets over e.raw) → this goes red.
+  printf -- '\n- [open]\n  [machine] 소유권이 다음 줄에 온 항목\n' >> "$W/truths/verify.md"
+  vrun status
+  expect_has "1 missing an ownership tag"
+  expect_hasnt "machine can just do 1"
+  vrun validate; expect_block "has no valid ownership tag"
+}
+acct_status_hq_vtab_separator_agrees_with_validate() {
+  # The separator latitude between the two tags must be ONE class on both surfaces: validate strips
+  # [ \t\n\v\f\r] between [open] and the ownership bracket, the buckets tolerated only [ \t] — so a
+  # \v-separated entry landed in "missing an ownership tag (validate rejects these)" while validate
+  # passed it (the same false-claim class P1-2 closed, one whitespace over). Pathological input,
+  # fixed because the alignment is three characters.
+  # Revert the [ \t\v\f]* separator in the bucket regexes → this goes red.
+  printf -- '\n- [open]\v[user-only] 수직탭 구분 항목\n' >> "$W/truths/verify.md"
+  vrun validate; expect_pass
+  vrun status
+  expect_has "you decide 1"
+  expect_hasnt "missing an ownership tag"
+}
+acct_gaps_localized_badline_bytes() {
+  # The new badline warning interpolated the latin1-domain section name into a UTF-8 template —
+  # the two-encoders trap this codebase documents, sprung again in the line that was added to fix
+  # a different silence (cold review, v0.5.10). The warning must carry the section name's own
+  # bytes. Revert the byte-domain emit in cmd-gaps → this goes red (mojibake).
+  sed -i 's/^gaps\.sections:.*/gaps.sections: 미해결|수용/' "$W/.weavedoc/schema"
+  printf '# 미해결\n\n# 수용\n\n- [symmetry] 첫 항목 — 의도적 공백 — scope: [x] — recheck: y — as-of: t001\n등록부가 읽을 수 없는 산문\n' > "$W/gaps.md"
+  vrun gaps
+  expect_has "'# 수용'"
+  expect_has "records 1 already accepted"
+}
+acct_openlist_hq_unclosed_placeholder_surfaces() {
+  # PINNING a surfacing the fix introduced (cold review #4): an unclosed placeholder bracket is not
+  # a stub (stubLine requires the bracket to close) and not droppable prose — it lists as untagged,
+  # where v0.5.9 silently dropped it. Surface-don't-drop is the direction; this case makes it a
+  # decision instead of an accident.
+  printf -- '\n- [{state\n' >> "$W/truths/verify.md"
+  vrun status --open
+  expect_has "(untagged): - [{state"
+  expect_hasnt "nothing is waiting on you"
+}
+acct_openlist_hq_full_template_silent() {
+  # AN OVER-BLOCKING GUARD (passes before and after — no red-first): the SHIPPED template line is
+  # placeholders throughout and must stay silent, or a freshly-initialised mine reports a waiting
+  # item that does not exist. This is the boundary the realized-stub cases sit on the other side of.
+  # …and a template STATE over a real ownership tag with nothing after it (cold review #5): the
+  # tags are all the line carries, so it is held — and unrealized, it stays silent too.
+  printf -- '\n- [<state>] [<ownership>] <where> — <what the machine wanted to dismiss + its reason> — <what breaks if the dismissal is wrong>\n- [{state}] [user-only]\n' >> "$W/truths/verify.md"
+  vrun status --open
+  expect_has "nothing is waiting on you"
+}
+block_hq_open_continuation_needs_ownership() {
+  # THE OWNERSHIP CONTRACT OVER LOGICAL ENTRIES (external review P1-2): `- [open]` with its content
+  # on a continuation line is a legal entry, and validate skipped it — `what === '' → continue`, an
+  # uncommented guard — while plain `status` counted it as "missing an ownership tag (validate
+  # rejects these)". One entry, one command saying validate rejects it, validate passing it.
+  # Revert the `what === ''` skip removal in checkHqTags → this goes red.
+  printf -- '\n- [open]\n  실제 결정이 필요함\n' >> "$W/truths/verify.md"
+  vrun validate; expect_block "has no valid ownership tag"
+}
+acct_gaps_accepted_badline_named() {
+  # The accepted tally stops at a line the register grammar cannot read, so entries after it are
+  # missing from the count — and the CLI said nothing (status --open has warned since v0.5.7; this
+  # command got the shared scanner in v0.5.8 and dropped its badline on the floor).
+  # Revert the `reg.badline` warning in cmd-gaps.mjs → this goes red.
+  printf '# Open\n\n# Accepted\n\n- [symmetry] 첫 항목 — 의도적 공백 — scope: [x] — recheck: y — as-of: t001\n등록부가 읽을 수 없는 산문\n- [declared] 안 세어지는 항목 — 이유 — scope: [y] — recheck: z — as-of: t002\n' > "$W/gaps.md"
+  vrun gaps
+  expect_pass
+  expect_has "cannot read"
+  expect_has "records 1 already accepted"
 }
 acct_openlist_question_stateless() {
   # A question bullet with no state tag at all: validate never reads questions.md, so nothing else

@@ -9,7 +9,7 @@ import { nocomment, sectionAll, defence, commentBalanced } from './sections.mjs'
 import { fmvB, loadSchema } from './read.mjs'
 import { fm, join, docIds, materialIds, truthFiles, basename } from './mine.mjs'
 import { fidBody, isNoise } from './review.mjs'
-import { scanRegister, stubEntry, emptyRemainder } from './gaps-register.mjs'
+import { scanRegister, stubEntry, stubLine, emptyRemainder } from './gaps-register.mjs'
 
 // Each ledger's entry PREFIX, so "does this entry's line carry content?" is asked the same way in
 // all three (gaps.md's lives with the register reader). Human queue: the state slot plus an
@@ -68,7 +68,9 @@ export const hqBody = file => sectionAll(nocomment(readOr(file)), 'Human queue')
 // measured the claim: `--open` still re-reads these files for its own diagnostics, and
 // commentBalanced reads them again). What is single is the JUDGMENT: both buckets come out of one
 // pass over one body, so the `status` counters and the `--open` listing cannot answer differently
-// about the same file. The line rules are the counters' own, kept exactly: a placeholder bullet
+// about the same file. Since v0.5.10 a placeholder bullet is judged by its REMAINDER (a pure stub
+// is held for a continuation to realize; real content after template tags surfaces as untagged) —
+// the line rules below are otherwise the counters' own, kept exactly: a full-template bullet
 // is template noise; an open entry matches `- [open]` with the counter's indentation tolerance; an
 // untagged ENTRY starts at column 0 (an indented `- ` is a sub-bullet OF an entry), and
 // `- (없음)` / `- (none)` is the documented empty-queue idiom, not an entry.
@@ -78,25 +80,53 @@ export function hqEntries (m) {
   const untagged = []
   for (const f of hqFiles(m)) {
     const label = rel(f)
-    // The entry a continuation would fold into — set only when the entry's own line is nothing but
-    // its tags (see emptyRemainder). An entry that HAS content keeps its sub-bullets as dropped
-    // detail, which is the rule acct_openlist_subbullets_stay_detail pins.
+    // `last` — the listed entry a continuation folds into, set only when the entry's own line is
+    // nothing but its tags (emptyRemainder); an entry that HAS content keeps its sub-bullets as
+    // dropped detail (acct_openlist_subbullets_stay_detail). `held` — a pure placeholder stub
+    // waiting for a continuation to REALIZE it, the machine gaps.md had all along (scanRegister's
+    // gnoise) and this ledger lacked: dropping the stub immediately left the continuation carrying
+    // the actual content with nothing to attach to, and the item vanished (external review,
+    // v0.5.10 — `- [{state}] [{ownership}]` + indented content reported "nothing is waiting").
     let last = null
+    let held = null
     for (const l of splitLines(hqBody(f))) {
-      if (!/[^ \t]/.test(l)) { last = null; continue }
+      if (!/[^ \t]/.test(l)) { last = null; held = null; continue }
       if (!/^[ \t]*- [[][{<]/.test(l) && /^[ \t]*- \[open\]/.test(l)) {
-        open.push({ file: label, line: l })
+        held = null
+        // `raw` is the ENTRY LINE, never mutated; `line` is the display, which folding extends.
+        // The bucket classifiers read raw: ownership lives on the entry line (FORMATS — two fixed
+        // tags, then prose), and classifying the FOLDED line once put an entry in "machine can
+        // just do" while validate rejected it — the two surfaces disagreeing about one entry, the
+        // exact class this whole lane exists to end (cold review, v0.5.10 — critical).
+        open.push({ file: label, line: l, raw: l })
         last = emptyRemainder(l, HQ_TAG) ? { a: open, i: open.length - 1 } : null
         continue
       }
-      if (/^- \[[<{]/.test(l) || !/^- /.test(l) || NONE_IDIOM.test(l) || /^- \[(open|ruled)\]/.test(l)) {
-        // Not an entry of either kind. An INDENTED non-empty line under an empty-remainder entry is
-        // that entry's content — the shape the v0.5.7 gaps fix repaired, live in this ledger too.
-        if (last !== null && /^[ \t]+[^ \t]/.test(l)) last.a[last.i].line += ` ${l.replace(/^[ \t]+/, '')}`
-        else if (!/^[ \t]/.test(l)) last = null
+      // A placeholder-OPENING bullet: the remainder decides (FORMATS), same as everywhere else.
+      // Empty remainder → a stub, held for realization. Real remainder → an entry whose state slot
+      // is a template, i.e. an entry with no valid state tag — surfaced as untagged, where the
+      // v0.5.5 prefix rule used to drop it wholesale (external review, v0.5.10).
+      if (/^- \[[<{]/.test(l)) {
+        last = null
+        if (stubLine(l, HQ_TAG)) held = l
+        else { held = null; untagged.push({ file: label, line: l, raw: l }) }
         continue
       }
-      untagged.push({ file: label, line: l })
+      if (!/^- /.test(l) || NONE_IDIOM.test(l) || /^- \[(open|ruled)\]/.test(l)) {
+        // An INDENTED non-empty line realizes a held stub (its content lives here), or continues an
+        // empty-remainder entry; anything else at column 0 closes both holds.
+        if (/^[ \t]+[^ \t]/.test(l)) {
+          const cont = l.replace(/^[ \t]+/, '')
+          if (held !== null) {
+            untagged.push({ file: label, line: `${held} ${cont}`, raw: held })
+            last = { a: untagged, i: untagged.length - 1 }
+            held = null
+          } else if (last !== null) last.a[last.i].line += ` ${cont}`
+        } else if (!/^[ \t]/.test(l)) { last = null; held = null }
+        continue
+      }
+      held = null
+      untagged.push({ file: label, line: l, raw: l })
       last = emptyRemainder(l, HQ_TAG) ? { a: untagged, i: untagged.length - 1 } : null
     }
   }
@@ -147,9 +177,12 @@ export function cmdStatus (m, out) {
     if (hqOpen > 0) {
       // The three buckets must SUM to the total. A `- [open]` with no ownership tag lands in the
       // total but in no bucket, so the remainder is shown rather than hidden until validate rejects it.
-      const u = open.filter(e => /^[ \t]*- \[open\][ \t]*\[user-only\]/.test(e.line)).length
-      const r = open.filter(e => /^[ \t]*- \[open\][ \t]*\[recommended\]/.test(e.line)).length
-      const mm = open.filter(e => /^[ \t]*- \[open\][ \t]*\[machine\]/.test(e.line)).length
+      // Classified on e.raw — the entry line, never the folded display (cold review, v0.5.10) —
+      // and the tag separator is the SAME latitude checkHqTags strips ([ \t\v\f]; \n\r cannot
+      // survive splitLines), so "(validate rejects these)" is true for every shape counted here.
+      const u = open.filter(e => /^[ \t]*- \[open\][ \t\v\f]*\[user-only\]/.test(e.raw)).length
+      const r = open.filter(e => /^[ \t]*- \[open\][ \t\v\f]*\[recommended\]/.test(e.raw)).length
+      const mm = open.filter(e => /^[ \t]*- \[open\][ \t\v\f]*\[machine\]/.test(e.raw)).length
       let rest = hqOpen - u - r - mm
       if (rest < 0) rest = 0
       let line = `human queue: open ${hqOpen} — you decide ${u} · recommendation ready ${r} · machine can just do ${mm}`
@@ -265,20 +298,32 @@ export function cmdStatusOpen (m, out) {
     if (raw !== null) {
       const df = defence(nocomment(raw))
       if (df.open) warns.push("warning: questions.md ends inside an unterminated code fence — entries behind it are invisible to this listing")
-      // The entry a continuation folds into, as an APPENDER rather than an index: the two buckets
-      // hold different shapes (a string here, an object there) and one index cannot address both.
+      // `qlast` — the listed entry a continuation folds into, as an APPENDER rather than an index
+      // (the two buckets hold different shapes). `qheld` — a pure template stub waiting for a
+      // continuation to REALIZE it: dropping the stub on sight left `- [<status>]` + an indented
+      // real question with nothing to attach to, and the ledger no validator reads printed
+      // "nothing is waiting" over it (external review, v0.5.10 — the gaps machine, applied here).
       let qlast = null
+      let qheld = null
       for (const l of splitLines(df.text)) {
-        if (!/[^ \t]/.test(l)) { qlast = null; continue }
+        if (!/[^ \t]/.test(l)) { qlast = null; qheld = null; continue }
         if (!/^- /.test(l)) {                         // an entry opens at column 0 (FORMATS)
-          // …so an indented line is a continuation, and it carries the entry's content whenever the
-          // entry's own line was nothing but its state tag — the shape the gaps fix repaired, live
-          // in this ledger too (cold review, v0.5.7).
-          if (qlast !== null && /^[ \t]+[^ \t]/.test(l)) qlast(l.replace(/^[ \t]+/, ''))
-          else if (!/^[ \t]/.test(l)) qlast = null
+          // …so an indented line is a continuation: it realizes a held stub (the entry's content
+          // lives here — its state slot is a template, so it surfaces as unrecognized, the same
+          // bucket its inline-filled twin lands in), or continues an empty-remainder entry.
+          if (/^[ \t]+[^ \t]/.test(l)) {
+            const cont = l.replace(/^[ \t]+/, '')
+            if (qheld !== null) {
+              qUnknown.push({ line: `${qheld} ${cont}`, why: 'unrecognized state' })
+              const e = qUnknown[qUnknown.length - 1]
+              qlast = s => { e.line += ` ${s}` }
+              qheld = null
+            } else if (qlast !== null) qlast(cont)
+          } else if (!/^[ \t]/.test(l)) { qlast = null; qheld = null }
           continue
         }
         qlast = null
+        qheld = null
         if (NONE_IDIOM.test(l)) continue              // the empty-ledger idiom (FORMATS)
         const mm = /^- \[([^\]]*)\]/.exec(l)
         // NO BRACKET IS JUDGED BEFORE isNoise, not after: isNoise answers "prose or entry" for a
@@ -297,8 +342,9 @@ export function cmdStatusOpen (m, out) {
         // question mentioning `<미정>` would be silently dropped and the run would report "nothing
         // is waiting" (cold review, v0.5.6). `stubEntry` asks the register's question instead —
         // is the slot a placeholder AND is what follows empty once template tokens are removed —
-        // which is the rule FORMATS states for both ledgers.
-        if (stubEntry(l)) continue
+        // which is the rule FORMATS states for both ledgers. HELD, not dropped (v0.5.10): a
+        // continuation below may be carrying the entry's actual content.
+        if (stubEntry(l)) { qheld = l; continue }
         if (qWaiting.includes(mm[1])) {
           questions.push(l)
           if (foldable) { const i = questions.length - 1; qlast = s => { questions[i] += ` ${s}` } }
@@ -349,7 +395,8 @@ export function cmdStatusOpen (m, out) {
       // it TRUNCATES the rest of the section — silence here would print a short list as if it were
       // the whole one (cold review, v0.5.6). validate blocks on this under `required`; the listing
       // says it at any setting, because the entries behind it are missing either way.
-      if (reg.badline !== '') warns.push(`warning: gaps.md '# ${secOpen}' holds a line the register grammar cannot read, so nothing after it is listed — validate names it under 'completeness: required'`)
+      // secOpen is latin1-domain — emitted as bytes, the same repair cmd-gaps' twin got (v0.5.10).
+      if (reg.badline !== '') warns.push(Buffer.concat([T("warning: gaps.md '# "), B(secOpen), T("' holds a line the register grammar cannot read, so nothing after it is listed — validate names it under 'completeness: required'")]))
     }
   }
 

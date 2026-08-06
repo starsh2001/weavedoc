@@ -46,12 +46,22 @@ export function emptyRemainder (line, tag) {
   return strip(s.slice(m[0].length)) === ''
 }
 
-export function stubEntry (line) {
+// The general spelling, because each ledger's tag prefix is its own grammar (v0.5.10): a Human
+// queue entry carries a state slot plus an optional ownership slot, and asking "is the remainder
+// empty?" after only the FIRST bracket would call `- [{state}] [{ownership}]` a real entry whose
+// content is "[{ownership}]". The tag regex names what to skip; the remainder decides after that.
+export function stubLine (line, tag) {
   const s = line.replace(/^[ \t]*/, '')
   if (!s.startsWith('- [') || !s.includes(']')) return false
   const kw = s.slice(3, s.indexOf(']'))
   if (!/^[<{]/.test(kw) || strip(kw) !== '') return false
-  return strip(s.slice(s.indexOf(']') + 1)) === ''
+  const m = tag.exec(s)
+  if (m === null) return false
+  return strip(s.slice(m[0].length)) === ''
+}
+
+export function stubEntry (line) {
+  return stubLine(line, /^- \[[^\]]*\]/)
 }
 
 // STATE-BASED entry scan: a continuation is legal only AFTER a bullet — an indented line with no
