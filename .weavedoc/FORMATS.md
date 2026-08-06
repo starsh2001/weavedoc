@@ -160,6 +160,8 @@ Body:
 
   Entry format — **two fixed English tags, then prose in the project language**:
   `- [<state>] [<ownership>] <where> — <what the machine wanted to dismiss + its reason> — <what breaks if the dismissal is wrong>`
+  - **Empty ledger** — write `- (없음)` (project language) or `- (none)`, **alone on its line**. Readers treat that exact line as "no entries" rather than as an entry missing its tags; a line that merely *opens* with those words is an ordinary entry and is counted and listed as one (`weavedoc status --open`, v0.5.7). Same idiom in `questions.md`.
+  - **Continuations** — an indented line under an entry belongs to it. When the entry's own line carries nothing but its tags, `status --open` folds those lines in so the listing shows the content; when the entry already carries content, indented lines stay detail and are not listed.
   - `state` (`humanqueue.enum.state`) — `open` | `ruled`. A `ruled` entry records the user's utterance with it, like `questions.md`.
   - `ownership` (`humanqueue.enum.ownership`) — **whose decision this actually is**, assigned by the **cold defender** when the entry is written (not by the producer, and not when the user asks). The test is *what the answer requires*, not whether a recommendation is possible — the machine can nearly always produce some recommendation, so "추천이 가능한가"로 가르면 `user-only`이 구조적으로 비고 이 축이 정확히 드러내려던 항목이 사라진다:
     - `user-only` — answering needs information **no material holds**: a fact, an intent, or a preference only the user has (은지의 자퇴 시점). A recommendation about *form* doesn't move it out of this bucket.

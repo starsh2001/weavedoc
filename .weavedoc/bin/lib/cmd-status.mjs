@@ -9,7 +9,13 @@ import { nocomment, sectionAll, defence, commentBalanced } from './sections.mjs'
 import { fmvB, loadSchema } from './read.mjs'
 import { fm, join, docIds, materialIds, truthFiles, basename } from './mine.mjs'
 import { fidBody, isNoise } from './review.mjs'
-import { scanRegister, stubEntry } from './gaps-register.mjs'
+import { scanRegister, stubEntry, emptyRemainder } from './gaps-register.mjs'
+
+// Each ledger's entry PREFIX, so "does this entry's line carry content?" is asked the same way in
+// all three (gaps.md's lives with the register reader). Human queue: the state slot plus an
+// optional ownership slot. questions.md: the state slot.
+const HQ_TAG = /^- \[[^\]]*\][ \t]*(\[[^\]]*\])?/
+const Q_TAG = /^- \[[^\]]*\]/
 
 const isDir = p => { try { return statSync(p).isDirectory() } catch { return false } }
 
@@ -27,7 +33,14 @@ const readOr = p => readOrNull(p) ?? ''
 // documented empty-queue idiom `- (없음)` stopped matching — its three UTF-8 bytes are not the
 // three characters in this file's source — so an empty queue reported itself as an untagged entry
 // (caught by acct_status_empty_queue_idiom, which is why that case exists).
-const NONE_IDIOM = new RegExp(`^- \\((${U('없음')}|none)\\)`)
+// ANCHORED, and that is the second half of the rule: this is the EMPTY-ledger idiom, so it means
+// "this line is the idiom and nothing else". Unanchored, `- (none) 실제로는 질문임` — a real entry
+// that merely opens with the words — was swallowed and the ledger read as empty (external review,
+// v0.5.6). `\r` is in the trailing class for the same reason `isFence` keeps it (core.mjs):
+// splitLines removes ONE trailing CR, so the member covers a line that carried a stray one
+// mid-way or a second one — NOT "splitLines leaves CRs", which is false and was the first
+// spelling of this comment (cold review, v0.5.7).
+const NONE_IDIOM = new RegExp(`^- \\((${U('없음')}|none)\\)[ \t\r]*$`)
 
 // Every file carrying a "## Human queue" section, in one order. ONE list, one definition — validate
 // and status must see the same set, or one reports "human queue: 0" over decisions open in files it
@@ -51,10 +64,11 @@ export function hqFiles (m) {
 // walker answer alike about a `####### Human queue`: not a heading, therefore not a section.
 export const hqBody = file => sectionAll(nocomment(readOr(file)), 'Human queue')
 
-// ONE WALK, and now literally one (v0.5.6: the claim was made while two collectors each re-read
-// every file — this suite has a name for a claim nobody measured). Returns both buckets from a
-// single pass so the `status` counters and the `--open` listing cannot answer differently about a
-// file neither read twice. The line rules are the counters' own, kept exactly: a placeholder bullet
+// ONE CLASSIFIER — precisely that, and no more (v0.5.6 said "one walk", and an external review
+// measured the claim: `--open` still re-reads these files for its own diagnostics, and
+// commentBalanced reads them again). What is single is the JUDGMENT: both buckets come out of one
+// pass over one body, so the `status` counters and the `--open` listing cannot answer differently
+// about the same file. The line rules are the counters' own, kept exactly: a placeholder bullet
 // is template noise; an open entry matches `- [open]` with the counter's indentation tolerance; an
 // untagged ENTRY starts at column 0 (an indented `- ` is a sub-bullet OF an entry), and
 // `- (없음)` / `- (none)` is the documented empty-queue idiom, not an entry.
@@ -64,13 +78,26 @@ export function hqEntries (m) {
   const untagged = []
   for (const f of hqFiles(m)) {
     const label = rel(f)
+    // The entry a continuation would fold into — set only when the entry's own line is nothing but
+    // its tags (see emptyRemainder). An entry that HAS content keeps its sub-bullets as dropped
+    // detail, which is the rule acct_openlist_subbullets_stay_detail pins.
+    let last = null
     for (const l of splitLines(hqBody(f))) {
-      if (!/^[ \t]*- [[][{<]/.test(l) && /^[ \t]*- \[open\]/.test(l)) open.push({ file: label, line: l })
-      if (/^- \[[<{]/.test(l)) continue
-      if (!/^- /.test(l)) continue
-      if (NONE_IDIOM.test(l)) continue
-      if (/^- \[(open|ruled)\]/.test(l)) continue
+      if (!/[^ \t]/.test(l)) { last = null; continue }
+      if (!/^[ \t]*- [[][{<]/.test(l) && /^[ \t]*- \[open\]/.test(l)) {
+        open.push({ file: label, line: l })
+        last = emptyRemainder(l, HQ_TAG) ? { a: open, i: open.length - 1 } : null
+        continue
+      }
+      if (/^- \[[<{]/.test(l) || !/^- /.test(l) || NONE_IDIOM.test(l) || /^- \[(open|ruled)\]/.test(l)) {
+        // Not an entry of either kind. An INDENTED non-empty line under an empty-remainder entry is
+        // that entry's content — the shape the v0.5.7 gaps fix repaired, live in this ledger too.
+        if (last !== null && /^[ \t]+[^ \t]/.test(l)) last.a[last.i].line += ` ${l.replace(/^[ \t]+/, '')}`
+        else if (!/^[ \t]/.test(l)) last = null
+        continue
+      }
       untagged.push({ file: label, line: l })
+      last = emptyRemainder(l, HQ_TAG) ? { a: untagged, i: untagged.length - 1 } : null
     }
   }
   return { open, untagged }
@@ -238,15 +265,32 @@ export function cmdStatusOpen (m, out) {
     if (raw !== null) {
       const df = defence(nocomment(raw))
       if (df.open) warns.push("warning: questions.md ends inside an unterminated code fence — entries behind it are invisible to this listing")
+      // The entry a continuation folds into, as an APPENDER rather than an index: the two buckets
+      // hold different shapes (a string here, an object there) and one index cannot address both.
+      let qlast = null
       for (const l of splitLines(df.text)) {
-        if (!/^- /.test(l)) continue                  // an entry opens at column 0 (FORMATS)
-        if (NONE_IDIOM.test(l)) continue     // the documented empty-ledger idiom
+        if (!/[^ \t]/.test(l)) { qlast = null; continue }
+        if (!/^- /.test(l)) {                         // an entry opens at column 0 (FORMATS)
+          // …so an indented line is a continuation, and it carries the entry's content whenever the
+          // entry's own line was nothing but its state tag — the shape the gaps fix repaired, live
+          // in this ledger too (cold review, v0.5.7).
+          if (qlast !== null && /^[ \t]+[^ \t]/.test(l)) qlast(l.replace(/^[ \t]+/, ''))
+          else if (!/^[ \t]/.test(l)) qlast = null
+          continue
+        }
+        qlast = null
+        if (NONE_IDIOM.test(l)) continue              // the empty-ledger idiom (FORMATS)
         const mm = /^- \[([^\]]*)\]/.exec(l)
         // NO BRACKET IS JUDGED BEFORE isNoise, not after: isNoise answers "prose or entry" for a
         // ledger whose entries all carry brackets, so a bracket-less bullet reads as prose there —
         // which is exactly the shape that must NOT be dropped here (a question nobody tagged is
         // still a question waiting on the user, and no validator reads this file).
-        if (!mm) { qUnknown.push({ line: l, why: 'no state tag' }); continue }
+        if (!mm) {
+          qUnknown.push({ line: l, why: 'no state tag' })
+          // No bracket at all, so the whole line is content — nothing to fold into.
+          continue
+        }
+        const foldable = emptyRemainder(l, Q_TAG)
         // THE STUB TEST IS THE REGISTER'S, not isNoise's. isNoise carries a documented known limit
         // — prose holding a `<…>`/`{…}` token reads as a placeholder — whose safe direction is
         // "never a new false block". In THIS consumer the same limit points the other way: a real
@@ -255,9 +299,14 @@ export function cmdStatusOpen (m, out) {
         // is the slot a placeholder AND is what follows empty once template tokens are removed —
         // which is the rule FORMATS states for both ledgers.
         if (stubEntry(l)) continue
-        if (qWaiting.includes(mm[1])) questions.push(l)
-        else if (qStates.includes(mm[1])) continue    // a recognized closed state
-        else qUnknown.push({ line: l, why: 'unrecognized state' })
+        if (qWaiting.includes(mm[1])) {
+          questions.push(l)
+          if (foldable) { const i = questions.length - 1; qlast = s => { questions[i] += ` ${s}` } }
+        } else if (qStates.includes(mm[1])) continue  // a recognized closed state
+        else {
+          qUnknown.push({ line: l, why: 'unrecognized state' })
+          if (foldable) { const e = qUnknown[qUnknown.length - 1]; qlast = s => { e.line += ` ${s}` } }
+        }
       }
     }
   }

@@ -4419,6 +4419,22 @@ acct_golden_outputs_current() {
   OUT="${bad:-golden snapshots match the current runtime}"; RC=0
   if [ -z "$bad" ]; then ok; else bad "golden drift —$bad (run 'bash tests/refresh-golden.sh' and review the diff)"; fi
 }
+meta_manifest_baseline_current() {
+  # tests/baseline/bundle.manifest is the release's own identity record, and NOTHING read it: CI
+  # only checks that two consecutive GENERATIONS agree, which is true of a baseline a year stale.
+  # Two releases in a row refreshed it by hand and a third nearly shipped without (cold review,
+  # v0.5.7) — a record nobody compares is a file, not a record (the same finding golden/ drew).
+  # Compares the COMMITTED tree, not the working tree: make-manifest hashes git blobs, so an
+  # uncommitted edit is legitimately absent until it is staged.
+  local now
+  now=$(cd "$REPO" && bash tests/make-manifest.sh 2>/dev/null | sha256sum | awk '{print $1}')
+  local rec
+  rec=$(cd "$REPO" && cat tests/baseline/bundle.manifest.sha256 2>/dev/null | tr -d '[:space:]')
+  OUT="manifest now=$now recorded=$rec"; RC=0
+  if [ -z "$now" ] || [ -z "$rec" ]; then bad "manifest digest missing (now='$now' recorded='$rec') — the comparison would be vacuous"
+  elif [ "$now" != "$rec" ]; then bad "tests/baseline/bundle.manifest is stale — regenerate it ('bash tests/make-manifest.sh > tests/baseline/bundle.manifest' + its .sha256) and commit"
+  else ok; fi
+}
 acct_fingerprint_covers_lib() {
   # The fingerprint is the ONE spelling of "are these two installs the same runtime", and the Node
   # runtime is a dispatcher plus the modules under lib/ — an entrypoint-only hash reported
@@ -4811,6 +4827,76 @@ EOF
   elif [ "$vn" != "$ln" ]; then
     bad "validate counts $vn open gap(s), status --open lists $ln — one file, two answers"
   else ok; fi
+}
+acct_openlist_gaps_continuation_shown() {
+  # A gap's CONTENT can live entirely on its continuation lines — FORMATS makes an indented line
+  # under a bullet part of the entry — and the listing showed only the bullet, so the reader got
+  # `- [declared]` and had to open the file: the exact "Surface, don't point" failure this command
+  # exists to end (external review, v0.5.6). The count was right, which is why a count-only
+  # assertion could not see it; this case asserts the CONTENT.
+  # Revert the `else if (last >= 0)` fold arm in gaps-register.mjs → this goes red.
+  printf '# Open\n\n- [declared]\n  penalty cap의 근거가 필요함\n\n# Accepted\n' > "$W/gaps.md"
+  vrun status --open
+  expect_has "gaps (1):"
+  expect_has "- [declared] penalty cap의 근거가 필요함"
+}
+acct_openlist_gaps_continuation_multi() {
+  # Several continuation lines fold into the one line the entry gets — "one line per item" is the
+  # rule the whole listing is built on, so an entry does not get to break it by being long.
+  # Revert the `else if (last >= 0)` fold arm in gaps-register.mjs → this goes red.
+  printf '# Open\n\n- [reference]\n  라온고 — 정의하는 truth 없음\n  t001에서만 언급됨\n\n# Accepted\n' > "$W/gaps.md"
+  vrun status --open
+  expect_has "gaps (1):"
+  expect_has "- [reference] 라온고 — 정의하는 truth 없음 t001에서만 언급됨"
+}
+acct_openlist_fold_only_when_empty() {
+  # THE NARROWING (cold review, v0.5.7): the first fix folded EVERY continuation, so an entry that
+  # already carried its content swallowed its sub-bullets and rendered as one line wearing two
+  # entry tokens. Folding happens only when the entry's own line is nothing but its tags.
+  # Revert `emptyRemainder(gl, ENTRY_TAG) ? … : -1` to an unconditional index → this goes red.
+  printf '# Open\n\n- [enumeration] 앨범 — 6곡 계획 vs 5곡 수록\n  - [declared] 하위 항목처럼 보이는 부연\n\n# Accepted\n' > "$W/gaps.md"
+  vrun status --open
+  expect_has "gaps (1):"
+  expect_hasnt "부연"
+}
+acct_openlist_hq_continuation_shown() {
+  # The same defect in the twin ledger. v0.5.7 first fixed only gaps.md while the CHANGELOG headline
+  # read repo-wide (cold review) — a Human-queue entry whose content lives on its continuation was
+  # still listed as a bare `- [open] [user-only]`.
+  # Revert the `last`/emptyRemainder block in hqEntries → this goes red.
+  printf -- '\n- [open] [user-only]\n  병기 허용 여부를 정해 주세요\n' >> "$W/truths/verify.md"
+  vrun status --open
+  expect_has "human queue (1):"
+  expect_has "- [open] [user-only] 병기 허용 여부를 정해 주세요"
+}
+acct_openlist_question_continuation_shown() {
+  # …and the third ledger. Same rule, same narrowing (an entry WITH content keeps its sub-bullets
+  # as dropped detail — acct_openlist_subbullets_stay_detail pins that side).
+  # Revert the `qlast` appender in the questions loop → this goes red.
+  printf -- '# 질문\n\n- [open]\n  지체상금 상한 값이 필요합니다\n' > "$W/questions.md"
+  vrun status --open
+  expect_has "questions (1):"
+  expect_has "- [open] 지체상금 상한 값이 필요합니다"
+}
+acct_openlist_none_idiom_anchored() {
+  # `- (없음)` / `- (none)` is the EMPTY-ledger idiom; the pattern was not anchored, so a real entry
+  # that merely opened with those words was swallowed and the ledger read as empty (external
+  # review, v0.5.6). Revert the `[ \t\r]*$` anchor in NONE_IDIOM (cmd-status.mjs) → this goes red.
+  printf -- '# 질문\n\n- (none) 실제로는 질문임\n' > "$W/questions.md"
+  vrun status --open
+  expect_has "실제로는 질문임"
+  expect_hasnt "nothing is waiting on you"
+}
+acct_openlist_none_idiom_still_empty() {
+  # AN OVER-BLOCKING GUARD: it passes before AND after the anchor fix, by design (there is no
+  # red-first for this shape — it exists so the fix cannot be "achieved" by dropping the idiom).
+  # The other direction, so the anchor cannot be "fixed" by deleting the idiom: a bare idiom line —
+  # with trailing whitespace, which is what an editor leaves — is still an empty ledger, in BOTH
+  # spellings and in the Human queue where the idiom is documented.
+  printf -- '\n- (없음)  \n' >> "$W/truths/verify.md"
+  printf -- '# 질문\n\n- (none)\n' > "$W/questions.md"
+  vrun status --open
+  expect_has "nothing is waiting on you"
 }
 acct_openlist_gaps_localized_section() {
   # THE DOMAIN DOOR (cold review, v0.5.6). The register section name is matched against the file's
