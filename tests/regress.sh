@@ -4440,6 +4440,18 @@ EOF
   # 2, not 3: the pure stub stays template noise in every reader.
   expect_has "records 2 already accepted"
 }
+acct_gaps_unterminated_fence_named() {
+  # A fence nobody closed makes everything after it invisible to the tally, and this command said
+  # nothing — it took `defence(...).text` and dropped the `.open` flag beside it. Recorded as a
+  # known issue in v0.5.4 and walked past again in v0.5.8, which edited this very line. Its twin
+  # reader (`status --open`) has warned since v0.5.6; silence here is the same "reader cannot see
+  # it, so say so" rule, unapplied.
+  # Revert the `if (df.open) out(…)` line in cmd-gaps.mjs → this goes red.
+  printf '# Open\n\n# Accepted\n\n```\n- [symmetry] 펜스 안 — 세어지지 않음\n' > "$W/gaps.md"
+  vrun gaps
+  expect_pass
+  expect_has "unterminated code fence"
+}
 acct_gaps_accepted_tally_localized_section() {
   # An OVER-BLOCKING GUARD (passes before and after — no red-first for this shape): the tally moves
   # to the byte domain to share validate's scanner, and the section name must move WITH it. Reading
@@ -4921,9 +4933,9 @@ acct_openlist_none_idiom_anchored() {
 acct_openlist_none_idiom_still_empty() {
   # AN OVER-BLOCKING GUARD: it passes before AND after the anchor fix, by design (there is no
   # red-first for this shape — it exists so the fix cannot be "achieved" by dropping the idiom).
-  # The other direction, so the anchor cannot be "fixed" by deleting the idiom: a bare idiom line —
-  # with trailing whitespace, which is what an editor leaves — is still an empty ledger, in BOTH
-  # spellings and in the Human queue where the idiom is documented.
+  # The other direction, so the anchor cannot be "fixed" by deleting the idiom: a bare idiom line
+  # is still an empty ledger in BOTH spellings and in both ledgers. The Human-queue arm carries
+  # trailing whitespace (what an editor leaves); the questions arm is bare.
   printf -- '\n- (없음)  \n' >> "$W/truths/verify.md"
   printf -- '# 질문\n\n- (none)\n' > "$W/questions.md"
   vrun status --open

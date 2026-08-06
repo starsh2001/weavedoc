@@ -92,7 +92,14 @@ export function cmdGaps (m, out, err) {
     const schB = loadSchema(m.schemaPath, 'latin1')
     const secAcc = (schB.get('gaps.sections') || 'Open|Accepted').split('|')[1] || 'Accepted'
     const kindSet = new Set((schB.get('gaps.enum.kind') || 'declared|reference|enumeration|symmetry').split('|').filter(Boolean))
-    nacc = scanRegister(defence(nocomment(readBytes(gapsPath))).text, secAcc, kindSet).n
+    // The flag beside the text is not decoration: a fence nobody closed makes everything after it
+    // invisible to this tally, and a number that silently shrank reads exactly like a small one.
+    // v0.5.4 recorded this as a known issue and v0.5.8 edited this very line without applying it
+    // (its twin reader has warned since v0.5.6) — "what a reader cannot see is NAMED" holds here
+    // too, and non-blocking is a reason to print it, not a reason to stay quiet.
+    const df = defence(nocomment(readBytes(gapsPath)))
+    if (df.open) out("gaps.md ends inside an unterminated code fence — entries behind it are invisible to the accepted tally below; close the fence (validate blocks on this under 'completeness: required')")
+    nacc = scanRegister(df.text, secAcc, kindSet).n
   }
   out(`— ${n} marker line(s) + ${c} unchecked checkbox(es) — RAW scan, not an open count: gaps.md records ${nacc} already accepted. Non-blocking; run the weavedoc-gaps skill to reconcile these against gaps.md and to cover reference/enumeration/symmetry + fill-or-accept.`)
   return 0
