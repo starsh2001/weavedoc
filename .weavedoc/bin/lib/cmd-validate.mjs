@@ -941,7 +941,7 @@ export function cmdValidate (m, out, json = false, consecOk = '') {
         const kindEnum = sch('gaps.enum.kind') || 'declared|reference|enumeration|symmetry'
         const kindSet = new Set(pipes(kindEnum))
         const scanRegister = (section) => {
-          let n = 0; let badline = ''; let badkind = null; let dblkind = null; let inb = false; let gnoise = false
+          let n = 0; let badline = ''; let badkind = null; let dblkind = null; let inb = false; let gnoise = false; let gnoiseKind = ''
           for (let gl of splitLines(sectionAll(nocomment(readOr(gapsPath)), section))) {
             gl = gl.replace(/\r$/, '')
             if (!/[^ \t]/.test(gl)) { inb = false; continue }
@@ -950,7 +950,14 @@ export function cmdValidate (m, out, json = false, consecOk = '') {
               inb = true
               gnoise = false
               if (grest.startsWith('- [<') || grest.startsWith('- [{')) {
-                if (strip(grest.includes(']') ? grest.slice(grest.indexOf(']') + 1) : grest) === '') gnoise = true
+                // The bracket word rides along with the noise flag (review #7 P1-1): a bullet held
+                // as noise can be REALIZED by a continuation below, and realization must carry the
+                // placeholder kind into the vocabulary judgment — before this, the continuation
+                // branch counted the entry and judged nothing.
+                if (strip(grest.includes(']') ? grest.slice(grest.indexOf(']') + 1) : grest) === '') {
+                  gnoise = true
+                  gnoiseKind = grest.includes(']') ? grest.slice(3, grest.indexOf(']')) : ''
+                }
                 // A placeholder kind over a REAL body is an ENTRY whose kind is not in the
                 // vocabulary (cold review of this patch: this branch ran before the kind branch,
                 // so '- [<kind>] [declared] x — r' drew no diagnostic at all — an Accepted
@@ -974,7 +981,12 @@ export function cmdValidate (m, out, json = false, consecOk = '') {
               if (!gnoise) n++
             } else {
               if (grest === gl || !inb) { badline = gl; break }
-              if (gnoise && strip(grest) !== '') { n++; gnoise = false }
+              // A continuation with real content REALIZES the held-back bullet — it becomes an
+              // entry, and its kind slot is the placeholder it was holding, judged by the same
+              // vocabulary rule as any other kind (review #7 P1-1: this line counted the entry
+              // and set nothing, so '- [{kind}] …' over a real continuation was an Accepted
+              // decision with template noise for a kind — validate rc 0, measured).
+              if (gnoise && strip(grest) !== '') { n++; gnoise = false; if (badkind === null) badkind = gnoiseKind }
             }
           }
           return { n, badline, badkind, dblkind }

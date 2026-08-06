@@ -127,7 +127,10 @@ export function ledgerIndex (file) {
     // Recording is not quarantining: a later valid row still wins (the repaired-ledger rule), but
     // the odd word is CARRIED so every consumer can name it.
     if (f.length >= 3 && f[2] !== 'verified' && f[2] !== 'failed' && f[2] !== 'legacy-unbound') {
-      if (!oddVerdicts.has(id)) oddVerdicts.set(id, f[2])
+      // EVERY odd word per id, not just the first (review #7): validate names each bad row, so
+      // scope showing one word for an id carrying two was the two-readers split on the count axis.
+      if (!oddVerdicts.has(id)) oddVerdicts.set(id, new Set())
+      oddVerdicts.get(id).add(f[2])
     }
     // ATTRIBUTION PRECEDES STRUCTURE (v0.5.2 cold-review round). This test sat on the
     // failed-structure path only, so a row with SIX well-formed columns and an EMPTY first one

@@ -62,6 +62,9 @@ KEY=$( { git -C "$REPO" rev-parse HEAD 2>/dev/null
            # without changing the case, and --resume would hand back the stale result. The *.sh
            # glob keys this harness's own bytes too (v0.5.1), so the separate self-hash is gone.
            sha256sum "$REPO"/tests/*.sh "$REPO"/tests/*.mjs
+           # ...and the DOCS those scripts read (review #7): the doccheck case greps README,
+           # CHANGELOG and FORMATS — a dirty edit there changes what it measures too.
+           sha256sum "$REPO/README.md" "$REPO/CHANGELOG.md" "$REPO/.weavedoc/FORMATS.md"
            find "$REPO/tests/baseline/golden" "$REPO/.weavedoc/templates" -type f -print0 | sort -z | xargs -0 sha256sum; } 2>/dev/null | awk '{print $1}'
          # The RUNNER's version (v0.5.1, external review): a node upgrade is a different
          # configuration the way a bash upgrade always was (bash/awk/sed are keyed below).
@@ -3274,9 +3277,10 @@ acct_upgrade_refuses_held_ledger_lock() {
   # rollback unlinked the file with upgrade's freshly minted legacy rows inside, upgrade having
   # already reported success. Every ledger writer takes the ONE lock (lock.mjs) now: a held lock
   # refuses the whole migration after the bounded wait, byte-identically.
-  # (The full attest-beside-upgrade interleave is not constructible on a coherent mine — a v1 mine
-  # refuses attest (ids unresolvable, rc 2) and a migrated mine gives upgrade nothing to write —
-  # so the protocol is pinned pairwise: this case for upgrade, the concurrent cases for attest.)
+  # (An earlier revision of this comment claimed the full attest-beside-upgrade interleave was not
+  # constructible — FALSE, my overgeneralisation from the mkv1 mine's renamed ids: the PRISTINE
+  # fixture is a v1 mine with canonical ids and attest runs on it (rc 0, measured, review #7).
+  # The real interleave is pinned in acct_upgrade_attest_real_cross below.)
   mkv1
   mkdir -p "$W/truths/verify-ledger.tsv.lock"
   local pre post
@@ -3294,6 +3298,96 @@ acct_upgrade_refuses_held_ledger_lock() {
   vrun validate
   expect_pass
 }
+acct_upgrade_concurrent_apply_applies_once() {
+  # Review #7 P1-2: the preflight ran BEFORE the lock with no rescan after acquiring, so two
+  # applies racing both planned from the v1 state and the loser applied its STALE plan onto the
+  # migrated mine — measured: both rc 0 "applied 4 item(s)", TWO backup dirs, the second one
+  # snapshotting v2 files under a MANIFEST claiming a v1 restore point. Deterministic via the
+  # driver's --slow-write seam: A holds the lock mid-apply for 3s while B preflights beside it;
+  # B must RESCAN under the lock (caches cleared, config snapshot rebuilt) and find nothing to do.
+  ( cd "$W" && node "$REPO/tests/upgrade-faultinject.mjs" --slow-write 3000 - ) > "$W/.a.out" 2>&1 &
+  local apid=$!
+  sleep 0.5
+  ( cd "$W" && $TO "${WDRUN[@]}" upgrade --apply ) > "$W/.b.out" 2>&1
+  local brc=$?
+  wait "$apid"; local arc=$?
+  [ "$arc" -eq 0 ] || bad "the slow apply failed (rc $arc)"
+  [ "$brc" -eq 0 ] || bad "the concurrent apply exited $brc instead of finding nothing to do"
+  grep -q 'applied' "$W/.a.out" || bad "the slow apply did not report applying"
+  grep -q 'nothing to do' "$W/.b.out" || bad "the loser did not rescan under the lock"
+  grep -q 'applied' "$W/.b.out" && bad "the loser applied a STALE plan onto the migrated mine"
+  [ "$(ls -d "$W"/.upgrade-backup-* 2>/dev/null | wc -l | tr -d ' ')" = 1 ] || bad "two backup dirs — a stale second apply left a false restore point"
+  vrun validate; expect_pass
+}
+acct_upgrade_attest_real_cross() {
+  # Review #7: the REAL attest-beside-upgrade interleave (the pristine fixture is a v1 mine with
+  # CANONICAL ids, so attest runs on it — the earlier "not constructible" claim was false). A
+  # failing attest HOLDS the lock; upgrade --apply arriving beside it must refuse before writing
+  # anything, leaving the mine v1; once the holder exits, the same apply migrates clean.
+  # Passes on 95eb395 too (the lock landed there — this pins it); red vs 3041881: sailed through.
+  ( cd "$W" && node "$REPO/tests/attest-faultinject.mjs" --sleep-ms 7000 verified 1 bstd m001 ) > "$W/.x.out" 2>&1 &
+  local xpid=$!
+  sleep 0.6
+  vrun upgrade --apply
+  local urc=$RC
+  [ "$urc" -ne 0 ] || bad "upgrade applied THROUGH the attest's held lock"
+  expect_block "is held and was not released"
+  expect_has "Nothing written"
+  grep -q '^version: 1' "$W/project.md" || bad "the refused apply left the mine migrated"
+  wait "$xpid"
+  vrun upgrade --apply
+  expect_pass
+  vrun validate; expect_pass
+}
+block_upgrade_version_flip_mid_wait() {
+  # .3 cold review (real): the under-lock rerun skipped the CLOSED VERSION MATRIX — a mine whose
+  # project.md flipped to 'version: 3' while --apply waited on the lock was STAGED INTO and only
+  # the post-apply validate rolled it back (rc 1, "rolled back", a backup created and consumed) —
+  # data-safe, but "refusing to touch a format this code cannot read" had already touched it.
+  # The matrix reruns under the lock now: rc 2, the refusal sentence, zero writes.
+  ( cd "$REPO" && node --input-type=module -e "
+    import { acquireLedgerLock, releaseLedgerLock } from './.weavedoc/bin/lib/lock.mjs'
+    const lk = process.argv[1]
+    if (acquireLedgerLock(lk, 'x') !== '') process.exit(2)
+    const t = Date.now(); while (Date.now() - t < 3000) { /* hold */ }
+    releaseLedgerLock(lk)
+  " "$W/truths/verify-ledger.tsv.lock" ) &
+  local hpid=$!
+  sleep 0.5
+  ( cd "$W" && $TO "${WDRUN[@]}" upgrade --apply ) > "$W/.v.out" 2>&1 &
+  local upid=$!
+  sleep 1.2
+  sed -i 's/^version: 1$/version: 3/' "$W/project.md"
+  wait "$upid"; local urc=$?
+  wait "$hpid"
+  [ "$urc" -eq 2 ] || bad "expected rc 2 (refused before any write), got $urc"
+  grep -q 'refusing to touch a format this code cannot read' "$W/.v.out" || bad "the future version was not refused"
+  grep -q 'rolled back' "$W/.v.out" && bad "the migration ran and rolled back instead of refusing up front"
+  [ -z "$(ls -d "$W"/.upgrade-backup-* 2>/dev/null)" ] || bad "a backup dir appeared — writes happened"; ok
+}
+acct_lock_release_only_own() {
+  # Review #7 low-pri: releaseLedgerLock removes ONLY a lock whose on-disk mark this process
+  # wrote. The one path that could break the exclusion without any code being wrong: a human
+  # deletes a LIVE lock against the refusal's instruction, a second writer acquires, and the
+  # first holder's release then removed the SECOND holder's lock. Simulated in one process:
+  # acquire, have the "human" remove the lock, let a foreign writer take the path, release —
+  # the foreign lock must survive. Red vs the unmarked runtime: rmdir took the foreign lock.
+  mkdir -p "$W/truths"
+  local lk="$W/truths/verify-ledger.tsv.lock"
+  OUT=$( ( cd "$REPO" && node --input-type=module -e "
+    import { acquireLedgerLock, releaseLedgerLock } from './.weavedoc/bin/lib/lock.mjs'
+    import { rmSync, mkdirSync, existsSync } from 'node:fs'
+    const lk = process.argv[1]
+    const w = acquireLedgerLock(lk, 'probe.lock')
+    if (w !== '') { console.log('ACQUIRE-FAIL ' + w); process.exit(2) }
+    rmSync(lk, { recursive: true, force: true })
+    mkdirSync(lk)
+    releaseLedgerLock(lk)
+    console.log(existsSync(lk) ? 'FOREIGN-SURVIVES' : 'FOREIGN-REMOVED')
+  " "$lk" ) 2>&1 ); RC=$?
+  expect_has "FOREIGN-SURVIVES"
+  rm -rf "$lk"
+}
 acct_scope_names_superseded_odd_verdict() {
   # v0.5.2 (external review P1-2). A typo'd verdict with a LATER valid row: validate blocks on the
   # history row, but scope judged only the winner — so the very row the mine is blocked on was
@@ -3307,6 +3401,18 @@ acct_scope_names_superseded_odd_verdict() {
   expect_has "superseded row(s) carry unknown verdicts"
   vrun validate
   expect_block "[LEDGER-VERDICT]"
+}
+acct_scope_names_all_odd_words_per_id() {
+  # Review #7 low-pri: oddVerdicts kept only the FIRST odd word per id, so an id whose history
+  # carries two different typos showed one in scope while validate named both rows — the
+  # two-readers split on the count axis. Every word rides now, joined with '·'.
+  vrun attest verified 1 std m001
+  sed -i 's/\tverified\t/\tverifed\t/' "$W/truths/verify-ledger.tsv"
+  printf 'm001\t-\ttypo2\t9\tstd\t2026-01-01\n' >> "$W/truths/verify-ledger.tsv"
+  vrun attest verified 3 std m001
+  vrun scope
+  expect_has "superseded row(s) carry unknown verdicts"
+  expect_has "verifed·typo2"
 }
 acct_scope_quarantined_odd_not_superseded() {
   # v0.5.2 cold review. The superseded-history line fired on rows that are neither superseded nor
@@ -3372,6 +3478,21 @@ block_completeness_kind_placeholder_with_body() {
   expect_block "not in the vocabulary"
   # the freshly-initialised template stub stays inert — noise, not an entry, not an error
   printf '# Open\n\n# Accepted\n\n- [<kind>] <설명> — <근거>\n' > "$W/gaps.md"
+  vrun validate
+  expect_pass
+}
+block_completeness_placeholder_realized_by_continuation() {
+  # Review #7 P1-1: a placeholder bullet held as noise, then REALIZED by a continuation with real
+  # content — the continuation branch counted the entry and judged nothing, so an Accepted
+  # decision wearing '[{kind}]' passed validate rc 0 and the gaps CLI both (measured). The bracket
+  # word rides along with the noise flag now: realization carries it into the same vocabulary
+  # judgment every kind gets.
+  req_completeness
+  printf -- "# Accepted\n\n- [{kind}] {where} — {what} — {evidence}\n  m001 intentionally accepted but placeholder kind remained\n\n# Open\n" > "$W/gaps.md"
+  vrun validate
+  expect_block "not in the vocabulary"
+  # a placeholder bullet whose continuation is ALSO noise stays a stub — not an entry, not an error
+  printf -- "# Accepted\n\n- [{kind}] {where} — {what}\n  {more placeholder}\n\n# Open\n" > "$W/gaps.md"
   vrun validate
   expect_pass
 }

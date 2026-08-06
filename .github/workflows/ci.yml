@@ -247,10 +247,16 @@ jobs:
           else
             echo "tag '$GITHUB_REF_NAME' is not vMAJOR.MINOR.PATCH (leading zeros included) — refusing to publish"; exit 1
           fi
-          if grep -qF "**${GITHUB_REF_NAME} — " CHANGELOG.md; then
-            echo "tag claimed by CHANGELOG: $GITHUB_REF_NAME"
+          # Scoped to the TOP section only (review #7): past claim lines stay in the file forever,
+          # so a whole-file grep let an OLD tag re-pointed at the wrong HEAD pass — measured with
+          # v0.5.1 against the v0.5.2 tree. Only the newest '## <bundle>' section speaks for THIS
+          # tree; a legitimate re-run of an old tag checks out ITS OWN tree, whose top section
+          # claims it. Line-anchored so a mid-sentence mention cannot satisfy the gate.
+          tag_re=$(printf '%s' "$GITHUB_REF_NAME" | sed 's/\./\\./g')
+          if awk '/^## /{n++} n==1' CHANGELOG.md | grep -qE "^\\*\\*${tag_re} — "; then
+            echo "tag claimed by the top CHANGELOG section: $GITHUB_REF_NAME"
           else
-            echo "tag '$GITHUB_REF_NAME' is not claimed by any CHANGELOG section (no '**$GITHUB_REF_NAME — ' line) — refusing to publish"; exit 1
+            echo "tag '$GITHUB_REF_NAME' is not claimed by the TOP CHANGELOG section (no leading '**$GITHUB_REF_NAME — ' line there) — refusing to publish"; exit 1
           fi
           bash tests/doccheck.sh
           echo "tag=$GITHUB_REF_NAME · bundle=$(cat .weavedoc/VERSION) · schema=$(grep -m1 '^schema.version:' .weavedoc/schema | sed 's/.*:[[:space:]]*//')"

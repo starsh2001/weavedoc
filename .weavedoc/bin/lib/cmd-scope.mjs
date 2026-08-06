@@ -294,7 +294,7 @@ export function cmdScope (m, out, json) {
     // Only ids with a VALID winning row are "superseded history" (v0.5.2 cold review): an odd word
     // on a QUARANTINED id (typo'd last row, no later row) is that id's latest, not history — the
     // malformed line already covers it — and a HEADLESS odd row keys to '' and belongs to no id.
-    const hist = [...lidx.oddVerdicts].filter(([id]) => lidx.win.has(id) && !winnersBad.has(id)).map(([id, w]) => `${id} (${w})`)
+    const hist = [...lidx.oddVerdicts].filter(([id]) => lidx.win.has(id) && !winnersBad.has(id)).map(([id, ws]) => `${id} (${[...ws].join('·')})`)
     if (hist.length) out(`  ledger: superseded row(s) carry unknown verdicts — history, not evidence, and validate blocks on them [LEDGER-VERDICT]: ${hist.join(' ')}`)
   }
   if (ledgerSbad.length) {
