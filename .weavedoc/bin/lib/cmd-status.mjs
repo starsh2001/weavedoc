@@ -4,18 +4,25 @@
 // on the user — the listing is pasted/rendered, never re-composed from memory).
 import { existsSync, statSync } from 'node:fs'
 import { readFileSync } from 'node:fs'
-import { splitLines, U } from './core.mjs'
+import { splitLines, U, TAG_SEP } from './core.mjs'
 import { nocomment, sectionAll, defence, commentBalanced } from './sections.mjs'
 import { fmvB, loadSchema } from './read.mjs'
 import { fm, join, docIds, materialIds, truthFiles, basename } from './mine.mjs'
 import { fidBody, isNoise } from './review.mjs'
-import { scanRegister, stubEntry, stubLine, emptyRemainder } from './gaps-register.mjs'
+import { scanRegister, stubEntry, stubLine, emptyRemainder, hasContent } from './gaps-register.mjs'
 
 // Each ledger's entry PREFIX, so "does this entry's line carry content?" is asked the same way in
 // all three (gaps.md's lives with the register reader). Human queue: the state slot plus an
 // optional ownership slot. questions.md: the state slot.
-const HQ_TAG = /^- \[[^\]]*\][ \t]*(\[[^\]]*\])?/
+const HQ_TAG = new RegExp(`^- \\[[^\\]]*\\]${TAG_SEP}*(\\[[^\\]]*\\])?`)
 const Q_TAG = /^- \[[^\]]*\]/
+// The counter's indentation tolerance for an `[open]` entry — the SAME class, one position earlier
+// (cold review, v0.5.11): validate strips `TAG_SEP` before testing a line, status tolerated `[ \t]`,
+// so a `\v`-indented `- [open]` was an entry to the gate and invisible to both status surfaces.
+// Only these two tests widen: the UNTAGGED rule still demands column 0, because there an indented
+// bullet is a sub-bullet of the entry above (acct_openlist_subbullets_stay_detail).
+const HQ_OPEN = new RegExp(`^${TAG_SEP}*- \\[open\\]`)
+const HQ_STUB_OPENER = new RegExp(`^${TAG_SEP}*- [[][{<]`)
 
 const isDir = p => { try { return statSync(p).isDirectory() } catch { return false } }
 
@@ -91,7 +98,7 @@ export function hqEntries (m) {
     let held = null
     for (const l of splitLines(hqBody(f))) {
       if (!/[^ \t]/.test(l)) { last = null; held = null; continue }
-      if (!/^[ \t]*- [[][{<]/.test(l) && /^[ \t]*- \[open\]/.test(l)) {
+      if (!HQ_STUB_OPENER.test(l) && HQ_OPEN.test(l)) {
         held = null
         // `raw` is the ENTRY LINE, never mutated; `line` is the display, which folding extends.
         // The bucket classifiers read raw: ownership lives on the entry line (FORMATS — two fixed
@@ -117,11 +124,14 @@ export function hqEntries (m) {
         // empty-remainder entry; anything else at column 0 closes both holds.
         if (/^[ \t]+[^ \t]/.test(l)) {
           const cont = l.replace(/^[ \t]+/, '')
-          if (held !== null) {
+          // A held stub is realized only by a continuation that HAS content once template tokens
+          // are stripped — the register's own rule (v0.5.11). A placeholder-only continuation
+          // leaves the hold standing, so a real line further down still realizes it.
+          if (held !== null && hasContent(cont)) {
             untagged.push({ file: label, line: `${held} ${cont}`, raw: held })
             last = { a: untagged, i: untagged.length - 1 }
             held = null
-          } else if (last !== null) last.a[last.i].line += ` ${cont}`
+          } else if (held === null && last !== null) last.a[last.i].line += ` ${cont}`
         } else if (!/^[ \t]/.test(l)) { last = null; held = null }
         continue
       }
@@ -168,7 +178,7 @@ export function cmdStatus (m, out) {
 
   // Decisions parked on the user. Counted here because a completeness line reporting only
   // "열린 갭 0 · 열린 질문 0" reads as "nothing is waiting on you" while the queue holds eleven.
-  // The counts come from the SAME walk `--open` lists from, so the two modes cannot disagree.
+  // The counts come from the SAME classifier `--open` lists from, so the two modes cannot disagree.
   const files = hqFiles(m)
   if (files.length > 0) {
     const { open, untagged } = hqEntries(m)
@@ -178,11 +188,13 @@ export function cmdStatus (m, out) {
       // The three buckets must SUM to the total. A `- [open]` with no ownership tag lands in the
       // total but in no bucket, so the remainder is shown rather than hidden until validate rejects it.
       // Classified on e.raw — the entry line, never the folded display (cold review, v0.5.10) —
-      // and the tag separator is the SAME latitude checkHqTags strips ([ \t\v\f]; \n\r cannot
-      // survive splitLines), so "(validate rejects these)" is true for every shape counted here.
-      const u = open.filter(e => /^[ \t]*- \[open\][ \t\v\f]*\[user-only\]/.test(e.raw)).length
-      const r = open.filter(e => /^[ \t]*- \[open\][ \t\v\f]*\[recommended\]/.test(e.raw)).length
-      const mm = open.filter(e => /^[ \t]*- \[open\][ \t\v\f]*\[machine\]/.test(e.raw)).length
+      // through TAG_SEP, the one class checkHqTags strips, at BOTH positions (before the bullet and
+      // between the tags). Every earlier spelling of this comment named a narrower class and
+      // claimed `\r` could not reach here; a mid-line `\r` can, and did (v0.5.11).
+      const owned = own => new RegExp(`^${TAG_SEP}*- \\[open\\]${TAG_SEP}*\\[${own}\\]`)
+      const u = open.filter(e => owned('user-only').test(e.raw)).length
+      const r = open.filter(e => owned('recommended').test(e.raw)).length
+      const mm = open.filter(e => owned('machine').test(e.raw)).length
       let rest = hqOpen - u - r - mm
       if (rest < 0) rest = 0
       let line = `human queue: open ${hqOpen} — you decide ${u} · recommendation ready ${r} · machine can just do ${mm}`
@@ -213,7 +225,7 @@ export function cmdStatus (m, out) {
 // one place it mattered (the gaps register, where it copied the looser tally rule and reported a
 // blocking gap as "nothing is waiting"), so the rule is now literal: gaps through `scanRegister`,
 // the SAME function validate counts with; fidelity violations through the gate's own fidBody +
-// isNoise with consecrate's derivation; the Human queue through the shared walk above; question
+// isNoise with consecrate's derivation; the Human queue through the shared classifier above; question
 // entries through isNoise's remainder rule, which already covers both template dialects.
 //
 // What a reader cannot see is NAMED — an unreadable file, an unterminated '<!--' or code fence each
@@ -286,7 +298,9 @@ export function cmdStatusOpen (m, out) {
   // questions.md is the one ledger no validator reads, so a state outside the enum, a template
   // slot over a written-out body, or no bracket at all has NOTHING to fail — dropping any of them
   // would print "nothing is waiting" over a visibly open question (external review, v0.5.5). Only a
-  // bullet that is placeholders THROUGHOUT is noise, judged by isNoise's remainder rule.
+  // bullet that is placeholders THROUGHOUT is noise — judged by the REGISTER's `stubEntry`, not by
+  // isNoise (whose known limit inverts here; see the note at the stub test below), and a stub is
+  // HELD rather than dropped so a continuation carrying real content can realize it.
   const qPath = join(m.root, 'questions.md')
   const qEnum = schB.get('questions.enum.status') || 'open|proposed|answered'
   const qStates = qEnum.split('|').filter(Boolean)
@@ -313,12 +327,15 @@ export function cmdStatusOpen (m, out) {
           // bucket its inline-filled twin lands in), or continues an empty-remainder entry.
           if (/^[ \t]+[^ \t]/.test(l)) {
             const cont = l.replace(/^[ \t]+/, '')
-            if (qheld !== null) {
+            // Same realization rule as the Human queue and the register: template tokens are not
+            // content, so the shipped template's own `<where> — <what>` line cannot turn a
+            // template into a reported waiting item (v0.5.11).
+            if (qheld !== null && hasContent(cont)) {
               qUnknown.push({ line: `${qheld} ${cont}`, why: 'unrecognized state' })
               const e = qUnknown[qUnknown.length - 1]
               qlast = s => { e.line += ` ${s}` }
               qheld = null
-            } else if (qlast !== null) qlast(cont)
+            } else if (qheld === null && qlast !== null) qlast(cont)
           } else if (!/^[ \t]/.test(l)) { qlast = null; qheld = null }
           continue
         }
@@ -357,7 +374,8 @@ export function cmdStatusOpen (m, out) {
     }
   }
 
-  // Human queue — the same single walk the `status` counters derive from.
+  // Human queue — the same single CLASSIFIER the `status` counters derive from (the file is read
+  // again below for its own diagnostics; what is single is the judgment, not the read).
   const { open: hqO, untagged: hqU } = hqEntries(m)
   for (const f of hqFiles(m)) readLedger(rel(f), f)
 

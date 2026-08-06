@@ -3,7 +3,8 @@
 #
 # WHY. Windows is where this is developed and Linux is where it is graded. MSYS serialises process
 # creation globally, so a full sweep there starves the machine it is running on (36m47s measured);
-# the same sweep in a container is under 20 seconds.
+# the same sweep in a container is ~30s (487 cases -j6: 32·33s measured 2026-08-07 — the figure
+# tracks the case count, so re-measure it here and in tests/README.md when that grows).
 #
 #   bash tests/in-container.sh regress                    # the whole suite against the runtime
 #   bash tests/in-container.sh sh '<any shell>'           # anything else, /work is the tree

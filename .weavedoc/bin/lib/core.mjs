@@ -49,6 +49,15 @@ export const M = (strs, ...vals) => strs.reduce((a, s, i) => a + U(s) + (i < val
 // class for the line that carried two of them, which both runtimes still read as a fence.
 export const isFence = l => /^---[ \t\v\f\r]*$/.test(l)
 
+// THE whitespace class between a ledger entry's tags — ONE spelling, because it had three and each
+// pair disagreed somewhere (external review, v0.5.11): validate stripped `[ \t\n\v\f\r]`, status's
+// ownership buckets took `[ \t\v\f]`, and the fold test took `[ \t]`. Measured consequences: a
+// `\v`-separated entry folded nothing, so its body was dropped from `status --open`; a mid-line
+// `\r` entry was counted "missing an ownership tag (validate rejects these)" while validate passed
+// it. `\n` stays in the class although a line cannot hold one — it is validate's spelling, kept so
+// this constant IS that rule rather than a near-copy of it.
+export const TAG_SEP = '[ \\t\\n\\v\\f\\r]'
+
 // ---- id spelling --------------------------------------------------------------------------
 // The single definition of "how a number is spelled as an id", used both to resolve a file and to
 // reject a file spelling its number any other way — so lookup and naming convention cannot drift.

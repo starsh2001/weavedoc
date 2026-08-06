@@ -13,7 +13,7 @@ bash tests/regress.sh --one NAME # 케이스 하나, 출력 인라인 (pristine 
 
 기본 러너는 **배포되는 런타임**(`node .weavedoc/bin/weavedoc.mjs`)이다. bash 판이 함께 배포되던 동안 기본값이 그쪽이어서 **로컬에서 그냥 돌리면 제품이 아니라 기준을 채점**하고 있었다(v0.4.0 외부 리뷰 지적, 번들 2026-08-05.3에서 수정). 다른 대상을 채점하려면 `WD_BIN="<인터프리터> <진입점>"`.
 
-MSYS는 프로세스 생성을 전역 직렬화해서 Windows 전체 sweep은 수십 분이다. **컨테이너를 쓴다** — 같은 sweep이 20초 미만:
+MSYS는 프로세스 생성을 전역 직렬화해서 Windows 전체 sweep은 수십 분이다. **컨테이너를 쓴다** — 같은 sweep이 **30초대**(486케이스 -j6 기준 32·33초 실측, 2026-08-07. 이 줄은 케이스가 늘면 같이 갱신한다 — "20초 미만"은 케이스가 430대이던 시절의 값이었다):
 
 ```bash
 bash tests/in-container.sh regress          # 전체 suite

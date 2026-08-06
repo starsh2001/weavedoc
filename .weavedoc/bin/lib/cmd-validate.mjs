@@ -11,7 +11,7 @@
 // cases build — a substring suite cannot grade a rewrite whose contract is bytes. Both that scale
 // and its reference are gone; the last run of it is in tests/baseline/parity-final-2026-08-05.md.
 import { statSync, realpathSync, readFileSync, readdirSync } from 'node:fs'
-import { canonId, isDate, isFence, isPlaceholder, inList, listField, fmVal, pipes, splitLines, U, M } from './core.mjs'
+import { canonId, isDate, isFence, isPlaceholder, inList, listField, fmVal, pipes, splitLines, U, M, TAG_SEP } from './core.mjs'
 import { join, materialIds, mdirFor, docIds, tfileFor, docFinalPath, contextDigest } from './mine.mjs'
 import { nocomment, dupSection, commentBalanced, sectionAll, countHeadings, defence } from './sections.mjs'
 import { hqFiles } from './cmd-status.mjs'
@@ -256,7 +256,9 @@ function checkHqTags (m, prob, file, sch) {
     const st = s.slice(0, s.indexOf(']'))
     if (!states.has(st)) continue
     if (st !== 'open') continue
-    const rest = s.slice(s.indexOf(']') + 1).replace(/^[ \t\n\v\f\r]+/, '')
+    // The SHARED separator class (core.mjs TAG_SEP) — this spelling was the one status's buckets
+    // and the fold test each approximated differently, and every pair disagreed somewhere.
+    const rest = s.slice(s.indexOf(']') + 1).replace(new RegExp(`^${TAG_SEP}+`), '')
     let ow = ''
     if (rest.startsWith('[')) { const r2 = rest.slice(1); if (r2.includes(']')) ow = r2.slice(0, r2.indexOf(']')) }
     if (owns.has(ow)) continue

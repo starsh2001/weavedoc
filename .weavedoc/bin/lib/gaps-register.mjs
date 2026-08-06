@@ -39,6 +39,13 @@ const strip = s => s.replace(/\{[^{}]*\}/g, '').replace(/<[^<>]*>/g, '').replace
 // ledgers live with their readers, because each ledger's tag is its own grammar.
 export const ENTRY_TAG = /^- \[[^\]]*\]/
 
+// "Is there anything here once template tokens are removed?" — the question a CONTINUATION must
+// answer before it may realize a held stub. The register has always asked it (`strip(grest) !== ''`
+// at the realization branch); the twin ledgers realized on any non-blank line, so the shipped
+// template's own second line (`  <where> — <what>`) turned a template into a reported waiting item
+// (external review, v0.5.11).
+export const hasContent = text => strip(text) !== ''
+
 export function emptyRemainder (line, tag) {
   const s = line.replace(/^[ \t]*/, '')
   const m = tag.exec(s)

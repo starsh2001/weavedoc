@@ -5040,6 +5040,56 @@ acct_openlist_hq_placeholder_inline() {
   expect_has "human queue (0 open, 1 untagged):"
   expect_has "실제 결정이 필요함"
 }
+acct_openlist_placeholder_cont_stays_noise() {
+  # A PLACEHOLDER CONTINUATION IS NOT CONTENT (external review, v0.5.11). Q/HQ realized a held stub
+  # on ANY non-blank continuation, so the shipped template's own second line turned a template into
+  # a reported waiting item — a false "someone is waiting on you", in both ledgers. gaps has always
+  # asked the right question (strip the template tokens; is anything left?); the twins now ask it
+  # too. Revert `hasContent(cont)` in the realization branches → this goes red.
+  printf -- '# 질문\n\n- [<status>]\n  <where> — <what>\n' > "$W/questions.md"
+  printf -- '\n- [{state}] [{ownership}]\n  <where> — <what>\n' >> "$W/truths/verify.md"
+  vrun status --open
+  expect_has "nothing is waiting on you"
+}
+acct_openlist_placeholder_cont_then_real() {
+  # …and the hold SURVIVES a placeholder-only continuation: a real one below still realizes it,
+  # exactly as gaps behaves (the realizing line is the one that carries the content).
+  # AN OVER-BLOCKING GUARD — it passes before AND after (before: realized by the placeholder line,
+  # then the real line folds on; after: held past the placeholder, realized by the real line), so
+  # there is no red-first for it. It exists so the fix above cannot be "achieved" by making a held
+  # stub unrealizable.
+  printf -- '# 질문\n\n- [<status>]\n  <where> — <what>\n  지체상금 상한 값이 필요합니다\n' > "$W/questions.md"
+  vrun status --open
+  expect_has "지체상금 상한 값이 필요합니다"
+  expect_hasnt "nothing is waiting on you"
+}
+acct_status_hq_tag_separator_is_one_class() {
+  # ONE SPELLING OF "the whitespace between an entry's two tags" (external review, v0.5.11). It had
+  # three: validate stripped [ \t\n\v\f\r], the buckets took [ \t\v\f], HQ_TAG (which decides
+  # folding) took [ \t] only. Consequences measured, both directions: a \v-separated entry folded
+  # nothing, so `status --open` printed the tag line and DROPPED the decision body; and a mid-line
+  # \r entry was counted "missing an ownership tag (validate rejects these)" while validate passed
+  # it — the false-claim class again. Revert TAG_SEP in HQ_TAG or the buckets → this goes red.
+  printf -- '\n- [open]\v[user-only]\n  세로탭 뒤 본문\n- [open]\r[recommended] 캐리지리턴 항목\n' >> "$W/truths/verify.md"
+  vrun validate; expect_pass
+  vrun status
+  expect_has "you decide 1 · recommendation ready 1"
+  expect_hasnt "missing an ownership tag"
+  vrun status --open
+  expect_has "세로탭 뒤 본문"
+}
+acct_status_hq_leading_whitespace_is_one_class_too() {
+  # THE SAME UNIFICATION, ONE POSITION EARLIER (cold review, v0.5.11). TAG_SEP closed the class
+  # BETWEEN the two tags while the whitespace BEFORE the bullet still had two spellings: validate
+  # strips [ \t\n\v\f\r] before testing, status tolerated [ \t] — so a \v-indented `- [open]` was
+  # an entry to the gate and invisible to both status surfaces (rc 1 with "nothing is waiting on
+  # you" beside it). Pre-existing, and exactly the disagreement this release says it closed.
+  # Revert the leading TAG_SEP in the open/placeholder tests → this goes red.
+  printf -- '\v- [open] 세로탭으로 들여쓴 항목\n' >> "$W/truths/verify.md"
+  vrun validate; expect_block "has no valid ownership tag"
+  vrun status; expect_has "missing an ownership tag"
+  vrun status --open; expect_has "세로탭으로 들여쓴 항목"
+}
 acct_status_hq_ownership_is_judged_on_the_entry_line() {
   # THE FOLD IS DISPLAY, THE CONTRACT IS THE ENTRY LINE (cold review, v0.5.10 — critical). Folding
   # a continuation into an empty-remainder `- [open]` made the bucket regexes see
