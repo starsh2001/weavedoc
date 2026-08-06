@@ -26,6 +26,8 @@ export function hqFiles (m) {
 // without saying which level, so read either rather than silently finding nothing in one of them —
 // and EVERY matching section, not the first: reading only the first hid every later round's entries
 // from the counter and from the tag check at once.
+// sectionAll caps heading depth at six (v0.5.4), so this reader and validate's own Human-queue
+// walker answer alike about a `####### Human queue`: not a heading, therefore not a section.
 export const hqBody = file => sectionAll(nocomment(readOr(file)), 'Human queue')
 
 const countLines = (text, re) => splitLines(text)

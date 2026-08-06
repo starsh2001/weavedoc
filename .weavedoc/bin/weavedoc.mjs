@@ -197,6 +197,44 @@ const argv = process.argv.slice(2)
 const cmd = argv[0] ?? ''
 const rest = argv.slice(1)
 
+// THE SINGLE-WRITER ADMISSION GATE (§11 2026-08-06, review #9). WeaveDoc supports ONE mutating
+// command per mine at a time. That was always the shape of its use — skills call it in sequence
+// inside one session — but it was never declared and nothing enforced it, so two writers on one
+// mine quietly lost committed work: a fresh seal overwritten by a migration's older buffer, a
+// successful retag erased by a neighbour's rollback, a verification row landing already stale.
+// Every command reads a snapshot and writes it back whole, so this is a data race the per-file
+// locks inside individual commands cannot close.
+//
+// The gate is taken HERE — before the command exists, before openMine reads anything — which is
+// why no command needed its decisions relocated for it. Internal reindex/validate calls go
+// straight to their functions and never re-enter this dispatcher, so there is nothing reentrant
+// to solve. Read-only commands, and the read-only MODES of writing commands, are never gated:
+// a report has no reason to queue behind a migration, and `--check` promises to write nothing.
+//
+// It is the machine's half of the contract only. An agent editing mine files directly, or a
+// second checkout of a shared drive, is outside any lock this CLI can take — FORMATS carries that.
+const MUTATES = {
+  attest: () => true,
+  consecrate: () => true,
+  'seal-review': () => true,
+  upgrade: a => a.includes('--apply'),
+  retag: a => !a.includes('--dry'),
+  reindex: a => !a.includes('--check')
+}
+let mineLockPath = null
+let releaseMine = () => {}
+if (Object.prototype.hasOwnProperty.call(MUTATES, cmd) && MUTATES[cmd](rest)) {
+  const { openMine } = await import('./lib/mine.mjs')
+  const { acquireMineLock, releaseMineLock } = await import('./lib/lock.mjs')
+  const root = openMine(SCRIPT_DIR).root
+  mineLockPath = `${root}/.weavedoc/mine.lock`
+  const why = acquireMineLock(mineLockPath, '.weavedoc/mine.lock')
+  if (why) { errln(`weavedoc ${cmd}: ${why}. Nothing written`); process.exit(1) }
+  releaseMine = () => releaseMineLock(mineLockPath)
+  // Released on EVERY exit, including the ones that call process.exit() deep inside a command.
+  process.on('exit', releaseMine)
+}
+
 let rc
 switch (cmd) {
   case 'lang':

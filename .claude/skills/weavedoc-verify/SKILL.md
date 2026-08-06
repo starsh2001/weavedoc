@@ -19,6 +19,8 @@ The agent that produced the conversion must NOT grade its own work. Verify spawn
 
 > **Running weavedoc: pick the shell by platform.** Commands below are written `node .weavedoc/bin/weavedoc.mjs …` and read the same in every shell. **On Windows run them through PowerShell; everywhere else through bash** — Git Bash pays ~290ms per process to emulate Unix (measured: 373ms vs 80ms for one invocation), and a mine-wide command spends most of its time there. Never create a `.ps1` wrapper: PowerShell's execution policy applies to `.ps1` files and a downloaded one is blocked under `RemoteSigned`, while `node script.mjs` is not subject to it at all.
 
+> **One writer per mine.** WeaveDoc is single-writer: one mutating session, and one mutating command, against a mine at a time (FORMATS.md). The CLI refuses a second mutating command; it cannot see YOU editing mine files directly, so never run this skill against a mine another session is writing to. A lost seal or verification row is evidence, not a cache — re-running the command is not the repair.
+
 > **Thin context.** Don't read all materials or truths into context. Load only the specific material or truth cluster being verified. The truth is on disk; re-read when you need it.
 
 > **Write-scope.** Material mode writes only to `materials/<id>/converted.md` (fixes) and material frontmatter. Truths mode writes only to `truths/*.md` and `truths/verify.md`. Neither mode touches `documents/`.

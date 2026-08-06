@@ -133,6 +133,7 @@ It's a bonus enforcement floor (CI-friendly); the core loop runs on the skills +
 ## 7. Sessions and how the skills are divided
 
 - **The gate and the advisory panel spawn cold reviewers as subagents** (empty context = independence). Run the skills from the main session; never run a weavedoc skill *as* a subagent (it then can't spawn reviewers and degrades to a warm self-check).
+- **One writing session per mine, at a time** (the single-writer contract — FORMATS.md). Cold reviewers read; they never write. Two sessions writing to one mine can lose committed work silently, and re-running the command is *not* the repair for a lost seal or verification row. The CLI refuses a second mutating command, but it cannot see an agent editing mine files directly — so don't point two working sessions at the same mine.
 - **One step per skill** keeps any single session bounded — no session carries the whole build. Each skill reads only what it needs from disk at the time.
 - **The split is by *step*, not by role.** Each step ends and hands to the next explicitly. WeaveDoc fixes only the order of steps, the gate, and the conflict rules — it leaves *what to write* within each step open. The methodology is built into the skills; this document is the map.
 

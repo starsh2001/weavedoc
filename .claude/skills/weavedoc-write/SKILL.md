@@ -9,6 +9,8 @@ Draw a document from the data mine — write the draft from the plan, grounded s
 
 > **Language: read it first.** Read `language:` from `.weavedoc/config.yaml` and write **every** reply in that language. These skill files are English; your output is not.
 
+> **One writer per mine.** WeaveDoc is single-writer: one mutating session, and one mutating command, against a mine at a time (FORMATS.md). The CLI refuses a second mutating command; it cannot see YOU editing mine files directly, so never run this skill against a mine another session is writing to. A lost seal or verification row is evidence, not a cache — re-running the command is not the repair.
+
 > **Thin context.** Don't read all truths upfront. For each section, grep the relevant tags from `truths/index.md`, then read only those truth files. The truth is on disk; re-read when you need it.
 
 > **Write-scope.** This skill writes only to `documents/<doc-id>/` and `questions.md`. It does **not** touch `materials/` or `truths/` (except to set conflict status when a conflict is discovered during writing).
