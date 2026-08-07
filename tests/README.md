@@ -35,7 +35,7 @@ bash tests/in-container.sh sh '<셸 명령>'    # 그 외, /work가 트리
 ## 격리 모델 (Phase 2, WD-QA-002)
 
 - **픽스처**: 실행마다 `mktemp -d` workspace — trap으로 종료 시 제거. 병렬/중복 실행이 충돌할 수 없고, 중단돼도 workspace가 남지 않는다.
-- **결과 캐시**: `$TMPDIR/wd-reg-<key>/res` — key는 **commit + bundle 바이트 + 런타임 전체(진입점 + `bin/lib/*` + schema)의 해시 + WD_BIN + OS + 도구 버전**. 런타임 전체를 넣는 이유: 진입점만 해시하면 **커밋 안 된 lib 수정 뒤 `--resume`이 이전 결과를 재사용**한다(HEAD는 커밋된 변경만 덮는다 — 같은 외부 리뷰가 지적). `--resume`은 정확히 같은 구성의 결과만 재사용할 수 있다: 다른 구성은 다른 디렉터리라서, 오래된 결과는 걸러지는 게 아니라 **도달 불가능**하다. (`WD_REG_KEY_SALT` 환경변수로 강제 새 키 가능. 쌓인 `wd-reg-*` 디렉터리는 언제든 지워도 된다.)
+- **결과 캐시**: `$TMPDIR/wd-reg-<key>/res` — key는 `compute_key()`가 이 순서로 해시한다 — **commit · `.weavedoc/VERSION` · WD_BIN · schema · `.weavedoc/bin` 트리 전체 · `$WD_ENTRY` · `tests/**`의 `*.sh`+`*.mjs`(baseline 제외) · README·CHANGELOG·FORMATS · golden·templates · READ.md·baseline manifest 2개 · `.claude/skills` 내용 · git 인덱스(`ls-files -s`) · 경로 목록(`key_paths`) · node/OS/bash/awk/sed 버전 · `WD_REG_KEY_SALT`**. 런타임 전체를 넣는 이유: 진입점만 해시하면 **커밋 안 된 lib 수정 뒤 `--resume`이 이전 결과를 재사용**한다(HEAD는 커밋된 변경만 덮는다 — 같은 외부 리뷰가 지적). `--resume`은 정확히 같은 구성의 결과만 재사용할 수 있다: 다른 구성은 다른 디렉터리라서, 오래된 결과는 걸러지는 게 아니라 **도달 불가능**하다. (`WD_REG_KEY_SALT` 환경변수로 강제 새 키 가능. 쌓인 `wd-reg-*` 디렉터리는 언제든 지워도 된다.)
 - 워커는 부모의 workspace를 env로 상속하며, mktemp를 **만든** 호출만 제거를 담당한다.
 
 ## CI

@@ -35,6 +35,9 @@ const HQ_OPEN = new RegExp(`^${TAG_SEP}*- \\[open\\]`)
 // sibling pins it) while an indented placeholder has always been dropped as detail, and this keeps
 // both. A control lead cannot be ordinary nesting — no editor writes one — so it stays an entry.
 const HQ_STUB_ENTRY = /^[\n\v\f\r]*- [[][{<]/
+// Every placeholder-opening bullet at any indentation — the population the rule above selects from,
+// and the one the orphan rule in hqEntries needs (v0.5.16).
+const PLACEHOLDER_BULLET = new RegExp(`^${TAG_SEP}*- [[][{<]`)
 
 const isDir = p => { try { return statSync(p).isDirectory() } catch { return false } }
 
@@ -106,12 +109,19 @@ export function hqEntries (m) {
     // gnoise) and this ledger lacked: dropping the stub immediately left the continuation carrying
     // the actual content with nothing to attach to, and the item vanished (external review,
     // v0.5.10 — `- [{state}] [{ownership}]` + indented content reported "nothing is waiting").
+    // DETAIL NEEDS SOMETHING TO BE DETAIL OF (external review, v0.5.16). v0.5.15 made an indented
+    // placeholder detail — right under a real entry, and a silent DISAPPEARANCE when nothing is
+    // above it: `  - [{state}] [{ownership}] REAL-DECISION` alone in the section printed "nothing
+    // is waiting on you", with validate green beside it (it skips a placeholder state too, so
+    // nothing anywhere named the item). `parent` is what tells the two cases apart.
     let last = null
     let held = null
+    let parent = false
     for (const l of splitLines(hqBody(f))) {
-      if (!/[^ \t]/.test(l)) { last = null; held = null; continue }
+      if (!/[^ \t]/.test(l)) { last = null; held = null; parent = false; continue }
       if (HQ_OPEN.test(l)) {
         held = null
+        parent = true
         // `raw` is the ENTRY LINE, never mutated; `line` is the display, which folding extends.
         // The bucket classifiers read raw: ownership lives on the entry line (FORMATS — two fixed
         // tags, then prose), and classifying the FOLDED line once put an entry in "machine can
@@ -129,8 +139,17 @@ export function hqEntries (m) {
       // anchoring at column 0 left a control-indented placeholder handled by nobody — it vanished
       // and the run printed "nothing is waiting on you" — while the full lead swallowed ordinary
       // nested sub-bullets. See the constant for which half is whose contract.
-      if (HQ_STUB_ENTRY.test(l)) {
+      // WHICH indentation makes a placeholder an entry has moved three times, so the rule is
+      // spelled out: a control lead or column 0 is ALWAYS an entry (HQ_STUB_ENTRY — v0.5.13/14),
+      // and a space/tab-indented one is an entry too WHEN THERE IS NOTHING ABOVE IT to be detail
+      // of (v0.5.16). Under a parent it stays detail, which is what stopped nested sub-bullets
+      // from being counted twice.
+      if (PLACEHOLDER_BULLET.test(l) && (HQ_STUB_ENTRY.test(l) || !parent)) {
         last = null
+        // A SURFACED PLACEHOLDER IS NOT A PARENT (cold review, v0.5.16). Setting `parent` here made
+        // the FIRST orphan an entry and every sibling after it detail-of-a-placeholder — three
+        // orphans in a row listed one, which is the same silent drop this rule exists to stop.
+        // Only a real entry ([open]/[ruled]/an untagged non-placeholder bullet) can have detail.
         if (stubLine(l, HQ_TAG)) held = l
         else { held = null; untagged.push({ file: label, line: l, raw: l }) }
         continue
@@ -147,11 +166,21 @@ export function hqEntries (m) {
             untagged.push({ file: label, line: `${held} ${cont}`, raw: held })
             last = { a: untagged, i: untagged.length - 1 }
             held = null
+            parent = true
           } else if (held === null && last !== null) last.a[last.i].line += ` ${cont}`
-        } else if (!/^[ \t]/.test(l)) { last = null; held = null }
+        } else if (!/^[ \t]/.test(l)) {
+          last = null
+          held = null
+          // A column-0 `- [ruled]` IS a parent — a real entry whose nested placeholder is detail
+          // (cold review, v0.5.16). It reaches this branch (nothing above lists a `ruled` entry),
+          // and a flat `parent = false` here erased the flag a separate assignment had just set:
+          // one place decides, so the two cannot disagree.
+          parent = /^- \[ruled\]/.test(l)
+        }
         continue
       }
       held = null
+      parent = true
       untagged.push({ file: label, line: l, raw: l })
       last = emptyRemainder(l, HQ_TAG) ? { a: untagged, i: untagged.length - 1 } : null
     }
