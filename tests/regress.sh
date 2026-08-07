@@ -2558,6 +2558,32 @@ acct_cfg_windows_abs_path() {
   vrun validate
   expect_has "C:/wd-nope"
 }
+e2e_empty_dir_survives_a_clone() {
+  # GIT STORES FILES, NEVER DIRECTORIES (external review, v0.5.18). A configured directory that is
+  # still empty — `documents/` in any mine before its first document — is simply absent from a
+  # clone, and `validate` then blocks with CFG-PATH-MISSING. Measured on a fresh clone of a real
+  # mine: rc 1, on a mine that is clean where it stands. The answer is a tracked marker, not a
+  # leniency in validate: "the directory is missing" and "the directory is empty" must stay
+  # distinguishable, because a check that walks a missing directory runs zero times and that looks
+  # exactly like passing. weavedoc-init writes `.gitkeep` into each configured path since v0.5.18.
+  # Delete the .gitkeep line below → this goes red, which is what the skill's instruction buys.
+  # Siblings of the mine inside the case's own workspace ($WORK/w/<case> is $W), never inside it:
+  # copying a directory into itself is what the first spelling did, and it failed for that reason.
+  local up="$W-clonesrc" dn="$W-clonedst" out rc
+  rm -rf "$up" "$dn"; mkdir -p "$up"
+  cp -r "$W"/. "$up"/ 2>/dev/null || { bad "could not copy the mine"; return; }
+  rm -rf "$up/documents"; mkdir -p "$up/documents" && printf '' > "$up/documents/.gitkeep"
+  ( cd "$up" && git init -q . && git add -A >/dev/null 2>&1 && git -c user.email=t@t -c user.name=t commit -q -m mine ) \
+    || { bad "could not build the source repository"; return; }
+  git clone -q "$up" "$dn" 2>/dev/null || { bad "could not clone"; return; }
+  [ -d "$dn/documents" ] || { bad "documents/ did not survive the clone even with a marker"; return; }
+  out=$( cd "$dn" && $WD_BIN validate 2>&1 ); rc=$?
+  OUT="clone rc=$rc"
+  case "$out" in *CFG-PATH-MISSING*) bad "the clone still reports CFG-PATH-MISSING"; return ;; esac
+  [ "$rc" = 0 ] || { OUT="clone rc=$rc :: $out"; bad "the cloned mine does not validate"; rm -rf "$up" "$dn"; return; }
+  rm -rf "$up" "$dn"
+  ok
+}
 block_retag_outside_root() {
   # A write command refuses a target that resolves outside the project (WD-IO-001) — a
   # redirected path may READ from wherever the user says; writing there is another matter.
@@ -4296,6 +4322,24 @@ acct_ledger_crlf_reads_as_verified() {
   expect_has "materials  1 converted · 1 verified (digest-bound)"
   vrun validate; expect_pass
 }
+acct_schema_crlf_reads_like_lf() {
+  # THE SHIPPED RUNTIME'S OWN FILE, CRLF (external review, v0.5.18). `loadSchema` kept a trailing CR
+  # on purpose — parity with a bash reader that was DELETED in bundle 2026-08-05.3 — while every
+  # other reader in this codebase treats it as a line ending. The cost is not theoretical: a
+  # consumer who follows the documented install (copy `.weavedoc/` into their repo) on Windows
+  # default settings gets `core.autocrlf=true`, and then EVERY schema list ends in `…|roles\r`, so
+  # no frontmatter key matches and no enum member matches. Measured on a fresh clone of the eclypse
+  # testbed: 372 problems — 300 FM-MISSING, 61 RESOLUTION-ENUM, 8 PROV-ENUM — on a mine that is
+  # clean. The mine's own bytes are NOT the problem (a CRLF mine under an LF runtime validates);
+  # the runtime reading its own schema is. Same ruling as acct_ledger_crlf_reads_as_verified: one
+  # reader. Revert loadSchema to its private schemaLines → this goes red.
+  { while IFS= read -r l || [ -n "$l" ]; do printf '%s\r\n' "${l%$'\r'}"; done < "$W/.weavedoc/schema"; } > "$W/s.crlf"
+  mv "$W/s.crlf" "$W/.weavedoc/schema"
+  IFS= read -r l0 < "$W/.weavedoc/schema"
+  case "$l0" in *$'\r') ;; *) bad "fixture did not become CRLF — the case would prove nothing"; return ;; esac
+  vrun validate; expect_pass
+  expect_hasnt "FM-MISSING"
+}
 acct_ledger_unterminated_last_row_blocks() {
   # The signature of an `attest` that died mid-write: a final row with no newline. `scope` READ it
   # and `validate` DISCARDED it, so a half-written verification either counted or vanished
@@ -4642,7 +4686,7 @@ meta_git_env_ignored_by_key_and_manifest() {
   #     the default index while the manifest it is supposed to cover described the alternate one:
   #     same key, different manifest, `--resume` replaying a PASS the fresh run fails.
   # Both halves run here. Delete the `. tests/git-env.sh` line from either script → this goes red.
-  local sc="$W/gitenv" alt="$W/gitenv-altidx" fails="" pois="" v k0 kp m0 m1 blob
+  local sc="$W/gitenv" alt="$W/gitenv-altidx" fails="" pois="" v k0 kp m0 m1 m2 blob
   for v in $(git rev-parse --local-env-vars 2>/dev/null); do
     case "$v" in GIT_CONFIG_COUNT) pois="$pois $v=0" ;; *) pois="$pois $v=/nonexistent-wd-gitenv" ;; esac
   done
@@ -4657,8 +4701,13 @@ meta_git_env_ignored_by_key_and_manifest() {
   # does not). Two tracked files are enough: what is asserted is that both runs answer alike, not
   # what they answer. The alternate index restages VERSION with schema's blob — a difference the
   # unfixed script reported and the key never saw.
-  mkdir -p "$sc/.weavedoc" "$sc/tests"
-  cp "$REPO/.weavedoc/VERSION" "$REPO/.weavedoc/schema" "$sc/.weavedoc"/ 2>/dev/null
+  mkdir -p "$sc/.weavedoc" "$sc/tests" "$sc/.claude/skills/weavedoc-x"
+  cp "$REPO/.weavedoc/VERSION" "$REPO/.weavedoc/schema" "$REPO/.weavedoc/READ.md"      "$REPO/.weavedoc/FORMATS.md" "$REPO/.weavedoc/.gitattributes" "$sc/.weavedoc"/ 2>/dev/null
+  mkdir -p "$sc/.weavedoc/bin" && cp "$REPO/.weavedoc/bin/weavedoc.mjs" "$sc/.weavedoc/bin"/ 2>/dev/null
+  printf 'skill
+' > "$sc/.claude/skills/weavedoc-x/SKILL.md"
+  printf 'other
+' > "$sc/.claude/skills/not-ours.md"
   cp "$REPO/tests/make-manifest.sh" "$REPO/tests/git-env.sh" "$sc/tests"/ 2>/dev/null
   ( cd "$sc" && git init -q . && git add -A >/dev/null 2>&1 ) || { bad "could not build a scratch git repo"; return; }
   cp "$sc/.git/index" "$alt" 2>/dev/null
@@ -4668,9 +4717,63 @@ meta_git_env_ignored_by_key_and_manifest() {
   m0=$( cd "$sc" && bash tests/make-manifest.sh 2>/dev/null )
   m1=$( cd "$sc" && GIT_INDEX_FILE="$alt" bash tests/make-manifest.sh 2>/dev/null )
   case "$m0" in *.weavedoc/VERSION*) ;; *) bad "the scratch manifest is empty — the comparison would be vacuous"; return ;; esac
+  case "$m0" in *weavedoc-x/SKILL.md*) ;; *) bad "the scratch manifest has no skill row — the pathspec half would be vacuous"; return ;; esac
+  case "$m0" in *not-ours.md*) bad "the manifest picked up a skill that is not ours"; return ;; esac
   [ "$m0" = "$m1" ] || fails="$fails manifest"
+  # (3) THE PATHSPEC FAMILY, which `git rev-parse --local-env-vars` does not name (external review,
+  # v0.5.18). With GIT_LITERAL_PATHSPECS set, the glob that used to select the skills matched
+  # nothing: 46 rows became 36 and the digest changed while the suite's cache key did not move at
+  # all. Both halves of the fix are exercised — git-env.sh clears these four, and make-manifest.sh
+  # no longer selects through a glob — so either alone keeps this green and removing both is red.
+  for v in GIT_LITERAL_PATHSPECS GIT_NOGLOB_PATHSPECS GIT_GLOB_PATHSPECS GIT_ICASE_PATHSPECS; do
+    m2=$( cd "$sc" && env "$v=1" bash tests/make-manifest.sh 2>/dev/null )
+    [ "$m0" = "$m2" ] || fails="$fails pathspec($v)"
+  done
   OUT="leaks:${fails:- none}"; RC=0
   if [ -n "$fails" ]; then bad "an inherited git environment still reaches:$fails"; else ok; fi
+}
+meta_manifest_generator_fails_closed() {
+  # THE RELEASE WARRANTY MAY NOT REPORT SUCCESS ON NOTHING (external review, v0.5.18). This script
+  # absorbed every git failure into an empty manifest and rc 0 — measured on v0.5.17: run outside a
+  # repository, run in a repository that stages none of these files, or hit an unreadable blob, and
+  # all three printed nothing and exited 0. The last one was the worst: `git cat-file` failing left
+  # the pipeline hashing EMPTY INPUT, so the manifest recorded `e3b0c442…` — the sha256 of nothing —
+  # as though it were the file's digest. Revert pipefail, the per-blob promotion, or the
+  # required-path guard → this goes red.
+  local sc="$W/mmfc" out rc fails=""
+  mkdir -p "$sc/tests"
+  cp "$REPO/tests/make-manifest.sh" "$REPO/tests/git-env.sh" "$sc/tests"/ 2>/dev/null
+  # (1) no repository at all
+  out=$( cd "$sc" && bash tests/make-manifest.sh 2>/dev/null ); rc=$?
+  [ "$rc" != 0 ] || fails="$fails no-repo-rc0"
+  [ -z "$out" ] || fails="$fails no-repo-output"
+  # (2) a repository that holds none of the required paths
+  ( cd "$sc" && git init -q . && git add -A >/dev/null 2>&1 ) || { bad "could not build a scratch git repo"; return; }
+  out=$( cd "$sc" && bash tests/make-manifest.sh 2>/dev/null ); rc=$?
+  [ "$rc" != 0 ] || fails="$fails empty-rc0"
+  [ -z "$out" ] || fails="$fails empty-output"
+  # (3) and the sha256 of empty input must never appear as a row
+  case "$out" in *e3b0c44298fc1c14*) fails="$fails empty-blob-digest" ;; esac
+  # (4) A STAGED BLOB THAT CANNOT BE READ. This is the worst of the three: `git cat-file` failing
+  # left the pipeline hashing EMPTY INPUT, so the row recorded `e3b0c442…` — the sha256 of nothing —
+  # as though it were the file's digest, and the script exited 0. Built by staging the required
+  # paths and then deleting one loose object out from under the index.
+  local sc2="$W/mmfc2" obj
+  mkdir -p "$sc2/tests" "$sc2/.weavedoc/bin"
+  cp "$REPO/tests/make-manifest.sh" "$REPO/tests/git-env.sh" "$sc2/tests"/ 2>/dev/null
+  cp "$REPO/.weavedoc/VERSION" "$REPO/.weavedoc/schema" "$REPO/.weavedoc/READ.md"      "$REPO/.weavedoc/FORMATS.md" "$REPO/.weavedoc/.gitattributes" "$sc2/.weavedoc"/ 2>/dev/null
+  cp "$REPO/.weavedoc/bin/weavedoc.mjs" "$sc2/.weavedoc/bin"/ 2>/dev/null
+  ( cd "$sc2" && git init -q . && git add -A >/dev/null 2>&1 ) || { bad "could not build the second scratch repo"; return; }
+  out=$( cd "$sc2" && bash tests/make-manifest.sh 2>/dev/null ); rc=$?
+  [ "$rc" = 0 ] || { OUT="the intact scratch repo already failed: rc=$rc"; bad "the unreadable-blob probe would be vacuous"; return; }
+  obj=$( cd "$sc2" && git rev-parse ":.weavedoc/schema" 2>/dev/null )
+  rm -f "$sc2/.git/objects/${obj:0:2}/${obj:2}" 2>/dev/null
+  [ -f "$sc2/.git/objects/${obj:0:2}/${obj:2}" ] && { bad "could not remove the object — the probe would be vacuous"; return; }
+  out=$( cd "$sc2" && bash tests/make-manifest.sh 2>/dev/null ); rc=$?
+  [ "$rc" != 0 ] || fails="$fails unreadable-blob-rc0"
+  case "$out" in *e3b0c44298fc1c14*) fails="$fails unreadable-blob-digest" ;; esac
+  OUT="fails:${fails:- none}"; RC=0
+  if [ -n "$fails" ]; then bad "the manifest generator is not fail-closed:$fails"; else ok; fi
 }
 meta_git_env_writes_stay_inside() {
   # THE WRITE HALF (external review, v0.5.17). With an inherited GIT_OBJECT_DIRECTORY, the scratch
@@ -5200,6 +5303,44 @@ acct_openlist_gaps_continuation_realized() {
   expect_has "gaps (1):"
   expect_hasnt "nothing is waiting on you"
 }
+acct_openlist_gaps_arrays_agree() {
+  # THE THREE RETURNS MUST DESCRIBE ONE SCAN. `n` is what validate counts, `entries` is what the
+  # listing prints, and `kinds` (v0.5.18) is what tells the listing which of them names a kind — a
+  # per-entry array that would mislabel every line after any push the other branch forgot. The
+  # module's own comment claimed the suite asserted this and no case did, so a mismatch would have
+  # surfaced as the WRONG LINE being called malformed. Same fixture as the count case: every shape
+  # that has ever split these readers. Drop a `kinds.push` in either branch → this goes red.
+  cat > "$W/gaps.md" <<'EOF'
+# Open
+
+- [enumeration] 앨범 — 6곡 계획 vs 5곡 수록 — m002 대비
+- [<kind>] album — six-vs-five
+- [<kind>] <where> — <what>
+- [{kind}]
+  실제 내용이 이어짐
+- (없음)
+- [reference] 라온고 — 정의하는 truth 없음 — t001 언급
+  - 근거: 하위 불릿은 항목이 아니다
+
+# Accepted
+
+- [declared] 3장 — 의도적으로 남김 — scope: a — recheck: b — as-of: t001
+EOF
+  OUT=$(node -e "
+    const { scanRegister } = await import('file://' + process.argv[1] + '/.weavedoc/bin/lib/gaps-register.mjs')
+    const { readFileSync } = await import('node:fs')
+    const t = readFileSync(process.argv[2]).toString('latin1')
+    const ks = new Set(['declared', 'reference', 'enumeration', 'symmetry'])
+    let bad = ''
+    for (const sec of ['Open', 'Accepted']) {
+      const r = scanRegister(t, sec, ks)
+      if (r.n !== r.entries.length || r.n !== r.kinds.length) bad += \` \${sec}(n=\${r.n} e=\${r.entries.length} k=\${r.kinds.length})\`
+      if (r.n === 0) bad += \` \${sec}-empty\`
+    }
+    console.log('mismatch:' + (bad || ' none'))
+  " "$REPO" "$W/gaps.md" 2>&1); RC=$?
+  case "$OUT" in *"mismatch: none"*) ok ;; *) bad "the scan's arrays disagree — $OUT" ;; esac
+}
 acct_openlist_gaps_count_matches_validate() {
   # THE ANTI-DRIFT GUARD, and the case this release exists for: one gaps.md, two readers, one
   # answer. Every shape that ever split them rides in the same file — plain entry, filled
@@ -5303,6 +5444,65 @@ acct_openlist_none_idiom_still_empty() {
   printf -- '# 질문\n\n- (none)\n' > "$W/questions.md"
   vrun status --open
   expect_has "nothing is waiting on you"
+}
+acct_openlist_gaps_none_idiom_is_malformed() {
+  # THE REGISTER HAS NO EMPTY-LEDGER IDIOM (ruled 2026-08-07, after an external review measured the
+  # consequence). `- (없음)` / `- (none)` is the Human queue's and questions.md's way of writing "no
+  # entries"; gaps.md is fail-closed and every bullet in it is a kind-tagged record, so the same
+  # line here is a bullet with no routable kind. A real mine had one, and `status --open` reported
+  # ONE WAITING GAP whose entire text was the word "none". The ruling keeps the invariant and names
+  # the line instead of inventing a sentinel for it. Empty means zero bullets.
+  # Drop the per-entry `kinds` from scanRegister (or the label below) → this goes red.
+  printf -- '# Open
+
+- (없음)
+- [declared] 3장 — 값이 미정 — 표에 TBD
+
+# Accepted
+
+' > "$W/gaps.md"
+  vrun status --open
+  # The TOTAL is what validate counts over the same scan; the malformed count annotates it rather
+  # than subtracting from it. The first spelling printed `0 open, 1 malformed` beside validate's
+  # `2 open gap(s)` — one file, two numbers, the drift this lane exists to end (self review).
+  expect_has "gaps (2, 1 malformed):"
+  expect_has "(malformed register entry — no [kind] slot): - (없음)"
+  # …and that agreement is asserted, not left to a reader to notice.
+  sed -i 's/^  completeness: off.*$/  completeness: required/' "$W/.weavedoc/config.yaml"
+  vrun validate
+  expect_has "holds 2 open gap(s)"
+}
+acct_openlist_gaps_none_idiom_malformed_in_accepted() {
+  # BOTH SECTIONS, one grammar. `# Accepted` was the looser half of this register until §11
+  # 2026-08-05 gave it the same scanner; the idiom ruling applies there for the same reason — an
+  # accepted decision without a kind is a decision about nothing nameable. Under `required` the
+  # gate names it; the listing only ever reads `# Open`, so this half is validate's to prove.
+  printf -- '# Open
+
+# Accepted
+
+- (none)
+' > "$W/gaps.md"
+  sed -i 's/^  completeness: off.*$/  completeness: required/' "$W/.weavedoc/config.yaml"
+  vrun validate
+  expect_block "no '[<kind>]' slot at all"
+}
+acct_gaps_empty_register_is_zero_bullets() {
+  # …and the form that IS empty: no bullets at all in either section, with the explanation in a
+  # comment. This is the shape weavedoc-gaps writes and the shape a clean mine keeps; it must stay
+  # green under `required`, or the ruling above would have no legal way to say "nothing is open".
+  # Passes before and after — an over-blocking guard for the ruling, not a repro.
+  printf -- '# Open
+
+<!-- 열린 갭 없음 -->
+
+# Accepted
+
+' > "$W/gaps.md"
+  sed -i 's/^  completeness: off.*$/  completeness: required/' "$W/.weavedoc/config.yaml"
+  vrun validate; expect_pass
+  vrun status --open
+  expect_hasnt "gaps ("
 }
 acct_openlist_gaps_localized_section() {
   # THE DOMAIN DOOR (cold review, v0.5.6). The register section name is matched against the file's
@@ -5459,6 +5659,65 @@ acct_openlist_hq_ruled_entry_is_a_parent() {
   printf -- '\n- [ruled] [user-only] RULED-DECISION\n  - [{state}] [{ownership}] RULED-DETAIL\n' >> "$W/truths/verify.md"
   vrun status; expect_has "human queue: 0"
   vrun status --open; expect_hasnt "RULED-DETAIL"
+}
+acct_openlist_hq_nested_open_is_detail() {
+  # THE LEAD RULE IS FOR EVERY BULLET, NOT ONLY PLACEHOLDERS (external review, v0.5.18). v0.5.17
+  # taught the placeholder branch that a strictly deeper bullet is DETAIL, and left `- [open]` in
+  # front of it, so a nested open bullet stayed an entry: `status` counted two waiting decisions
+  # where FORMATS names one, and `validate` failed the mine with HQ-UNTAGGED over a line that is
+  # not an entry — rc 1 on a legal file. Both surfaces read one walk now.
+  # Move the HQ_OPEN test back in front of the lead comparison → this goes red.
+  printf -- '
+- [open] [user-only] PARENT
+  - [open] CHILD-DETAIL
+' >> "$W/truths/verify.md"
+  vrun validate; expect_pass
+  vrun status
+  expect_has "you decide 1"
+  expect_hasnt "missing an ownership tag"
+  vrun status --open
+  expect_has "human queue (1):"
+}
+acct_openlist_hq_nested_open_tagged_is_still_detail() {
+  # …and adding the ownership tag validate used to demand does not turn detail into a decision.
+  # That was the other half of the trap: the only way to make v0.5.17's validate pass was to tag
+  # the sub-bullet, and then `status --open` reported a waiting decision that does not exist.
+  printf -- '
+- [open] [user-only] PARENT-B
+  - [open] [recommended] CHILD-WITH-OWNERSHIP
+' >> "$W/truths/verify.md"
+  vrun validate; expect_pass
+  vrun status
+  expect_has "you decide 1 · recommendation ready 0"
+  vrun status --open
+  expect_has "human queue (1):"
+  expect_hasnt "CHILD-WITH-OWNERSHIP"
+}
+acct_openlist_hq_indented_ruled_is_a_parent() {
+  # An indented `[ruled]` is an ENTRY at its own lead, so its sub-bullet is detail. Before v0.5.18
+  # only a COLUMN-0 `- [ruled]` set the parent, so the same two lines one indent over reported the
+  # sub-bullet as a waiting item — the over-count twin of the drop above.
+  # Revert the ruled arm to a column-0 test → this goes red.
+  printf -- '
+  - [ruled] [user-only] RULED-INDENTED
+    - [{state}] [{ownership}] RULED-SUB
+' >> "$W/truths/verify.md"
+  vrun status; expect_has "human queue: 0"
+  vrun status --open; expect_hasnt "RULED-SUB"
+}
+acct_openlist_hq_untagged_peer_surfaces() {
+  # A PLAIN BULLET AT THE PARENT'S OWN LEAD IS A PEER, not detail (external review, v0.5.18). The
+  # untagged rule demanded column 0, so an indented pair — the shape a nested Human queue actually
+  # takes — kept the first and silently dropped the second. Only STRICTLY deeper is detail.
+  printf -- '
+  - 태그 없는 항목 하나
+  - 태그 없는 항목 둘
+    - 이건 진짜 하위
+' >> "$W/truths/verify.md"
+  vrun status; expect_has "2 entry(s) with no"
+  vrun status --open
+  expect_has "태그 없는 항목 하나"; expect_has "태그 없는 항목 둘"
+  expect_hasnt "이건 진짜 하위"
 }
 acct_openlist_hq_realized_stub_siblings() {
   # A BOOLEAN CANNOT SAY *WHAT* THE DETAIL IS DETAIL OF (external review, v0.5.17). v0.5.16 kept
@@ -5758,9 +6017,10 @@ acct_openlist_second_hq_section() {
 }
 acct_openlist_subbullets_stay_detail() {
   # One line per item: an entry's UNTAGGED indented sub-bullets are its detail, not entries of
-  # their own (R5-N3's counter rule, applied to the listing). An indented `- [open]` sub-bullet
-  # DOES list — counter parity: the open counter tolerates indentation, and the listing must not
-  # disagree with the count.
+  # their own (R5-N3's counter rule, applied to the listing). The second half of this comment used
+  # to read "an indented `- [open]` sub-bullet DOES list — counter parity"; that was true of the
+  # code and false of the contract, and acct_openlist_hq_nested_open_is_detail now pins the other
+  # answer (external review, v0.5.18). Nothing here ever tested it — the claim lived only in prose.
   printf -- '\n- [open] [user-only] 병기 허용 여부\n  - 근거: 두 자료가 다른 값\n' >> "$W/truths/verify.md"
   vrun status --open
   expect_has "human queue (1):"

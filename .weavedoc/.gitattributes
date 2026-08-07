@@ -1,0 +1,16 @@
+# SHIPPED WITH THE RUNTIME, on purpose (external review, v0.5.18).
+#
+# The documented install is "copy this .weavedoc/ folder into your project", and the project on the
+# other end is usually a git repository of its own — with its own settings and, on Windows, the
+# default core.autocrlf=true. This repository pins LF for .weavedoc/** in its ROOT .gitattributes,
+# but a root file does not travel with a copied folder, so the pin stopped at the boundary.
+#
+# What that cost, measured on a fresh clone of a real mine: 97 CR bytes in `schema`, 381 in the
+# entrypoint, the bin+schema fingerprint moving ea390a9e0fbc -> d1324e0a09b7, and `validate`
+# reporting 372 problems on a mine that is clean. The parser no longer breaks on it (loadSchema
+# reads a trailing CR as a line ending since v0.5.18) — this file is the other half: it keeps the
+# BYTES identical, so `weavedoc version` fingerprints match across machines and the bundle manifest
+# means the same thing downstream as it does here.
+#
+# Every file under .weavedoc/ is text the runtime reads or a shebang script it executes.
+* text eol=lf

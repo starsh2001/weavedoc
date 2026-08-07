@@ -43,12 +43,23 @@ if [ "$_wd_gn" -lt 8 ]; then
         GIT_INDEX_FILE GIT_NO_REPLACE_OBJECTS GIT_REPLACE_REF_BASE GIT_PREFIX GIT_SHALLOW_FILE \
         GIT_COMMON_DIR
 fi
+# …AND THE PATHSPEC FAMILY, WHICH `--local-env-vars` DOES NOT NAME (external review, v0.5.18).
+# These four do not bind git to a repository, so they are absent from the derived list above — but
+# they change which FILES a pathspec selects, which is the same corruption one layer over. Measured
+# on v0.5.17: with GIT_LITERAL_PATHSPECS (or NOGLOB, or GLOB) set, `make-manifest.sh` matched 36
+# paths instead of 46 and produced a different digest, while the suite's cache key did not move —
+# `--resume` replays a PASS that a fresh run fails, the exact false green this file exists to stop.
+# This IS an enumeration, which is normally the mistake; git offers no enumerator for them, so the
+# honest thing is to name them with the reason rather than to pretend the derived list covers them.
+# make-manifest.sh separately stopped depending on pathspec globbing, so the two halves are
+# independent: neither alone is load-bearing.
+unset GIT_LITERAL_PATHSPECS GIT_NOGLOB_PATHSPECS GIT_GLOB_PATHSPECS GIT_ICASE_PATHSPECS
 unset _wd_gv _wd_gn
 # The vacuity guard, loud and once. Both branches above are meant to leave nothing behind; reaching
 # here with one still set means the construction broke, and a broken cleanup does not fail — it just
 # stops isolating, which looks exactly like success (the class this suite keeps a name for). These
 # four are named because each has a measured consequence above, not because the rule is a list.
-for _wd_gv in GIT_DIR GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_COMMON_DIR; do
+for _wd_gv in GIT_DIR GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_COMMON_DIR GIT_LITERAL_PATHSPECS; do
   if [ -n "${!_wd_gv+set}" ]; then
     echo "tests/git-env.sh: $_wd_gv survived the cleanup — git calls would run half-isolated" >&2
     exit 2

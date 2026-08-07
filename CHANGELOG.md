@@ -4,6 +4,35 @@
 
 ---
 
+## 2026-08-07.8
+
+**v0.5.18 — 구조 판정은 한 곳에서, 그리고 배포는 소비자의 저장소까지다.** 독립 콜드 리뷰와 downstream 재클론이 above-bar 4건을 실측했다.
+
+**① Human queue의 lead 계약이 placeholder에만 적용됐다 (P1).** v0.5.17이 "더 깊은 불릿은 detail"을 placeholder 분기에만 가르쳤고, `- [open]`은 그 앞에 그대로 있었다. 실측:
+
+```md
+- [open] [user-only] PARENT
+  - [open] CHILD-DETAIL
+```
+
+`status`는 대기 결정을 **2건**으로 셌고(FORMATS는 1건이라 한다), `validate`는 항목이 아닌 줄에 소유권 태그를 요구하며 **rc 1**로 막았다 — 멀쩡한 파일에서. 태그를 넣으면 이번엔 **존재하지 않는 대기 결정**이 보고된다. 같은 분열이 같은 lead의 일반 untagged 형제를 침묵 소실시키고, 들여쓴 `[ruled]` 밑의 하위 불릿을 중복 계상했다.
+
+원인은 워커가 둘이었다는 것이다 — `status`의 걸음과 `validate`의 독립 walker. **`hq-ledger.mjs`를 만들어 구조 판정을 한 번만 한다**: 어떤 줄이 항목인지는 의견의 문제가 아니고, 그것으로 무엇을 할지가 정책이라 각자에게 남는다. `status`는 버킷으로 나누고, `validate`는 받은 항목의 태그를 검사한다. 규칙도 일반화했다 — **제어문자만으로 된 lead(컬럼 0 포함)는 언제나 항목**, 그 외에는 위 항목보다 **엄격히 더 깊을 때만** detail. placeholder 전용이던 `HQ_STUB_ENTRY`가 모든 불릿의 규칙이 됐다.
+
+**② Windows downstream 재클론에서 런타임이 깨졌다 (P1).** 이 저장소는 루트 `.gitattributes`로 `.weavedoc/** text eol=lf`를 고정하지만, **배포 계약은 "`.weavedoc` 폴더 복사"**라 그 핀이 경계에서 멈춘다. `core.autocrlf=true`(Windows 기본값)로 fresh clone한 실측: schema에 CR **97개**, 진입점에 **381개**, fingerprint `ea390a9e0fbc` → `d1324e0a09b7`, validate **rc 1 · 372 problems**(FM-MISSING 300 · RESOLUTION-ENUM 61 · PROV-ENUM 8).
+
+분해해서 원인을 특정했다: **CRLF 런타임 + LF 광산 = 372건**, **LF 런타임 + CRLF 광산 = 정상**. 즉 광산 바이트가 아니라 **런타임이 자기 schema를 읽는 것**이 깨진다. `loadSchema`만 CR을 남기고 있었고, 그 근거로 적혀 있던 것은 **bundle 2026-08-05.3에서 삭제된 bash 런타임과의 파리티**였다 — 원본이 사라진 순간이 물려받은 규칙을 다시 정할 때다(장부 CRLF를 §11 2026-08-05에 통일한 것과 같은 판정: **리더는 하나**). 두 반쪽을 함께 고쳤다: **파서가 판정을 되살리고**, **`.weavedoc/.gitattributes`를 번들에 실어 fingerprint를 되살린다**(매니페스트에도 등재).
+
+**③ 빈 configured 디렉터리가 clone에서 사라졌다 (P1).** Git은 파일만 저장하므로 비어 있는 `documents/`는 clone에 없고, validate는 `CFG-PATH-MISSING`으로 정확히 막는다. **없는 디렉터리를 빈 것으로 간주하는 완화는 하지 않았다** — 0회 실행되는 검사와 통과는 구분돼야 한다. `weavedoc-init`이 configured 경로마다 `.gitkeep`을 보장하고(reconfigure 포함), 회귀는 **광산을 커밋 → clone → validate**로 실제로 왕복한다.
+
+**④ pathspec 환경변수로 같은 KEY·다른 manifest (P1).** `git rev-parse --local-env-vars`는 `GIT_LITERAL_PATHSPECS`류를 **세지 않는다**. 실측: 그 넷 중 셋이 걸리면 매니페스트가 46행 `fb6a96eb…` → 36행 `09c403ef…`가 되는데 **하네스 키는 그대로**라, `--resume`이 fresh 실행이면 실패할 PASS를 재생한다. 양쪽을 독립적으로 막았다 — git-env.sh가 그 넷을 지우고(열거지만 git에 열거자가 없으므로 이유를 적어 남긴다), **make-manifest.sh는 애초에 pathspec glob에 의존하지 않는다**(`.claude/skills/weavedoc-*` → 디렉터리 + 루프 필터). `bin/`도 트리 통째로 받는다.
+
+**매니페스트 생성기가 fail-closed가 됐다.** 실측: 저장소 밖 실행·필수 경로 없는 저장소·읽히지 않는 blob — 셋 다 **빈 매니페스트에 rc 0**이었고, 마지막 것은 **빈 입력의 sha256(`e3b0c442…`)을 파일 다이제스트로 기록**했다. 이제 `pipefail` + blob 실패 승격 + 64-hex 검사 + **필수 경로 확인**(개수 임계가 아니라 이름)으로 거부한다.
+
+**gaps.md의 "비었음" 계약을 명문화했다 (사용자 재정).** `- (없음)`/`- (none)`은 **Human queue와 questions.md의 idiom이고 완결성 등록부의 것이 아니다** — 여기서 빈 절은 **불릿 0개**다. 등록부는 fail-closed이고 모든 불릿이 kind를 가진 gap 또는 결정이라는 단순 불변식이 언어별 예외보다 값이 크다. 대신 kind 없는 불릿을 **`malformed register entry`로 표시**한다(`status --open`은 설정과 무관하게, validate는 `required`에서 `COMP-MALFORMED`로). **표시일 뿐 총계에서 빼지 않는다** — 자기 검토에서 첫 철자가 `0 open, 1 malformed`를 찍는데 validate는 같은 스캔으로 `2 open gap(s)`를 막고 있었다: 한 파일 두 숫자, 이 lane이 없애려는 바로 그 계열이다. 이제 `gaps (2, 1 malformed)`이고 그 일치를 케이스가 단언한다. 그리고 이 표시는 **kind 슬롯이 아예 없는 줄**에만 붙는다 — placeholder가 남은 kind 위에 실제 내용이 있는 항목은 FORMATS가 명시적으로 **열린 갭으로 센다**(첫 철자가 그것까지 빼서 기존 케이스 둘이 정당하게 빨개졌다). eclypse의 `- (없음)` 삭제가 옳은 처리였다. `scanRegister`가 **항목별 kind 판정**을 돌려주고 집계는 거기서 파생된다 — 판정 하나, 리더 둘.
+
+**회귀 15건 추가**(대부분 red-first): nested `[open]`(태그 유무 양쪽)·들여쓴 `[ruled]`의 부모성·같은 lead untagged 형제·CRLF schema·빈 디렉터리 clone 왕복·pathspec 4종·매니페스트 fail-closed 3축·gaps idiom(Open·Accepted·정상 빈 형태). 변이 확인: `HQ_OPEN`을 lead 비교 앞으로 되돌리면 ①이, `loadSchema`를 되돌리면 CRLF가, `.gitkeep`을 빼면 clone이, 소싱/pipefail/필수경로를 되돌리면 하네스 케이스가 각각 빨개진다.
+
 ## 2026-08-07.7
 
 **v0.5.17 — 부모가 누구인지 알아야 detail이다, 그리고 격리는 상속된 git 환경 전부다.** 외부 리뷰가 above-bar 2건을 실측했다. 둘 다 **v0.5.16이 만든 것**이다.
