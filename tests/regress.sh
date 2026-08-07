@@ -5,13 +5,19 @@
 # Results: a keyed cache dir under $TMPDIR (key = commit + bundle bytes + OS + tool versions),
 # which is what makes --resume safe across exactly one thing: the same configuration.
 #
-#   bash notes/regress.sh            # every case (parallel)
-#   bash notes/regress.sh gate       # only cases whose name contains "gate"
-#   bash notes/regress.sh -j1 gate   # serially, for debugging
-#   bash notes/regress.sh --one NAME # exactly one case, output inline
+#   bash tests/regress.sh            # every case (parallel)
+#   bash tests/regress.sh gate       # only cases whose name contains "gate"
+#   bash tests/regress.sh -j1 gate   # serially, for debugging
+#   bash tests/regress.sh --one NAME # exactly one case, output inline — SEALS after printing:
+#                                    # rc 2 if the tree moved mid-run, even on a PASS (+~40%,
+#                                    # it computes the key a second time)
 #
-# One `validate` costs ~35s on MSYS/Windows for a 1-truth mine, so cases run in parallel, each in
-# its own copy of the fixture. Each case starts from a pristine minimal project (1 material ·
+# (The paths said `notes/` — where this suite lived before Phase 0 moved it here, years of edits
+# ago in this file's terms. Corrected 2026-08-07 with the timing below, which was equally stale.)
+#
+# On MSYS/Windows a case costs ~1.8s — a fixture copy plus one CLI run — and the whole sweep ~7min
+# at -j6; the same sweep is ~30s in the Linux container, which is why the pre-tag rule uses it.
+# Cases run in parallel, each in its own copy of the fixture. Each case starts from a pristine minimal project (1 material ·
 # 1 truth · 1 document · final.md) that validates clean, mutates it, and asserts on the output.
 # A case named block_* must be REJECTED for a named reason; pass_* must not be rejected at all;
 # acct_* asserts on the `examined:` accounting line.
@@ -47,6 +53,11 @@ WD_ENTRY=${WDRUN[${#WDRUN[@]}-1]}
 # DEFINED ABOVE the KEY computation on purpose — below it, the call inside KEY would fail into its
 # 2>/dev/null and the paths would silently vanish from the key (the emptiness-looks-like-success
 # class this suite keeps a name for).
+# `.claude/skills` was briefly added here and is OUT again (cold review, v0.5.14): the reason
+# given — "renaming a skill file to identical bytes moves the manifest but not the key" — does
+# not reproduce. make-manifest.sh reads the INDEX (`git ls-files` + `git cat-file blob :<path>`),
+# which a working-tree rename does not touch, and a STAGED rename moves the key through the index
+# hash anyway. Keeping it only widened the surface on which a stray untracked file fires the seal.
 key_paths() { ( cd "$1" && find tests .weavedoc/templates .weavedoc/bin -type f -print0 | sort -z | tr '\0' '\n' ); }
 
 # WORKERS INHERIT THE KEY — they do not recompute it (v0.5.12). The block below spawns ~25
@@ -74,16 +85,24 @@ compute_key() { { git -C "$REPO" rev-parse HEAD 2>/dev/null
          # whose behavior lives in bin/lib/, so a key that hashed only $WD_ENTRY let a dirty lib
          # edit reuse the previous run's results under --resume (the v0.4.0 external review's
          # finding; HEAD only covers COMMITTED edits).
-         { sha256sum "$REPO/.weavedoc/bin/weavedoc.mjs" "$REPO/.weavedoc/schema"
-           # find, not a flat glob: a future lib/subdir/ must key too. Sorted for stability.
-           find "$REPO/.weavedoc/bin/lib" -type f -print0 | sort -z | xargs -0 sha256sum
+         # THE WHOLE bin/ TREE, never named files (cold review, v0.5.14). Naming weavedoc.mjs and
+           # bin/lib left anything else under bin/ CONTENT-blind while key_paths kept only its path,
+           # so editing a `bin/extra.mjs` moved nothing — measured: `--resume` replays the old PASS
+           # and a fresh run fails. The invariant cases police "whatever .mjs sits under bin/", so
+           # the key must cover the same set. This subsumes the $WD_ENTRY hash added earlier in this
+           # release for the identical class one file over.
+           { sha256sum "$REPO/.weavedoc/schema"
+           find "$REPO/.weavedoc/bin" -type f -print0 | sort -z | xargs -0 sha256sum
            # EVERYTHING a case consumes is configuration (v0.5.2 keyed the faultinject drivers;
            # review #6 named the rest of the class): doccheck.sh and ctlscan.mjs are RUN by cases,
            # the golden files are COMPARED by one, and the pristine fixture copies a template out
            # of .weavedoc/templates — a dirty edit to any of them changes what a case measures
            # without changing the case, and --resume would hand back the stale result. The *.sh
            # glob keys this harness's own bytes too (v0.5.1), so the separate self-hash is gone.
-           sha256sum "$REPO"/tests/*.sh "$REPO"/tests/*.mjs
+           # RECURSIVE for the same reason: a future tests/helpers/x.sh is content-blind to a
+           # top-level glob. baseline/ is pruned — only its two manifest files are read by a case
+           # and they are hashed by name below.
+           find "$REPO/tests" -path "$REPO/tests/baseline" -prune -o -type f -name "*.sh" -print0 -o -type f -name "*.mjs" -print0 | sort -z | xargs -0 sha256sum
            # ...and the DOCS those scripts read (review #7): the doccheck case greps README,
            # CHANGELOG and FORMATS — a dirty edit there changes what it measures too.
            sha256sum "$REPO/README.md" "$REPO/CHANGELOG.md" "$REPO/.weavedoc/FORMATS.md"
@@ -96,11 +115,15 @@ compute_key() { { git -C "$REPO" rev-parse HEAD 2>/dev/null
            # case with no refusal at all.
            sha256sum "$REPO/.weavedoc/READ.md" "$REPO/tests/baseline/bundle.manifest" "$REPO/tests/baseline/bundle.manifest.sha256"
            find "$REPO/.claude/skills" -type f -print0 | sort -z | xargs -0 sha256sum
-           # …and the INDEX, because make-manifest.sh hashes `git cat-file blob :<path>` — staged
-           # bytes, not working-tree bytes. A `git add` during a run changes what that case measures
-           # while every file on disk is untouched, so the index state is part of the configuration.
-           git -C "$REPO" ls-files -s
            : ; } 2>/dev/null | awk '{print $1}'
+         # …and the INDEX, hashed WHOLE and OUTSIDE that awk (external review, v0.5.14). It was
+         # inside, where `awk '{print $1}'` keeps only the first field — for `git ls-files -s` that
+         # is the file MODE, so the blob SHAs and paths were discarded and the index was never
+         # really in the key. Measured: edit a file, start a sweep, `git add` it mid-run — 491/491
+         # and `--resume` reuses the stale PASSes, while a fresh-salt run fails on manifest drift.
+         # make-manifest.sh hashes `git cat-file blob :<path>`, i.e. STAGED bytes, so the index is
+         # configuration for every case that reads that manifest.
+         git -C "$REPO" ls-files -s -z 2>/dev/null | sha256sum
          # PATHS, not just contents (review #9) — and WHOLE repo-relative paths, not basenames
          # (review #10): the first fix hashed `basename` output, so moving a file between
          # directories — golden/version.txt into golden/z/ — kept the key while the fixed path
@@ -4523,22 +4546,78 @@ acct_gaps_accepted_tally_localized_section() {
   vrun gaps
   expect_has "records 1 already accepted"
 }
+meta_key_seal_covers_one_and_worker_branch() {
+  # THE TWO MECHANISMS v0.5.14 ADDED, exercised (cold review, v0.5.14). Deleting `--one`'s seal
+  # call, or the worker-branch refusal on `--seal-check`, left every case green — two new gate
+  # mechanisms with zero coverage, in the release whose own lesson is "text is not behaviour".
+  #   Revert either guard → this goes red.
+  local out rc probe="$REPO/.weavedoc/bin/lib/.seal-probe.mjs"
+  # (1) --one seals. Deterministic, not raced: the probe case WRITES a keyed file while `--one` is
+  # already running, so the key it computed at start cannot match the one it computes at the end.
+  # THIS case owns the cleanup — the probe deliberately leaves the file, and it is removed here on
+  # every path, so the window is one subshell inside one worker and the tree is clean after.
+  out=$( cd "$REPO" && WD_REG_RES= WD_REG_KEY= TMPDIR="$W" bash tests/regress.sh --one sealprobe_writes_keyed_file 2>&1 ); rc=$?
+  rm -f "$probe"
+  OUT="one: rc=$rc :: $out"
+  case "$out" in *"the tree changed while the suite was running"*) ;; *) bad "--one did not seal"; return ;; esac
+  [ "$rc" = 2 ] || { bad "--one sealed but exited $rc"; return; }
+  # (2) --seal-check refuses to run in the worker branch instead of dying on an undefined function.
+  out=$( cd "$REPO" && WD_REG_RES="$W/fake-res" WD_REG_KEY=abc TMPDIR="$W" bash tests/regress.sh --seal-check zzz 2>&1 ); rc=$?
+  OUT="$OUT || worker: rc=$rc :: $out"
+  case "$out" in
+    *"command not found"*) bad "--seal-check died on the undefined function instead of refusing" ;;
+    *"that is the worker branch"*) [ "$rc" = 2 ] && ok || bad "worker-branch refusal exited $rc" ;;
+    *) bad "--seal-check gave no worker-branch refusal" ;;
+  esac
+}
+sealprobe_writes_keyed_file() {
+  # A PROBE, not an assertion — the ONLY case that writes inside $REPO, and it does so on purpose:
+  # meta_key_seal_covers_one_and_worker_branch runs it through `--one` so that run's own seal has
+  # something to catch, and THAT case removes the file afterwards.
+  #
+  # NAMED `sealprobe_`, NOT `acct_`, and that is the point: the selector takes
+  # ^(block|pass|acct|meta|e2e)_, so this is unreachable from a plain sweep and can only be summoned
+  # by name. Scheduled like a case it would leave the file behind mid-sweep, the sweep's own seal
+  # would refuse — correctly — and every run would fail. The suite already keeps `nodeshape_`
+  # outside the selector for exactly this reason.
+  printf 'export const probe = 1\n' > "$REPO/.weavedoc/bin/lib/.seal-probe.mjs"
+  OUT="seal probe: wrote .weavedoc/bin/lib/.seal-probe.mjs (its caller removes it)"; RC=0; ok
+}
 meta_key_seal_refuses_and_clears() {
   # THE SEAL'S BEHAVIOUR, not its text (cold review, v0.5.13). The first version of this guard
   # counted four strings in the source, and text is not behaviour: mutating `exit 2` to `exit 0`,
   # or making the `if` unreachable, left it GREEN with the seal dead — this suite's oldest class,
   # one level up. `--seal-check <key>` runs the real `seal_or_refuse`, so the refusal is exercised:
   # message, exit code, and the cache actually being discarded.
-  local res="$W/.sealres" out rc n
-  mkdir -p "$res"; : > "$res/leftover-result"
-  out=$( cd "$REPO" && WD_REG_RES="" TMPDIR="$W" bash tests/regress.sh --seal-check deadbeefcafe 2>&1 ); rc=$?
-  n=$(ls "$RES" 2>/dev/null | wc -l)
-  OUT="rc=$rc :: $out"
+  # THE SENTINEL GOES IN THE CHILD'S OWN CACHE (external review, v0.5.14). The first version made
+  # `$W/.sealres` and then counted `$RES` — this case's own dir, not the child's — so the deletion
+  # half asserted nothing: replacing the real `rm -rf` with `:` left it green. The child's cache is
+  # `$TMPDIR/wd-reg-<key>/res`, and TMPDIR is pointed at this case's workspace so nothing outside
+  # it is touched; the key is read from the child's own refusal message.
+  local out rc key child
+  # WD_REG_RES/WD_REG_KEY are CLEARED for the child: inside a --batch worker they are exported, and
+  # a child that inherits them takes the "worker" branch where `compute_key` is never defined — so
+  # the seal could not run and this case failed only under the real fan-out, never under `--one`
+  # (found by the container sweep, v0.5.14).
+  out=$( cd "$REPO" && WD_REG_RES= WD_REG_KEY= TMPDIR="$W" bash tests/regress.sh --seal-check deadbeefcafe 2>&1 ); rc=$?
+  key=$(printf '%s\n' "$out" | sed -n 's/.*, \([0-9a-f]*\) now\..*/\1/p')
+  child="$W/wd-reg-$key/res"
+  OUT="rc=$rc key=$key child=$child :: $out"
   case "$out" in
     *"the tree changed while the suite was running"*) ;;
     *) bad "the seal did not refuse on a key that cannot match"; return ;;
   esac
-  if [ "$rc" != 2 ]; then bad "the seal refused but exited $rc — CI reads anything but 2 as a pass"
+  if [ "$rc" != 2 ]; then bad "the seal refused but exited $rc — CI reads anything but 2 as a pass"; return; fi
+  if [ -z "$key" ]; then bad "could not read the child's key from its refusal — the sentinel check would be vacuous"; return; fi
+  # Now prove the DELETION: plant a result in the child's real cache, refuse again, require it gone.
+  mkdir -p "$child"; : > "$child/planted-result"
+  # WD_REG_RES/WD_REG_KEY are CLEARED for the child: inside a --batch worker they are exported, and
+  # a child that inherits them takes the "worker" branch where `compute_key` is never defined — so
+  # the seal could not run and this case failed only under the real fan-out, never under `--one`
+  # (found by the container sweep, v0.5.14).
+  out=$( cd "$REPO" && WD_REG_RES= WD_REG_KEY= TMPDIR="$W" bash tests/regress.sh --seal-check deadbeefcafe 2>&1 ); rc=$?
+  if [ -e "$child/planted-result" ]; then bad "the seal said the cache was discarded but $child/planted-result survived"
+  elif [ "$rc" != 2 ]; then bad "second refusal exited $rc"
   else ok; fi
 }
 meta_key_seal_is_one_function_called_twice() {
@@ -5177,6 +5256,21 @@ acct_status_hq_tag_separator_is_one_class() {
   vrun status --open
   expect_has "세로탭 뒤 본문"
 }
+acct_openlist_hq_nested_placeholder_is_detail() {
+  # THE v0.5.13 FIX OVERSHOT (external review, v0.5.14). Widening the stub branch to HQ_STUB_OPENER
+  # let it swallow ORDINARY space/tab indentation too, so a nested placeholder sub-bullet under a
+  # real entry became a second waiting item — v0.5.12 reported one entry here, v0.5.13 reported two.
+  # Space/tab indentation is a continuation (detail); only a CONTROL-character lead is an entry the
+  # gate accepts, so the two are separated now.
+  # Revert to the un-split HQ_STUB_OPENER branch → this goes red.
+  printf -- '\n- [open] [user-only] PARENT\n  - [{state}] [{ownership}] NESTED-DETAIL\n' >> "$W/truths/verify.md"
+  vrun status
+  expect_has "you decide 1"
+  expect_hasnt "with no '[open]'/'[ruled]' state tag"
+  vrun status --open
+  expect_has "human queue (1):"
+  expect_hasnt "NESTED-DETAIL"
+}
 acct_openlist_hq_leading_ctrl_stub_realizes() {
   # THE WORSE HALF of the same shape (cold review, v0.5.13): a control-indented PLACEHOLDER stub
   # was excluded from the `[open]` branch by HQ_STUB_OPENER and then not matched by the stub branch
@@ -5423,6 +5517,13 @@ runone() { # $1 = case name; runs in its own fixture copy, writes $RES/<case>
 }
 
 if [ -n "$SEALCHECK" ]; then
+  # A WORKER CANNOT SEAL: it inherits the key instead of computing one, so `compute_key` does not
+  # exist in that branch and the seal would die with a shell error instead of a verdict. Said out
+  # loud rather than left to fail obscurely (v0.5.14 — a case hit exactly this).
+  if [ -n "${WD_REG_RES:-}" ]; then
+    echo "--seal-check cannot run with WD_REG_RES set: that is the worker branch, which inherits the key rather than computing it" >&2
+    exit 2
+  fi
   mkdir -p "$RES"
   seal_or_refuse "$SEALCHECK"
   echo "seal: key unchanged ($KEY)"
@@ -5448,6 +5549,12 @@ if [ -n "$ONE" ]; then
   [ -d "$PRISTINE" ] || mkpristine
   runone "$ONE"
   cat "$RES/$ONE"
+  # `--one` seals too (external review, v0.5.14): it is a PUBLIC entry point that runs a case
+  # against the live tree, so its verdict carries the same claim the full run's total does. The
+  # seal comes after the result is printed — a refusal must not hide what the case actually said.
+  # GUARDED like --seal-check: in the worker branch `seal_or_refuse` is not even defined, and an
+  # unguarded call there died with `command not found` and silently no-op'd (cold review, v0.5.14).
+  if [ -z "${WD_REG_RES:-}" ]; then seal_or_refuse "$KEY"; fi
   grep -q "	PASS" "$RES/$ONE"
   exit $?
 fi
@@ -5470,8 +5577,9 @@ OUT=$( ( cd "$PRISTINE" && "${WDRUN[@]}" validate ) 2>&1 ) || {
   printf '%s\n' "$OUT" | sed 's/^/   | /'; exit 2
 }
 mkdir -p "$RES" "$WORK/w"
-# --resume keeps results already in THIS key's cache and runs only what is missing. One `validate`
-# costs ~40s here even at -j6, so a full sweep outlives a single foreground command; without
+# --resume keeps results already in THIS key's cache and runs only what is missing. A sweep is minutes
+# on MSYS (one `validate` is ~1s on the pristine fixture — the "~40s" this line used to claim
+# predates the Node runtime), so it outlives a single foreground command; without
 # resume every interruption threw away the whole sweep. A different commit/bundle/toolchain is a
 # different key — its cache is a different directory, so cross-configuration reuse cannot happen.
 if [ "$RESUME" -eq 0 ]; then rm -rf "$RES" "$WORK/w" 2>/dev/null; mkdir -p "$RES" "$WORK/w"; fi

@@ -9,6 +9,8 @@ bash tests/regress.sh            # 전체 케이스 (병렬 -j6)
 bash tests/regress.sh gate       # 이름에 "gate"가 들어간 케이스만
 bash tests/regress.sh --resume   # 같은 구성의 이전 결과 재사용, 남은 것만
 bash tests/regress.sh --one NAME # 케이스 하나, 출력 인라인 (pristine 자동 생성)
+#   ↑ 결과를 찍은 뒤 KEY seal도 건다: 실행 중 트리가 바뀌면 케이스가 PASS여도 rc 2로 끝난다
+#     (키를 한 번 더 계산하므로 케이스당 ~40% 느리다)
 ```
 
 기본 러너는 **배포되는 런타임**(`node .weavedoc/bin/weavedoc.mjs`)이다. bash 판이 함께 배포되던 동안 기본값이 그쪽이어서 **로컬에서 그냥 돌리면 제품이 아니라 기준을 채점**하고 있었다(v0.4.0 외부 리뷰 지적, 번들 2026-08-05.3에서 수정). 다른 대상을 채점하려면 `WD_BIN="<인터프리터> <진입점>"`.
