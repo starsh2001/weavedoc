@@ -2,8 +2,8 @@
 # Run a test command inside the Linux container, against the working tree as it stands.
 #
 # WHY. Windows is where this is developed and Linux is where it is graded. MSYS serialises process
-# creation globally, so what costs time there is the NUMBER of spawns, not the runtime: 487 cases
-# run in ~30s in the container and ~7min natively (both -j6, measured 2026-08-07; natively it was
+# creation globally, so what costs time there is the NUMBER of spawns, not the runtime: 507 cases
+# run in ~33s in the container and ~4.5min natively (both -j6, measured 2026-08-07; natively it was
 # 30min+ before v0.5.12 stopped re-computing the cache key and re-parsing this suite once per
 # case). Both figures track the case count — re-measure here and in tests/README.md when it grows.
 #

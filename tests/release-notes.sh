@@ -7,6 +7,10 @@
 #   bash tests/release-notes.sh <prev-tag> <this-tag-or-ref>
 set -u
 REPO=$(cd "$(dirname "$0")/.." >/dev/null 2>&1 && pwd)
+# The same cleaned git environment the rest of tests/ runs in (v0.5.17): these `git show`s decide
+# what a published release says changed, and an inherited GIT_DIR would have them read a different
+# repository entirely. shellcheck source=tests/git-env.sh
+. "$REPO/tests/git-env.sh" || { echo "tests/git-env.sh could not be sourced — refusing to read an ambient repository" >&2; exit 2; }
 PREV=${1:?usage: release-notes.sh <prev-tag> <this-tag>}
 THIS=${2:?usage: release-notes.sh <prev-tag> <this-tag>}
 cd "$REPO"

@@ -25,6 +25,13 @@
 set -u
 REPO=$(cd "$(dirname "$0")/.." >/dev/null 2>&1 && pwd)
 
+# A CLEAN GIT ENVIRONMENT FOR THE WHOLE PROCESS — sourced above the key, so every git call in this
+# file and in every case is isolated without carrying flags of its own. Two of them read this
+# repository and two build throwaway ones, and an inherited git environment corrupts both halves
+# (tests/git-env.sh records what leaked before, measured).
+# shellcheck source=tests/git-env.sh
+. "$REPO/tests/git-env.sh" || { echo "tests/git-env.sh could not be sourced — refusing to run git half-isolated"; exit 2; }
+
 # ---- runtime under test ----
 # Every case here is a CLI black box: it builds a mine, runs a command, and asserts stdout plus the
 # exit code. Nothing reads the runtime's internals. So the runtime can be swapped WITHOUT touching a
@@ -75,7 +82,7 @@ else
 # A FUNCTION, because the key is computed TWICE (v0.5.13): once to name the cache, and once when
 # the workers are done, to prove the tree did not move under them. Two spellings would be two
 # answers about the same bytes — the class this repo keeps closing — so there is one.
-compute_key() { { env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE git -C "$REPO" rev-parse HEAD 2>/dev/null
+compute_key() { { git -C "$REPO" rev-parse HEAD 2>/dev/null
          cat "$REPO/.weavedoc/VERSION" 2>/dev/null
          # WD_BIN itself: two different invocations of the same commit are different configurations
          # and must not share a result cache, or `--resume` would hand one implementation's results
@@ -89,8 +96,10 @@ compute_key() { { env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE git -C "$REP
            # bin/lib left anything else under bin/ CONTENT-blind while key_paths kept only its path,
            # so editing a `bin/extra.mjs` moved nothing — measured: `--resume` replays the old PASS
            # and a fresh run fails. The invariant cases police "whatever .mjs sits under bin/", so
-           # the key must cover the same set. This subsumes the $WD_ENTRY hash added earlier in this
-           # release for the identical class one file over.
+           # the key must cover the same set. It does NOT subsume the $WD_ENTRY hash below — this
+           # comment said it did, and v0.5.15 deleted that line on the strength of the sentence
+           # before measuring it (WD_BIN takes any project-relative path, and one outside bin/ went
+           # unkeyed). Corrected with the line, v0.5.17.
            { sha256sum "$REPO/.weavedoc/schema"
            find "$REPO/.weavedoc/bin" -type f -print0 | sort -z | xargs -0 sha256sum
            # EVERYTHING a case consumes is configuration (v0.5.2 keyed the faultinject drivers;
@@ -128,7 +137,12 @@ compute_key() { { env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE git -C "$REP
          # and `--resume` reuses the stale PASSes, while a fresh-salt run fails on manifest drift.
          # make-manifest.sh hashes `git cat-file blob :<path>`, i.e. STAGED bytes, so the index is
          # configuration for every case that reads that manifest.
-         env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE git -C "$REPO" ls-files -s -z 2>/dev/null | sha256sum
+         # No -u flags here any more (external review, v0.5.17): the three this line carried were
+         # unset HERE and left standing in make-manifest.sh, so the key read the default index while
+         # the manifest the key is supposed to cover read the alternate one — same key, different
+         # manifest, `--resume` replaying a PASS that the fresh run fails. tests/git-env.sh, sourced
+         # at the top, now clears the whole set for the process, so no git call carries its own.
+         git -C "$REPO" ls-files -s -z 2>/dev/null | sha256sum
          # PATHS, not just contents (review #9) — and WHOLE repo-relative paths, not basenames
          # (review #10): the first fix hashed `basename` output, so moving a file between
          # directories — golden/version.txt into golden/z/ — kept the key while the fixed path
@@ -4596,24 +4610,96 @@ meta_key_covers_the_git_index() {
   mkdir -p "$repo" && cp -r "$REPO/tests" "$REPO/.weavedoc" "$repo"/ 2>/dev/null
   mkdir -p "$repo/.claude" && cp -r "$REPO/.claude/skills" "$repo/.claude"/ 2>/dev/null
   cp "$REPO/README.md" "$REPO/CHANGELOG.md" "$repo"/ 2>/dev/null
-  # env -u: `git init` HONOURS an inherited GIT_DIR — it re-initialises THAT dir instead of making
+  # `git init` HONOURS an inherited GIT_DIR — it re-initialises THAT dir instead of making
   # one here, and the `git add -A` then stages this scratch tree into the REAL repository's index,
   # marking every real entry deleted (measured; the case still reported PASS). GIT_DIR is set inside
   # every hook, `rebase --exec`, `bisect run` and `submodule foreach` — i.e. the ordinary
   # run-the-suite-before-committing wiring. Data loss, in the release that moved a probe out of the
-  # live tree for the same reason (cold review, v0.5.16).
-  local nogit="env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE"
-  ( cd "$repo" && $nogit git init -q . && $nogit git add -A >/dev/null 2>&1 ) || { bad "could not build a scratch git repo"; return; }
+  # live tree for the same reason (cold review, v0.5.16). The local `env -u` copy that stood here
+  # is gone (external review, v0.5.17): it named three variables and left GIT_OBJECT_DIRECTORY
+  # standing, so these two calls wrote 79 objects of this scratch repo into whatever repository that
+  # variable named — measured, with the case still reporting PASS. tests/git-env.sh clears the whole
+  # set for the process instead, which is what meta_git_env_writes_stay_inside exercises.
+  ( cd "$repo" && git init -q . && git add -A >/dev/null 2>&1 ) || { bad "could not build a scratch git repo"; return; }
   before=$( cd "$repo" && WD_REG_RES= WD_REG_KEY= TMPDIR="$W" bash tests/regress.sh --seal-check zzzzzzzzzzzz 2>&1 | sed -n 's/.*, \([0-9a-f]*\) now\..*/\1/p' )
   # A STAGED-ONLY change: the file on disk is edited AND staged, so a key that ignored the index
   # would still move — stage a change and then restore the worktree copy, leaving only the index.
   printf '\n// staged only\n' >> "$repo/.weavedoc/bin/lib/core.mjs"
-  ( cd "$repo" && $nogit git add .weavedoc/bin/lib/core.mjs >/dev/null 2>&1 )
+  ( cd "$repo" && git add .weavedoc/bin/lib/core.mjs >/dev/null 2>&1 )
   sed -i '$ d' "$repo/.weavedoc/bin/lib/core.mjs"; sed -i '$ d' "$repo/.weavedoc/bin/lib/core.mjs"
   after=$( cd "$repo" && WD_REG_RES= WD_REG_KEY= TMPDIR="$W" bash tests/regress.sh --seal-check zzzzzzzzzzzz 2>&1 | sed -n 's/.*, \([0-9a-f]*\) now\..*/\1/p' )
   OUT="before=$before after=$after"
   if [ -z "$before" ]; then bad "no key from the scratch repo — the comparison would be vacuous"
   elif [ "$before" = "$after" ]; then bad "a staged-only change did not move the key — the index is not in it"
+  else ok; fi
+}
+meta_git_env_ignored_by_key_and_manifest() {
+  # NO GIT-LOCAL ENVIRONMENT VARIABLE MAY REACH THIS SUITE (external review, v0.5.17). v0.5.16 unset
+  # three of the fifteen `git rev-parse --local-env-vars` names, at the call sites it had found:
+  #   * GIT_OBJECT_DIRECTORY, GIT_COMMON_DIR and GIT_CONFIG_PARAMETERS each MOVED the cache key
+  #     (measured — the key became the one a git-less tree produces);
+  #   * GIT_INDEX_FILE was unset in compute_key and NOT in make-manifest.sh, so the key described
+  #     the default index while the manifest it is supposed to cover described the alternate one:
+  #     same key, different manifest, `--resume` replaying a PASS the fresh run fails.
+  # Both halves run here. Delete the `. tests/git-env.sh` line from either script → this goes red.
+  local sc="$W/gitenv" alt="$W/gitenv-altidx" fails="" pois="" v k0 kp m0 m1 blob
+  for v in $(git rev-parse --local-env-vars 2>/dev/null); do
+    case "$v" in GIT_CONFIG_COUNT) pois="$pois $v=0" ;; *) pois="$pois $v=/nonexistent-wd-gitenv" ;; esac
+  done
+  [ -n "$pois" ] || { bad "git named no local env vars — the poison would be vacuous"; return; }
+  # (1) THE KEY. Poison every one of them at once: a partial cleanup shows up as a moved key.
+  k0=$( WD_REG_RES= WD_REG_KEY= TMPDIR="$W" bash "$REPO/tests/regress.sh" --seal-check zzzzzzzzzzzz 2>&1 | sed -n 's/.*, \([0-9a-f]*\) now\..*/\1/p' )
+  # shellcheck disable=SC2086  # $pois is a list of NAME=VALUE words, built here — splitting is the point
+  kp=$( env $pois WD_REG_RES= WD_REG_KEY= TMPDIR="$W" bash "$REPO/tests/regress.sh" --seal-check zzzzzzzzzzzz 2>&1 | sed -n 's/.*, \([0-9a-f]*\) now\..*/\1/p' )
+  [ -n "$k0" ] || { bad "no key from a clean run — the comparison would be vacuous"; return; }
+  [ "$k0" = "$kp" ] || fails="$fails key($k0!=$kp)"
+  # (2) THE MANIFEST, in a throwaway repo so this works where $REPO has no .git (the container copy
+  # does not). Two tracked files are enough: what is asserted is that both runs answer alike, not
+  # what they answer. The alternate index restages VERSION with schema's blob — a difference the
+  # unfixed script reported and the key never saw.
+  mkdir -p "$sc/.weavedoc" "$sc/tests"
+  cp "$REPO/.weavedoc/VERSION" "$REPO/.weavedoc/schema" "$sc/.weavedoc"/ 2>/dev/null
+  cp "$REPO/tests/make-manifest.sh" "$REPO/tests/git-env.sh" "$sc/tests"/ 2>/dev/null
+  ( cd "$sc" && git init -q . && git add -A >/dev/null 2>&1 ) || { bad "could not build a scratch git repo"; return; }
+  cp "$sc/.git/index" "$alt" 2>/dev/null
+  blob=$( cd "$sc" && git rev-parse :.weavedoc/schema 2>/dev/null )
+  ( cd "$sc" && GIT_INDEX_FILE="$alt" git update-index --cacheinfo 100644,"$blob",.weavedoc/VERSION >/dev/null 2>&1 ) \
+    || { bad "could not stage into the alternate index"; return; }
+  m0=$( cd "$sc" && bash tests/make-manifest.sh 2>/dev/null )
+  m1=$( cd "$sc" && GIT_INDEX_FILE="$alt" bash tests/make-manifest.sh 2>/dev/null )
+  case "$m0" in *.weavedoc/VERSION*) ;; *) bad "the scratch manifest is empty — the comparison would be vacuous"; return ;; esac
+  [ "$m0" = "$m1" ] || fails="$fails manifest"
+  OUT="leaks:${fails:- none}"; RC=0
+  if [ -n "$fails" ]; then bad "an inherited git environment still reaches:$fails"; else ok; fi
+}
+meta_git_env_writes_stay_inside() {
+  # THE WRITE HALF (external review, v0.5.17). With an inherited GIT_OBJECT_DIRECTORY, the scratch
+  # repo meta_key_covers_the_git_index builds wrote 79 objects into an UNRELATED repository — and
+  # the case reported PASS, in the release whose own lesson was that a test may not touch a tree it
+  # is not grading. Runs that case as a CHILD under a poisoned environment and reads the victim.
+  # Isolated copy, never $REPO: the child computes the key twice and a live tree would make this
+  # case fail on someone else's edit rather than on the leak (v0.5.16's lesson, applied).
+  # GIT_DIR and GIT_INDEX_FILE are poisoned alongside it. Those two were ALREADY handled in v0.5.16,
+  # so that part of this case passes before and after — it is here so a future cleanup cannot be
+  # narrowed back to "the object dir only" without going red.
+  local copy="$W/gitwrite" vic="$W/gitwrite-victim" before after vidx0 vidx1 out
+  mkdir -p "$copy/.claude" "$vic"
+  cp -r "$REPO/tests" "$REPO/.weavedoc" "$copy"/ 2>/dev/null
+  cp -r "$REPO/.claude/skills" "$copy/.claude"/ 2>/dev/null
+  cp "$REPO/README.md" "$REPO/CHANGELOG.md" "$copy"/ 2>/dev/null
+  ( cd "$vic" && git init -q . && printf 'victim\n' > v.txt && git add v.txt >/dev/null 2>&1 ) \
+    || { bad "could not build the victim repo"; return; }
+  before=$( find "$vic/.git/objects" -type f 2>/dev/null | wc -l | tr -d ' ' )
+  vidx0=$( sha256sum "$vic/.git/index" 2>/dev/null | awk '{print $1}' )
+  [ "$before" -gt 0 ] || { bad "the victim has no objects to compare against"; return; }
+  out=$( cd "$copy" && env GIT_OBJECT_DIRECTORY="$vic/.git/objects" GIT_DIR="$vic/.git" GIT_INDEX_FILE="$vic/.git/index" \
+         WD_REG_RES= WD_REG_KEY= TMPDIR="$W" bash tests/regress.sh --one meta_key_covers_the_git_index 2>&1 )
+  after=$( find "$vic/.git/objects" -type f 2>/dev/null | wc -l | tr -d ' ' )
+  vidx1=$( sha256sum "$vic/.git/index" 2>/dev/null | awk '{print $1}' )
+  OUT="victim objects $before->$after :: $out"
+  case "$out" in *meta_key_covers_the_git_index*) ;; *) bad "the child never ran the case"; return ;; esac
+  if [ "$before" != "$after" ]; then bad "the child wrote $((after - before)) objects into the victim repository"
+  elif [ "$vidx0" != "$vidx1" ]; then bad "the child rewrote the victim's index"
   else ok; fi
 }
 meta_key_seal_covers_one_and_worker_branch() {
@@ -5374,10 +5460,92 @@ acct_openlist_hq_ruled_entry_is_a_parent() {
   vrun status; expect_has "human queue: 0"
   vrun status --open; expect_hasnt "RULED-DETAIL"
 }
+acct_openlist_hq_realized_stub_siblings() {
+  # A BOOLEAN CANNOT SAY *WHAT* THE DETAIL IS DETAIL OF (external review, v0.5.17). v0.5.16 kept
+  # `parent` as a flag, so the moment a continuation REALIZED a held stub the flag went up and the
+  # next sibling stub — same indentation, a peer, not detail — was folded into the entry above it:
+  # two waiting decisions reported as one, measured. `parentLead` holds the parent's indentation
+  # instead, and a line is detail only when it is nested STRICTLY DEEPER.
+  # Revert parentLead to a boolean (or set it from anything but the held stub's own lead) → red.
+  printf -- '\n  - [{state}] [{ownership}]\n    BODY-ONE\n  - [{state}] [{ownership}]\n    BODY-TWO\n' >> "$W/truths/verify.md"
+  vrun status; expect_has "2 entry(s) with no"
+  vrun status --open
+  expect_has "human queue (0 open, 2 untagged):"
+  expect_has "BODY-ONE"; expect_has "BODY-TWO"
+}
+acct_openlist_hq_orphan_beside_open_entry() {
+  # THE SAME BOOLEAN, WORSE (external review, v0.5.17): a placeholder peer of a real `[open]` entry
+  # did not merge — it VANISHED. `- [open] …` set the flag, the peer became "detail" of an entry
+  # that already had content, and detail of a contentful entry is dropped, so status reported one
+  # waiting item and `--open` never named the second. Peers share a lead; only deeper is detail.
+  printf -- '\n  - [open] [user-only] OPEN-FIRST\n  - [{state}] [{ownership}] ORPHAN-SIBLING\n' >> "$W/truths/verify.md"
+  vrun status
+  expect_has "you decide 1"
+  expect_has "1 entry(s) with no"
+  vrun status --open
+  expect_has "OPEN-FIRST"; expect_has "ORPHAN-SIBLING"
+}
+acct_openlist_hq_deeper_placeholder_under_orphan() {
+  # THE OTHER DIRECTION OF THE SAME RULE (external review, v0.5.17). With a boolean that a surfaced
+  # placeholder deliberately did NOT set, a sub-bullet UNDER an orphan had no parent either, so it
+  # was counted as a second waiting item — the over-count twin of the two drops above, and against
+  # FORMATS' "an indented line under an entry belongs to it". A surfaced placeholder IS a parent;
+  # what stops it from swallowing its peers is the lead comparison, not the absence of a parent.
+  printf -- '\n  - [{state}] [{ownership}] ORPHAN\n    - [{state}] [{ownership}] DEEPER-DETAIL\n' >> "$W/truths/verify.md"
+  vrun status; expect_has "1 entry(s) with no"
+  vrun status --open
+  expect_has "ORPHAN"
+  expect_hasnt "DEEPER-DETAIL"
+}
+acct_openlist_hq_detail_under_realized_stub() {
+  # A REALIZED STUB'S ENTRY LIVES WHERE THE STUB WAS, not where the continuation that realized it
+  # was (v0.5.17). Taking the parent's indentation from the continuation line puts it one level too
+  # deep, and then a genuine sub-bullet — at the continuation's own indentation — stops being
+  # "deeper" and surfaces as a SECOND waiting item. The peer case above cannot see this: peers are
+  # shallower than the continuation either way. Change `parentLead = held.lead` to the continuation
+  # line's lead → this goes red (one entry becomes two).
+  # What is asserted is the COUNT, not the absence of the text: the realized entry's own line is
+  # tags-only, so every continuation under it folds into the display — the documented behaviour
+  # for an empty-remainder entry (acct_openlist_gaps_continuation_multi pins the same fold).
+  # Being part of one entry's text and being a second entry are different things; only the
+  # second is a defect, and the count is what says which happened.
+  printf -- '\n  - [{state}] [{ownership}]\n    REALIZED-BODY\n    - [{state}] [{ownership}] DEEP-DETAIL\n' >> "$W/truths/verify.md"
+  vrun status; expect_has "1 entry(s) with no"
+  vrun status --open
+  expect_has "human queue (0 open, 1 untagged):"
+  expect_has "REALIZED-BODY"
+}
+acct_openlist_hq_section_boundary_resets() {
+  # STATE MUST NOT CROSS A SECTION BOUNDARY (external review, v0.5.17). A Human queue is an
+  # append-per-round log, so one file legitimately carries several `## Human queue` sections; the
+  # reader concatenated their bodies with nothing between them, so when a section ENDED with an
+  # entry and the next BEGAN with an indented one, the second round's first item became detail of
+  # the first round's last — and disappeared. Each section is walked with fresh state now.
+  # Revert hqEntries to one walk over the joined body → this goes red.
+  printf -- '\n## Human queue\n- [open] [user-only] ROUND-ONE\n## Human queue\n  - [{state}] [{ownership}] ROUND-TWO\n' >> "$W/truths/verify.md"
+  vrun status --open
+  expect_has "ROUND-ONE"; expect_has "ROUND-TWO"
+}
+acct_openlist_hq_ctrl_placeholder_under_parent_is_entry() {
+  # THE CONTRACT THE MATRIX BELOW CLAIMED TO COVER AND DID NOT (external review, v0.5.17). Its
+  # comment said "EVERY lead… (or FF/CR)", but it only ever pinned space and tab — and for the
+  # control leads the answer is the OPPOSITE one: HQ_STUB_ENTRY makes a control-led placeholder an
+  # entry wherever it sits, parent or no parent, because a control character is not indentation the
+  # gate recognises. This case PASSES BEFORE AND AFTER the v0.5.17 fix — it is an over-blocking
+  # guard, not a red-first repro: the contract was simply never pinned, so the lead comparison
+  # could have been widened to swallow control leads with nothing going red. Dropping
+  # HQ_STUB_ENTRY's arm from the condition does make it red (checked by mutation).
+  printf -- '\n- [open] [user-only] CTRL-PARENT\n\f- [{state}] [{ownership}] FF-ENTRY\n' >> "$W/truths/verify.md"
+  vrun status
+  expect_has "you decide 1"
+  expect_has "1 entry(s) with no"
+  vrun status --open; expect_has "FF-ENTRY"
+}
 acct_openlist_hq_nested_placeholder_whitespace_matrix() {
-  # The detail side across EVERY lead the previous fix touched — space was the only one pinned, so
-  # a revert that re-included tab (or FF/CR) would have gone unnoticed. Under a parent, each is
-  # detail; the control-led ones are entries only when orphaned, which the case above covers.
+  # The detail side for the two leads that ARE indentation — space and tab. The control leads are
+  # not on this axis at all: HQ_STUB_ENTRY makes them entries under a parent too, which is pinned
+  # by acct_openlist_hq_ctrl_placeholder_under_parent_is_entry (this comment claimed to cover
+  # "EVERY lead … or FF/CR" through v0.5.16 and never did — external review, v0.5.17).
   printf -- '\n- [open] [user-only] PARENT-A\n  - [{state}] [{ownership}] SPACE-DETAIL\n' >> "$W/truths/verify.md"
   printf -- '\n- [open] [user-only] PARENT-B\n\t- [{state}] [{ownership}] TAB-DETAIL\n' >> "$W/truths/verify.md"
   vrun status
@@ -5710,7 +5878,7 @@ CASES=$(declare -F | awk '{print $3}' | grep -E '^(block|pass|acct|meta|e2e)_' |
 if [ -n "$FILTER" ]; then CASES=$(printf '%s\n' "$CASES" | grep -F "$FILTER" || true); fi
 [ -z "$CASES" ] && { echo "no cases match [$FILTER]"; exit 2; }
 
-echo "weavedoc regression — $(cd "$REPO" && git rev-parse --short HEAD 2>/dev/null) / bundle $(cat "$REPO/.weavedoc/VERSION") / $(printf '%s\n' "$CASES" | wc -l | tr -d ' ') cases, -j$JOBS"
+echo "weavedoc regression — $(git -C "$REPO" rev-parse --short HEAD 2>/dev/null) / bundle $(cat "$REPO/.weavedoc/VERSION") / $(printf '%s\n' "$CASES" | wc -l | tr -d ' ') cases, -j$JOBS"
 echo "  env: $(uname -sr) · bash ${BASH_VERSION%%(*} · cache key $KEY"
 # Syntax-check the entrypoint before building a fixture: a runtime that does not parse fails every
 # case identically and buries the one line that says why.

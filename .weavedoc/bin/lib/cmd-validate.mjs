@@ -244,7 +244,7 @@ function checkHqTags (m, prob, file, sch) {
   for (const raw of splitLines(nocomment(readOr(file)).replace(/\n+$/, ''))) {
     // Six is the deepest heading, here as in sectionAll (v0.5.4, review #9): this walker is a
     // second copy of those rules, and v0.5.4 moved the cap into only one of them — so a
-    // `####### Human queue` was a section to this check and to `status`'s hqBody, but not to any
+    // `####### Human queue` was a section to this check and to `status`'s hqBodies, but not to any
     // sectionAll consumer. One depth rule, every reader.
     if (lev(raw) <= 6 && /^#+[ \t\n\v\f\r]+Human queue[ \t\n\v\f\r]*$/.test(raw)) { on = true; lv = lev(raw); continue }
     if (on && /^#+[ \t\n\v\f\r]/.test(raw) && lev(raw) <= 6 && lev(raw) <= lv) on = false

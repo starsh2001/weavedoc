@@ -98,8 +98,16 @@ export function sectionBody2 (text, h) {
 // heading (Human queue, Adjudications: append-per-round). A section ends only at a SAME-OR-SHALLOWER
 // heading, so the sub-headings a ledger groups its rounds under stay inside it.
 // `Fidelity violations` must NOT use this: a second copy there is a bypass, which dupSection blocks.
-export function sectionAll (text, h) {
-  const out = []
+// EACH matching section, kept apart. sectionAll is this function joined, so there is one walker and
+// not two answers about where a section begins (v0.5.17). A reader that carries STATE across lines —
+// the Human queue's "what is this line detail of" — needs the boundary: the bodies were concatenated
+// with nothing between them, so a round ending in an entry and the next round beginning with an
+// indented one made the second round's first item detail of the first round's last, and it vanished
+// (external review). A reader that only counts lines cannot tell the difference and keeps using
+// sectionAll.
+export function sectionEach (text, h) {
+  const parts = []
+  let out = []
   let on = false
   let lv = 0
   const lev = s => { const m = /^#+/.exec(s); return m ? m[0].length : 0 }
@@ -109,13 +117,17 @@ export function sectionAll (text, h) {
   // gaps`: same file, two answers, the drift class again. Markdown agrees with the stricter
   // reader (a seventh '#' is not a heading), so the cap moves here rather than the other way.
   const head = s => /^#+[ \t\n\v\f\r]/.test(s) && lev(s) <= 6
+  const close = () => { if (out.length) parts.push(out.join('\n') + '\n'); out = [] }
   for (const line of toLines(text)) {
-    if (lev(line) <= 6 && new RegExp(`^#+[ \t\n\v\f\r]+${rx(h)}[ \t\n\v\f\r]*$`).test(line)) { on = true; lv = lev(line); continue }
-    if (on && head(line) && lev(line) <= lv) on = false
+    if (lev(line) <= 6 && new RegExp(`^#+[ \t\n\v\f\r]+${rx(h)}[ \t\n\v\f\r]*$`).test(line)) { close(); on = true; lv = lev(line); continue }
+    if (on && head(line) && lev(line) <= lv) { close(); on = false }
     if (on) out.push(line)
   }
-  return out.length ? out.join('\n') + '\n' : ''
+  close()
+  return parts
 }
+
+export function sectionAll (text, h) { return sectionEach(text, h).join('') }
 
 // ---- code fences ---------------------------------------------------------------------------
 // ONE fence judgment for every reader of a file (review #11): the fence rule lived in ONE of the
