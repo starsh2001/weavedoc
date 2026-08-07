@@ -4,6 +4,32 @@
 
 ---
 
+## 2026-08-07.10
+
+**v0.5.21 — 장부는 펜스와 빈 줄을 사람처럼 읽어야 한다.** 독립 콜드 리뷰가 P1 세 묶음을 실측했다. 셋 다 **정상 입력**에서 나온다.
+
+**① fenced Human queue 오인 (P1, 세 방향).** 이 장부는 HTML 주석만 벗기고 **코드펜스 판정을 안 썼다**(gaps.md는 v0.5.4부터 `defence`로 읽는다). 실측 세 건: fenced 예시의 `- [open] [user-only] …`가 **실제 대기 결정으로 계수**됐고, ownership 없는 fenced 예시는 **`HQ-UNTAGGED`로 rc 1** — 멀쩡한 파일을 막았으며, 진짜 `## Human queue`를 지우고 **fenced 제목만 남겨도 필수 절 검사가 통과**했다(광산에 큐가 아예 없는데 green). 이제 `hqRead()` 하나가 주석+펜스를 함께 벗기고 **walk와 필수-절 검사가 같은 텍스트를 읽는다**. 그 리더의 대가도 명명했다 — **미종결 펜스**는 뒤를 전부 지우므로 validate가 `HQ-UNTERMINATED-FENCE`로 막고 `status --open`이 경고한다(gaps·미종결 `<!--`와 같은 취급).
+
+**② 빈 줄 하나에 실제 결정이 사라졌다 (P1).** walk가 빈 줄에서 `parentLead`·held stub·fold를 **전부 초기화**했다. 그런데 loose list — 항목, 빈 줄, 들여쓴 본문 — 은 평범한 마크다운이고 평범한 타이핑이다:
+
+```md
+- [{state}] [{ownership}]
+
+  실제 결정 내용
+```
+
+실측 결과 `human queue: 0` · `status --open`은 "nothing is waiting on you" · validate rc 0. **모든 표면에서 동시에 소실**된다. 거울상은 반대로 **차단**했다 — 빈 줄 뒤의 nested `- [open]`이 형제로 오인돼 detail인 줄에 ownership을 요구했다(rc 1). 구조는 **lead**가 정하고 빈 줄에는 lead가 없다. 항목을 닫는 것은 들여쓰지 않은 줄이다.
+
+**③ 빈 경로 보장이 절반이었다 (P1).** validate가 `materials`·`truths`·`documents`만 검사하고 **`inbox`를 빠뜨렸다** — 실측: 클론에서 `inbox/`만 없애도 `✓ all checks passed`. 그리고 init의 reconfigure 문단은 "가드 **둘**"이라 적혀 있는데 폴더 marker 항목은 "reconfigure에서도 실행"이라 적혀 있었다 — 두 줄이 서로를 반박했다. 넷 다 검사하고, reconfigure 가드를 **셋**으로 정리했다. **회귀도 고쳤다**: 기존 클론 케이스는 marker를 스스로 만들어서 스킬의 `.gitkeep` 지시를 지워도 green이었다 — 이제 케이스는 **네 경로 전수 행렬**을 돌고, `doccheck`이 **validate가 configured로 취급하는 키마다 init 스킬이 그 폴더와 `.gitkeep`을 명시하는지** 연결한다(스킬은 실행할 수 없는 지시문이라 이건 **텍스트 검사**이며, 그렇게 명시했다 — 양방향 변이로 red 확인).
+
+**계약 정합 2건.** ① FORMATS는 kind 없는 불릿을 "malformed, **not a gap**"이라 하는데 status와 validate는 **open 총계에 넣고** 있었다 — v0.5.18에서 내가 총계를 validate에 맞춘 것이 방향을 잘못 잡았다. 이제 **어느 표면도 gap으로 세지 않고**(`1 open, 1 malformed`), 그 줄은 `COMP-MALFORMED`로 계속 막는다. ② 매니페스트의 필수 경로 검사가 **부분 문자열**이라 `weavedoc.mjs`가 없고 `weavedoc.mjs.bak`만 있어도 rc 0이었다 — 행의 **경로 필드를 exact match**한다.
+
+**재현 못 한 지적 1건(정직하게 남긴다).** "`- [{state}] [` 같은 미폐합 두 번째 bracket이 조용히 pure stub으로 사라진다" — 실측하면 **내용이 있으면 사라지지 않는다**: 같은 줄에 내용이 있으면 untagged 항목으로, continuation에 있으면 실재화돼 표면화된다(`- [{state}] [{ownership} 실제내용`·`- [{state 실제내용`·`- [{state}] [` + 다음 줄 내용, 셋 다 확인). 사라지는 것은 **내용이 아예 없는 줄**뿐이고 그건 정상적인 템플릿 노이즈다. 다른 재현체가 있으면 알려주시라.
+
+**미결로 남긴 것 1건(§11 기준 below-bar).** continuation fold는 부모보다 **얕거나 공백↔탭이 호환되지 않아도 접힌다**(실측 확인). 항목/detail 판정은 엄격 접두사인데 fold는 "들여쓰였는가"만 본다 — 비대칭은 사실이다. 다만 지금 동작은 **텍스트를 보여주는 쪽**으로 실패하고, 엄격하게 바꾸면 그 줄을 **표시에서 잃는다**(붙일 상위 항목을 추적하려면 lead 스택이 필요하다). 데이터 파괴도 정상 경로의 오차단/오통과도 아니므로 이번엔 손대지 않고, 스택 설계는 요청이 있으면 별건으로 한다.
+
+**회귀 10건 추가**(9건 red-first): fenced 예시 3방향·미종결 펜스·loose list·빈 줄 뒤 nested·configured 경로 전수 행렬·클론 왕복 4경로·gaps 계약 수치·매니페스트 exact match. 변이 확인: `hqRead`를 `nocomment`로 되돌리면 펜스 3건이, 빈 줄 리셋을 되살리면 loose list가, `inbox`를 목록에서 빼면 경로 행렬이, exact를 prefix로 바꾸면 매니페스트가, 스킬 문구를 지우면 doccheck이 각각 빨개진다.
+
 ## 2026-08-07.9
 
 **v0.5.20 — 하네스 한 건 수정, 런타임 무변경.** v0.5.18 태그는 3-OS CI에서 **red**로 끝났다(릴리스 잡 skip, 발행물 없음). 원인은 런타임이 아니라 이번에 추가한 케이스 하나다: `acct_openlist_gaps_arrays_agree`가 `--input-type=module` 없이 `node -e` 안에서 top-level await를 썼고, node 20(컨테이너)·22(로컬)는 모듈 문법을 감지해 실행하지만 **선언된 바닥인 node 18은 SyntaxError**다 — 그리고 **CI만 18로 돈다**. 로컬 518/518 green, 컨테이너 518/518 green, CI 3-OS 전부 red. 케이스를 **CLI 블랙박스로 다시 썼다**(정렬이 어긋나면 malformed 라벨이 옆 줄로 옮겨간다 — 두 `kinds.push` 각각에 대해 변이로 red 확인). **태그는 하나도 옮기지 않았다**: v0.5.18은 red 이력으로 남고, v0.5.19는 릴리스 게이트가 거부한 이력으로 남는다(한 번들에 릴리스 주장은 하나라는 계약 — 같은 절에 주장을 둘 넣은 것이 원인이고, 그 게이트는 옳다). 발행은 v0.5.20이다. **런타임 코드는 `.8`과 동일**하고 fingerprint `c489e6ed4cc8`도 그대로다 — 이 번들이 `.8`과 다른 것은 `VERSION` 한 줄뿐이다. 교훈은 케이스보다 크다 — **로컬도 컨테이너도 선언된 바닥을 채점하지 않는다**. tests/README에 명문화했고, 컨테이너 이미지를 18로 내리는 것은 미결로 남긴다.

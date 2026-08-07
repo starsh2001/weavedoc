@@ -49,6 +49,25 @@ for c in $cmds; do
   case "$usage" in *"$c"*) ;; *) say "command '$c' is in dispatch but not in the USAGE line" ;; esac
 done
 
+# 5. Every path validate treats as configured is a path weavedoc-init promises a marker for. These
+# two are the halves of one guarantee — "git stores no empty directories, so a configured path that
+# is still empty must carry a tracked file" — and they live in different kinds of artifact: one in
+# JS, one in a markdown skill nobody can execute. A test can run the first half (the suite's
+# configured-path matrix does); the second half is instructions, and the only mechanism available
+# for instructions is to check that they still say it. That is a TEXT check and it is named as one:
+# it cannot prove the skill is followed, only that the sentence a follower would read is there.
+# Deleting the `.gitkeep` instruction turned the clone case green through v0.5.20 because the case
+# created the marker itself (external review, v0.5.21); this is the link that goes red instead.
+init="$REPO/.claude/skills/weavedoc-init/SKILL.md"
+paths=$(grep -oE "for \(const k of \[[^]]*\]\) \{" "$REPO/.weavedoc/bin/lib/cmd-validate.mjs"   | grep -oE "'[a-z]+'" | tr -d "'" | LC_ALL=C sort -u)
+np=$(printf '%s
+' "$paths" | grep -c . || true)
+[ "${np:-0}" -ge 4 ] || say "configured-path extraction found only ${np:-0} key(s) in cmd-validate.mjs — the parse is broken, not the docs"
+grep -q '`.gitkeep`' "$init" || say "weavedoc-init no longer instructs a .gitkeep marker — an empty configured directory will not survive a clone"
+for k in $paths; do
+  grep -q "\`$k/\`" "$init" || say "validate treats '$k' as a configured path but weavedoc-init never names \`$k/\`"
+done
+
 # 3. The VERSION label and CHANGELOG's newest entry are one fact.
 v=$(cat "$REPO/.weavedoc/VERSION" 2>/dev/null)
 top=$(grep -m1 '^## ' "$REPO/CHANGELOG.md" | sed 's/^## *//')

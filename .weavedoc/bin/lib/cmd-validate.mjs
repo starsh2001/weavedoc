@@ -14,7 +14,7 @@ import { statSync, realpathSync, readFileSync, readdirSync } from 'node:fs'
 import { canonId, isDate, isFence, isPlaceholder, inList, listField, fmVal, pipes, splitLines, U, M, TAG_SEP } from './core.mjs'
 import { join, materialIds, mdirFor, docIds, tfileFor, docFinalPath, contextDigest } from './mine.mjs'
 import { nocomment, dupSection, commentBalanced, sectionAll, countHeadings, defence } from './sections.mjs'
-import { scanHq, hqFiles, hqBodies } from './hq-ledger.mjs'
+import { scanHq, hqFiles, hqBodies, hqRead } from './hq-ledger.mjs'
 import { artifactDigest, ledgerRead } from './verify.mjs'
 import { fidMark, fidBody, isNoise, foldKinds, bearsKind, commentSpans } from './review.mjs'
 import { scanRegister } from './gaps-register.mjs'
@@ -328,7 +328,12 @@ export function cmdValidate (m, out, json = false, consecOk = '') {
   // A configured path that is not there, or mine content sitting outside it, is the same leak as an
   // unreadable schema: the loops run zero times and the tick looks earned. FORMATS explicitly allows
   // moving these, so a typo while moving folders silently switches both membranes off.
-  for (const k of ['materials', 'truths', 'documents']) {
+  // ALL FOUR configured paths (external review, v0.5.21). `inbox` was missing from this list, so a
+  // mine whose inbox/ had vanished — the shape a clone of an empty-inbox mine takes, since git
+  // stores no empty directories — passed with '✓ all checks passed' while gather's landing zone
+  // was not there. Measured on a real clone. The list comes from the same four keys the config
+  // declares; leaving one out is the enumeration mistake in miniature.
+  for (const k of ['inbox', 'materials', 'truths', 'documents']) {
     const v = m[k]
     if (!isDirAt(v)) prob('CFG-PATH-MISSING', M`config paths.${k} → '${v}' does not exist. Every check that walks it runs zero times, which is indistinguishable from passing`)
     if (rp(v) !== rp(`${m.root}/${k}`) && isDirAt(`${m.root}/${k}`)) {
@@ -951,7 +956,14 @@ export function cmdValidate (m, out, json = false, consecOk = '') {
         //     decision with no kind at all, which FORMATS' entry format does not allow.
         const kindEnum = sch('gaps.enum.kind') || 'declared|reference|enumeration|symmetry'
         const kindSet = new Set(pipes(kindEnum))
-        const { n: nopen, badline, badkind: openKind, dblkind: openDbl, unclosed: openUnc } = scanRegister(gapsText, secOpen, kindSet)
+        const { n: nAll, kinds: openKinds, badline, badkind: openKind, dblkind: openDbl, unclosed: openUnc } = scanRegister(gapsText, secOpen, kindSet)
+        // A BULLET WITH NO KIND SLOT IS NOT AN OPEN GAP (external review, v0.5.21). FORMATS says so
+        // — "a malformed register entry, not a gap" — and this count said otherwise, so one gaps.md
+        // holding a real gap and a `- (없음)` was `2 open` here and `2, 1 malformed` in the listing:
+        // the contract and both surfaces telling three stories. It still BLOCKS, through
+        // COMP-MALFORMED below; what it does not do is inflate the number of gaps somebody must
+        // fill. An unusable KIND WORD is a different thing and stays counted (a typo in a gap that
+        // was really filed), exactly as FORMATS' filled-placeholder rule requires.
         const accepted = scanRegister(gapsText, secAcc, kindSet)
         // A GAP OUTSIDE THE TWO SECTIONS IS A GAP NOBODY COUNTS (v0.5.4, review #9). The register
         // is read section by section, so an entry parked under a third heading — or above the
@@ -1000,6 +1012,7 @@ export function cmdValidate (m, out, json = false, consecOk = '') {
         if (accepted.badline !== '') {
           prob('COMP-MALFORMED', M`completeness is 'required' but gaps.md '# ${secAcc}' holds a line the register grammar cannot read: '${accepted.badline}' — the same grammar as '# ${secOpen}': entries are '- ' bullets and an indented line is a continuation ONLY under one. An accepted gap is a DECISION, so prose the counter cannot attribute to an entry is a decision nobody can point at`)
         }
+        const nopen = nAll - openKinds.filter(k => k === '').length
         if (badline !== '') {
           prob('COMP-MALFORMED', M`completeness is 'required' but gaps.md '# ${secOpen}' holds a line the register grammar cannot read: '${badline}' — entries are '- [<kind>] …' bullets; an indented line is a continuation ONLY under a bullet, and prose anywhere is a gap no counter sees, so it blocks like a malformed register`)
         } else if (nopen > 0) {
@@ -1029,10 +1042,14 @@ export function cmdValidate (m, out, json = false, consecOk = '') {
     }
     const vst = fmv(vmd, 'status')
     if (vst !== '' && !inList(vst, sch('verify.fm.enum.status'))) prob('VERIFY-ENUM', M`truths/verify.md  status '${vst}' invalid → use ${sch('verify.fm.enum.status')}`)
-    // Either heading level, read through the comment stripper — a section living only in a comment
-    // satisfies a raw grep but is unreadable. Emission keeps the DECLARED section order.
+    // Either heading level, read through the comment stripper AND the fence blanker — a section
+    // living only in a comment satisfies a raw grep but is unreadable, and so does one living only
+    // inside a code fence: measured (external review, v0.5.21) by replacing the real
+    // `## Human queue` with a fenced copy, which left the mine with no queue at all and validate
+    // green. The same reader the Human-queue walk uses (hq-ledger's hqRead), so "is this section
+    // here" and "what is in it" cannot answer differently. Emission keeps the DECLARED order.
     const want = new Set(pipes(sch('verify.sections')).filter(x => x !== ''))
-    for (const l of splitLines(nocomment(readOr(vmd)).replace(/\n+$/, ''))) {
+    for (const l of splitLines(hqRead(vmd).text.replace(/\n+$/, ''))) {
       if (!/^##?[ \t]/.test(l)) continue
       want.delete(l.replace(/^##?[ \t]+/, '').replace(/[ \t\r]*$/, ''))
     }
@@ -1044,7 +1061,17 @@ export function cmdValidate (m, out, json = false, consecOk = '') {
   // --- Human queue ownership tags (truths/verify.md AND documents/*/review.md) ---
   // Both carry a Human queue; checking only verify.md let a semantic dismissal parked on the
   // document side vanish from validate, status and audit alike.
-  for (const hqf of hqFiles(m)) checkHqTags(m, prob, hqf, sch)
+  for (const hqf of hqFiles(m)) {
+    // AN UNTERMINATED FENCE BLANKS EVERYTHING AFTER IT (external review, v0.5.21). The queue is
+    // read through `defence` now, which is what stops a fenced example from counting — and the
+    // cost of that reader is that an opener nobody closed makes every entry below it invisible to
+    // the ownership check, to the counter and to the listing at once. gaps.md blocks on the same
+    // shape; so does an unterminated '<!--' next to a review. Named, not absorbed.
+    if (hqRead(hqf).fenceOpen) {
+      prob('HQ-UNTERMINATED-FENCE', M`${U(hqf.startsWith(`${m.root}/`) ? hqf.slice(m.root.length + 1) : hqf)} ends inside an unterminated code fence — everything after it is blanked before any check reads it, so Human queue entries below would ship unseen. Close the fence`)
+    }
+    checkHqTags(m, prob, hqf, sch)
+  }
 
   // --- config enums ---
   const cfl = k => cfgB.flat.get(k) ?? ''

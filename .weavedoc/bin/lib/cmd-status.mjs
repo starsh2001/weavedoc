@@ -10,7 +10,7 @@ import { fmvB, loadSchema } from './read.mjs'
 import { fm, join, docIds, materialIds, truthFiles, basename } from './mine.mjs'
 import { fidBody, isNoise } from './review.mjs'
 import { scanRegister, stubEntry, emptyRemainder, hasContent } from './gaps-register.mjs'
-import { scanHq, hqFiles, hqBodies, NONE_IDIOM } from './hq-ledger.mjs'
+import { scanHq, hqFiles, hqBodies, hqRead, NONE_IDIOM } from './hq-ledger.mjs'
 
 // questions.md's entry PREFIX — the state slot. The Human queue's lives with the shared walk
 // (hq-ledger.mjs), which is where every judgment about that ledger's structure now happens.
@@ -288,6 +288,12 @@ export function cmdStatusOpen (m, out) {
   // Human queue — the same single CLASSIFIER the `status` counters derive from (the file is read
   // again below for its own diagnostics; what is single is the judgment, not the read).
   const { open: hqO, untagged: hqU } = hqEntries(m)
+  // …and the same silence the gaps listing already names: a queue file that ends inside an
+  // unterminated fence hides every entry below the opener from this listing (v0.5.21). validate
+  // blocks on it; the listing says it at any setting, because the entries are missing either way.
+  for (const f of hqFiles(m)) {
+    if (hqRead(f).fenceOpen) warns.push(Buffer.concat([T('warning: '), B(rel(f)), T(' ends inside an unterminated code fence — Human queue entries behind it are invisible to this listing')]))
+  }
   for (const f of hqFiles(m)) readLedger(rel(f), f)
 
   // fidelity violations — the gate's entries through the gate's sole readers. The sections/kinds
@@ -380,12 +386,13 @@ export function cmdStatusOpen (m, out) {
     // every unusable kind and two existing cases went red, correctly.
     const bad = i => gapsBad[i] === ''
     const nbad = gaps.map((_, i) => i).filter(bad).length
-    // THE TOTAL IS THE TOTAL — the malformed count is an annotation, never a subtraction (self
-    // review, v0.5.18). The first spelling printed `0 open, 1 malformed` while validate, counting
-    // the same scan, blocked with `2 open gap(s)`: one file, two numbers, which is the drift this
-    // whole lane exists to end. The Human queue's `N open, M untagged` is not the same shape —
-    // there plain `status` reports the untagged separately too, so its surfaces agree.
-    out(nbad > 0 ? `gaps (${gaps.length}, ${nbad} malformed):` : `gaps (${gaps.length}):`)
+    // OPEN AND MALFORMED ARE DIFFERENT NUMBERS, and validate now agrees (external review,
+    // v0.5.21). v0.5.18 made this line print the total because validate counted the malformed
+    // entry among the open gaps — one file, two numbers. The right repair was the other direction:
+    // FORMATS calls a kind-less bullet "a malformed register entry, not a gap", so neither surface
+    // counts it as one, and it goes on blocking through COMP-MALFORMED. Both are still LISTED,
+    // because both are waiting on the user; only the arithmetic changed.
+    out(nbad > 0 ? `gaps (${gaps.length - nbad} open, ${nbad} malformed):` : `gaps (${gaps.length}):`)
     for (let i = 0; i < gaps.length; i++) {
       outB(bad(i) ? '  (malformed register entry — no [kind] slot): ' : '  ', gaps[i])
     }

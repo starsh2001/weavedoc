@@ -325,6 +325,7 @@ Every problem and warning the checker emits carries a **stable code**. The code 
 | `REVIEW-KIND-UNKNOWN` | bracketed slot inside the gate is not an exact violation kind |
 | `REVIEW-LOST-SECTION` | a declared section vanishes once comments are stripped |
 | `REVIEW-UNTERMINATED-COMMENT` | `review.md` ends inside an open `<!--` |
+| `HQ-UNTERMINATED-FENCE` | a Human-queue file ends inside an open code fence — entries below it are blanked before any reader sees them |
 | `SCHEMA-ROSTER` | the declared schema key roster is truncated |
 | `SCHEMA-UNREADABLE` | `.weavedoc/schema` is missing or unreadable — no verdict is issued |
 | `SEAL-QUOTE-MISSING` | a truth's verbatim body is not found in its source (laundering risk) |
