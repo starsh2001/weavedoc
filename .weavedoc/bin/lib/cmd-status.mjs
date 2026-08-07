@@ -22,7 +22,19 @@ const Q_TAG = /^- \[[^\]]*\]/
 // Only these two tests widen: the UNTAGGED rule still demands column 0, because there an indented
 // bullet is a sub-bullet of the entry above (acct_openlist_subbullets_stay_detail).
 const HQ_OPEN = new RegExp(`^${TAG_SEP}*- \\[open\\]`)
-const HQ_STUB_OPENER = new RegExp(`^${TAG_SEP}*- [[][{<]`)
+// SPACE/TAB INDENTATION IS DETAIL; A CONTROL LEAD IS AN ENTRY (external review, v0.5.14). v0.5.13
+// widened the stub branch to the full TAG_SEP lead so a control-indented placeholder would stop
+// vanishing — and thereby swallowed ordinary nested sub-bullets too, reporting a placeholder
+// DETAIL line under a real entry as a second waiting item (v0.5.12 counted one there; v0.5.13
+// counted two).
+//
+// The justification is each half's own long-standing contract, NOT the gate: checkHqTags strips
+// space and tab exactly as it strips `\v`, so validate draws no line here — an earlier spelling of
+// this comment claimed it did, which the code contradicts. What is true is that an indented
+// `- [open]` has been counted since the counter existed (acct_openlist_subbullets_stay_detail's
+// sibling pins it) while an indented placeholder has always been dropped as detail, and this keeps
+// both. A control lead cannot be ordinary nesting — no editor writes one — so it stays an entry.
+const HQ_STUB_ENTRY = /^[\n\v\f\r]*- [[][{<]/
 
 const isDir = p => { try { return statSync(p).isDirectory() } catch { return false } }
 
@@ -98,7 +110,7 @@ export function hqEntries (m) {
     let held = null
     for (const l of splitLines(hqBody(f))) {
       if (!/[^ \t]/.test(l)) { last = null; held = null; continue }
-      if (!HQ_STUB_OPENER.test(l) && HQ_OPEN.test(l)) {
+      if (HQ_OPEN.test(l)) {
         held = null
         // `raw` is the ENTRY LINE, never mutated; `line` is the display, which folding extends.
         // The bucket classifiers read raw: ownership lives on the entry line (FORMATS — two fixed
@@ -113,12 +125,11 @@ export function hqEntries (m) {
       // Empty remainder → a stub, held for realization. Real remainder → an entry whose state slot
       // is a template, i.e. an entry with no valid state tag — surfaced as untagged, where the
       // v0.5.5 prefix rule used to drop it wholesale (external review, v0.5.10).
-      // HQ_STUB_OPENER, not a column-0 pattern (cold review, v0.5.13): the `[open]` branch above
-      // already excludes control-indented placeholders through the same regex, so anchoring THIS
-      // one at column 0 left that shape handled by nobody — the entry vanished entirely and the
-      // run printed "nothing is waiting on you", which is worse than the body-loss this release
-      // set out to fix.
-      if (HQ_STUB_OPENER.test(l)) {
+      // HQ_STUB_ENTRY, not a column-0 pattern (v0.5.13) and not the full TAG_SEP lead (v0.5.14):
+      // anchoring at column 0 left a control-indented placeholder handled by nobody — it vanished
+      // and the run printed "nothing is waiting on you" — while the full lead swallowed ordinary
+      // nested sub-bullets. See the constant for which half is whose contract.
+      if (HQ_STUB_ENTRY.test(l)) {
         last = null
         if (stubLine(l, HQ_TAG)) held = l
         else { held = null; untagged.push({ file: label, line: l, raw: l }) }
