@@ -59,11 +59,13 @@ done) || { echo "make-manifest: a staged blob could not be read — no manifest"
 # THE VACUITY GUARD. Every one of these exists in any tree this script is meant to describe, so a
 # manifest without them was built from something else — an empty index, the wrong directory, a
 # pathspec that matched nothing. Named, not counted: a threshold would drift with the file count.
+# EXACT, not a prefix (external review, v0.5.21). `case "$out" in *"  $r"*)` is satisfied by any row
+# whose path merely STARTS with the required one, so a tree holding `weavedoc.mjs.bak` and no
+# `weavedoc.mjs` passed the guard that exists to catch exactly that. The path is the second
+# whitespace-separated field of a row; compare it as a field.
 for r in .weavedoc/VERSION .weavedoc/bin/weavedoc.mjs .weavedoc/schema .weavedoc/READ.md \
          .weavedoc/FORMATS.md .weavedoc/.gitattributes; do
-  case "$out" in
-    *"  $r"*) ;;
-    *) echo "make-manifest: required path missing from the manifest: $r" >&2; exit 2 ;;
-  esac
+  printf '%s\n' "$out" | awk -v p="$r" 'NF == 2 && $2 == p { found = 1 } END { exit !found }' \
+    || { echo "make-manifest: required path missing from the manifest: $r" >&2; exit 2; }
 done
 printf '%s\n' "$out"

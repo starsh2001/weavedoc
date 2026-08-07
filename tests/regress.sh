@@ -2558,6 +2558,22 @@ acct_cfg_windows_abs_path() {
   vrun validate
   expect_has "C:/wd-nope"
 }
+block_cfg_every_configured_path_checked() {
+  # ALL FOUR, not three (external review, v0.5.21). `inbox` was missing from the checked list, so a
+  # mine whose landing zone had vanished — the shape a clone takes, since git stores no empty
+  # directories — reported "all checks passed". Measured on a real clone. The matrix runs every
+  # configured path, so leaving one out cannot pass again.
+  # Remove any key from the list in cmd-validate -> this goes red for that key.
+  local miss=""
+  for k in inbox materials truths documents; do
+    rm -rf "$W/$k.hold"; mv "$W/$k" "$W/$k.hold"
+    vrun validate
+    case "$OUT" in *"config paths.$k"*) ;; *) miss="$miss $k" ;; esac
+    mv "$W/$k.hold" "$W/$k"
+  done
+  OUT="unchecked:${miss:- none}"; RC=0
+  if [ -n "$miss" ]; then bad "a configured path can vanish unnoticed:$miss"; else ok; fi
+}
 e2e_empty_dir_survives_a_clone() {
   # GIT STORES FILES, NEVER DIRECTORIES (external review, v0.5.18). A configured directory that is
   # still empty — `documents/` in any mine before its first document — is simply absent from a
@@ -2569,14 +2585,21 @@ e2e_empty_dir_survives_a_clone() {
   # Delete the .gitkeep line below → this goes red, which is what the skill's instruction buys.
   # Siblings of the mine inside the case's own workspace ($WORK/w/<case> is $W), never inside it:
   # copying a directory into itself is what the first spelling did, and it failed for that reason.
-  local up="$W-clonesrc" dn="$W-clonedst" out rc
+  # EVERY configured path, emptied and marked (external review, v0.5.21). Only documents/ was
+  # exercised, so the guarantee was pinned for one quarter of the paths it is about — and `inbox`
+  # turned out to be the one validate did not even check.
+  local up="$W-clonesrc" dn="$W-clonedst" out rc k
   rm -rf "$up" "$dn"; mkdir -p "$up"
   cp -r "$W"/. "$up"/ 2>/dev/null || { bad "could not copy the mine"; return; }
-  rm -rf "$up/documents"; mkdir -p "$up/documents" && printf '' > "$up/documents/.gitkeep"
+  for k in inbox documents; do
+    rm -rf "$up/$k"; mkdir -p "$up/$k" && printf '' > "$up/$k/.gitkeep"
+  done
   ( cd "$up" && git init -q . && git add -A >/dev/null 2>&1 && git -c user.email=t@t -c user.name=t commit -q -m mine ) \
     || { bad "could not build the source repository"; return; }
   git clone -q "$up" "$dn" 2>/dev/null || { bad "could not clone"; return; }
-  [ -d "$dn/documents" ] || { bad "documents/ did not survive the clone even with a marker"; return; }
+  for k in inbox documents; do
+    [ -d "$dn/$k" ] || { bad "$k/ did not survive the clone even with a marker"; rm -rf "$up" "$dn"; return; }
+  done
   out=$( cd "$dn" && $WD_BIN validate 2>&1 ); rc=$?
   OUT="clone rc=$rc"
   case "$out" in *CFG-PATH-MISSING*) bad "the clone still reports CFG-PATH-MISSING"; return ;; esac
@@ -4775,6 +4798,27 @@ meta_manifest_generator_fails_closed() {
   OUT="fails:${fails:- none}"; RC=0
   if [ -n "$fails" ]; then bad "the manifest generator is not fail-closed:$fails"; else ok; fi
 }
+meta_manifest_required_path_is_exact() {
+  # THE GUARD MUST COMPARE A PATH, NOT A PREFIX (external review, v0.5.21). The required-path check
+  # was `case "$out" in *"  $r"*`, which any row whose path merely STARTS with the required one
+  # satisfies — so a tree holding `weavedoc.mjs.bak` and no `weavedoc.mjs` passed the guard that
+  # exists to catch exactly that shape. Built here by staging the .bak and nothing else.
+  # Revert the awk field comparison to the substring case → this goes red.
+  local sc="$W/mmex" out rc
+  mkdir -p "$sc/tests" "$sc/.weavedoc/bin"
+  cp "$REPO/tests/make-manifest.sh" "$REPO/tests/git-env.sh" "$sc/tests"/ 2>/dev/null
+  cp "$REPO/.weavedoc/VERSION" "$REPO/.weavedoc/schema" "$REPO/.weavedoc/READ.md"      "$REPO/.weavedoc/FORMATS.md" "$REPO/.weavedoc/.gitattributes" "$sc/.weavedoc"/ 2>/dev/null
+  cp "$REPO/.weavedoc/bin/weavedoc.mjs" "$sc/.weavedoc/bin/weavedoc.mjs.bak" 2>/dev/null
+  ( cd "$sc" && git init -q . && git add -A >/dev/null 2>&1 ) || { bad "could not build a scratch git repo"; return; }
+  # The vacuity check reads the INDEX, not the manifest: on refusal the generator prints nothing,
+  # so asserting the .bak's presence in stdout would be vacuous exactly when the case matters.
+  ( cd "$sc" && git ls-files | grep -q 'weavedoc[.]mjs[.]bak' ) || { bad "the .bak was not staged — the probe would be vacuous"; return; }
+  ( cd "$sc" && git ls-files | grep -qx '.weavedoc/bin/weavedoc.mjs' ) && { bad "the real entrypoint is staged too — the probe would prove nothing"; return; }
+  out=$( cd "$sc" && bash tests/make-manifest.sh 2>/dev/null ); rc=$?
+  OUT="rc=$rc rows=$(printf '%s
+' "$out" | grep -c . || true)"
+  if [ "$rc" = 0 ]; then bad "a '.bak' row satisfied the required-path guard for weavedoc.mjs"; else ok; fi
+}
 meta_git_env_writes_stay_inside() {
   # THE WRITE HALF (external review, v0.5.17). With an inherited GIT_OBJECT_DIRECTORY, the scratch
   # repo meta_key_covers_the_git_index builds wrote 79 objects into an UNRELATED repository — and
@@ -5064,7 +5108,9 @@ pass_space_in_path() {
 }
 pass_shipped_templates() {
   # A project built from the three shipped templates, filled in exactly as documented.
-  local p="$W-tmpl"; rm -rf "$p" 2>/dev/null; mkdir -p "$p/materials/m001" "$p/truths" "$p/documents/d1"
+  # inbox/ is one of the four configured paths and weavedoc-init creates it, so a mine built from
+  # the shipped templates has one — it was missing here only because validate did not look (v0.5.21).
+  local p="$W-tmpl"; rm -rf "$p" 2>/dev/null; mkdir -p "$p/inbox" "$p/materials/m001" "$p/truths" "$p/documents/d1"
   cp -r "$REPO/.weavedoc" "$p/.weavedoc"
   cp "$REPO/.weavedoc/templates/config.yaml" "$p/.weavedoc/config.yaml"
   sed -e 's/{ko|en}/ko/' -e 's/^roles: \[\]/roles: [계약서]/' -e 's/^tone:.*$/tone: 담백/' \
@@ -5329,7 +5375,7 @@ acct_openlist_gaps_arrays_agree() {
 - [declared] 3장 — 의도적으로 남김 — scope: a — recheck: b — as-of: t001
 EOF
   vrun status --open
-  expect_has "gaps (3, 1 malformed):"
+  expect_has "gaps (2 open, 1 malformed):"
   expect_has "(malformed register entry — no [kind] slot): - (없음)"
   # …and NOT on the entry above it, which is where a shifted `kinds` array puts it.
   expect_hasnt "no [kind] slot): - [{kind}] 실제 내용이 이어짐"
@@ -5455,15 +5501,18 @@ acct_openlist_gaps_none_idiom_is_malformed() {
 
 ' > "$W/gaps.md"
   vrun status --open
-  # The TOTAL is what validate counts over the same scan; the malformed count annotates it rather
-  # than subtracting from it. The first spelling printed `0 open, 1 malformed` beside validate's
-  # `2 open gap(s)` — one file, two numbers, the drift this lane exists to end (self review).
-  expect_has "gaps (2, 1 malformed):"
+  # OPEN AND MALFORMED ARE DIFFERENT NUMBERS, and FORMATS says which: "a malformed register entry,
+  # not a gap". v0.5.18 made this line print the TOTAL because validate counted the malformed entry
+  # among the open gaps — one file, two numbers. The right repair was the other direction (external
+  # review, v0.5.21): neither surface counts it as a gap, and it goes on blocking as COMP-MALFORMED.
+  expect_has "gaps (1 open, 1 malformed):"
   expect_has "(malformed register entry — no [kind] slot): - (없음)"
-  # …and that agreement is asserted, not left to a reader to notice.
+  # …and that agreement is asserted, not left to a reader to notice: the same file, the same scan,
+  # the same number on both surfaces, with the malformed line still blocking by its own name.
   sed -i 's/^  completeness: off.*$/  completeness: required/' "$W/.weavedoc/config.yaml"
   vrun validate
-  expect_has "holds 2 open gap(s)"
+  expect_has "holds 1 open gap(s)"
+  expect_block "no '[<kind>]' slot at all"
 }
 acct_openlist_gaps_none_idiom_malformed_in_accepted() {
   # BOTH SECTIONS, one grammar. `# Accepted` was the looser half of this register until §11
@@ -5711,6 +5760,72 @@ acct_openlist_hq_untagged_peer_surfaces() {
   vrun status --open
   expect_has "태그 없는 항목 하나"; expect_has "태그 없는 항목 둘"
   expect_hasnt "이건 진짜 하위"
+}
+acct_openlist_hq_fenced_example_is_not_an_entry() {
+  # A FENCED EXAMPLE IS NOT A DECISION (external review, v0.5.21). This ledger was read through the
+  # comment stripper and nothing else, so the way documentation shows an entry — inside a code
+  # fence — was a real waiting decision to `status` and a real entry to the gate. gaps.md has read
+  # through `defence` since v0.5.4; the twin ledger never got it.
+  # Revert hqRead to plain nocomment() -> this goes red.
+  printf -- '\n\n```md\n- [open] [user-only] FENCED-EXAMPLE\n```\n' >> "$W/truths/verify.md"
+  vrun status; expect_has "human queue: 0"
+  vrun status --open; expect_has "nothing is waiting on you"
+  vrun validate; expect_pass
+}
+block_hq_fenced_example_does_not_block() {
+  # THE SAME BLINDNESS IN THE OTHER DIRECTION, and this half FAILED A LEGAL MINE: a fenced example
+  # written without an ownership tag — which is what an example of the untagged shape looks like —
+  # was rejected as HQ-UNTAGGED, rc 1. A pass_ case would be the right prefix, but the shape it
+  # guards is a block, so it asserts the absence of that block by name.
+  printf -- '\n\n```md\n- [open] FENCED-NO-OWNERSHIP\n```\n' >> "$W/truths/verify.md"
+  vrun validate
+  expect_pass
+  expect_hasnt "HQ-UNTAGGED"
+}
+block_verify_fenced_section_is_not_a_section() {
+  # …AND A FENCED HEADING IS NOT A SECTION. Replacing the real `## Human queue` with a fenced copy
+  # left the mine with no queue at all and validate green (measured) — the required-section check
+  # read the file with the comment stripper only, so the fence satisfied it. It reads through the
+  # same hqRead the walk uses now: one file, one idea of what is in it.
+  # Revert the required-section reader to nocomment() -> this goes red.
+  { printf '```md\n'; cat "$W/truths/verify.md"; } > "$W/v.tmp"
+  printf '\n```\n' >> "$W/v.tmp"
+  # The real section is now INSIDE the fence, so the file has none the reader can see.
+  mv "$W/v.tmp" "$W/truths/verify.md"
+  vrun validate
+  expect_block "required section 'Human queue' missing"
+}
+block_hq_unterminated_fence() {
+  # THE COST OF READING THROUGH FENCES, named rather than absorbed: an opener nobody closed blanks
+  # everything after it, so entries below vanish from the counter, the listing and the gate at once
+  # — the same shape gaps.md and an unterminated `<!--` already block on.
+  printf -- '\n\n```md\n- [open] [user-only] BEHIND-AN-OPEN-FENCE\n' >> "$W/truths/verify.md"
+  vrun validate
+  expect_block "unterminated code fence"
+  vrun status --open
+  expect_has "unterminated code fence"
+}
+acct_openlist_hq_loose_list_stub_realizes() {
+  # A BLANK LINE IS NOT A TERMINATOR (external review, v0.5.21). A LOOSE LIST — the item, a blank
+  # line, then its indented content — is ordinary markdown and ordinary typing, and the walk threw
+  # away the held stub when it saw the blank: the decision VANISHED from every surface at once
+  # (`human queue: 0`, "nothing is waiting on you", validate rc 0, measured).
+  # Restore the reset on a blank line -> this goes red.
+  printf -- '\n- [{state}] [{ownership}]\n\n  LOOSE-LIST-DECISION\n' >> "$W/truths/verify.md"
+  vrun status; expect_has "1 entry(s) with no"
+  vrun status --open
+  expect_has "human queue (0 open, 1 untagged):"
+  expect_has "LOOSE-LIST-DECISION"
+}
+acct_openlist_hq_blank_then_nested_is_detail() {
+  # …and the mirror defect, which BLOCKED instead of dropping: the blank line made the nested
+  # `- [open]` a peer, so status counted two waiting decisions and validate demanded an ownership
+  # tag on a line that is detail — rc 1 on a legal file. Structure is the lead, not the blank line.
+  printf -- '\n- [open] [user-only] PARENT\n\n  - [open] NESTED-AFTER-BLANK\n' >> "$W/truths/verify.md"
+  vrun validate; expect_pass
+  vrun status
+  expect_has "you decide 1"
+  expect_hasnt "missing an ownership tag"
 }
 acct_openlist_hq_realized_stub_siblings() {
   # A BOOLEAN CANNOT SAY *WHAT* THE DETAIL IS DETAIL OF (external review, v0.5.17). v0.5.16 kept

@@ -20,7 +20,7 @@
 // does with an entry is policy and stays theirs; WHICH LINES ARE ENTRIES is not a matter of opinion.
 import { readFileSync, existsSync } from 'node:fs'
 import { splitLines, U, TAG_SEP, TAG_LEAD } from './core.mjs'
-import { nocomment, sectionEach } from './sections.mjs'
+import { nocomment, sectionEach, defence } from './sections.mjs'
 import { join, docIds } from './mine.mjs'
 import { stubLine, emptyRemainder, hasContent } from './gaps-register.mjs'
 
@@ -76,7 +76,20 @@ export function hqFiles (m) {
 // everywhere. EACH section separately (v0.5.17): a queue is an append-per-round log, and joining
 // the bodies put one round's last line above the next round's first, so the walk below read a new
 // entry as detail of an old one and dropped it.
-export const hqBodies = file => sectionEach(nocomment(readOr(file)), 'Human queue')
+// FENCES TOO, not just comments (external review, v0.5.21). This read stripped `<!-- -->` and
+// stopped there, so a fenced EXAMPLE of an entry — the way documentation writes one — was a real
+// waiting decision to `status` and a contract violation to `validate`. Measured on a normal file:
+// a fenced `- [open] [user-only] …` was listed as one open entry, and a fenced `- [open] …` without
+// an ownership tag blocked the mine with HQ-UNTAGGED. Worse in the other direction: replacing the
+// real `## Human queue` with a FENCED one satisfied validate's required-section check, so a mine
+// that had lost the section entirely passed. gaps.md has read through `defence` since v0.5.4 for
+// exactly this; the twin ledger simply never got it. `fenceOpen` is what an unterminated fence
+// leaves behind — everything after it is blanked, so entries vanish and both surfaces must say so.
+export function hqRead (file) {
+  const df = defence(nocomment(readOr(file)))
+  return { text: df.text, fenceOpen: df.open }
+}
+export const hqBodies = file => sectionEach(hqRead(file).text, 'Human queue')
 
 // THE WALK. Returns every ENTRY in order, each with:
 //   kind — 'open' | 'ruled' | 'untagged'   (template noise is not an entry and is not returned)
@@ -101,7 +114,15 @@ export function scanHq (bodies) {
     const deeper = lead => parentLead !== null && lead.length > parentLead.length && lead.startsWith(parentLead)
     const push = (kind, raw, lead, line = raw) => entries.push({ kind, raw, lead, line }) - 1
     for (const l of splitLines(body)) {
-      if (!/[^ \t]/.test(l)) { last = null; held = null; parentLead = null; continue }
+      // A BLANK LINE IS NOT A TERMINATOR (external review, v0.5.21). Resetting the whole state here
+      // destroyed the ordinary LOOSE LIST — `- [{state}] [{ownership}]`, blank line, `  실제 결정
+      // 내용` — which is legal markdown and which a person writes without thinking: the held stub
+      // was dropped and the decision VANISHED from every surface at once (status 0, `--open`
+      // "nothing is waiting on you", validate rc 0, measured). The mirror defect blocked instead of
+      // dropping: a blank line before a nested `- [open]` made it a peer, so validate demanded an
+      // ownership tag on a line that is detail. Structure is decided by the LEAD, and a blank line
+      // carries none. What closes an item is an unindented line, which the branch below handles.
+      if (!/[^ \t]/.test(l)) continue
       const lead = TAG_LEAD.exec(l)[0]
       const rest = l.slice(lead.length)
       if (rest.startsWith('- ') && !NONE_IDIOM.test(l) && (CTRL_ONLY_LEAD.test(lead) || !deeper(lead))) {
