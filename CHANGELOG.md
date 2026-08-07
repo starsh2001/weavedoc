@@ -31,6 +31,8 @@
 
 **gaps.md의 "비었음" 계약을 명문화했다 (사용자 재정).** `- (없음)`/`- (none)`은 **Human queue와 questions.md의 idiom이고 완결성 등록부의 것이 아니다** — 여기서 빈 절은 **불릿 0개**다. 등록부는 fail-closed이고 모든 불릿이 kind를 가진 gap 또는 결정이라는 단순 불변식이 언어별 예외보다 값이 크다. 대신 kind 없는 불릿을 **`malformed register entry`로 표시**한다(`status --open`은 설정과 무관하게, validate는 `required`에서 `COMP-MALFORMED`로). **표시일 뿐 총계에서 빼지 않는다** — 자기 검토에서 첫 철자가 `0 open, 1 malformed`를 찍는데 validate는 같은 스캔으로 `2 open gap(s)`를 막고 있었다: 한 파일 두 숫자, 이 lane이 없애려는 바로 그 계열이다. 이제 `gaps (2, 1 malformed)`이고 그 일치를 케이스가 단언한다. 그리고 이 표시는 **kind 슬롯이 아예 없는 줄**에만 붙는다 — placeholder가 남은 kind 위에 실제 내용이 있는 항목은 FORMATS가 명시적으로 **열린 갭으로 센다**(첫 철자가 그것까지 빼서 기존 케이스 둘이 정당하게 빨개졌다). eclypse의 `- (없음)` 삭제가 옳은 처리였다. `scanRegister`가 **항목별 kind 판정**을 돌려주고 집계는 거기서 파생된다 — 판정 하나, 리더 둘.
 
+**v0.5.19 — 같은 번들, 하네스 한 건 수정.** v0.5.18 태그는 3-OS CI에서 **red**로 끝났다(릴리스 잡은 skip, 발행물 없음). 원인은 런타임이 아니라 이번에 추가한 케이스 하나다: `acct_openlist_gaps_arrays_agree`가 `--input-type=module` 없이 `node -e` 안에서 top-level await를 썼고, node 20(컨테이너)·22(로컬)는 모듈 문법을 감지해 실행하지만 **선언된 바닥인 node 18은 SyntaxError**다 — 그리고 **CI만 18로 돈다**. 로컬 518/518 green, 컨테이너 518/518 green, CI 3-OS 전부 red. 케이스를 **CLI 블랙박스로 다시 썼다**(정렬이 어긋나면 malformed 라벨이 옆 줄로 옮겨간다 — 두 `kinds.push` 각각에 대해 변이로 red 확인). 태그는 옮기지 않았다: v0.5.18은 red 이력으로 남고 v0.5.19가 후속이며, **런타임 바이트는 동일**하므로 번들 라벨과 fingerprint도 그대로다. 교훈은 케이스보다 크다 — **로컬도 컨테이너도 선언된 바닥을 채점하지 않는다**. tests/README에 명문화했고, 컨테이너 이미지를 18로 내리는 것은 미결로 남긴다.
+
 **회귀 15건 추가**(대부분 red-first): nested `[open]`(태그 유무 양쪽)·들여쓴 `[ruled]`의 부모성·같은 lead untagged 형제·CRLF schema·빈 디렉터리 clone 왕복·pathspec 4종·매니페스트 fail-closed 3축·gaps idiom(Open·Accepted·정상 빈 형태). 변이 확인: `HQ_OPEN`을 lead 비교 앞으로 되돌리면 ①이, `loadSchema`를 되돌리면 CRLF가, `.gitkeep`을 빼면 clone이, 소싱/pipefail/필수경로를 되돌리면 하네스 케이스가 각각 빨개진다.
 
 ## 2026-08-07.7
