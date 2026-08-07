@@ -1,7 +1,7 @@
 name: ci
 
 # Phase 2 (IMPROVEMENT_PLAN WD-QA-001~003): the same suite on PRs, pushes and tags.
-# Cost profile (private-repo Actions minutes: Windows ×2, macOS ×10, and the suite is ~35min on
+# Cost profile (private-repo Actions minutes: Windows ×2, macOS ×10; the suite runs ~2.5min on
 # Windows): Ubuntu runs on every trigger; Windows + macOS run on tags and manual dispatch only.
 # macOS is REQUIRED since 2026-08-04 (plan §11): the census quartet resolved in v0.3.4 (a side
 # effect of the index-reconciliation rewrite), the revert condition fired, and the user promoted
@@ -88,8 +88,9 @@ jobs:
             echo "worktree not clean after the suite:"; echo "$status"; exit 1
           fi
 
-  # Windows is the primary user environment but costs 2x minutes and ~35min wall per sweep;
-  # macOS costs 10x. Both run where they matter contractually — tags — and on demand.
+  # Windows is the primary user environment and costs 2x minutes — ~2.5min wall per sweep since
+  # v0.5.12 (it was ~35min when this comment was written); macOS costs 10x. Both run where they
+  # matter contractually — tags — and on demand.
   regression-full:
     if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/')
     strategy:
@@ -310,5 +311,41 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" --title "WeaveDoc $GITHUB_REF_NAME" \
-            --notes-file notes.md bundle.manifest bundle.manifest.sha256
+          # IDEMPOTENT (external review, v0.5.13). A tag can reach this job twice — the push run and
+          # a workflow_dispatch on the same tag, which is exactly what the 2026-08-06 Actions outage
+          # forced us to do — and `gh release create` fails on the second, so a run whose 3-OS gates
+          # were all green ended red on an already-published release. Publishing is not the gate;
+          # the gates above are. So: if a release exists for this tag, verify its published
+          # bundle.manifest is byte-identical to this tree's and succeed.
+          #
+          # WHAT THIS DOES AND DOES NOT PROVE (cold review): the manifest covers the runtime, schema,
+          # templates, READ/FORMATS and the skills — the shipped bundle. Two commits with identical
+          # bundle bytes and different docs or tests hash the SAME, so this check says "the same
+          # bundle is already published under this tag", not "the same commit".
+          #
+          # Every gh call is guarded: the default shell is `bash -e`, and only the `view` probe sits
+          # inside an `if`. An unguarded `download` turned a missing/renamed asset into an opaque
+          # step failure — the very "green gates, red job" outcome this replaced.
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            want=$(cat bundle.manifest.sha256)
+            rm -rf published && mkdir -p published
+            if ! gh release download "$GITHUB_REF_NAME" -p bundle.manifest -D published --clobber; then
+              echo "a release exists for $GITHUB_REF_NAME but its bundle.manifest asset could not be"
+              echo "downloaded — it was published without that asset, or under another name."
+              echo "refusing to guess; resolve by hand"; exit 1
+            fi
+            if [ ! -s published/bundle.manifest ]; then
+              echo "the published bundle.manifest is empty or missing after download — resolve by hand"; exit 1
+            fi
+            have=$(sha256sum published/bundle.manifest | awk '{print $1}')
+            if [ "$want" != "$have" ]; then
+              echo "a release already exists for $GITHUB_REF_NAME and its bundle.manifest differs"
+              echo "  published: $have"
+              echo "  this tree: $want"
+              echo "refusing to overwrite — resolve by hand"; exit 1
+            fi
+            echo "release $GITHUB_REF_NAME already published with this bundle ($have) — nothing to do"
+          else
+            gh release create "$GITHUB_REF_NAME" --title "WeaveDoc $GITHUB_REF_NAME" \
+              --notes-file notes.md bundle.manifest bundle.manifest.sha256
+          fi
