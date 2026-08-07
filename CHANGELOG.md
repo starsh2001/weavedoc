@@ -4,6 +4,22 @@
 
 ---
 
+## 2026-08-07.3
+
+**v0.5.13 — 스윕이 자기 기준을 봉인한다.** 외부 리뷰가 v0.5.12에서 **P1 false-green**을 실측했다: 워커가 부모의 캐시 KEY를 물려받는데(v0.5.12), 그 KEY는 **첫 케이스 전에 찍은 스냅샷**이고 그 뒤로 아무도 다시 보지 않았다. 그런데 케이스가 전부 픽스처만 읽는 게 아니다 — golden·doccheck·소스 형태 검사·장애 주입은 실행 중인 `$REPO`를 **다시 읽는다**. 그래서 스윕 도중 소스가 바뀌면 결과가 두 소스 상태에 걸쳐 흩어지고, 요약은 **한 번도 존재한 적 없는 트리에 대해 하나의 판정**을 찍는다.
+
+**실측**(재현 그대로): 스윕 시작 18초 뒤 keyed 런타임 파일을 편집 → 스윕은 그대로 green을 찍고, 곧바로 같은 트리에 fresh key로 돌린 `acct_golden_outputs_current`는 **DRIFT로 실패**한다. 같은 트리, 두 답. 이 저장소가 가장 오래 이름 붙여 온 클래스(**검사가 green을 찍으며 아무것도 재지 않는다**)의 하네스판이다.
+
+**수정: KEY seal.** KEY 계산을 `compute_key()` **하나**로 빼고(두 철자는 두 답이다), 워커가 끝난 뒤 **집계 전에 다시 계산**한다. 다르면 총계를 **보고하지 않고** rc 2로 거부하며, 결과 캐시를 **지운다** — 섞인 결과가 멀쩡한 KEY 아래 남으면 그게 바로 `--resume`이 "이미 통과했다"며 돌려줄 물건이기 때문이다. 검증: 위 재현을 새 하네스로 돌려 **rc=2 · "the tree changed while the suite was running — key … at start, … now" · 캐시 폐기** 확인. *행위 증명은 레이스라 수동 실측으로 하고(케이스가 $REPO를 편집하면 그게 곧 이 결함이다), 대신 `meta_key_seal_is_one_function_called_twice`가 **구조**를 고정한다 — 정의 1회·호출 2회(시작+씰)·거부 메시지 1회.*
+
+**릴리스 잡 멱등화.** 태그가 이 잡에 두 번 닿을 수 있다 — push run과 같은 태그의 workflow_dispatch, 정확히 2026-08-06 Actions 장애가 강제했던 조합 — 그런데 `gh release create`가 두 번째에서 실패해서, **3-OS 게이트를 전부 통과한 run이 이미 발행된 릴리스 때문에 빨갛게** 끝났다. 이제 릴리스가 있으면 **manifest digest를 대조해** 같으면 성공, 다르면 거부한다(발행은 게이트가 아니지만, 다른 트리가 발행된 태그를 입는 것은 통과시킬 수 없다).
+
+**Below-bar 1건 — 같은 클래스의 한 겹 아래.** v0.5.11이 항목 **판정**을 TAG_SEP로 넓히면서 접기 판정(`emptyRemainder`·`stubLine`)의 선행 strip은 `[ ` + B + `t]`로 남겨, 제어문자로 들여쓴 `- [open] [user-only]`가 계수·validate는 통과하고 **목록에서만 본문을 잃었다**. 선행 strip도 TAG_SEP로 통일.
+
+**콜드 리뷰(커밋 전) 발견 — critical 2건 모두 이 패치의 것이었다.** ① **씰이 자기가 이름 붙인 클래스를 다 막지 못했다**: 케이스가 라이브로 읽는 `tests/baseline/bundle.manifest`(+`.sha256`)와 `.weavedoc/READ.md`·`.claude/skills/*`가 KEY에 없었고, `make-manifest.sh`는 **git 인덱스**(`git cat-file blob :path`)를 읽는데 인덱스 상태도 키에 없었다 — 실측: 스윕 중 매니페스트에 한 줄 추가하면 케이스는 실패하는데 **거부는 일어나지 않았다**. 넷 다 키에 넣었다(인덱스는 `git ls-files -s`). ② **구조 케이스가 텍스트만 고정했다**: `exit 2`를 `exit 0`으로 바꾸거나 조건을 도달 불가로 만들어도 **green**이었다 — 텍스트는 행위가 아니다. 씰을 `seal_or_refuse()`로 빼고 `--seal-check <key>`를 열어 **거부 자체를 케이스가 실행**한다(메시지·rc 2·캐시 삭제 전부 단언). ③ `--resume`에서 실행할 케이스가 0이면 씰을 건너뛰던 가드(`[ -n "$TODO" ]`) 제거 — 그 창에서도 픽스처를 만들고 검증한다. ④ **선행 제어문자 placeholder stub은 더 나쁘게 사라졌다**: `[open]` 분기는 TAG_SEP로 제외하는데 stub 분기는 컬럼0 앵커라 **아무도 처리하지 않아** 항목이 통째로 없어지고 "nothing is waiting on you"까지 찍혔다 — stub 분기도 `HQ_STUB_OPENER`로. ⑤ 릴리스 잡의 `gh release download`가 `bash -e` 아래 무방비라 자산이 없거나 이름이 다르면 다시 "게이트 green, 잡 red"가 됐다 — 가드 + 빈 파일 검사 추가, 그리고 주석이 주장하던 범위를 **매니페스트가 실제로 덮는 것**으로 좁혔다(번들 바이트가 같으면 다른 커밋도 통과한다는 사실을 명시).
+
+**문서 4건.** ① **CHANGELOG에 실제 제어문자 19개**(VT 10·FF 4·TAB 5)가 들어가 문단이 깨지고 `git diff --check`가 실패했다 — 원인은 제 heredoc이 `""` 안의 이중 백슬래시를 줄여 Python이 이스케이프를 **해석**한 것이고, 같은 이유로 첫 수정 시도도 VT를 VT로 치환하는 no-op이었다(`chr(92)`로 우회). ② IMPROVEMENT_PLAN 현행 표기 ③ tests/README·ci.yml의 Windows "~35분" → **실측 2m28s**(v0.5.12 전 5m18s) ④ 셋 다 `doccheck`가 보지 않는 문장이라 잡히지 않았다.
+
 ## 2026-08-07.2
 
 **v0.5.12 — Windows 스윕 30분+ → 7분. 느린 건 런타임이 아니라 하네스였다.** 사용자 지적: "속도 때문에 Node를 도입했는데 여전히 MSYS fork를 쓰면 어떻게 하느냐." 맞는 말이고, 실측이 그것을 그대로 보여줬다 — 런타임(Node)은 죄가 없고 **케이스마다 띄우는 프로세스 수**가 전부였다.
@@ -29,11 +45,11 @@ MSYS는 프로세스 생성을 전역 직렬화하므로 spawn 하나가 ~0.4s�
 
 ## 2026-08-07.1
 
-**v0.5.11 — 태그 사이의 공백을 한 번만 철자한다.** 외부 리뷰가 v0.5.10을 유효 판정(above-bar 0)하면서 **같은 계열 below-bar 3건**을 실측했다. 셋 다 뿌리가 하나다: "항목의 두 태그 사이 공백"이 **세 군데에서 다르게** 적혀 있었다 — validate는 `[ 	
-
-]`, status의 소유권 버킷은 `[ 	]`, 접기를 결정하는 `HQ_TAG`는 `[ 	]`. 쌍마다 어딘가에서 어긋났다.
+**v0.5.11 — 태그 사이의 공백을 한 번만 철자한다.** 외부 리뷰가 v0.5.10을 유효 판정(above-bar 0)하면서 **같은 계열 below-bar 3건**을 실측했다. 셋 다 뿌리가 하나다: "항목의 두 태그 사이 공백"이 **세 군데에서 다르게** 적혀 있었다 — validate는 `[ \t
+\v\f
+]`, status의 소유권 버킷은 `[ \t\v\f]`, 접기를 결정하는 `HQ_TAG`는 `[ \t]`. 쌍마다 어딘가에서 어긋났다.
 
-- **`` 구분자 + continuation → 본문이 목록에서 사라진다.** HQ_TAG가 ``를 모르니 "태그뿐인 줄"로 안 읽혀 접기가 안 걸리고, `status --open`이 태그 줄만 찍고 결정 본문을 버렸다(실측).
+- **`\v` 구분자 + continuation → 본문이 목록에서 사라진다.** HQ_TAG가 `\v`를 모르니 "태그뿐인 줄"로 안 읽혀 접기가 안 걸리고, `status --open`이 태그 줄만 찍고 결정 본문을 버렸다(실측).
 - **행 내부 `
 ` → status가 validate에 대해 거짓말한다.** `- [open]<CR>[user-only] …`를 status는 "missing an ownership tag **(validate rejects these)**"로 세고 validate는 rc 0으로 통과시켰다 — 이 릴리스 줄기가 계속 잡아 온 그 문장. 코드 주석의 "`
 `은 splitLines를 통과하지 못한다"도 **행 끝에만 참**이고 행 내부에는 거짓이었다.
@@ -44,9 +60,9 @@ MSYS는 프로세스 생성을 전역 직렬화하므로 spawn 하나가 ~0.4s�
 
 **"세 장부가 같은 기계"라는 v0.5.10의 설명은 그때 사실이 아니었다** — 실재화 조건이 달랐다. 이제 **실재화 판정은** 셋이 같고(콜드 리뷰가 continuation 텍스트 18종을 세 장부에 전수 대조: HEAD 9/18 갈림 → 0/18), 그 차이를 케이스로 고정했다. **여전히 같지 않은 것도 적어 둔다**: 빈 장부 관용구 `- (없음)`을 Q·HQ는 관용구로 넘기고 register는 항목으로 세며, 문법이 못 읽는 줄은 gaps만 경고한다 — 장부별로 정당한 차이지만 "같은 기계"는 **실재화 축에 한정된 말**이다.
 
-**콜드 리뷰(커밋 전) 발견 6건 — 절반이 이 패치가 만든 것.** ① **TAG_SEP가 태그 *사이*만 닫고 불릿 *앞*은 두 철자로 남아 있었다**: ``로 들여쓴 `- [open]`이 validate에겐 항목이고 status 두 표면 모두에겐 안 보였다(rc 1 옆에 "nothing is waiting on you"). 같은 클래스, 한 자리 앞 — 선행 공백도 TAG_SEP로 통일(단 untagged 규칙은 컬럼0 유지: 거기서 들여쓴 불릿은 하위 detail이다). ② **내가 이번에 폐기한 문장이 내가 편집한 줄 바로 위에 그대로 있었다** — 버킷 주석의 "`[ 	]` … `
+**콜드 리뷰(커밋 전) 발견 6건 — 절반이 이 패치가 만든 것.** ① **TAG_SEP가 태그 *사이*만 닫고 불릿 *앞*은 두 철자로 남아 있었다**: `\v`로 들여쓴 `- [open]`이 validate에겐 항목이고 status 두 표면 모두에겐 안 보였다(rc 1 옆에 "nothing is waiting on you"). 같은 클래스, 한 자리 앞 — 선행 공백도 TAG_SEP로 통일(단 untagged 규칙은 컬럼0 유지: 거기서 들여쓴 불릿은 하위 detail이다). ② **내가 이번에 폐기한 문장이 내가 편집한 줄 바로 위에 그대로 있었다** — 버킷 주석의 "`[ \t\v\f]` … `
 
-`은 splitLines를 통과 못 한다". ③ "single walk" 잔존이 1곳이 아니라 3곳이었다(2곳 더 정정) ④ 타이밍 문구도 사본이 하나 더 있었다(`tests/in-container.sh`) ⑤ 번들 라벨 날짜와 발행일 불일치(→ `2026-08-07.1`) ⑥ CHANGELOG의 계수·범위 과장 2건. **동작 변화 1건 명시**: `- [{state}][{ownership}]` 단독은 이제 표시되지 않는다(공백 구분 쌍둥이와 동일 — 순수 stub은 소음, 초기 장부가 green으로 유지된다).
+`은 splitLines를 통과 못 한다". ③ "single walk" 잔존이 1곳이 아니라 3곳이었다(2곳 더 정정) ④ 타이밍 문구도 사본이 하나 더 있었다(`tests/in-container.sh`) ⑤ 번들 라벨 날짜와 발행일 불일치(→ `2026-08-07.1`) ⑥ CHANGELOG의 계수·범위 과장 2건. **동작 변화 1건 명시**: `- [{state}]\v[{ownership}]` 단독은 이제 표시되지 않는다(공백 구분 쌍둥이와 동일 — 순수 stub은 소음, 초기 장부가 green으로 유지된다).
 
 **문서 드리프트 4건.** ① IMPROVEMENT_PLAN 현행 표기(v0.5.9 → v0.5.11) ② `isNoise` 설명 주석이 현행 코드(`stubEntry` + hold)와 불일치 ③ "single walk" 잔존 1곳 → single classifier ④ **tests/README의 "컨테이너 20초 미만"** — 실측 32·33초(486케이스 -j6, 2026-08-07). 케이스가 430대이던 시절의 값이 그대로 남아 있었다; 케이스가 늘면 갱신하라는 문장을 함께 넣었다.
 
@@ -64,9 +80,9 @@ MSYS는 프로세스 생성을 전역 직렬화하므로 spawn 하나가 ~0.4s�
 
 **테스트.** placeholder/정상 태그 × inline/continuation 행렬 신규 6케이스 — **행렬이 이때 완결됐다는 주장은 과했다: `2026-08-07.1`에서 두 칸이 더 나왔다**(red-first 5 + full-template 침묵 가드 1 — 가드는 양방향 통과가 정답임을 주석에 선언). 세 장부 대칭이 이제 케이스로 고정된다.
 
-**콜드 리뷰(커밋 전)가 이 패치 자신의 critical 1건을 잡았다 — 접기와 계약의 경계.** `- [open]` + continuation에 **ownership 태그가 다음 줄에** 오는 형태에서, status는 접힌 표시 줄로 분류해 "machine can just do 1"이라 하고 validate는 물리 항목 줄을 판정해 거부했다 — 한 항목, 두 답, 이 릴리스가 잡던 클래스가 P1-2 수정 **때문에** 새 조합으로 열린 것. 계약대로 태그는 **항목 줄**의 것이므로(FORMATS: two fixed tags, then prose — defender가 쓰면서 단다), 버킷 분류는 접히지 않은 원본 줄(`raw`)로 옮기고 접기는 표시 전용으로 남겼다. FORMATS에 "fold는 display, 판정은 entry line"을 명문화. 함께: ② 태그 사이 구분자 latitude를 validate와 정렬(`[ 	]` —  구분 항목이 "validate rejects these"로 세어지며 validate는 통과하던 병적 형태) ③ **새로 넣은 badline 경고가 두-인코더 함정을 또 밟았다** — latin1 섹션명을 UTF-8 템플릿에 보간해 지역화 스키마에서 mojibake(cmd-gaps + status --open 쌍둥이 모두 바이트 방출로) ④ 미닫힘 placeholder 브래킷의 untagged 표면화와 template-state+실ownership의 침묵 유지를 케이스로 고정. 신규 4케이스(red-first 3 + 핀 1).
+**콜드 리뷰(커밋 전)가 이 패치 자신의 critical 1건을 잡았다 — 접기와 계약의 경계.** `- [open]` + continuation에 **ownership 태그가 다음 줄에** 오는 형태에서, status는 접힌 표시 줄로 분류해 "machine can just do 1"이라 하고 validate는 물리 항목 줄을 판정해 거부했다 — 한 항목, 두 답, 이 릴리스가 잡던 클래스가 P1-2 수정 **때문에** 새 조합으로 열린 것. 계약대로 태그는 **항목 줄**의 것이므로(FORMATS: two fixed tags, then prose — defender가 쓰면서 단다), 버킷 분류는 접히지 않은 원본 줄(`raw`)로 옮기고 접기는 표시 전용으로 남겼다. FORMATS에 "fold는 display, 판정은 entry line"을 명문화. 함께: ② 태그 사이 구분자 latitude를 validate와 정렬(`[ \t\v\f]` — \v 구분 항목이 "validate rejects these"로 세어지며 validate는 통과하던 병적 형태) ③ **새로 넣은 badline 경고가 두-인코더 함정을 또 밟았다** — latin1 섹션명을 UTF-8 템플릿에 보간해 지역화 스키마에서 mojibake(cmd-gaps + status --open 쌍둥이 모두 바이트 방출로) ④ 미닫힘 placeholder 브래킷의 untagged 표면화와 template-state+실ownership의 침묵 유지를 케이스로 고정. 신규 4케이스(red-first 3 + 핀 1).
 
-**Known issues(이 릴리스가 새로 남기는 것만).** ① stub + 빈 줄 + continuation의 고아 continuation은 gaps에서만 명명되고(badline 경고) HQ·questions에서는 조용히 버려진다 — 빈 줄이 hold를 죽이는 규칙 자체는 세 장부 동일하나, "못 읽는 것은 명명한다"가 두 장부에 미적용(기존 클래스, 이번 변경 무관). ②  들여쓰기 등 더 깊은 공백 병리는 §11 기준 밖.
+**Known issues(이 릴리스가 새로 남기는 것만).** ① stub + 빈 줄 + continuation의 고아 continuation은 gaps에서만 명명되고(badline 경고) HQ·questions에서는 조용히 버려진다 — 빈 줄이 hold를 죽이는 규칙 자체는 세 장부 동일하나, "못 읽는 것은 명명한다"가 두 장부에 미적용(기존 클래스, 이번 변경 무관). ② \v 들여쓰기 등 더 깊은 공백 병리는 §11 기준 밖.
 
 ## 2026-08-06.12
 

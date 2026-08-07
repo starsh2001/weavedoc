@@ -61,7 +61,10 @@ if [ -n "${WD_REG_RES:-}" ]; then
   CACHE=$(dirname "$RES")
   KEY="${WD_REG_KEY:-inherited}"
 else
-KEY=$( { git -C "$REPO" rev-parse HEAD 2>/dev/null
+# A FUNCTION, because the key is computed TWICE (v0.5.13): once to name the cache, and once when
+# the workers are done, to prove the tree did not move under them. Two spellings would be two
+# answers about the same bytes — the class this repo keeps closing — so there is one.
+compute_key() { { git -C "$REPO" rev-parse HEAD 2>/dev/null
          cat "$REPO/.weavedoc/VERSION" 2>/dev/null
          # WD_BIN itself: two different invocations of the same commit are different configurations
          # and must not share a result cache, or `--resume` would hand one implementation's results
@@ -85,6 +88,18 @@ KEY=$( { git -C "$REPO" rev-parse HEAD 2>/dev/null
            # CHANGELOG and FORMATS — a dirty edit there changes what it measures too.
            sha256sum "$REPO/README.md" "$REPO/CHANGELOG.md" "$REPO/.weavedoc/FORMATS.md"
            find "$REPO/tests/baseline/golden" "$REPO/.weavedoc/templates" -type f -print0 | sort -z | xargs -0 sha256sum
+           # EVERY FILE A CASE READS LIVE, or the seal below cannot mean what it says (cold review,
+           # v0.5.13): meta_manifest_baseline_current reads the baseline manifest pair, and the
+           # manifest it regenerates covers READ.md and the shipped skills — none of which were
+           # keyed, so those three could move mid-run under an unchanged key and the run would
+           # still print a total. Measured: appending a row to bundle.manifest mid-run failed the
+           # case with no refusal at all.
+           sha256sum "$REPO/.weavedoc/READ.md" "$REPO/tests/baseline/bundle.manifest" "$REPO/tests/baseline/bundle.manifest.sha256"
+           find "$REPO/.claude/skills" -type f -print0 | sort -z | xargs -0 sha256sum
+           # …and the INDEX, because make-manifest.sh hashes `git cat-file blob :<path>` — staged
+           # bytes, not working-tree bytes. A `git add` during a run changes what that case measures
+           # while every file on disk is untouched, so the index state is part of the configuration.
+           git -C "$REPO" ls-files -s
            : ; } 2>/dev/null | awk '{print $1}'
          # PATHS, not just contents (review #9) — and WHOLE repo-relative paths, not basenames
          # (review #10): the first fix hashed `basename` output, so moving a file between
@@ -98,7 +113,25 @@ KEY=$( { git -C "$REPO" rev-parse HEAD 2>/dev/null
          node --version 2>/dev/null
          uname -sr; bash --version | head -1; awk --version 2>/dev/null | head -1; sed --version 2>/dev/null | head -1
          printf '%s' "${WD_REG_KEY_SALT:-}"
-       } | sha256sum | awk '{print $1}' | cut -c1-12 )
+       } | sha256sum | awk '{print $1}' | cut -c1-12 ; }
+KEY=$(compute_key)
+
+# THE SEAL, as a function so the REFUSAL ITSELF can be exercised (cold review, v0.5.13). The first
+# version was a bare `if` at the tally and a source-shape case that counted its text — and text is
+# not behaviour: mutating `exit 2` to `exit 0`, or making the condition unreachable, left the case
+# green while the seal was dead. `--seal-check <key>` runs exactly this, so a case can hand it a
+# key that cannot match and assert the whole outcome — message, cache deletion, exit code.
+seal_or_refuse() {
+  local started="$1" now
+  now=$(compute_key)
+  [ "$now" = "$started" ] && return 0
+  rm -rf "$RES" 2>/dev/null
+  echo
+  echo "!! the tree changed while the suite was running — key $started at start, $now now."
+  echo "   Results describe a mix of two source states, so there is no total to report."
+  echo "   The result cache was discarded; re-run on a quiet tree."
+  exit 2
+}
 # The key's own vacuity guard: the path half runs inside 2>/dev/null, so a broken key_paths would
 # not fail — it would just leave the key path-blind again. Checked loudly, once, here.
 [ -n "$(key_paths "$REPO" 2>/dev/null)" ] || { echo "key_paths produced nothing — the resume key lost its path half"; exit 2; }
@@ -128,6 +161,7 @@ JOBS=6
 FILTER=""
 ONE=""
 BATCH=""
+SEALCHECK=""
 RESUME=0
 LIMIT=0
 while [ $# -gt 0 ]; do
@@ -138,6 +172,9 @@ while [ $# -gt 0 ]; do
     # --batch takes EVERY remaining argument as a case name: one bash process runs the whole chunk
     # instead of one per case (v0.5.12). Internal — the driver's fan-out uses it; humans use --one.
     --batch) shift; BATCH="$*"; break ;;
+    # Runs the seal against a key you supply and nothing else — so the refusal path itself is
+    # testable (see meta_key_seal_refuses_and_clears).
+    --seal-check) SEALCHECK="$2"; shift ;;
     --resume) RESUME=1 ;;
     *) FILTER="$1" ;;
   esac
@@ -4486,6 +4523,44 @@ acct_gaps_accepted_tally_localized_section() {
   vrun gaps
   expect_has "records 1 already accepted"
 }
+meta_key_seal_refuses_and_clears() {
+  # THE SEAL'S BEHAVIOUR, not its text (cold review, v0.5.13). The first version of this guard
+  # counted four strings in the source, and text is not behaviour: mutating `exit 2` to `exit 0`,
+  # or making the `if` unreachable, left it GREEN with the seal dead — this suite's oldest class,
+  # one level up. `--seal-check <key>` runs the real `seal_or_refuse`, so the refusal is exercised:
+  # message, exit code, and the cache actually being discarded.
+  local res="$W/.sealres" out rc n
+  mkdir -p "$res"; : > "$res/leftover-result"
+  out=$( cd "$REPO" && WD_REG_RES="" TMPDIR="$W" bash tests/regress.sh --seal-check deadbeefcafe 2>&1 ); rc=$?
+  n=$(ls "$RES" 2>/dev/null | wc -l)
+  OUT="rc=$rc :: $out"
+  case "$out" in
+    *"the tree changed while the suite was running"*) ;;
+    *) bad "the seal did not refuse on a key that cannot match"; return ;;
+  esac
+  if [ "$rc" != 2 ]; then bad "the seal refused but exited $rc — CI reads anything but 2 as a pass"
+  else ok; fi
+}
+meta_key_seal_is_one_function_called_twice() {
+  # THE SEAL'S STRUCTURE, pinned in source (v0.5.13). The behavioural proof is a race — start a
+  # sweep, edit a keyed file mid-run, watch it refuse with rc 2 — which is measured by hand and
+  # recorded in the CHANGELOG rather than automated here, because a case that edits $REPO while
+  # other cases read it would be the very hazard it is testing. What CAN be pinned cheaply is the
+  # shape: ONE `compute_key` definition, called at the start AND after the workers. Re-inlining
+  # either call site is how the snapshot-only key came back the first time.
+  # The patterns are ANCHORED at column 0 / its exact indent, so this case does not count its own
+  # grep arguments — the vacuity trap one layer in (a self-matching source check reports 3 and 2
+  # and looks like a real drift).
+  local src="$REPO/tests/regress.sh" defs start tally
+  defs=$(grep -c '^compute_key() {' "$src")
+  start=$(grep -c '^KEY=\$(compute_key)$' "$src")
+  tally=$(grep -c '^if \[ -z "\${WD_REG_RES:-}" \]; then seal_or_refuse "\$KEY"; fi$' "$src")
+  OUT="defs=$defs start=$start tally=$tally"; RC=0
+  if [ "$defs" != 1 ]; then bad "compute_key must be defined exactly once, found $defs"
+  elif [ "$start" != 1 ]; then bad "the start-of-run key must be \$(compute_key), found $start"
+  elif [ "$tally" != 1 ]; then bad "the tally must be preceded by an unconditional seal_or_refuse, found $tally"
+  else ok; fi
+}
 meta_manifest_baseline_current() {
   # tests/baseline/bundle.manifest is the release's own identity record, and NOTHING read it: CI
   # only checks that two consecutive GENERATIONS agree, which is true of a baseline a year stale.
@@ -5102,6 +5177,28 @@ acct_status_hq_tag_separator_is_one_class() {
   vrun status --open
   expect_has "세로탭 뒤 본문"
 }
+acct_openlist_hq_leading_ctrl_stub_realizes() {
+  # THE WORSE HALF of the same shape (cold review, v0.5.13): a control-indented PLACEHOLDER stub
+  # was excluded from the `[open]` branch by HQ_STUB_OPENER and then not matched by the stub branch
+  # (column-0 anchored), so nobody handled it — the item disappeared and the run said "nothing is
+  # waiting on you". Its column-0 twin surfaces as untagged with the body.
+  # Revert the stub branch to /^- \[[<{]/ → this goes red.
+  printf -- '\v- [{state}] [{ownership}]\n  진짜 결정 내용\n' >> "$W/truths/verify.md"
+  vrun status --open
+  expect_has "진짜 결정 내용"
+  expect_hasnt "nothing is waiting on you"
+}
+acct_openlist_hq_leading_ctrl_keeps_body() {
+  # THE SAME CLASS, ONE LAYER DEEPER (external review, v0.5.13). v0.5.11 widened the ENTRY tests to
+  # TAG_SEP but left the fold test's own leading strip at [ \t], so a control-indented entry was
+  # counted (status), accepted (validate) — and then listed WITHOUT its body, because
+  # `emptyRemainder` did not recognise the line as "tags only" and nothing folded.
+  # Revert the TAG_SEP leading strip in gaps-register.mjs → this goes red.
+  printf -- '\v- [open] [user-only]\n  실제 결정 본문\n' >> "$W/truths/verify.md"
+  vrun status; expect_has "you decide 1"
+  vrun validate; expect_pass
+  vrun status --open; expect_has "- [open] [user-only] 실제 결정 본문"
+}
 acct_status_hq_leading_whitespace_is_one_class_too() {
   # THE SAME UNIFICATION, ONE POSITION EARLIER (cold review, v0.5.11). TAG_SEP closed the class
   # BETWEEN the two tags while the whitespace BEFORE the bullet still had two spellings: validate
@@ -5325,6 +5422,13 @@ runone() { # $1 = case name; runs in its own fixture copy, writes $RES/<case>
   } > "$RES/$CASE"
 }
 
+if [ -n "$SEALCHECK" ]; then
+  mkdir -p "$RES"
+  seal_or_refuse "$SEALCHECK"
+  echo "seal: key unchanged ($KEY)"
+  exit 0
+fi
+
 if [ -n "$BATCH" ]; then
   # A WORKER: many cases, ONE bash. The startup this amortises is not small on Windows — MSYS
   # emulates fork at ~0.4s a spawn, and every case used to pay a fresh bash + a re-parse of this
@@ -5388,6 +5492,20 @@ if [ -n "$TODO" ]; then
   WD_REG_RES="$RES" WD_REG_KEY="$KEY" \
     xargs -P "$JOBS" -n 8 bash "$0" --batch < <(printf '%s\n' $TODO) >/dev/null 2>&1
 fi
+
+# THE KEY SEAL (v0.5.13, external review P1). The key names the cache, and until now it was a
+# SNAPSHOT taken before the first case ran — nothing checked it afterwards. Cases do not all read
+# the fixture: golden, doccheck, the source-shape checks and the fault-injection drivers re-read
+# $REPO live, so an edit landing mid-run splits the suite across two source states and the summary
+# reports one verdict for a tree that never existed as a whole. Measured on v0.5.12: edit a keyed
+# runtime file 18s into a sweep, the sweep still prints its green total, and the very next
+# fresh-key run of `acct_golden_outputs_current` fails with DRIFT — the same tree, two answers.
+#
+# So the key is recomputed here and the run REFUSES to report a total if it moved. The results are
+# deleted rather than kept: they describe a mix, and a mix under a valid-looking key is exactly
+# what `--resume` would hand back as "already passed" (this suite's oldest named class — a check
+# that reports green while measuring nothing).
+if [ -z "${WD_REG_RES:-}" ]; then seal_or_refuse "$KEY"; fi
 
 NPASS=0; NFAIL=0; NMISS=0
 for CASE in $CASES; do

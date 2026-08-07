@@ -12,7 +12,7 @@
 // BYTE DOMAIN. Callers pass latin1 text. `strip()`'s bracket class is a class of BYTES (see below),
 // so the same input decoded as UTF-8 would judge stubs differently — the reader and its callers
 // must share one domain, and validate's is bytes.
-import { splitLines } from './core.mjs'
+import { splitLines, TAG_SEP } from './core.mjs'
 import { sectionAll } from './sections.mjs'
 
 // The bracket class is spelled in BYTES, and it is a class of BYTES rather than of characters —
@@ -46,8 +46,14 @@ export const ENTRY_TAG = /^- \[[^\]]*\]/
 // (external review, v0.5.11).
 export const hasContent = text => strip(text) !== ''
 
+// THE LEADING STRIP IS TAG_SEP HERE TOO (v0.5.13). v0.5.11 widened the entry TESTS to the shared
+// class and left these two at `[ \t]`, so a control-indented `- [open] [user-only]` was counted by
+// status and accepted by validate and then listed WITHOUT its body — this function did not see a
+// "tags only" line, so nothing folded. Same class, one layer under the one that was fixed.
+const LEAD = new RegExp(`^${TAG_SEP}*`)
+
 export function emptyRemainder (line, tag) {
-  const s = line.replace(/^[ \t]*/, '')
+  const s = line.replace(LEAD, '')
   const m = tag.exec(s)
   if (m === null) return false
   return strip(s.slice(m[0].length)) === ''
@@ -58,7 +64,7 @@ export function emptyRemainder (line, tag) {
 // empty?" after only the FIRST bracket would call `- [{state}] [{ownership}]` a real entry whose
 // content is "[{ownership}]". The tag regex names what to skip; the remainder decides after that.
 export function stubLine (line, tag) {
-  const s = line.replace(/^[ \t]*/, '')
+  const s = line.replace(LEAD, '')
   if (!s.startsWith('- [') || !s.includes(']')) return false
   const kw = s.slice(3, s.indexOf(']'))
   if (!/^[<{]/.test(kw) || strip(kw) !== '') return false

@@ -113,7 +113,12 @@ export function hqEntries (m) {
       // Empty remainder → a stub, held for realization. Real remainder → an entry whose state slot
       // is a template, i.e. an entry with no valid state tag — surfaced as untagged, where the
       // v0.5.5 prefix rule used to drop it wholesale (external review, v0.5.10).
-      if (/^- \[[<{]/.test(l)) {
+      // HQ_STUB_OPENER, not a column-0 pattern (cold review, v0.5.13): the `[open]` branch above
+      // already excludes control-indented placeholders through the same regex, so anchoring THIS
+      // one at column 0 left that shape handled by nobody — the entry vanished entirely and the
+      // run printed "nothing is waiting on you", which is worse than the body-loss this release
+      // set out to fix.
+      if (HQ_STUB_OPENER.test(l)) {
         last = null
         if (stubLine(l, HQ_TAG)) held = l
         else { held = null; untagged.push({ file: label, line: l, raw: l }) }
