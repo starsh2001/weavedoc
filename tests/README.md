@@ -15,17 +15,17 @@ bash tests/regress.sh --one NAME # 케이스 하나, 출력 인라인 (pristine 
 
 기본 러너는 **배포되는 런타임**(`node .weavedoc/bin/weavedoc.mjs`)이다. bash 판이 함께 배포되던 동안 기본값이 그쪽이어서 **로컬에서 그냥 돌리면 제품이 아니라 기준을 채점**하고 있었다(v0.4.0 외부 리뷰 지적, 번들 2026-08-05.3에서 수정). 다른 대상을 채점하려면 `WD_BIN="<인터프리터> <진입점>"`.
 
-MSYS는 프로세스 생성을 전역 직렬화한다 — Windows에서 이 suite가 느린 이유는 런타임(Node)이 아니라 **프로세스를 몇 번 띄우느냐**다. 실측(2026-08-07, 487케이스 -j6):
+MSYS는 프로세스 생성을 전역 직렬화한다 — Windows에서 이 suite가 느린 이유는 런타임(Node)이 아니라 **프로세스를 몇 번 띄우느냐**다. 실측(2026-08-07; 케이스당은 v0.5.12 시점 직렬 측정, sweep은 507케이스 -j6 실측):
 
 | | 케이스당 | 전체 sweep |
 |---|---|---|
 | Windows 네이티브 (v0.5.11까지) | 5.2s | **30분+** |
-| Windows 네이티브 (현재) | 1.76s | **7분** |
-| Linux 컨테이너 | — | **30초** |
+| Windows 네이티브 (현재) | 1.76s | **4분 29초** |
+| Linux 컨테이너 | — | **33초** |
 
-**케이스당 남은 1.76s는 픽스처 복사 706ms + CLI 1회 833ms**가 거의 전부다(50개 파일 복사와 black-box 실행 — 둘 다 설계상 줄일 수 없다). 그 위에 있던 3.4s는 케이스마다 **캐시 KEY를 다시 계산하고**(git·find·sha256sum·각종 `--version` 등 ~25개 프로세스) **bash를 새로 띄워 이 스크립트를 다시 파싱**한 비용이었고, v0.5.12에서 없앴다: 드라이버가 `WD_REG_RES`/`WD_REG_KEY`를 물려주고 `--batch`로 워커 하나가 8케이스를 처리한다. 기각된 대안도 실측으로 적어 둔다 — **robocopy는 `cp -r`보다 느렸고**(828ms vs 639ms), **`-j`를 12로 올려도 이득이 없었다**(436→416s, 게다가 잠금 타이밍 케이스가 흔들린다 — 변경 전 하네스도 동일하게 흔들렸다).
+**케이스당 남은 1.76s는 픽스처 복사 706ms + CLI 1회 833ms**가 거의 전부다(50개 파일 복사와 black-box 실행 — 둘 다 설계상 줄일 수 없다). 케이스당 수치는 직렬 측정이고 sweep 열은 `-j6` 실측이라 단순 곱셈으로는 맞지 않는다. 그 위에 있던 3.4s는 케이스마다 **캐시 KEY를 다시 계산하고**(git·find·sha256sum·각종 `--version` 등 ~25개 프로세스) **bash를 새로 띄워 이 스크립트를 다시 파싱**한 비용이었고, v0.5.12에서 없앴다: 드라이버가 `WD_REG_RES`/`WD_REG_KEY`를 물려주고 `--batch`로 워커 하나가 8케이스를 처리한다. 기각된 대안도 실측으로 적어 둔다 — **robocopy는 `cp -r`보다 느렸고**(828ms vs 639ms), **`-j`를 12로 올려도 이득이 없었다**(436→416s, 게다가 잠금 타이밍 케이스가 흔들린다 — 변경 전 하네스도 동일하게 흔들렸다).
 
-여전히 **컨테이너가 14배 빠르므로 태그 전 검증은 컨테이너로 한다**:
+여전히 **컨테이너가 8배 빠르므로 태그 전 검증은 컨테이너로 한다**:
 
 ```bash
 bash tests/in-container.sh regress          # 전체 suite
@@ -37,13 +37,14 @@ bash tests/in-container.sh sh '<셸 명령>'    # 그 외, /work가 트리
 - **픽스처**: 실행마다 `mktemp -d` workspace — trap으로 종료 시 제거. 병렬/중복 실행이 충돌할 수 없고, 중단돼도 workspace가 남지 않는다.
 - **결과 캐시**: `$TMPDIR/wd-reg-<key>/res` — key는 `compute_key()`가 이 순서로 해시한다 — **commit · `.weavedoc/VERSION` · WD_BIN · schema · `.weavedoc/bin` 트리 전체 · `$WD_ENTRY` · `tests/**`의 `*.sh`+`*.mjs`(baseline 제외) · README·CHANGELOG·FORMATS · golden·templates · READ.md·baseline manifest 2개 · `.claude/skills` 내용 · git 인덱스(`ls-files -s`) · 경로 목록(`key_paths`) · node/OS/bash/awk/sed 버전 · `WD_REG_KEY_SALT`**. 런타임 전체를 넣는 이유: 진입점만 해시하면 **커밋 안 된 lib 수정 뒤 `--resume`이 이전 결과를 재사용**한다(HEAD는 커밋된 변경만 덮는다 — 같은 외부 리뷰가 지적). `--resume`은 정확히 같은 구성의 결과만 재사용할 수 있다: 다른 구성은 다른 디렉터리라서, 오래된 결과는 걸러지는 게 아니라 **도달 불가능**하다. (`WD_REG_KEY_SALT` 환경변수로 강제 새 키 가능. 쌓인 `wd-reg-*` 디렉터리는 언제든 지워도 된다.)
 - 워커는 부모의 workspace를 env로 상속하며, mktemp를 **만든** 호출만 제거를 담당한다.
+- **git 환경**: `tests/git-env.sh`가 `git rev-parse --local-env-vars`가 세는 변수를 **전부 unset**한다 (`regress.sh`·`make-manifest.sh`·`release-notes.sh`가 소싱). 훅·`rebase --exec`·`bisect run`·`submodule foreach`는 `GIT_DIR`과 `GIT_INDEX_FILE`을 내보내고 `git -c`는 `GIT_CONFIG_PARAMETERS`로 전파되므로, "커밋 전에 스윕"이 바로 그 환경이다. v0.5.16은 셋만, 그것도 찾은 호출 지점에서만 지웠고 — 상속된 `GIT_OBJECT_DIRECTORY`에서 임시 저장소가 **무관한 저장소에 object 79개를 썼으며**(케이스는 PASS), 상속된 `GIT_INDEX_FILE`에서 **키와 매니페스트가 서로 다른 인덱스를 읽었다**(false-green). 호출 지점을 열거하는 대신 프로세스 환경을 정리하므로 앞으로 추가되는 git 호출도 자동으로 격리된다.
 
 ## CI
 
 [.github/workflows/ci.yml](../.github/workflows/ci.yml) — **트리거마다 도는 OS가 다르다.**
 
 - **push(main·improve/**)·PR**: `bash -n` + ShellCheck(오류 등급), **Ubuntu에서만** 전체 suite, bundle manifest 2회 재현 검증.
-- **tag(`v*`)·workflow_dispatch**: 위에 더해 **Windows·macOS** matrix에서 전체 suite. 셋 다 **required**(macOS는 census 4건이 v0.3.4에서 해소되어 2026-08-04 승격). Windows는 분당요금 2배, macOS는 10배라 계약이 걸리는 지점 — 태그 — 에서만 돈다. (CI sweep 실측 2026-08-07, 같은 축끼리: Windows **2m28s** — 같은 CI에서 v0.5.12 직전 트리는 **5m18s**였다. macOS 49s · Linux 41s. 로컬 Windows 네이티브는 별개 축이다 — 위 표의 7분.)
+- **tag(`v*`)·workflow_dispatch**: 위에 더해 **Windows·macOS** matrix에서 전체 suite. 셋 다 **required**(macOS는 census 4건이 v0.3.4에서 해소되어 2026-08-04 승격). Windows는 분당요금 2배, macOS는 10배라 계약이 걸리는 지점 — 태그 — 에서만 돈다. (CI sweep 실측 2026-08-07, 같은 축끼리: Windows **2m28s** — 같은 CI에서 v0.5.12 직전 트리는 **5m18s**였다. macOS 49s · Linux 41s. 로컬 Windows 네이티브는 별개 축이다 — 위 표의 4분 29초. 이 CI 숫자는 493케이스 시점 측정이며, 케이스가 늘면 함께 늘어난다.)
 
 두 경로 모두 §7.3 계약대로 실행 케이스 ID·환경을 artifact로 게시하고, suite 성패와 무관하게(`if: always()`) 종료 후 clean worktree를 확인한다.
 

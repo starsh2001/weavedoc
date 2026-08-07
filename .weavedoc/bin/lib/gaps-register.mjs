@@ -12,7 +12,7 @@
 // BYTE DOMAIN. Callers pass latin1 text. `strip()`'s bracket class is a class of BYTES (see below),
 // so the same input decoded as UTF-8 would judge stubs differently — the reader and its callers
 // must share one domain, and validate's is bytes.
-import { splitLines, TAG_SEP } from './core.mjs'
+import { splitLines, TAG_SEP, TAG_LEAD as LEAD } from './core.mjs'
 import { sectionAll } from './sections.mjs'
 
 // The bracket class is spelled in BYTES, and it is a class of BYTES rather than of characters —
@@ -50,7 +50,9 @@ export const hasContent = text => strip(text) !== ''
 // class and left these two at `[ \t]`, so a control-indented `- [open] [user-only]` was counted by
 // status and accepted by validate and then listed WITHOUT its body — this function did not see a
 // "tags only" line, so nothing folded. Same class, one layer under the one that was fixed.
-const LEAD = new RegExp(`^${TAG_SEP}*`)
+// Imported as core's TAG_LEAD since v0.5.17: cmd-status.mjs needs the same lead to measure a
+// bullet's indentation, and building it there from TAG_SEP would have been a second spelling of a
+// constant that already had to be unified once.
 
 export function emptyRemainder (line, tag) {
   const s = line.replace(LEAD, '')

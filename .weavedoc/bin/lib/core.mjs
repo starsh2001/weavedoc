@@ -58,6 +58,10 @@ export const isFence = l => /^---[ \t\v\f\r]*$/.test(l)
 // this constant IS that rule rather than a near-copy of it.
 export const TAG_SEP = '[ \\t\\n\\v\\f\\r]'
 
+// …and the LEAD built from it, exported because two modules built the same regex from the same
+// constant (v0.5.17). Two spellings of one rule is how TAG_SEP itself came to have three.
+export const TAG_LEAD = new RegExp(`^${TAG_SEP}*`)
+
 // ---- id spelling --------------------------------------------------------------------------
 // The single definition of "how a number is spelled as an id", used both to resolve a file and to
 // reject a file spelling its number any other way — so lookup and naming convention cannot drift.

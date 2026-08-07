@@ -4,8 +4,8 @@
 // on the user — the listing is pasted/rendered, never re-composed from memory).
 import { existsSync, statSync } from 'node:fs'
 import { readFileSync } from 'node:fs'
-import { splitLines, U, TAG_SEP } from './core.mjs'
-import { nocomment, sectionAll, defence, commentBalanced } from './sections.mjs'
+import { splitLines, U, TAG_SEP, TAG_LEAD } from './core.mjs'
+import { nocomment, sectionEach, defence, commentBalanced } from './sections.mjs'
 import { fmvB, loadSchema } from './read.mjs'
 import { fm, join, docIds, materialIds, truthFiles, basename } from './mine.mjs'
 import { fidBody, isNoise } from './review.mjs'
@@ -82,9 +82,14 @@ export function hqFiles (m) {
 // without saying which level, so read either rather than silently finding nothing in one of them —
 // and EVERY matching section, not the first: reading only the first hid every later round's entries
 // from the counter and from the tag check at once.
-// sectionAll caps heading depth at six (v0.5.4), so this reader and validate's own Human-queue
-// walker answer alike about a `####### Human queue`: not a heading, therefore not a section.
-export const hqBody = file => sectionAll(nocomment(readOr(file)), 'Human queue')
+// The section walker caps heading depth at six (v0.5.4), so this reader and validate's own
+// Human-queue walker answer alike about a `####### Human queue`: not a heading, not a section.
+// EACH section on its own, not the concatenation (external review, v0.5.17). A Human queue is an
+// append-per-round log, so one file legitimately carries several of these sections; joining their
+// bodies put the last line of one round directly above the first line of the next, and the walk
+// below — which decides what a line is detail OF — read a round-two entry as detail of a round-one
+// one and dropped it. State resets at the boundary because the boundary is now visible.
+export const hqBodies = file => sectionEach(nocomment(readOr(file)), 'Human queue')
 
 // ONE CLASSIFIER — precisely that, and no more (v0.5.6 said "one walk", and an external review
 // measured the claim: `--open` still re-reads these files for its own diagnostics, and
@@ -102,87 +107,109 @@ export function hqEntries (m) {
   const untagged = []
   for (const f of hqFiles(m)) {
     const label = rel(f)
-    // `last` — the listed entry a continuation folds into, set only when the entry's own line is
-    // nothing but its tags (emptyRemainder); an entry that HAS content keeps its sub-bullets as
-    // dropped detail (acct_openlist_subbullets_stay_detail). `held` — a pure placeholder stub
-    // waiting for a continuation to REALIZE it, the machine gaps.md had all along (scanRegister's
-    // gnoise) and this ledger lacked: dropping the stub immediately left the continuation carrying
-    // the actual content with nothing to attach to, and the item vanished (external review,
-    // v0.5.10 — `- [{state}] [{ownership}]` + indented content reported "nothing is waiting").
-    // DETAIL NEEDS SOMETHING TO BE DETAIL OF (external review, v0.5.16). v0.5.15 made an indented
-    // placeholder detail — right under a real entry, and a silent DISAPPEARANCE when nothing is
-    // above it: `  - [{state}] [{ownership}] REAL-DECISION` alone in the section printed "nothing
-    // is waiting on you", with validate green beside it (it skips a placeholder state too, so
-    // nothing anywhere named the item). `parent` is what tells the two cases apart.
-    let last = null
-    let held = null
-    let parent = false
-    for (const l of splitLines(hqBody(f))) {
-      if (!/[^ \t]/.test(l)) { last = null; held = null; parent = false; continue }
-      if (HQ_OPEN.test(l)) {
-        held = null
-        parent = true
-        // `raw` is the ENTRY LINE, never mutated; `line` is the display, which folding extends.
-        // The bucket classifiers read raw: ownership lives on the entry line (FORMATS — two fixed
-        // tags, then prose), and classifying the FOLDED line once put an entry in "machine can
-        // just do" while validate rejected it — the two surfaces disagreeing about one entry, the
-        // exact class this whole lane exists to end (cold review, v0.5.10 — critical).
-        open.push({ file: label, line: l, raw: l })
-        last = emptyRemainder(l, HQ_TAG) ? { a: open, i: open.length - 1 } : null
-        continue
-      }
-      // A placeholder-OPENING bullet: the remainder decides (FORMATS), same as everywhere else.
-      // Empty remainder → a stub, held for realization. Real remainder → an entry whose state slot
-      // is a template, i.e. an entry with no valid state tag — surfaced as untagged, where the
-      // v0.5.5 prefix rule used to drop it wholesale (external review, v0.5.10).
-      // HQ_STUB_ENTRY, not a column-0 pattern (v0.5.13) and not the full TAG_SEP lead (v0.5.14):
-      // anchoring at column 0 left a control-indented placeholder handled by nobody — it vanished
-      // and the run printed "nothing is waiting on you" — while the full lead swallowed ordinary
-      // nested sub-bullets. See the constant for which half is whose contract.
-      // WHICH indentation makes a placeholder an entry has moved three times, so the rule is
-      // spelled out: a control lead or column 0 is ALWAYS an entry (HQ_STUB_ENTRY — v0.5.13/14),
-      // and a space/tab-indented one is an entry too WHEN THERE IS NOTHING ABOVE IT to be detail
-      // of (v0.5.16). Under a parent it stays detail, which is what stopped nested sub-bullets
-      // from being counted twice.
-      if (PLACEHOLDER_BULLET.test(l) && (HQ_STUB_ENTRY.test(l) || !parent)) {
-        last = null
-        // A SURFACED PLACEHOLDER IS NOT A PARENT (cold review, v0.5.16). Setting `parent` here made
-        // the FIRST orphan an entry and every sibling after it detail-of-a-placeholder — three
-        // orphans in a row listed one, which is the same silent drop this rule exists to stop.
-        // Only a real entry ([open]/[ruled]/an untagged non-placeholder bullet) can have detail.
-        if (stubLine(l, HQ_TAG)) held = l
-        else { held = null; untagged.push({ file: label, line: l, raw: l }) }
-        continue
-      }
-      if (!/^- /.test(l) || NONE_IDIOM.test(l) || /^- \[(open|ruled)\]/.test(l)) {
-        // An INDENTED non-empty line realizes a held stub (its content lives here), or continues an
-        // empty-remainder entry; anything else at column 0 closes both holds.
-        if (/^[ \t]+[^ \t]/.test(l)) {
-          const cont = l.replace(/^[ \t]+/, '')
-          // A held stub is realized only by a continuation that HAS content once template tokens
-          // are stripped — the register's own rule (v0.5.11). A placeholder-only continuation
-          // leaves the hold standing, so a real line further down still realizes it.
-          if (held !== null && hasContent(cont)) {
-            untagged.push({ file: label, line: `${held} ${cont}`, raw: held })
-            last = { a: untagged, i: untagged.length - 1 }
-            held = null
-            parent = true
-          } else if (held === null && last !== null) last.a[last.i].line += ` ${cont}`
-        } else if (!/^[ \t]/.test(l)) {
-          last = null
+    for (const body of hqBodies(f)) {
+      // `last` — the listed entry a continuation folds into, set only when the entry's own line is
+      // nothing but its tags (emptyRemainder); an entry that HAS content keeps its sub-bullets as
+      // dropped detail (acct_openlist_subbullets_stay_detail). `held` — a pure placeholder stub
+      // waiting for a continuation to REALIZE it, the machine gaps.md had all along (scanRegister's
+      // gnoise) and this ledger lacked: dropping the stub immediately left the continuation carrying
+      // the actual content with nothing to attach to, and the item vanished (external review,
+      // v0.5.10 — `- [{state}] [{ownership}]` + indented content reported "nothing is waiting").
+      // DETAIL NEEDS SOMETHING TO BE DETAIL OF (external review, v0.5.16). v0.5.15 made an indented
+      // placeholder detail — right under a real entry, and a silent DISAPPEARANCE when nothing is
+      // above it: `  - [{state}] [{ownership}] REAL-DECISION` alone in the section printed "nothing
+      // is waiting on you", with validate green beside it (it skips a placeholder state too, so
+      // nothing anywhere named the item).
+      //
+      // …AND IT NEEDS TO KNOW *WHAT* (external review, v0.5.17). v0.5.16 answered with a boolean, and
+      // a boolean cannot tell a peer from a child. Three measured consequences, all of them the same
+      // silent drop this rule exists to stop: two placeholder entries at one indentation MERGED into
+      // one (the first realized, which raised the flag, so the second became "detail"); a placeholder
+      // peer of a real `[open]` entry VANISHED outright (detail of a contentful entry is dropped);
+      // and — because the flag was deliberately not raised for a surfaced placeholder — a sub-bullet
+      // under an orphan was COUNTED TWICE. `parentLead` holds the parent's own leading whitespace, so
+      // "deeper" is what it says: a strictly longer lead that starts with the parent's. Peers share a
+      // lead and stay entries; the comparison, not the absence of a parent, is what stops swallowing.
+      // A prefix test rather than a width count on purpose — a tab under a two-space parent is not
+      // "deeper", it is a different indentation style, and the honest answer there is to surface.
+      let last = null
+      let held = null
+      let parentLead = null
+      // `''` is a legal parentLead (a column-0 entry), so every test here is `!== null` and never a
+      // truthiness check — the trap that would have made `- [ruled]` at column 0 no parent at all.
+      const deeper = lead => parentLead !== null && lead.length > parentLead.length && lead.startsWith(parentLead)
+      for (const l of splitLines(body)) {
+        if (!/[^ \t]/.test(l)) { last = null; held = null; parentLead = null; continue }
+        const lead = TAG_LEAD.exec(l)[0]
+        if (HQ_OPEN.test(l)) {
           held = null
-          // A column-0 `- [ruled]` IS a parent — a real entry whose nested placeholder is detail
-          // (cold review, v0.5.16). It reaches this branch (nothing above lists a `ruled` entry),
-          // and a flat `parent = false` here erased the flag a separate assignment had just set:
-          // one place decides, so the two cannot disagree.
-          parent = /^- \[ruled\]/.test(l)
+          parentLead = lead
+          // `raw` is the ENTRY LINE, never mutated; `line` is the display, which folding extends.
+          // The bucket classifiers read raw: ownership lives on the entry line (FORMATS — two fixed
+          // tags, then prose), and classifying the FOLDED line once put an entry in "machine can
+          // just do" while validate rejected it — the two surfaces disagreeing about one entry, the
+          // exact class this whole lane exists to end (cold review, v0.5.10 — critical).
+          open.push({ file: label, line: l, raw: l })
+          last = emptyRemainder(l, HQ_TAG) ? { a: open, i: open.length - 1 } : null
+          continue
         }
-        continue
+        // A placeholder-OPENING bullet: the remainder decides (FORMATS), same as everywhere else.
+        // Empty remainder → a stub, held for realization. Real remainder → an entry whose state slot
+        // is a template, i.e. an entry with no valid state tag — surfaced as untagged, where the
+        // v0.5.5 prefix rule used to drop it wholesale (external review, v0.5.10).
+        // HQ_STUB_ENTRY, not a column-0 pattern (v0.5.13) and not the full TAG_SEP lead (v0.5.14):
+        // anchoring at column 0 left a control-indented placeholder handled by nobody — it vanished
+        // and the run printed "nothing is waiting on you" — while the full lead swallowed ordinary
+        // nested sub-bullets. See the constant for which half is whose contract.
+        // WHICH indentation makes a placeholder an entry has moved four times, so the rule is spelled
+        // out: a control lead or column 0 is ALWAYS an entry (HQ_STUB_ENTRY — v0.5.13/14), and an
+        // otherwise-indented one is an entry unless it sits STRICTLY DEEPER than the entry above it
+        // (v0.5.16 asked only whether such an entry existed — v0.5.17 asks where).
+        if (PLACEHOLDER_BULLET.test(l) && (HQ_STUB_ENTRY.test(l) || !deeper(lead))) {
+          last = null
+          // A SURFACED PLACEHOLDER *IS* A PARENT — of what is nested under it, and of nothing else
+          // (v0.5.17). v0.5.16 refused it the role because with a boolean the role swallowed peers:
+          // the first orphan became an entry and its siblings became detail-of-a-placeholder, three
+          // in a row listing one. The lead comparison separates the two, so the refusal — which cost
+          // a double count for the sub-bullet under an orphan — is no longer needed.
+          // A HELD STUB CARRIES ITS OWN LEAD: the entry it becomes lives where the STUB was, not
+          // where the continuation that realized it was, and reading the wrong one made the next
+          // peer detail again.
+          if (stubLine(l, HQ_TAG)) held = { line: l, lead }
+          else { held = null; untagged.push({ file: label, line: l, raw: l }) }
+          parentLead = lead
+          continue
+        }
+        if (!/^- /.test(l) || NONE_IDIOM.test(l) || /^- \[(open|ruled)\]/.test(l)) {
+          // An INDENTED non-empty line realizes a held stub (its content lives here), or continues an
+          // empty-remainder entry; anything else at column 0 closes both holds.
+          if (/^[ \t]+[^ \t]/.test(l)) {
+            const cont = l.replace(/^[ \t]+/, '')
+            // A held stub is realized only by a continuation that HAS content once template tokens
+            // are stripped — the register's own rule (v0.5.11). A placeholder-only continuation
+            // leaves the hold standing, so a real line further down still realizes it.
+            if (held !== null && hasContent(cont)) {
+              untagged.push({ file: label, line: `${held.line} ${cont}`, raw: held.line })
+              last = { a: untagged, i: untagged.length - 1 }
+              parentLead = held.lead
+              held = null
+            } else if (held === null && last !== null) last.a[last.i].line += ` ${cont}`
+          } else if (!/^[ \t]/.test(l)) {
+            last = null
+            held = null
+            // A column-0 `- [ruled]` IS a parent — a real entry whose nested placeholder is detail
+            // (cold review, v0.5.16). It reaches this branch (nothing above lists a `ruled` entry),
+            // and a flat reset here erased what a separate assignment had just set: one place
+            // decides, so the two cannot disagree. `''` — its lead — is the value, not `true`.
+            parentLead = /^- \[ruled\]/.test(l) ? '' : null
+          }
+          continue
+        }
+        held = null
+        parentLead = lead
+        untagged.push({ file: label, line: l, raw: l })
+        last = emptyRemainder(l, HQ_TAG) ? { a: untagged, i: untagged.length - 1 } : null
       }
-      held = null
-      parent = true
-      untagged.push({ file: label, line: l, raw: l })
-      last = emptyRemainder(l, HQ_TAG) ? { a: untagged, i: untagged.length - 1 } : null
     }
   }
   return { open, untagged }
