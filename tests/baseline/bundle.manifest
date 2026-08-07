@@ -10,7 +10,7 @@ acf976596a98aed6f778cbf4746bd0480075f8d2de6d3496a9eb90f9bb8c1f9e  .claude/skills
 a7c833d53e3d2b21fae97c9d92669ad0eba67bf9e403f74098a4adde55ce7835  .claude/skills/weavedoc-write/SKILL.md
 d2da83e00d3ab3598de8d75a3693ea3910003344a176abe4f589e8a4b5d2b992  .weavedoc/FORMATS.md
 31a09c0977220ca0d6356313d52c81ee69d0de2331f4fee09f0b9c9a8a89b689  .weavedoc/READ.md
-8440d406389e1d639bc49aaad23e4b42a26062c5491f61cf68a22703be899e75  .weavedoc/VERSION
+3a137cc94517276a93759ea7b66afc99782b3c247225d726afbdc8aec0fc0ef8  .weavedoc/VERSION
 a4beb6ce9e77ffae122427e257ed6efefc33f1c98a2b02aa643c2ae6e467c33b  .weavedoc/bin/lib/cmd-attest.mjs
 5693b266e176927ce1c278b4f09433a9bc14304608afefded885fcbce962d4fd  .weavedoc/bin/lib/cmd-census.mjs
 b73a9b590225b3890cc2a62d0bc3d89a1df1634fee41403a6c53234a5966ff74  .weavedoc/bin/lib/cmd-consecrate.mjs
@@ -21,7 +21,7 @@ d7c2dbe051193e47531b966d78c98349f3740ccdac1ac9f69c4655a262c4e391  .weavedoc/bin/
 9c756f5d44252ba1d53fe8e4c941ffc7bce282c4f67165fb503e4501075ada5c  .weavedoc/bin/lib/cmd-retag.mjs
 c48b6bebbb77d59b5d2b0cdb483505f62b33c6e43ff29980f5167229629d2c50  .weavedoc/bin/lib/cmd-scope.mjs
 c765555e2fdf77060fed2a2fdc8ee77e227c586c875d76ba983779232c5c6982  .weavedoc/bin/lib/cmd-seal-review.mjs
-4e76461fc182a0a662e18803e3671bdfae55f1ad6b4b14ce406c3938747d8860  .weavedoc/bin/lib/cmd-status.mjs
+f3c2e76db633a1a301fff06ad48384dcbe92877e53de9712f6c936f18dddf31b  .weavedoc/bin/lib/cmd-status.mjs
 22540db04f12e1f2ae8d5c42f8c84ce96fc893f0b707c709e48ea67fa80f51b4  .weavedoc/bin/lib/cmd-upgrade.mjs
 c9e675ae963079478c08cb17b0ccab2947e1598f40bcca4df79f070012742d3a  .weavedoc/bin/lib/cmd-validate.mjs
 2929ec3808951266aa6198297028d3e861bb2c7e7ca7270f9a55651d7eb983ad  .weavedoc/bin/lib/core.mjs

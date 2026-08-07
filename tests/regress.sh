@@ -75,7 +75,7 @@ else
 # A FUNCTION, because the key is computed TWICE (v0.5.13): once to name the cache, and once when
 # the workers are done, to prove the tree did not move under them. Two spellings would be two
 # answers about the same bytes — the class this repo keeps closing — so there is one.
-compute_key() { { git -C "$REPO" rev-parse HEAD 2>/dev/null
+compute_key() { { env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE git -C "$REPO" rev-parse HEAD 2>/dev/null
          cat "$REPO/.weavedoc/VERSION" 2>/dev/null
          # WD_BIN itself: two different invocations of the same commit are different configurations
          # and must not share a result cache, or `--resume` would hand one implementation's results
@@ -99,6 +99,11 @@ compute_key() { { git -C "$REPO" rev-parse HEAD 2>/dev/null
            # of .weavedoc/templates — a dirty edit to any of them changes what a case measures
            # without changing the case, and --resume would hand back the stale result. The *.sh
            # glob keys this harness's own bytes too (v0.5.1), so the separate self-hash is gone.
+           # THE ENTRYPOINT UNDER TEST, wherever it lives (external review, v0.5.16). v0.5.15 dropped
+           # this line as "redundant with the bin/ tree" — but WD_BIN takes any project-relative
+           # path, and `.weavedoc/alt-entry.mjs` is not under bin/: measured, editing it left the key
+           # still and `--resume` replayed a PASS for a runtime that now exits 9. Cheap and exact.
+           sha256sum "$REPO/$WD_ENTRY"
            # RECURSIVE for the same reason: a future tests/helpers/x.sh is content-blind to a
            # top-level glob. baseline/ is pruned — only its two manifest files are read by a case
            # and they are hashed by name below.
@@ -123,7 +128,7 @@ compute_key() { { git -C "$REPO" rev-parse HEAD 2>/dev/null
          # and `--resume` reuses the stale PASSes, while a fresh-salt run fails on manifest drift.
          # make-manifest.sh hashes `git cat-file blob :<path>`, i.e. STAGED bytes, so the index is
          # configuration for every case that reads that manifest.
-         git -C "$REPO" ls-files -s -z 2>/dev/null | sha256sum
+         env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE git -C "$REPO" ls-files -s -z 2>/dev/null | sha256sum
          # PATHS, not just contents (review #9) — and WHOLE repo-relative paths, not basenames
          # (review #10): the first fix hashed `basename` output, so moving a file between
          # directories — golden/version.txt into golden/z/ — kept the key while the fixed path
@@ -4546,21 +4551,102 @@ acct_gaps_accepted_tally_localized_section() {
   vrun gaps
   expect_has "records 1 already accepted"
 }
+meta_key_covers_every_live_input() {
+  # THE KEY'S COVERAGE, exercised (external review, v0.5.16). Reverting the recursive bin/ and
+  # tests/ hashes, or the index hash, left the whole suite at 493/493 — three mechanisms added over
+  # three releases, none of them pinned. This asks the key itself: change each input the way a
+  # developer actually changes it, and the key must move. It runs against an ISOLATED COPY, so the
+  # real tree is never touched (the lesson the probe case learned the hard way).
+  local copy="$W/keyrepo" k0 k1 fails=""
+  mkdir -p "$copy" && cp -r "$REPO/tests" "$REPO/.weavedoc" "$copy"/ 2>/dev/null
+  mkdir -p "$copy/.claude" && cp -r "$REPO/.claude/skills" "$copy/.claude"/ 2>/dev/null
+  cp "$REPO/README.md" "$REPO/CHANGELOG.md" "$copy"/ 2>/dev/null
+  # WD_REG_RES/WD_REG_KEY CLEARED — inside a --batch worker they are exported and --seal-check
+  # refuses in that branch, so this returned no key and the case failed only under the real
+  # fan-out while passing under --one. The same trap v0.5.14 recorded, repeated here.
+  key_of() { ( cd "$copy" && WD_REG_RES= WD_REG_KEY= TMPDIR="$W" bash tests/regress.sh --seal-check zzzzzzzzzzzz 2>&1 | sed -n 's/.*, \([0-9a-f]*\) now\..*/\1/p' ); }
+  probe_moves() { # $1 = label, $2 = file to append to
+    local before after
+    before=$(key_of); printf '\n// %s\n' "$1" >> "$2"; after=$(key_of)
+    # BOTH keys checked (cold review): an empty second key made "before != after" true and
+    # the probe reported "covered" while measuring nothing.
+    [ -n "$before" ] && [ -n "$after" ] && [ "$before" != "$after" ] || fails="$fails $1"
+  }
+  # bin/ top level (not the entrypoint, not under lib/) — the v0.5.15 hole
+  printf 'export const x = 1\n' > "$copy/.weavedoc/bin/extra.mjs"; probe_moves bin-toplevel "$copy/.weavedoc/bin/extra.mjs"
+  # a nested lib module, and a tests/ helper below the top level — the recursive halves
+  mkdir -p "$copy/.weavedoc/bin/lib/sub" && printf 'export const y = 1\n' > "$copy/.weavedoc/bin/lib/sub/m.mjs"
+  probe_moves bin-nested "$copy/.weavedoc/bin/lib/sub/m.mjs"
+  mkdir -p "$copy/tests/helpers" && printf '#!/usr/bin/env bash\n' > "$copy/tests/helpers/h.sh"
+  probe_moves tests-nested "$copy/tests/helpers/h.sh"
+  # the entrypoint under a WD_BIN that lives OUTSIDE bin/ — the v0.5.16 hole
+  cp "$copy/.weavedoc/bin/weavedoc.mjs" "$copy/.weavedoc/alt-entry.mjs"
+  k0=$( cd "$copy" && WD_REG_RES= WD_REG_KEY= TMPDIR="$W" WD_BIN="node .weavedoc/alt-entry.mjs" bash tests/regress.sh --seal-check zzzzzzzzzzzz 2>&1 | sed -n 's/.*, \([0-9a-f]*\) now\..*/\1/p' )
+  printf '\n// edited\n' >> "$copy/.weavedoc/alt-entry.mjs"
+  k1=$( cd "$copy" && WD_REG_RES= WD_REG_KEY= TMPDIR="$W" WD_BIN="node .weavedoc/alt-entry.mjs" bash tests/regress.sh --seal-check zzzzzzzzzzzz 2>&1 | sed -n 's/.*, \([0-9a-f]*\) now\..*/\1/p' )
+  [ -n "$k0" ] && [ -n "$k1" ] && [ "$k0" != "$k1" ] || fails="$fails wd-entry"
+  OUT="uncovered:${fails:- none}"; RC=0
+  if [ -n "$fails" ]; then bad "the key does not move for:$fails"; else ok; fi
+}
+meta_key_covers_the_git_index() {
+  # The index half, in its own case because it needs a git repo (the copy above has none). Uses a
+  # throwaway repo under $W — never $REPO, whose index is shared with the developer's own work.
+  # Revert `git ls-files -s -z | sha256sum` (or move it back inside the awk) → this goes red.
+  local repo="$W/gitrepo" before after
+  mkdir -p "$repo" && cp -r "$REPO/tests" "$REPO/.weavedoc" "$repo"/ 2>/dev/null
+  mkdir -p "$repo/.claude" && cp -r "$REPO/.claude/skills" "$repo/.claude"/ 2>/dev/null
+  cp "$REPO/README.md" "$REPO/CHANGELOG.md" "$repo"/ 2>/dev/null
+  # env -u: `git init` HONOURS an inherited GIT_DIR — it re-initialises THAT dir instead of making
+  # one here, and the `git add -A` then stages this scratch tree into the REAL repository's index,
+  # marking every real entry deleted (measured; the case still reported PASS). GIT_DIR is set inside
+  # every hook, `rebase --exec`, `bisect run` and `submodule foreach` — i.e. the ordinary
+  # run-the-suite-before-committing wiring. Data loss, in the release that moved a probe out of the
+  # live tree for the same reason (cold review, v0.5.16).
+  local nogit="env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE"
+  ( cd "$repo" && $nogit git init -q . && $nogit git add -A >/dev/null 2>&1 ) || { bad "could not build a scratch git repo"; return; }
+  before=$( cd "$repo" && WD_REG_RES= WD_REG_KEY= TMPDIR="$W" bash tests/regress.sh --seal-check zzzzzzzzzzzz 2>&1 | sed -n 's/.*, \([0-9a-f]*\) now\..*/\1/p' )
+  # A STAGED-ONLY change: the file on disk is edited AND staged, so a key that ignored the index
+  # would still move — stage a change and then restore the worktree copy, leaving only the index.
+  printf '\n// staged only\n' >> "$repo/.weavedoc/bin/lib/core.mjs"
+  ( cd "$repo" && $nogit git add .weavedoc/bin/lib/core.mjs >/dev/null 2>&1 )
+  sed -i '$ d' "$repo/.weavedoc/bin/lib/core.mjs"; sed -i '$ d' "$repo/.weavedoc/bin/lib/core.mjs"
+  after=$( cd "$repo" && WD_REG_RES= WD_REG_KEY= TMPDIR="$W" bash tests/regress.sh --seal-check zzzzzzzzzzzz 2>&1 | sed -n 's/.*, \([0-9a-f]*\) now\..*/\1/p' )
+  OUT="before=$before after=$after"
+  if [ -z "$before" ]; then bad "no key from the scratch repo — the comparison would be vacuous"
+  elif [ "$before" = "$after" ]; then bad "a staged-only change did not move the key — the index is not in it"
+  else ok; fi
+}
 meta_key_seal_covers_one_and_worker_branch() {
   # THE TWO MECHANISMS v0.5.14 ADDED, exercised (cold review, v0.5.14). Deleting `--one`'s seal
   # call, or the worker-branch refusal on `--seal-check`, left every case green — two new gate
   # mechanisms with zero coverage, in the release whose own lesson is "text is not behaviour".
   #   Revert either guard → this goes red.
-  local out rc probe="$REPO/.weavedoc/bin/lib/.seal-probe.mjs"
-  # (1) --one seals. Deterministic, not raced: the probe case WRITES a keyed file while `--one` is
-  # already running, so the key it computed at start cannot match the one it computes at the end.
-  # THIS case owns the cleanup — the probe deliberately leaves the file, and it is removed here on
-  # every path, so the window is one subshell inside one worker and the tree is clean after.
-  out=$( cd "$REPO" && WD_REG_RES= WD_REG_KEY= TMPDIR="$W" bash tests/regress.sh --one sealprobe_writes_keyed_file 2>&1 ); rc=$?
-  rm -f "$probe"
+  local out rc copy="$W/repo"
+  # (1) --one seals — AGAINST AN ISOLATED COPY, never the live tree (external review, v0.5.16).
+  # The first version ran the probe in $REPO: it overwrote `.weavedoc/bin/lib/.seal-probe.mjs` and
+  # then deleted it, so a real file at that path was DESTROYED (measured), and the A→B→A shape it
+  # created was invisible to the seal while other workers could read state B mid-sweep. A test may
+  # not mutate the tree it is grading. The copy carries exactly what compute_key and the harness
+  # read; `git` is absent there, which compute_key already tolerates (its own `2>/dev/null`).
+  mkdir -p "$copy"
+  cp -r "$REPO/tests" "$REPO/.weavedoc" "$copy"/ 2>/dev/null
+  mkdir -p "$copy/.claude"
+  cp -r "$REPO/.claude/skills" "$copy/.claude"/ 2>/dev/null
+  cp "$REPO/README.md" "$REPO/CHANGELOG.md" "$copy"/ 2>/dev/null
+  out=$( cd "$copy" && WD_REG_RES= WD_REG_KEY= TMPDIR="$W" bash tests/regress.sh --one sealprobe_writes_keyed_file 2>&1 ); rc=$?
   OUT="one: rc=$rc :: $out"
   case "$out" in *"the tree changed while the suite was running"*) ;; *) bad "--one did not seal"; return ;; esac
   [ "$rc" = 2 ] || { bad "--one sealed but exited $rc"; return; }
+  # (1b) --one refuses in the worker branch too — BEFORE running anything, so it cannot leave a
+  # result in the parent's shared cache. Replacing it with v0.5.15's silent skip left the whole
+  # sweep green (cold review, v0.5.16): the branch was unreachable from any in-repo caller.
+  local fake="$W/fake-res"
+  mkdir -p "$fake"
+  out=$( cd "$REPO" && WD_REG_RES="$fake" WD_REG_KEY=abc TMPDIR="$W" bash tests/regress.sh --one acct_smoke_version 2>&1 ); rc=$?
+  OUT="$OUT || one-worker: rc=$rc left=$(ls "$fake" | wc -l) :: $out"
+  case "$out" in *"that is the worker branch"*) ;; *) bad "--one did not refuse in the worker branch"; return ;; esac
+  [ "$rc" = 2 ] || { bad "--one worker refusal exited $rc"; return; }
+  [ "$(ls "$fake" | wc -l)" = 0 ] || { bad "--one wrote into the parent's cache before refusing"; return; }
   # (2) --seal-check refuses to run in the worker branch instead of dying on an undefined function.
   out=$( cd "$REPO" && WD_REG_RES="$W/fake-res" WD_REG_KEY=abc TMPDIR="$W" bash tests/regress.sh --seal-check zzz 2>&1 ); rc=$?
   OUT="$OUT || worker: rc=$rc :: $out"
@@ -4572,8 +4658,10 @@ meta_key_seal_covers_one_and_worker_branch() {
 }
 sealprobe_writes_keyed_file() {
   # A PROBE, not an assertion — the ONLY case that writes inside $REPO, and it does so on purpose:
-  # meta_key_seal_covers_one_and_worker_branch runs it through `--one` so that run's own seal has
-  # something to catch, and THAT case removes the file afterwards.
+  # meta_key_seal_covers_one_and_worker_branch runs it through `--one` INSIDE AN ISOLATED COPY of
+  # the repo, so that run's own seal has something to catch and no real file is ever touched. Run
+  # by name against a live tree it leaves the file behind and that run's seal refuses — honest, but
+  # it is yours to delete (v0.5.16: the caller's `rm` went away with the copy).
   #
   # NAMED `sealprobe_`, NOT `acct_`, and that is the point: the selector takes
   # ^(block|pass|acct|meta|e2e)_, so this is unreachable from a plain sweep and can only be summoned
@@ -5256,6 +5344,50 @@ acct_status_hq_tag_separator_is_one_class() {
   vrun status --open
   expect_has "세로탭 뒤 본문"
 }
+acct_openlist_hq_orphan_placeholder_surfaces() {
+  # DETAIL NEEDS A PARENT (external review, v0.5.16). v0.5.15 made every space/tab-indented
+  # placeholder detail, so one with NOTHING above it disappeared — "nothing is waiting on you" with
+  # validate green beside it, because validate skips a placeholder state too. Nobody named it.
+  # Revert the `|| !parent` arm → this goes red.
+  printf -- '\n  - [{state}] [{ownership}] REAL-DECISION\n' >> "$W/truths/verify.md"
+  vrun status --open
+  expect_has "REAL-DECISION"
+  expect_hasnt "nothing is waiting on you"
+}
+acct_openlist_hq_every_orphan_surfaces() {
+  # ONE ORPHAN IS NOT THE RULE (cold review, v0.5.16). The first spelling set `parent` when it
+  # surfaced an orphan, so sibling orphans became detail-of-a-placeholder: three in a row listed
+  # ONE — the same silent drop the rule exists to stop, invisible to the single-orphan case above.
+  # A surfaced placeholder is not a parent; only a real entry can have detail.
+  # Revert the removal of `parent = true` in the placeholder branch → this goes red.
+  printf -- '\n  - [{state}] [{ownership}] DEC-ONE\n  - [{state}] [{ownership}] DEC-TWO\n  - [{state}] [{ownership}] DEC-THREE\n' >> "$W/truths/verify.md"
+  vrun status; expect_has "3 entry(s) with no"
+  vrun status --open
+  expect_has "DEC-ONE"; expect_has "DEC-TWO"; expect_has "DEC-THREE"
+}
+acct_openlist_hq_ruled_entry_is_a_parent() {
+  # `- [ruled]` is a real entry, so its nested placeholder is DETAIL. v0.5.16's first spelling let
+  # the column-0 reset erase the flag a separate line had just set, and the sub-bullet surfaced as
+  # a waiting item — contradicting FORMATS and this file's own comment. One place decides now.
+  # Revert `parent = /^- \[ruled\]/.test(l)` to a flat `parent = false` → this goes red.
+  printf -- '\n- [ruled] [user-only] RULED-DECISION\n  - [{state}] [{ownership}] RULED-DETAIL\n' >> "$W/truths/verify.md"
+  vrun status; expect_has "human queue: 0"
+  vrun status --open; expect_hasnt "RULED-DETAIL"
+}
+acct_openlist_hq_nested_placeholder_whitespace_matrix() {
+  # The detail side across EVERY lead the previous fix touched — space was the only one pinned, so
+  # a revert that re-included tab (or FF/CR) would have gone unnoticed. Under a parent, each is
+  # detail; the control-led ones are entries only when orphaned, which the case above covers.
+  printf -- '\n- [open] [user-only] PARENT-A\n  - [{state}] [{ownership}] SPACE-DETAIL\n' >> "$W/truths/verify.md"
+  printf -- '\n- [open] [user-only] PARENT-B\n\t- [{state}] [{ownership}] TAB-DETAIL\n' >> "$W/truths/verify.md"
+  vrun status
+  expect_has "you decide 2"
+  expect_hasnt "with no '[open]'/'[ruled]' state tag"
+  vrun status --open
+  expect_has "human queue (2):"
+  expect_hasnt "SPACE-DETAIL"
+  expect_hasnt "TAB-DETAIL"
+}
 acct_openlist_hq_nested_placeholder_is_detail() {
   # THE v0.5.13 FIX OVERSHOT (external review, v0.5.14). Widening the stub branch to HQ_STUB_OPENER
   # let it swallow ORDINARY space/tab indentation too, so a nested placeholder sub-bullet under a
@@ -5542,6 +5674,16 @@ if [ -n "$BATCH" ]; then
 fi
 
 if [ -n "$ONE" ]; then
+  # REFUSED BEFORE ANYTHING RUNS (cold review, v0.5.16). `--one` under WD_REG_RES is the worker
+  # branch: `seal_or_refuse` is not even defined there, so the seal used to die with
+  # `command not found` and silently no-op. The refusal was added at the END of this block, which
+  # meant the case had already run and written its PASS into the PARENT's shared result cache —
+  # a result the parent's tally would then count. Its twin at --seal-check refuses first; so does
+  # this now.
+  if [ -n "${WD_REG_RES:-}" ]; then
+    echo "--one cannot run with WD_REG_RES set: that is the worker branch, which inherits the key rather than computing it" >&2
+    exit 2
+  fi
   mkdir -p "$RES"
   # Standalone --one with no inherited workspace: build the fixture instead of failing on a
   # missing pristine (a stale shared pristine once ran an OLD bin against a new case — the keyed
@@ -5552,10 +5694,12 @@ if [ -n "$ONE" ]; then
   # `--one` seals too (external review, v0.5.14): it is a PUBLIC entry point that runs a case
   # against the live tree, so its verdict carries the same claim the full run's total does. The
   # seal comes after the result is printed — a refusal must not hide what the case actually said.
-  # GUARDED like --seal-check: in the worker branch `seal_or_refuse` is not even defined, and an
-  # unguarded call there died with `command not found` and silently no-op'd (cold review, v0.5.14).
-  if [ -z "${WD_REG_RES:-}" ]; then seal_or_refuse "$KEY"; fi
-  grep -q "	PASS" "$RES/$ONE"
+  seal_or_refuse "$KEY"
+  # THE VERDICT LINE, not the whole file (external review, v0.5.16). `runone` writes the verdict on
+  # line 1 and the case's OUTPUT below it — and a case whose output quotes a nested "	PASS" (the
+  # seal cases print another run's result) made a FAILING case exit 0. The tally already reads
+  # `head -1`; this is the same rule at the other exit.
+  head -1 "$RES/$ONE" | grep -q "	PASS"
   exit $?
 fi
 
