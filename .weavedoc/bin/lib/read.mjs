@@ -15,19 +15,20 @@ const readOr = (p, fb = '', enc = 'utf8') => { try { return readFileSync(p).toSt
 // ---- schema ------------------------------------------------------------------------------
 // Flat `key: value`, first spelling of a key wins. The value keeps its trailing whitespace — the
 // bash reader does not strip it either, and a port that "tidied" that would be a silent change.
-// A CARRIAGE RETURN IS NOT STRIPPED HERE, and that is the bash reader, not an oversight. `sch_load`
-// is `while IFS= read -r line`, which keeps it; `cfg_load` one function over adds `line=${line%$'\r'}`
-// and strips it. Two readers, two rules, and the port had unified them — measured on a CRLF schema:
-// `project.fm.required` becomes `version|language|roles\r`, so bash reports SEVEN problems (the last
-// key of every schema list is unmatchable) while the port reported none. Both bash platforms agree
-// there, so this is not the declared CRLF divergence; it is the port being lenient where the runtime
-// it replaces blocks. A CRLF schema is reachable: `core.autocrlf=true` is the Windows default and a
-// user's own mine carries no .gitattributes pin.
-const schemaLines = s => { const l = s.split('\n'); if (l.length && l[l.length - 1] === '') l.pop(); return l }
-
+// A TRAILING CARRIAGE RETURN IS A LINE ENDING HERE TOO (external review, v0.5.18). This reader used
+// to keep it — a private `schemaLines` that split on '\n' and nothing else — for parity with a bash
+// `sch_load` whose `while IFS= read -r line` kept it, while `cfg_load` one function over stripped it.
+// That runtime was DELETED in bundle 2026-08-05.3, so the parity argument outlived its subject, and
+// what remained was two readers with two rules over the same kind of file. The cost was measured on
+// a fresh clone of a real mine under `core.autocrlf=true` — the Windows default, and the documented
+// install is "copy `.weavedoc/` into your repo", which carries no .gitattributes pin of its own:
+// every schema list ends `…|roles\r`, so no frontmatter key and no enum member matches and validate
+// reports 372 problems on a clean mine. Same ruling as the verify ledger's (§11 2026-08-05): one
+// reader. `.weavedoc/.gitattributes` ships beside this so the bytes stay LF as well — the parser fix
+// restores the VERDICT, the pin restores the FINGERPRINT.
 export function loadSchema (schemaPath, enc = 'utf8') {
   const m = new Map()
-  for (const line of schemaLines(readOr(schemaPath, '', enc))) {
+  for (const line of splitLines(readOr(schemaPath, '', enc))) {
     if (line === '' || line.startsWith('#')) continue
     const i = line.indexOf(':')
     if (i < 0) continue

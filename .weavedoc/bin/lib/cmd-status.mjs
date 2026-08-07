@@ -4,40 +4,17 @@
 // on the user — the listing is pasted/rendered, never re-composed from memory).
 import { existsSync, statSync } from 'node:fs'
 import { readFileSync } from 'node:fs'
-import { splitLines, U, TAG_SEP, TAG_LEAD } from './core.mjs'
-import { nocomment, sectionEach, defence, commentBalanced } from './sections.mjs'
+import { splitLines, TAG_SEP } from './core.mjs'
+import { nocomment, defence, commentBalanced } from './sections.mjs'
 import { fmvB, loadSchema } from './read.mjs'
 import { fm, join, docIds, materialIds, truthFiles, basename } from './mine.mjs'
 import { fidBody, isNoise } from './review.mjs'
-import { scanRegister, stubEntry, stubLine, emptyRemainder, hasContent } from './gaps-register.mjs'
+import { scanRegister, stubEntry, emptyRemainder, hasContent } from './gaps-register.mjs'
+import { scanHq, hqFiles, hqBodies, NONE_IDIOM } from './hq-ledger.mjs'
 
-// Each ledger's entry PREFIX, so "does this entry's line carry content?" is asked the same way in
-// all three (gaps.md's lives with the register reader). Human queue: the state slot plus an
-// optional ownership slot. questions.md: the state slot.
-const HQ_TAG = new RegExp(`^- \\[[^\\]]*\\]${TAG_SEP}*(\\[[^\\]]*\\])?`)
+// questions.md's entry PREFIX — the state slot. The Human queue's lives with the shared walk
+// (hq-ledger.mjs), which is where every judgment about that ledger's structure now happens.
 const Q_TAG = /^- \[[^\]]*\]/
-// The counter's indentation tolerance for an `[open]` entry — the SAME class, one position earlier
-// (cold review, v0.5.11): validate strips `TAG_SEP` before testing a line, status tolerated `[ \t]`,
-// so a `\v`-indented `- [open]` was an entry to the gate and invisible to both status surfaces.
-// Only these two tests widen: the UNTAGGED rule still demands column 0, because there an indented
-// bullet is a sub-bullet of the entry above (acct_openlist_subbullets_stay_detail).
-const HQ_OPEN = new RegExp(`^${TAG_SEP}*- \\[open\\]`)
-// SPACE/TAB INDENTATION IS DETAIL; A CONTROL LEAD IS AN ENTRY (external review, v0.5.14). v0.5.13
-// widened the stub branch to the full TAG_SEP lead so a control-indented placeholder would stop
-// vanishing — and thereby swallowed ordinary nested sub-bullets too, reporting a placeholder
-// DETAIL line under a real entry as a second waiting item (v0.5.12 counted one there; v0.5.13
-// counted two).
-//
-// The justification is each half's own long-standing contract, NOT the gate: checkHqTags strips
-// space and tab exactly as it strips `\v`, so validate draws no line here — an earlier spelling of
-// this comment claimed it did, which the code contradicts. What is true is that an indented
-// `- [open]` has been counted since the counter existed (acct_openlist_subbullets_stay_detail's
-// sibling pins it) while an indented placeholder has always been dropped as detail, and this keeps
-// both. A control lead cannot be ordinary nesting — no editor writes one — so it stays an entry.
-const HQ_STUB_ENTRY = /^[\n\v\f\r]*- [[][{<]/
-// Every placeholder-opening bullet at any indentation — the population the rule above selects from,
-// and the one the orphan rule in hqEntries needs (v0.5.16).
-const PLACEHOLDER_BULLET = new RegExp(`^${TAG_SEP}*- [[][{<]`)
 
 const isDir = p => { try { return statSync(p).isDirectory() } catch { return false } }
 
@@ -49,167 +26,29 @@ const isDir = p => { try { return statSync(p).isDirectory() } catch { return fal
 const readOrNull = p => { try { return readFileSync(p).toString('latin1') } catch { return null } }
 const readOr = p => readOrNull(p) ?? ''
 
-// A NON-ASCII LITERAL IN A PATTERN MUST BE SPELLED IN BYTES once the text it matches is bytes.
-// `U()` is that spelling (utf8 → latin1), the same one validate's `M` template applies to every
-// message it builds. This is not theory: v0.5.6 moved these readers to the byte domain and the
-// documented empty-queue idiom `- (없음)` stopped matching — its three UTF-8 bytes are not the
-// three characters in this file's source — so an empty queue reported itself as an untagged entry
-// (caught by acct_status_empty_queue_idiom, which is why that case exists).
-// ANCHORED, and that is the second half of the rule: this is the EMPTY-ledger idiom, so it means
-// "this line is the idiom and nothing else". Unanchored, `- (none) 실제로는 질문임` — a real entry
-// that merely opens with the words — was swallowed and the ledger read as empty (external review,
-// v0.5.6). `\r` is in the trailing class for the same reason `isFence` keeps it (core.mjs):
-// splitLines removes ONE trailing CR, so the member covers a line that carried a stray one
-// mid-way or a second one — NOT "splitLines leaves CRs", which is false and was the first
-// spelling of this comment (cold review, v0.5.7).
-const NONE_IDIOM = new RegExp(`^- \\((${U('없음')}|none)\\)[ \t\r]*$`)
+// The empty-ledger idiom and the Human-queue walk both come from hq-ledger.mjs: the idiom is
+// shared with the questions reader below, and the walk is what validate consumes too.
 
-// Every file carrying a "## Human queue" section, in one order. ONE list, one definition — validate
-// and status must see the same set, or one reports "human queue: 0" over decisions open in files it
-// never opened.
-export function hqFiles (m) {
-  const out = []
-  const v = join(m.truths, 'verify.md')
-  if (existsSync(v)) out.push(v)
-  for (const d of docIds(m)) {
-    const r = join(m.documents, d, 'review.md')
-    if (existsSync(r)) out.push(r)
-  }
-  return out
-}
 
-// verify.md is `##`-sectioned and review.md `#`-sectioned. The spec added the section to both
-// without saying which level, so read either rather than silently finding nothing in one of them —
-// and EVERY matching section, not the first: reading only the first hid every later round's entries
-// from the counter and from the tag check at once.
-// The section walker caps heading depth at six (v0.5.4), so this reader and validate's own
-// Human-queue walker answer alike about a `####### Human queue`: not a heading, not a section.
-// EACH section on its own, not the concatenation (external review, v0.5.17). A Human queue is an
-// append-per-round log, so one file legitimately carries several of these sections; joining their
-// bodies put the last line of one round directly above the first line of the next, and the walk
-// below — which decides what a line is detail OF — read a round-two entry as detail of a round-one
-// one and dropped it. State resets at the boundary because the boundary is now visible.
-export const hqBodies = file => sectionEach(nocomment(readOr(file)), 'Human queue')
-
-// ONE CLASSIFIER — precisely that, and no more (v0.5.6 said "one walk", and an external review
-// measured the claim: `--open` still re-reads these files for its own diagnostics, and
-// commentBalanced reads them again). What is single is the JUDGMENT: both buckets come out of one
-// pass over one body, so the `status` counters and the `--open` listing cannot answer differently
-// about the same file. Since v0.5.10 a placeholder bullet is judged by its REMAINDER (a pure stub
-// is held for a continuation to realize; real content after template tags surfaces as untagged) —
-// the line rules below are otherwise the counters' own, kept exactly: a full-template bullet
-// is template noise; an open entry matches `- [open]` with the counter's indentation tolerance; an
-// untagged ENTRY starts at column 0 (an indented `- ` is a sub-bullet OF an entry), and
-// `- (없음)` / `- (none)` is the documented empty-queue idiom, not an entry.
+// ONE CLASSIFIER, and since v0.5.18 one that validate consumes too (hq-ledger.mjs). What is single
+// is the JUDGMENT: which lines are entries is decided once, so the `status` counters, the `--open`
+// listing and the gate's ownership check cannot answer differently about the same line. This
+// function is now only the BUCKETING — policy, which is status's own: `open` entries are what is
+// waiting, `untagged` entries are what someone must retag first, and a `ruled` entry is closed.
 export function hqEntries (m) {
   const rel = p => (p.startsWith(`${m.root}/`) ? p.slice(m.root.length + 1) : p)
   const open = []
   const untagged = []
   for (const f of hqFiles(m)) {
     const label = rel(f)
-    for (const body of hqBodies(f)) {
-      // `last` — the listed entry a continuation folds into, set only when the entry's own line is
-      // nothing but its tags (emptyRemainder); an entry that HAS content keeps its sub-bullets as
-      // dropped detail (acct_openlist_subbullets_stay_detail). `held` — a pure placeholder stub
-      // waiting for a continuation to REALIZE it, the machine gaps.md had all along (scanRegister's
-      // gnoise) and this ledger lacked: dropping the stub immediately left the continuation carrying
-      // the actual content with nothing to attach to, and the item vanished (external review,
-      // v0.5.10 — `- [{state}] [{ownership}]` + indented content reported "nothing is waiting").
-      // DETAIL NEEDS SOMETHING TO BE DETAIL OF (external review, v0.5.16). v0.5.15 made an indented
-      // placeholder detail — right under a real entry, and a silent DISAPPEARANCE when nothing is
-      // above it: `  - [{state}] [{ownership}] REAL-DECISION` alone in the section printed "nothing
-      // is waiting on you", with validate green beside it (it skips a placeholder state too, so
-      // nothing anywhere named the item).
-      //
-      // …AND IT NEEDS TO KNOW *WHAT* (external review, v0.5.17). v0.5.16 answered with a boolean, and
-      // a boolean cannot tell a peer from a child. Three measured consequences, all of them the same
-      // silent drop this rule exists to stop: two placeholder entries at one indentation MERGED into
-      // one (the first realized, which raised the flag, so the second became "detail"); a placeholder
-      // peer of a real `[open]` entry VANISHED outright (detail of a contentful entry is dropped);
-      // and — because the flag was deliberately not raised for a surfaced placeholder — a sub-bullet
-      // under an orphan was COUNTED TWICE. `parentLead` holds the parent's own leading whitespace, so
-      // "deeper" is what it says: a strictly longer lead that starts with the parent's. Peers share a
-      // lead and stay entries; the comparison, not the absence of a parent, is what stops swallowing.
-      // A prefix test rather than a width count on purpose — a tab under a two-space parent is not
-      // "deeper", it is a different indentation style, and the honest answer there is to surface.
-      let last = null
-      let held = null
-      let parentLead = null
-      // `''` is a legal parentLead (a column-0 entry), so every test here is `!== null` and never a
-      // truthiness check — the trap that would have made `- [ruled]` at column 0 no parent at all.
-      const deeper = lead => parentLead !== null && lead.length > parentLead.length && lead.startsWith(parentLead)
-      for (const l of splitLines(body)) {
-        if (!/[^ \t]/.test(l)) { last = null; held = null; parentLead = null; continue }
-        const lead = TAG_LEAD.exec(l)[0]
-        if (HQ_OPEN.test(l)) {
-          held = null
-          parentLead = lead
-          // `raw` is the ENTRY LINE, never mutated; `line` is the display, which folding extends.
-          // The bucket classifiers read raw: ownership lives on the entry line (FORMATS — two fixed
-          // tags, then prose), and classifying the FOLDED line once put an entry in "machine can
-          // just do" while validate rejected it — the two surfaces disagreeing about one entry, the
-          // exact class this whole lane exists to end (cold review, v0.5.10 — critical).
-          open.push({ file: label, line: l, raw: l })
-          last = emptyRemainder(l, HQ_TAG) ? { a: open, i: open.length - 1 } : null
-          continue
-        }
-        // A placeholder-OPENING bullet: the remainder decides (FORMATS), same as everywhere else.
-        // Empty remainder → a stub, held for realization. Real remainder → an entry whose state slot
-        // is a template, i.e. an entry with no valid state tag — surfaced as untagged, where the
-        // v0.5.5 prefix rule used to drop it wholesale (external review, v0.5.10).
-        // HQ_STUB_ENTRY, not a column-0 pattern (v0.5.13) and not the full TAG_SEP lead (v0.5.14):
-        // anchoring at column 0 left a control-indented placeholder handled by nobody — it vanished
-        // and the run printed "nothing is waiting on you" — while the full lead swallowed ordinary
-        // nested sub-bullets. See the constant for which half is whose contract.
-        // WHICH indentation makes a placeholder an entry has moved four times, so the rule is spelled
-        // out: a control lead or column 0 is ALWAYS an entry (HQ_STUB_ENTRY — v0.5.13/14), and an
-        // otherwise-indented one is an entry unless it sits STRICTLY DEEPER than the entry above it
-        // (v0.5.16 asked only whether such an entry existed — v0.5.17 asks where).
-        if (PLACEHOLDER_BULLET.test(l) && (HQ_STUB_ENTRY.test(l) || !deeper(lead))) {
-          last = null
-          // A SURFACED PLACEHOLDER *IS* A PARENT — of what is nested under it, and of nothing else
-          // (v0.5.17). v0.5.16 refused it the role because with a boolean the role swallowed peers:
-          // the first orphan became an entry and its siblings became detail-of-a-placeholder, three
-          // in a row listing one. The lead comparison separates the two, so the refusal — which cost
-          // a double count for the sub-bullet under an orphan — is no longer needed.
-          // A HELD STUB CARRIES ITS OWN LEAD: the entry it becomes lives where the STUB was, not
-          // where the continuation that realized it was, and reading the wrong one made the next
-          // peer detail again.
-          if (stubLine(l, HQ_TAG)) held = { line: l, lead }
-          else { held = null; untagged.push({ file: label, line: l, raw: l }) }
-          parentLead = lead
-          continue
-        }
-        if (!/^- /.test(l) || NONE_IDIOM.test(l) || /^- \[(open|ruled)\]/.test(l)) {
-          // An INDENTED non-empty line realizes a held stub (its content lives here), or continues an
-          // empty-remainder entry; anything else at column 0 closes both holds.
-          if (/^[ \t]+[^ \t]/.test(l)) {
-            const cont = l.replace(/^[ \t]+/, '')
-            // A held stub is realized only by a continuation that HAS content once template tokens
-            // are stripped — the register's own rule (v0.5.11). A placeholder-only continuation
-            // leaves the hold standing, so a real line further down still realizes it.
-            if (held !== null && hasContent(cont)) {
-              untagged.push({ file: label, line: `${held.line} ${cont}`, raw: held.line })
-              last = { a: untagged, i: untagged.length - 1 }
-              parentLead = held.lead
-              held = null
-            } else if (held === null && last !== null) last.a[last.i].line += ` ${cont}`
-          } else if (!/^[ \t]/.test(l)) {
-            last = null
-            held = null
-            // A column-0 `- [ruled]` IS a parent — a real entry whose nested placeholder is detail
-            // (cold review, v0.5.16). It reaches this branch (nothing above lists a `ruled` entry),
-            // and a flat reset here erased what a separate assignment had just set: one place
-            // decides, so the two cannot disagree. `''` — its lead — is the value, not `true`.
-            parentLead = /^- \[ruled\]/.test(l) ? '' : null
-          }
-          continue
-        }
-        held = null
-        parentLead = lead
-        untagged.push({ file: label, line: l, raw: l })
-        last = emptyRemainder(l, HQ_TAG) ? { a: untagged, i: untagged.length - 1 } : null
-      }
+    for (const e of scanHq(hqBodies(f))) {
+      // `raw` is the ENTRY LINE, never mutated; `line` is the display, which folding extends. The
+      // bucket classifiers downstream read raw: ownership lives on the entry line (FORMATS — two
+      // fixed tags, then prose), and classifying the FOLDED line once put an entry in "machine can
+      // just do" while validate rejected it — the two surfaces disagreeing about one entry, the
+      // exact class this whole lane exists to end (cold review, v0.5.10 — critical).
+      if (e.kind === 'open') open.push({ file: label, line: e.line, raw: e.raw })
+      else if (e.kind === 'untagged') untagged.push({ file: label, line: e.line, raw: e.raw })
     }
   }
   return { open, untagged }
@@ -470,6 +309,7 @@ export function cmdStatusOpen (m, out) {
   // and not the looser tally rule: the same call, so "how many gaps are open" has one answer.
   const gPath = join(m.root, 'gaps.md')
   let gaps = []
+  let gapsBad = []
   if (existsSync(gPath)) {
     const raw = readLedger('gaps.md', gPath)
     if (raw !== null) {
@@ -481,6 +321,13 @@ export function cmdStatusOpen (m, out) {
       const kindSet = new Set((schB.get('gaps.enum.kind') || 'declared|reference|enumeration|symmetry').split('|').filter(Boolean))
       const reg = scanRegister(df.text, secOpen, kindSet)
       gaps = reg.entries
+      // WHICH of them names a kind, from the same scan (v0.5.18). A bullet with no usable kind slot
+      // is not an open gap — it is a register entry nobody can route — and listing it as a gap put
+      // the word "none" in a run's closing message as a waiting item. A real mine wrote `- (없음)`
+      // here, reaching for the empty-ledger idiom the Human queue and questions.md have; this
+      // register does not have one (ruled 2026-08-07: every bullet is a routable record, and an
+      // empty section is zero bullets), so the honest report is that the line is malformed.
+      gapsBad = reg.kinds
       // The scanner's own "I could not read this line" is a reader-blind spot like the others, and
       // it TRUNCATES the rest of the section — silence here would print a short list as if it were
       // the whole one (cold review, v0.5.6). validate blocks on this under `required`; the listing
@@ -525,8 +372,23 @@ export function cmdStatusOpen (m, out) {
     for (const v of viol) outB(`  ${rel(v.rev)}: `, v.line)
   }
   if (gaps.length > 0) {
-    out(`gaps (${gaps.length}):`)
-    for (const l of gaps) outB('  ', l)
+    // NO SLOT AT ALL is the malformed case; a slot holding the WRONG WORD is not. FORMATS is
+    // explicit that a real gap which kept placeholder brackets over filled prose COUNTS as an open
+    // gap (v0.5.4), and an unknown kind is a typo in a gap somebody filed — both are entries whose
+    // kind validate names under `required`. What `- (없음)` is, is a bullet with no kind slot
+    // whatsoever: nothing to route, nothing to count. The first spelling of this line subtracted
+    // every unusable kind and two existing cases went red, correctly.
+    const bad = i => gapsBad[i] === ''
+    const nbad = gaps.map((_, i) => i).filter(bad).length
+    // THE TOTAL IS THE TOTAL — the malformed count is an annotation, never a subtraction (self
+    // review, v0.5.18). The first spelling printed `0 open, 1 malformed` while validate, counting
+    // the same scan, blocked with `2 open gap(s)`: one file, two numbers, which is the drift this
+    // whole lane exists to end. The Human queue's `N open, M untagged` is not the same shape —
+    // there plain `status` reports the untagged separately too, so its surfaces agree.
+    out(nbad > 0 ? `gaps (${gaps.length}, ${nbad} malformed):` : `gaps (${gaps.length}):`)
+    for (let i = 0; i < gaps.length; i++) {
+      outB(bad(i) ? '  (malformed register entry — no [kind] slot): ' : '  ', gaps[i])
+    }
   }
   return 0
 }

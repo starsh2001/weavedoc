@@ -92,6 +92,10 @@ WeaveDoc is a set of Claude Code skills. To use it in a project:
 
 **One writer per mine.** WeaveDoc is a single-writer tool: run one mutating session (and one mutating command) against a mine at a time. Two writers can lose committed work silently — and a lost review seal or verification row is *evidence*, so re-running the command is not the repair (FORMATS.md states the contract and the recovery). The CLI refuses a second mutating command at the door; it cannot see an agent editing mine files directly, so don't point two working sessions at one mine.
 
+**Copy the whole folder, including `.weavedoc/.gitattributes`.** It pins LF for everything under `.weavedoc/` **in your repository**, and it is load-bearing: this repo's own root `.gitattributes` does not travel with a copied folder, so without it a Windows clone under the default `core.autocrlf=true` rewrites the runtime's bytes. Measured on a real mine: 97 CR bytes in `schema`, 381 in the entrypoint, the fingerprint moving `ea390a9e0fbc` → `d1324e0a09b7`, and `validate` reporting 372 problems on a mine that is clean. (The parser no longer breaks on a CRLF schema since bundle `2026-08-07.8`; the pin is what keeps the FINGERPRINT comparable across machines.)
+
+**Empty configured directories need a marker.** Git stores files, never directories, so a `documents/` that holds nothing yet is simply absent from a clone and `validate` then blocks with `CFG-PATH-MISSING`. `weavedoc-init` writes a `.gitkeep` into each configured path for this reason; if you built the mine by hand, add them.
+
 **Keeping installs in sync.** `node .weavedoc/bin/weavedoc.mjs version` prints three lines: the bundle date label, the **fingerprint** (bin+schema content hash — compare THIS, two installs can share a date while their bin differs), and the **schema version** this runtime reads. Releases add a SemVer tag whose bundle manifest covers every behavior-deciding file. If you evolve the skills/runtime *inside* a project (the testbed pattern), backport here and bump `VERSION` — the runtime once grew two weeks ahead inside a testbed while this repo went stale.
 
 ## Deterministic checks

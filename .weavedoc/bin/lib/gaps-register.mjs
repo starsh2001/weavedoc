@@ -92,13 +92,23 @@ export function stubEntry (line) {
 // never machine-enforced, and turning it into a gate could block mines written before the rule
 // without a decision to do so.
 //
-// Returns: n (entries counted) · entries (the lines counted, in file order) · badline · badkind ·
-// dblkind · unclosed. The diagnostics are validate's; `entries` is the listing's; `n` is both, and
-// `n === entries.length` is the invariant that keeps them one answer (asserted by the suite).
+// Returns: n (entries counted) · entries (the lines counted, in file order) · kinds (per entry:
+// null when it names a kind in the vocabulary, otherwise the token that is not one) · badline ·
+// badkind · dblkind · unclosed. The diagnostics are validate's; `entries` and `kinds` are the
+// listing's; `n` is both. `n === entries.length === kinds.length` is the invariant that keeps them
+// one answer — the earlier spelling of this line said the suite asserted it, and no case did
+// (v0.5.18); acct_openlist_gaps_arrays_agree does now, over every shape that has ever split them.
 export function scanRegister (gapsText, section, kindSet) {
   let n = 0; let badline = ''; let badkind = null; let dblkind = null; let unclosed = ''
+  // PER ENTRY, and the aggregate is derived from it (v0.5.18). `badkind` alone told validate that
+  // SOMETHING in the section had no usable kind; `status --open` had no way to say WHICH line, so
+  // it listed a kind-less bullet as an ordinary open gap. A real mine wrote `- (없음)` there —
+  // the empty-ledger idiom of the OTHER two ledgers, which this fail-closed register does not have
+  // (FORMATS) — and the run reported one waiting gap whose text was the word "none". One judgment,
+  // two readers: null = the entry names a kind in the vocabulary, anything else = it does not.
   let inb = false; let gnoise = false; let gnoiseKind = ''; let gnoiseLine = ''
   const entries = []
+  const kinds = []
   // Which entry a continuation line extends, or -1 — set ONLY for an entry whose own line carries
   // no content (emptyRemainder). A gap's content can live entirely on its continuations
   // (`- [declared]` / `  penalty cap의 근거가 필요함`), and the first build appended them only in
@@ -125,7 +135,9 @@ export function scanRegister (gapsText, section, kindSet) {
       // broken kind slot read as noise and validate said nothing (measured rc 0 under required +
       // a consecrated output). An opener with no ']' is not a kind, not a placeholder and not
       // prose: it is a malformed entry.
+      let ekind = null
       if (grest.startsWith('- [') && !grest.includes(']')) {
+        ekind = grest.slice(3)
         if (unclosed === '') unclosed = gl
       } else if (grest.startsWith('- [')) {
         const kw = grest.slice(3, grest.indexOf(']'))
@@ -141,13 +153,15 @@ export function scanRegister (gapsText, section, kindSet) {
           // noise can be REALIZED by a continuation below, and realization must carry the
           // placeholder kind into the vocabulary judgment — before that, the continuation branch
           // counted the entry and judged nothing.
-          if (strip(after) === '') { gnoise = true; gnoiseKind = kw; gnoiseLine = gl }
           // A placeholder kind over a REAL body is an ENTRY whose kind is not in the vocabulary
           // (v0.5.4 cold review). A PURE stub stays what it was: noise — not an entry, not an
           // error — which keeps a freshly-initialised gaps.md green.
-          else if (badkind === null) badkind = kw
+          if (strip(after) === '') { gnoise = true; gnoiseKind = kw; gnoiseLine = gl } else {
+            ekind = kw
+            if (badkind === null) badkind = kw
+          }
         } else {
-          if (badkind === null && !kindSet.has(kw)) badkind = kw
+          if (!kindSet.has(kw)) { ekind = kw; if (badkind === null) badkind = kw }
           // ONE kind per entry (review #6): only the first bracket was judged, so
           // '- [declared] [reference] …' rode through wearing TWO routable kinds. Blocked only when
           // the second bracket IS a kind word — a bracketed citation right after the kind
@@ -155,14 +169,16 @@ export function scanRegister (gapsText, section, kindSet) {
           const m2 = /^[ \t]*\[([^\]]*)\]/.exec(after)
           if (dblkind === null && m2 && kindSet.has(m2[1])) dblkind = `[${kw}] [${m2[1]}]`
         }
-      } else if (badkind === null) {
-        badkind = ''   // no bracket at all — reported as a missing kind slot by the caller
+      } else {
+        ekind = ''   // no bracket at all — a missing kind slot, reported by the caller
+        if (badkind === null) badkind = ''
       }
       // A held-back stub gets `last = -1`: its continuation REALIZES it below rather than extending
       // it, and the two must not both fire on one line.
       if (!gnoise) {
         n++
         entries.push(gl)
+        kinds.push(ekind)
         last = emptyRemainder(gl, ENTRY_TAG) ? entries.length - 1 : -1
       } else last = -1
     } else {
@@ -177,6 +193,7 @@ export function scanRegister (gapsText, section, kindSet) {
       if (gnoise && strip(grest) !== '') {
         n++
         entries.push(`${gnoiseLine} ${grest}`)
+        kinds.push(kindSet.has(gnoiseKind) ? null : gnoiseKind)
         last = entries.length - 1
         gnoise = false
         if (badkind === null) badkind = gnoiseKind
@@ -187,5 +204,5 @@ export function scanRegister (gapsText, section, kindSet) {
       }
     }
   }
-  return { n, entries, badline, badkind, dblkind, unclosed }
+  return { n, entries, kinds, badline, badkind, dblkind, unclosed }
 }

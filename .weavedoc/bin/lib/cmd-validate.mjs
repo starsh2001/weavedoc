@@ -14,7 +14,7 @@ import { statSync, realpathSync, readFileSync, readdirSync } from 'node:fs'
 import { canonId, isDate, isFence, isPlaceholder, inList, listField, fmVal, pipes, splitLines, U, M, TAG_SEP } from './core.mjs'
 import { join, materialIds, mdirFor, docIds, tfileFor, docFinalPath, contextDigest } from './mine.mjs'
 import { nocomment, dupSection, commentBalanced, sectionAll, countHeadings, defence } from './sections.mjs'
-import { hqFiles } from './cmd-status.mjs'
+import { scanHq, hqFiles, hqBodies } from './hq-ledger.mjs'
 import { artifactDigest, ledgerRead } from './verify.mjs'
 import { fidMark, fidBody, isNoise, foldKinds, bearsKind, commentSpans } from './review.mjs'
 import { scanRegister } from './gaps-register.mjs'
@@ -237,19 +237,18 @@ function checkHqTags (m, prob, file, sch) {
   const rel = U(file.startsWith(`${m.root}/`) ? file.slice(m.root.length + 1) : file)
   const states = new Set(pipes(sch('humanqueue.enum.state')).filter(Boolean))
   const owns = new Set(pipes(sch('humanqueue.enum.ownership')).filter(Boolean))
-  const lev = s => { const x = /^#+/.exec(s); return x ? x[0].length : 0 }
-  let on = false; let lv = 0
-  // The same section rules hq_body uses — EVERY matching section, either heading level. Reading only
-  // the first hid every later round's entries from the counter and from this check at once.
-  for (const raw of splitLines(nocomment(readOr(file)).replace(/\n+$/, ''))) {
-    // Six is the deepest heading, here as in sectionAll (v0.5.4, review #9): this walker is a
-    // second copy of those rules, and v0.5.4 moved the cap into only one of them — so a
-    // `####### Human queue` was a section to this check and to `status`'s hqBodies, but not to any
-    // sectionAll consumer. One depth rule, every reader.
-    if (lev(raw) <= 6 && /^#+[ \t\n\v\f\r]+Human queue[ \t\n\v\f\r]*$/.test(raw)) { on = true; lv = lev(raw); continue }
-    if (on && /^#+[ \t\n\v\f\r]/.test(raw) && lev(raw) <= 6 && lev(raw) <= lv) on = false
-    if (!on) continue
-    const line = raw.replace(/^[ \t\n\v\f\r]+/, '')
+  // THE SHARED WALK, not a second copy of it (external review, v0.5.18). This function used to find
+  // its own sections and decide for itself what a line was, and when v0.5.17 taught `status` that a
+  // strictly deeper bullet is the previous entry's DETAIL, this walker did not hear: an indented
+  // `- [open]` under a real entry was detail to one command and a contract violation to the other,
+  // so the mine failed with HQ-UNTAGGED over a line nobody counts, and adding the tag it demanded
+  // then reported a waiting decision that does not exist. What an entry IS is not a matter of
+  // opinion; what to DO about it is, and that is all that is left here.
+  for (const e of scanHq(hqBodies(file))) {
+    // The ENTRY line, never the folded display: a tag written on a continuation does not satisfy
+    // the ownership requirement (FORMATS), and reading the fold once made status and this check
+    // disagree about one entry (cold review, v0.5.10).
+    const line = e.raw.replace(new RegExp(`^${TAG_SEP}+`), '')
     if (!line.startsWith('- [')) continue
     const s = line.slice(3)
     if (!s.includes(']')) continue
@@ -262,9 +261,8 @@ function checkHqTags (m, prob, file, sch) {
     let ow = ''
     if (rest.startsWith('[')) { const r2 = rest.slice(1); if (r2.includes(']')) ow = r2.slice(0, r2.indexOf(']')) }
     if (owns.has(ow)) continue
-    // The em-dash is spelled as its BYTES. This module works in the byte domain, and the bash side
-    // matches it inside an `LC_ALL=C awk`, where a multibyte literal in a pattern is a literal
-    // SEQUENCE of bytes. A JS regex holding the CHARACTER U+2014 never matches a byte-domain string.
+    // The em-dash is spelled as its BYTES. This module works in the byte domain, and a JS regex
+    // holding the CHARACTER U+2014 never matches a byte-domain string.
     const what = line.replace(/^[ \t\n\v\f\r]*- \[[^\]]*\][ \t\n\v\f\r]*/, '').replace(/[ \t\n\v\f\r]*\xe2\x80\x94[\s\S]*$/, '')
     // AN EMPTY BODY IS NOT AN EXEMPTION (v0.5.10, external review P1). `what === '' → continue`
     // stood here uncommented, and it let `- [open]` with its content on a CONTINUATION line — a
