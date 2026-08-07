@@ -5305,41 +5305,34 @@ acct_openlist_gaps_continuation_realized() {
 }
 acct_openlist_gaps_arrays_agree() {
   # THE THREE RETURNS MUST DESCRIBE ONE SCAN. `n` is what validate counts, `entries` is what the
-  # listing prints, and `kinds` (v0.5.18) is what tells the listing which of them names a kind — a
-  # per-entry array that would mislabel every line after any push the other branch forgot. The
-  # module's own comment claimed the suite asserted this and no case did, so a mismatch would have
-  # surfaced as the WRONG LINE being called malformed. Same fixture as the count case: every shape
-  # that has ever split these readers. Drop a `kinds.push` in either branch → this goes red.
+  # listing prints, and `kinds` (v0.5.18) is what tells the listing WHICH of them names a kind. They
+  # are parallel arrays, so a push the other branch forgets does not fail loudly — it shifts every
+  # label by one and puts "malformed" on the wrong line. Asserted through the CLI like every other
+  # case here: a realization comes FIRST, so a missing push at that branch moves the label off
+  # `- (없음)` and onto the realized entry above it. Drop either `kinds.push` → this goes red.
+  #   (The first spelling imported the module in `node -e` with a top-level await — and WITHOUT
+  #   `--input-type=module`, which the three fault-injection probes in this file all carry. Node 20
+  #   and 22 detect the module syntax and ran it; node 18, the declared floor, does not, and only
+  #   the TAG run uses 18 — so it was green locally, green in the container, and a SyntaxError on
+  #   all three CI platforms. Two lessons in one line: the floor is not what a local sweep grades,
+  #   and a case that reaches inside the runtime pays for it in ways a CLI case cannot.)
   cat > "$W/gaps.md" <<'EOF'
 # Open
 
-- [enumeration] 앨범 — 6곡 계획 vs 5곡 수록 — m002 대비
-- [<kind>] album — six-vs-five
-- [<kind>] <where> — <what>
 - [{kind}]
   실제 내용이 이어짐
 - (없음)
 - [reference] 라온고 — 정의하는 truth 없음 — t001 언급
-  - 근거: 하위 불릿은 항목이 아니다
 
 # Accepted
 
 - [declared] 3장 — 의도적으로 남김 — scope: a — recheck: b — as-of: t001
 EOF
-  OUT=$(node -e "
-    const { scanRegister } = await import('file://' + process.argv[1] + '/.weavedoc/bin/lib/gaps-register.mjs')
-    const { readFileSync } = await import('node:fs')
-    const t = readFileSync(process.argv[2]).toString('latin1')
-    const ks = new Set(['declared', 'reference', 'enumeration', 'symmetry'])
-    let bad = ''
-    for (const sec of ['Open', 'Accepted']) {
-      const r = scanRegister(t, sec, ks)
-      if (r.n !== r.entries.length || r.n !== r.kinds.length) bad += \` \${sec}(n=\${r.n} e=\${r.entries.length} k=\${r.kinds.length})\`
-      if (r.n === 0) bad += \` \${sec}-empty\`
-    }
-    console.log('mismatch:' + (bad || ' none'))
-  " "$REPO" "$W/gaps.md" 2>&1); RC=$?
-  case "$OUT" in *"mismatch: none"*) ok ;; *) bad "the scan's arrays disagree — $OUT" ;; esac
+  vrun status --open
+  expect_has "gaps (3, 1 malformed):"
+  expect_has "(malformed register entry — no [kind] slot): - (없음)"
+  # …and NOT on the entry above it, which is where a shifted `kinds` array puts it.
+  expect_hasnt "no [kind] slot): - [{kind}] 실제 내용이 이어짐"
 }
 acct_openlist_gaps_count_matches_validate() {
   # THE ANTI-DRIFT GUARD, and the case this release exists for: one gaps.md, two readers, one

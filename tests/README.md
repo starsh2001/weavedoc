@@ -46,6 +46,8 @@ bash tests/in-container.sh sh '<셸 명령>'    # 그 외, /work가 트리
 - **push(main·improve/**)·PR**: `bash -n` + ShellCheck(오류 등급), **Ubuntu에서만** 전체 suite, bundle manifest 2회 재현 검증.
 - **tag(`v*`)·workflow_dispatch**: 위에 더해 **Windows·macOS** matrix에서 전체 suite. 셋 다 **required**(macOS는 census 4건이 v0.3.4에서 해소되어 2026-08-04 승격). Windows는 분당요금 2배, macOS는 10배라 계약이 걸리는 지점 — 태그 — 에서만 돈다. (CI sweep 실측 2026-08-07, 같은 축끼리: Windows **2m28s** — 같은 CI에서 v0.5.12 직전 트리는 **5m18s**였다. macOS 49s · Linux 41s. 로컬 Windows 네이티브는 별개 축이다 — 위 표의 4분 29초. 이 CI 숫자는 493케이스 시점 측정이며, 케이스가 늘면 함께 늘어난다.)
 
+**CI는 선언된 바닥인 node 18로 돈다** (`.github/workflows/ci.yml`의 `node-version: '18'`) — 로컬은 22, 컨테이너 이미지는 20이다. 즉 **18에서만 깨지는 문법은 로컬 스윕에도 컨테이너에도 안 잡히고 태그에서 처음 드러난다**(v0.5.18 실측: `--input-type=module` 없는 `node -e` 안의 top-level await가 로컬·컨테이너 green, CI 3-OS 전부 red). 런타임 자체는 `node:fs/path/crypto`만 쓰고 18 이후 문법을 쓰지 않는다; 하네스 안의 node 프로브를 새로 쓸 땐 기존 셋처럼 **`--input-type=module`을 반드시 붙일 것**. 컨테이너 이미지를 18로 내리는 것은 미결이다.
+
 두 경로 모두 §7.3 계약대로 실행 케이스 ID·환경을 artifact로 게시하고, suite 성패와 무관하게(`if: always()`) 종료 후 clean worktree를 확인한다.
 
 ## baseline/ 산출물
