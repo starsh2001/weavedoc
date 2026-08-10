@@ -76,7 +76,10 @@ export function cmdConsecrate (m, out, errln, docId, ops = realOps) {
     return 2
   }
   if (review.lostSections.length > 0 || review.commentIncidents.length > 0) {
-    out('consecrate: review.md has comment structure that hides a declared section or violation-shaped history before live prose — repair the comment boundary before consecrating')
+    // "more source text", not "prose". The test is the closer's shape: a deliberate archive ends
+    // its line with `-->` (trailing blanks allowed). ANY further source on that line reopens the
+    // question of what was archived — another comment does it as surely as a sentence does.
+    out("consecrate: review.md has comment structure that hides a declared section, or a violation-shaped archive whose closing '-->' is followed by more source text on the same line — repair the comment boundary before consecrating")
     return 2
   }
   if (review.headingCount(review.gateName) !== 1) {

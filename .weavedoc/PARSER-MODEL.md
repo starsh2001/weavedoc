@@ -147,6 +147,11 @@ with `-->`. Single-line and multi-line comments are judged by that one rule. The
 spliced a same-line comment out before the tripwire ran, so only the multi-line form was ever
 tested; making the rule uniform can block a `review.md` that passed before.
 
+What follows the closer is measured as **source text, not prose**. Horizontal blanks after `-->`
+are trimmed and end the line, so a trailing space is not a suffix; anything else is, including an
+adjacent `<!-- … -->`. Describing the suffix as prose stated a narrower rule than the one all three
+consumers enforce, and a contract that three surfaces read must not be written down twice.
+
 Materialisation and boundary ownership remain separate facts here too. A pure placeholder-shaped
 line may be inert inside the gate, but the same shape at the gate heading's tier is also a Markdown
 section boundary and therefore blocks: treating that dual-role line as template noise would close

@@ -765,6 +765,70 @@ pass_gate_archived_entry_arrow_eol() {
 EOF
   vrun validate; expect_pass
 }
+block_gate_single_line_archive_before_comment() {
+  # THE SUFFIX IS SOURCE TEXT, NOT PROSE (external review, bundle 2026-08-08.2). Every swallow case
+  # above writes the MULTI-LINE shape, so the single-line form that 2026-08-08.1 declared as a
+  # behaviour change shipped with no case at all — and the suffix a writer is most likely to reach
+  # for, an adjacent comment, is exactly the one the old "live prose" wording implied was fine.
+  # All three surfaces are asserted because all three carried that wording.
+  REV ''
+  printf -- '\n<!-- 라운드 1 보관 - [contradiction] 3장 — 해소됨 --><!-- 감사 -->\n' >> "$W/documents/d1/review.md"
+  vrun validate; expect_block "closing '-->' is followed by"
+  vrun status --open
+  expect_has "comment that swallows"
+  expect_has "more source text after the '-->'"
+  vrun consecrate d1
+  expect_block "followed by more source text on the same line"
+}
+pass_gate_single_line_archive_arrow_eol() {
+  # THE MIRROR, without which the case above passes against a reader that blocks every single-line
+  # comment: the same archive whose closer ENDS its line stays legal, and trailing horizontal
+  # blanks are trimmed rather than counted as a suffix. Blank-vs-suffix is the whole boundary.
+  # MUTATION NOTE: the blank rule is carried by a PAIR of trims (leading and trailing) and either
+  # one alone collapses an all-blank suffix to '', so removing just one is survivable by design.
+  # The mutations this case actually kills are dropping `suffix !== ''` or dropping both trims.
+  REV ''
+  printf -- '\n<!-- 라운드 1 보관 - [contradiction] 3장 — 해소됨 -->   \n' >> "$W/documents/d1/review.md"
+  vrun validate; expect_pass
+  vrun status --open
+  expect_hasnt "comment that swallows"
+  vrun consecrate d1
+  expect_hasnt "more source text on the same line"
+}
+block_review_unterminated_fence() {
+  # 2026-08-08.1 added this check and shipped it with NO case. It also narrowed
+  # HQ-UNTERMINATED-FENCE to truths/verify.md (`hqf === vmd`), handing review.md to this diagnostic
+  # instead — a handoff nothing counted. Both halves are pinned: the new code fires, and the queue
+  # code no longer answers for this file.
+  REV ''
+  printf -- '\n```md\n- [open] [user-only] BEHIND-AN-OPEN-FENCE\n' >> "$W/documents/d1/review.md"
+  vrun validate
+  expect_block "REVIEW-UNTERMINATED-FENCE"
+  expect_hasnt "HQ-UNTERMINATED-FENCE"
+  vrun status --open
+  expect_has "unterminated code fence"
+}
+block_review_unterminated_frontmatter() {
+  # Frontmatter is an explicit capability of review.md, and an unclosed block parses the WHOLE file
+  # as metadata — the gate heading is then not a heading at all. Shipped in 2026-08-08.1 with no
+  # case; verify.md's twin (block_hq_unterminated_frontmatter) has had one since that bundle.
+  REV ''
+  sed -i '4d' "$W/documents/d1/review.md"
+  vrun validate
+  expect_block "REVIEW-UNTERMINATED-FRONTMATTER"
+  vrun status --open
+  expect_has "unterminated frontmatter"
+}
+block_hq_unterminated_comment() {
+  # The truths side of the same silence. review.md had REVIEW-UNTERMINATED-COMMENT already;
+  # truths/verify.md had nothing, so its Human queue could vanish behind a forgotten opener while
+  # validate stayed green. 2026-08-08.1 closed it and did not execute it.
+  printf -- '\n<!-- 보관 시작\n- [open] [user-only] BEHIND-AN-OPEN-COMMENT\n' >> "$W/truths/verify.md"
+  vrun validate
+  expect_block "HQ-UNTERMINATED-COMMENT"
+  vrun status --open
+  expect_has "unterminated '<!--'"
+}
 block_gate_stray_arrow() {
   # `-->` in ordinary prose LATER in the file rebalances the count, so the file does not end inside
   # a comment — and everything between the two markers, violations included, is blanked out.

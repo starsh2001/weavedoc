@@ -288,7 +288,10 @@ export function cmdStatusOpen (m, out) {
       warns.push(Buffer.concat([T(`warning: ${rel(rev)} has a declared review section hidden by an HTML comment: '`), B(section), T("' — the listing is incomplete")]))
     }
     for (const incident of model.commentIncidents) {
-      warns.push(Buffer.concat([T(`warning: ${rel(rev)} has an HTML comment that swallows ${incident.count} violation-shaped entry(s), then closes before live prose: `), B(incident.suffix)]))
+      // The suffix is ANY source text after the closing `-->`, not only prose: an adjacent
+      // `<!-- … -->` triggers this too, and saying "prose" described a narrower rule than the one
+      // consecrate and validate actually enforce — three surfaces, one contract.
+      warns.push(Buffer.concat([T(`warning: ${rel(rev)} has an HTML comment that swallows ${incident.count} violation-shaped entry(s), then closes with more source text after the '-->' on the same line: `), B(incident.suffix)]))
     }
     for (const entry of model.blockingMarks) viol.push({ rev, line: entry.text })
   }

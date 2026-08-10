@@ -10,12 +10,12 @@ acf976596a98aed6f778cbf4746bd0480075f8d2de6d3496a9eb90f9bb8c1f9e  .claude/skills
 a7c833d53e3d2b21fae97c9d92669ad0eba67bf9e403f74098a4adde55ce7835  .claude/skills/weavedoc-write/SKILL.md
 2438369832e8c12313d34e451966bbe7dd15f19b8310850789f38290b007798a  .weavedoc/.gitattributes
 90923edc278d1acf39e9c1f52cfb6686b2bcedae7eef5638b777922a8d36e3f1  .weavedoc/FORMATS.md
-6ef2e56c4244c24fe8003dfbf14b616d08fead995bb8ad4d06e708fb4cb2242c  .weavedoc/PARSER-MODEL.md
+c561dd69e57e4f29ea398e6ff57b085bcd87ed230702c1e8eab11c6cf3d16bcb  .weavedoc/PARSER-MODEL.md
 31a09c0977220ca0d6356313d52c81ee69d0de2331f4fee09f0b9c9a8a89b689  .weavedoc/READ.md
-f891cdd3bd5564ceea437f159d7a0c7b3fd7d396162ac1bda26ad98a63ec728b  .weavedoc/VERSION
+0d72d2391cece19755f562c276e9a131a2a956f683ae71f88faf31c905a54e83  .weavedoc/VERSION
 25150ac1c8654005fb340f4646686fa17adb946293af1d6bc71b84b09763f588  .weavedoc/bin/lib/cmd-attest.mjs
 cf6c9509957cbcf2d02bca7c68b7a36e32e1150a4ca486da17333111ca9df6cc  .weavedoc/bin/lib/cmd-census.mjs
-b97b2eb0e2ae162f6182c7a9eeba95ad16fae177b11c73accc87bb8a2db65391  .weavedoc/bin/lib/cmd-consecrate.mjs
+de08795b1a49535978c16daa15bf11eeb93778f0d0d9fbbf974e6e92c6a60284  .weavedoc/bin/lib/cmd-consecrate.mjs
 53e083a4afa318f0311d84374fc5f50afc1efb01f777cf4bf80c21a89b7ab775  .weavedoc/bin/lib/cmd-gaps.mjs
 6566defdb3ffa164832b75c10703fdd861d0dee700530987e33f6c390415ab3d  .weavedoc/bin/lib/cmd-impact.mjs
 d7c2dbe051193e47531b966d78c98349f3740ccdac1ac9f69c4655a262c4e391  .weavedoc/bin/lib/cmd-pull.mjs
@@ -23,7 +23,7 @@ d7c2dbe051193e47531b966d78c98349f3740ccdac1ac9f69c4655a262c4e391  .weavedoc/bin/
 9c756f5d44252ba1d53fe8e4c941ffc7bce282c4f67165fb503e4501075ada5c  .weavedoc/bin/lib/cmd-retag.mjs
 bfe90164bc8d5ba87f45518890107b75c3ab149c6abad1fc492a93aa78c7251a  .weavedoc/bin/lib/cmd-scope.mjs
 c765555e2fdf77060fed2a2fdc8ee77e227c586c875d76ba983779232c5c6982  .weavedoc/bin/lib/cmd-seal-review.mjs
-85db3822aa223bd749c0856cf8b95c0df7e07362dda4649d6a32bee855ae8576  .weavedoc/bin/lib/cmd-status.mjs
+3f99ba6cda7e20ea9e8396e1eb681b001be1b47c5ec26a9c0c2a2687ef73ce4e  .weavedoc/bin/lib/cmd-status.mjs
 47ffbbc8c3b0034c142f5a7819fccdb541309f4092e2d785a260037885b57a5e  .weavedoc/bin/lib/cmd-upgrade.mjs
 d5e7bd8d4be5225b19dde475e0bec326f94edf37f17e1dddd7c5a012e978292e  .weavedoc/bin/lib/cmd-validate.mjs
 c99bd8a8d988016c64d4335bbaa5f7ae349492248e9fb8cbf15a775fb1916cce  .weavedoc/bin/lib/core.mjs
