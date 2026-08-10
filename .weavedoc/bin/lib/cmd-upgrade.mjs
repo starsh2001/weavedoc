@@ -7,13 +7,14 @@
 // byte-identical to before.
 import { existsSync, statSync, readFileSync, appendFileSync, mkdirSync, mkdtempSync, rmSync, cpSync, readdirSync } from 'node:fs'
 import { splitLines, canonId, isFence, U, M } from './core.mjs'
-import { nocomment, sectionAll } from './sections.mjs'
 import { join, materialIds, docIds, fm } from './mine.mjs'
 import { fmvB, clearFileCaches, loadConfig } from './read.mjs'
 import { ledgerRows, ledgerIndex } from './verify.mjs'
 import { scanVerifiedUnits } from './cmd-scope.mjs'
 import { writeAtomic, writeAtomicX } from './write.mjs'
 import { acquireLedgerLock, releaseLedgerLock } from './lock.mjs'
+import { appendVerdicts, readVerifiedUnits, verifiedUnitsContract } from './verified-units.mjs'
+import { readReview, rewriteOutsideKinds } from './review-model.mjs'
 
 // The two operations a fault can land on, injectable exactly the way consecrate's and retag's are.
 // `write` is stage+rename with false PROMOTED to a throw (§11 2026-08-05): the direct writeFileSync
@@ -36,6 +37,10 @@ const isDirAt = p => { try { return statSync(p).isDirectory() } catch { return f
 const exists = p => { try { statSync(p); return true } catch { return false } }
 const bytewise = (a, b) => Buffer.compare(Buffer.from(a, 'latin1'), Buffer.from(b, 'latin1'))
 const uniqSort = xs => [...new Set(xs)].filter(x => x !== '').sort(bytewise)
+const reviewModel = (m, file) => readReview(file, {
+  sections: (m.sch.get('review.sections') ?? '').split('|').filter(Boolean).map(U),
+  kinds: (m.sch.get('review.enum.kind') ?? '').split('|').filter(Boolean).map(U)
+})
 const truthGlob = m => {
   try { return readdirSync(m.truths).filter(n => /^t[0-9].*\.md$/.test(n)).sort(bytewise) } catch { return [] }
 }
@@ -45,22 +50,10 @@ const truthGlob = m => {
 // it verified would erase unfinished work from the debt (v0.3.1). Anything that names units without
 // complete success is handed to a human — the machine never certifies what the ledger did not say.
 function verdictRows (m) {
-  const vd = (m.sch.get('verify.units.verified') || 'verified')
-  const body = sectionAll(nocomment(readB(join(m.truths, 'verify.md'))), 'Verified units')
-  const rows = []
-  for (const raw of splitLines(body)) {
-    const line = raw.split('Â·').join(' ').split('·').join(' ')
-    if (!/^[ \t\v\f\r]*[|-]/.test(line)) continue
-    if (/^[ \t\v\f\r]*\|[ \t\v\f\r|:-]*$/.test(line)) continue
-    if (!/[mt][0-9]/.test(line)) continue
-    const v = line.replace(/[ \t\v\f\r|*.-]+$/, '')
-    if (new RegExp(`(^|[^a-z_])${vd}$`).test(v.toLowerCase())) continue
-    let ok2 = false
-    const pm = /passes[ \t\v\f\r]*([0-9]+)\/([0-9]+)/.exec(line)
-    if (pm && +pm[1] === +pm[2] && +pm[2] > 0) ok2 = true
-    rows.push({ ok2, raw, line })
-  }
-  return rows
+  const model = readVerifiedUnits(join(m.truths, 'verify.md'), verifiedUnitsContract(m.sch))
+  if (!model.readable) return []
+  return model.rows.filter(row => !row.verified)
+    .map(row => ({ ok2: row.completePass, raw: row.raw, line: row.normalized }))
 }
 
 // Materials whose OWN v1 record says verified. The material lane's v1 evidence is the material's
@@ -112,10 +105,10 @@ export function scanUpgrade (m) {
       if (r.ok2) add('verdict', M`Verified units row gains its trailing verdict word: ${r.line}`)
       else add('verdict-manual', M`row names units but shows no COMPLETE success evidence (passes N/N with N=N) — review by hand: ${r.line}`)
     }
-    const stripped = nocomment(readB(join(m.truths, 'verify.md')))
+    const verified = readVerifiedUnits(join(m.truths, 'verify.md'), verifiedUnitsContract(m.sch))
     for (const b of (m.sch.get('verify.sections') ?? '').split('|')) {
       if (b === '') continue
-      if (!new RegExp(`^#{1,2}[ \t]+${b.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}[ \t]*$`, 'm').test(stripped)) {
+      if (!verified.hasHeading(U(b), [1, 2])) {
         add('verify-section', M`truths/verify.md gains an empty section: ## ${b}`)
       }
     }
@@ -137,8 +130,9 @@ export function scanUpgrade (m) {
   for (const d of docIds(m)) {
     const f = join(m.documents, d, 'review.md')
     if (!isFileAt(f)) continue
-    const n = countHistoryBrackets(readB(f))
-    if (n > 0) add('review-history', M`documents/${d}/review.md: ${n} bracketed kind record(s) outside the gate → brackets removed (record form; VERIFY none was an open violation)`)
+    const rewrite = rewriteOutsideKinds(reviewModel(m, f))
+    if (rewrite.changed > 0) add('review-history', M`documents/${d}/review.md: ${rewrite.changed} bracketed kind record(s) outside the gate → brackets removed (record form; VERIFY none was an open violation)`)
+    if (rewrite.manual.length > 0) add('review-history-manual', M`documents/${d}/review.md: ${rewrite.manual.length} outside-gate kind line(s) live in frontmatter, a code fence, or another shape unsafe to rewrite → rule by hand before migration`)
   }
   // Ledger materialization belongs to the v1 migration ONLY: on a v2 mine a markdown row with no
   // sidecar twin is the LEGAL legacy-unbound state (preserved, re-verified by risk), not pending
@@ -155,31 +149,6 @@ export function scanUpgrade (m) {
 // A bracketed violation kind sitting OUTSIDE the gate section is a RECORD, not an open violation —
 // on schema 2 it loses its brackets so the zone rule stops reading it as one. Counting and
 // rewriting share this walk so the scan and the apply cannot disagree about what they found.
-const KINDRX = /\[[A-Za-z_ -]+\]/
-function historyWalk (text, rewriteFn) {
-  let sec = ''
-  const out = []
-  let n = 0
-  for (const line of splitLines(text)) {
-    if (/^#/.test(line)) {
-      sec = line.replace(/^#+[ \t\v\f\r]*/, '').replace(/[ \t\v\f\r]*$/, '')
-      out.push(line); continue
-    }
-    if (sec !== 'Fidelity violations' && /^[ \t\v\f\r]*[-|*].*\[[A-Za-z_ -]+\]/.test(line)) {
-      const mm = KINDRX.exec(line)
-      const k = mm[0].slice(1, -1)
-      const kn = k.replace(/[^a-zA-Z]/g, '').toLowerCase()
-      if (kn === 'contradiction' || kn === 'unsupported' || kn === 'missingrequired') {
-        n++
-        out.push(rewriteFn ? line.replace(KINDRX, k) : line)
-        continue
-      }
-    }
-    out.push(line)
-  }
-  return { n, text: out.length ? out.join('\n') + '\n' : '' }
-}
-const countHistoryBrackets = t => historyWalk(nocomment(t), null).n
 
 // ---- the command ------------------------------------------------------------------------------
 export function cmdUpgrade (m, out, argv, runReindex, runValidate, ops = realOps) {
@@ -226,6 +195,26 @@ export function cmdUpgrade (m, out, argv, runReindex, runValidate, ops = realOps
     return ''
   }
 
+  // A typed parser distinguishes unreadable from empty; migration must preserve that distinction.
+  // Falling back to an empty model here can make a writable-but-unreadable review.md get replaced
+  // by marker-only content, or stamp schema 2 after silently omitting verification history.
+  const migrationSourceVoidWhy = mm => {
+    const verifyContract = verifiedUnitsContract(mm.sch)
+    if (!verifyContract.valid) return `.weavedoc/schema has an invalid verification-section contract (${verifyContract.error}) — migration refuses to guess which section carries evidence`
+    const verifyFile = join(mm.truths, 'verify.md')
+    if (exists(verifyFile)) {
+      const verified = readVerifiedUnits(verifyFile, verifiedUnitsContract(mm.sch))
+      if (!verified.readable) return 'truths/verify.md exists but cannot be read — its verification history is unknown, so migration refuses to treat it as empty'
+    }
+    for (const d of docIds(mm)) {
+      const file = join(mm.documents, d, 'review.md')
+      if (exists(file) && !reviewModel(mm, file).readable) {
+        return `documents/${d}/review.md exists but cannot be read — migration refuses to overwrite unknown review history`
+      }
+    }
+    return ''
+  }
+
   // ONE PREFLIGHT, CALLED ONCE PER INVOCATION (v0.5.4, review #8 P1-1). Every judgment this
   // command makes about the mine lives here: the closed version matrix, the already-migrated exit,
   // the ledger-void refusals, and the scan. It used to be written out TWICE — once before the lock
@@ -252,6 +241,8 @@ export function cmdUpgrade (m, out, argv, runReindex, runValidate, ops = realOps
     if (pvx !== '1' && cvx !== '1') { out(`upgrade: nothing to do — the mine is already at schema ${sv}`); return { rc: 0 } }
     const why = ledgerVoidWhy(mm)
     if (why) { out(`upgrade: ${why}`); return { rc: 1 } }
+    const sourceWhy = migrationSourceVoidWhy(mm)
+    if (sourceWhy) { out(`upgrade: ${sourceWhy}. Nothing written`); return { rc: 1 } }
     const items = scanUpgrade(mm)
     if (items.length === 0) { out(`upgrade: nothing to do — the mine is already at schema ${sv}`); return { rc: 0 } }
     return { items }
@@ -433,6 +424,13 @@ function upgradeApply (m, out, nitems, runReindex, runValidate, ops = realOps) {
     out('  fix each row (complete the verification, or mark its real verdict), then re-run')
     return 1
   }
+  const reviewManual = scanUpgrade(m).filter(([k]) => k === 'review-history-manual')
+  if (reviewManual.length) {
+    out('upgrade: review history needs a human ruling before apply can stamp schema 2 (nothing written):')
+    for (const [, disp] of reviewManual) out(Buffer.from(`  - ${disp}`, 'latin1'))
+    out('  move a real open violation into the gate, or rewrite an archival record without bracketed kind syntax; then re-run')
+    return 1
+  }
   let bak
   try { bak = mkdtempSync(bakPrefix) } catch (e) { out(`upgrade: cannot create backup dir ${bakPrefix}* (${e.code})`); return 1 }
 
@@ -486,26 +484,17 @@ function upgradeApply (m, out, nitems, runReindex, runValidate, ops = realOps) {
   if (isFileAt(vmd)) {
     bkup(rel(vmd))
     const vd = (m.sch.get('verify.units.verified') || 'verified')
-    const outl = []
-    for (const line of splitLines(readB(vmd))) {
-      const t = line.split('Â·').join(' ').split('·').join(' ')
-      if (!/^[ \t\v\f\r]*[|-]/.test(t) || /^[ \t\v\f\r]*\|[ \t\v\f\r|:-]*$/.test(t) || !/[mt][0-9]/.test(t)) { outl.push(line); continue }
-      const v = t.replace(/[ \t\v\f\r|*.-]+$/, '')
-      if (new RegExp(`(^|[^a-z_])${vd}$`).test(v.toLowerCase())) { outl.push(line); continue }
-      const pm = /passes[ \t\v\f\r]*([0-9]+)\/([0-9]+)/.exec(t)
-      if (pm && +pm[1] === +pm[2] && +pm[2] > 0) outl.push(`${line} ${U('·')} ${vd}`)
-      else outl.push(line)
+    const verified = readVerifiedUnits(vmd, verifiedUnitsContract(m.sch))
+    const verdictAppend = appendVerdicts(verified, ` ${U('·')} ${U(vd)}`)
+    if (!verdictAppend.postcondition) {
+      throw new Error('a Verified units verdict could not be made live after writing — refusing a migration that would report preserved evidence while hiding it')
     }
-    let text = outl.length ? outl.join('\n') + '\n' : ''
-    write(vmd, text)
+    let text = verdictAppend.text
     for (const b of (m.sch.get('verify.sections') ?? '').split('|')) {
       if (b === '') continue
-      const stripped = nocomment(readB(vmd))
-      if (!new RegExp(`^#{1,2}[ \t]+${b.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}[ \t]*$`, 'm').test(stripped)) {
-        text = readB(vmd) + `\n## ${b}\n`
-        write(vmd, text)
-      }
+      if (!verified.hasHeading(U(b), [1, 2])) text += `\n## ${U(b)}\n`
     }
+    write(vmd, text)
   }
 
   // 3. review history: bracketed kinds outside the gate lose their brackets (record form).
@@ -513,7 +502,7 @@ function upgradeApply (m, out, nitems, runReindex, runValidate, ops = realOps) {
     const f = join(m.documents, d, 'review.md')
     if (!isFileAt(f)) continue
     bkup(rel(f))
-    write(f, historyWalk(readB(f), true).text)
+    write(f, rewriteOutsideKinds(reviewModel(m, f)).text)
   }
 
   // 4. config: scalar repeat → per-scale map.

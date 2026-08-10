@@ -1,62 +1,24 @@
-// The Human-queue ledger — ONE structural reading of it, for every command that has an opinion.
+// Human-queue ledger: one lexical read and one structural model for status and validate.
 //
-// WHY A MODULE (external review, v0.5.18). `status` walked these files to count and list waiting
-// decisions; `validate` walked them again, with its own section detection and its own idea of what
-// a line is, to enforce the ownership tag. v0.5.17 taught the first walk that a bullet nested
-// strictly deeper than the entry above it is that entry's DETAIL — and the second walk never heard,
-// so the two disagreed about the same line in both directions at once. Measured on v0.5.17:
-//
-//     - [open] [user-only] PARENT
-//       - [open] CHILD-DETAIL
-//
-// …counted TWO open entries in `status` while FORMATS calls the second one detail, and `validate`
-// failed the mine (HQ-UNTAGGED, rc 1) demanding an ownership tag on a line that is not an entry.
-// Adding the tag traded a wrong rejection for a wrong report: a waiting decision that does not
-// exist. The same split dropped an untagged peer at one indentation and double-counted a
-// sub-bullet under an indented `[ruled]`.
-//
-// So the structure is decided ONCE, here, and the two commands consume the result: `status` sorts
-// the entries into its buckets, `validate` checks the tags of the entries it is given. What each
-// does with an entry is policy and stays theirs; WHICH LINES ARE ENTRIES is not a matter of opinion.
+// The source file is scanned once by markdown-scan.  This module then decides which visible bullets
+// are records, templates or details.  Consumers may bucket/check the returned records, but they do
+// not parse the source again.
 import { readFileSync, existsSync } from 'node:fs'
-import { splitLines, U, TAG_SEP, TAG_LEAD } from './core.mjs'
-import { nocomment, sectionEach, defence } from './sections.mjs'
+import { U } from './core.mjs'
 import { join, docIds } from './mine.mjs'
-import { stubLine, emptyRemainder, hasContent } from './gaps-register.mjs'
+import { scanMarkdown, sectionNodes } from './markdown-scan.mjs'
+import { exactLiveLine, missingSlot, parseTaggedBullet } from './ledger-model.mjs'
+import { itemBodyFacts, walkLedgerSections } from './ledger-structure.mjs'
 
-// BYTES. These files are quoted back to the user by both consumers, and validate works in the byte
-// domain so a value holding invalid UTF-8 prints as the mine holds it, not as U+FFFD.
-const readOr = p => { try { return readFileSync(p).toString('latin1') } catch { return '' } }
+const readOrNull = p => { try { return readFileSync(p).toString('latin1') } catch { return null } }
 
-// Each ledger's entry PREFIX, so "does this entry's line carry content?" is asked the same way in
-// all of them (gaps.md's lives with the register reader). Human queue: the state slot plus an
-// optional ownership slot.
-const HQ_TAG = new RegExp(`^- \\[[^\\]]*\\]${TAG_SEP}*(\\[[^\\]]*\\])?`)
-// The counter's indentation tolerance for an `[open]` entry — the SAME class, one position earlier
-// (cold review, v0.5.11): validate strips `TAG_SEP` before testing a line, status tolerated `[ \t]`,
-// so a `\v`-indented `- [open]` was an entry to the gate and invisible to both status surfaces.
-const HQ_OPEN = new RegExp(`^${TAG_SEP}*- \\[open\\]`)
-// Every placeholder-opening bullet at any indentation.
-const PLACEHOLDER_BULLET = new RegExp(`^${TAG_SEP}*- [[][{<]`)
-// A LEAD MADE ONLY OF CONTROL CHARACTERS IS NOT INDENTATION. No editor writes one, so such a bullet
-// is an entry wherever it sits — the rule v0.5.13/14 established for placeholder stubs (a
-// control-indented one was handled by nobody and vanished, and the run printed "nothing is waiting
-// on you"), generalised in v0.5.18 to every bullet, since every bullet now asks the same question.
-// The empty lead — column 0 — is the degenerate case and is likewise always an entry.
-const CTRL_ONLY_LEAD = /^[\n\v\f\r]*$/
-// The EMPTY-LEDGER idiom, for the Human queue and questions.md and nowhere else. gaps.md is a
-// fail-closed register whose every bullet is a kind-tagged gap or an accepted decision (FORMATS),
-// so `- (없음)` there is a malformed entry, not a sentinel — ruled 2026-08-07 rather than extending
-// the idiom, because "every bullet is a routable record" is worth more than the convenience.
-// ANCHORED: unanchored, a real entry that merely OPENS with those words was swallowed and the
-// ledger read as empty (external review, v0.5.6). Spelled in BYTES because the text is bytes.
-// `\r` is in the trailing class for the same reason `isFence` keeps it (core.mjs): splitLines
-// removes ONE trailing CR, so this covers a stray one mid-way or a second.
+const HQ_STATES = new Set(['open', 'ruled'])
+const HQ_OWNERS = new Set(['user-only', 'recommended', 'machine'])
+
+// The empty-ledger idiom belongs to Human queue and questions.md, never gaps.md.  It is byte-domain
+// because ledger files are read as latin1 and quoted back byte-for-byte.
 export const NONE_IDIOM = new RegExp(`^- \\((${U('없음')}|none)\\)[ \t\r]*$`)
 
-// Every file carrying a "## Human queue" section, in one order. ONE list, one definition — validate
-// and status must see the same set, or one reports "human queue: 0" over decisions open in files it
-// never opened.
 export function hqFiles (m) {
   const out = []
   const v = join(m.truths, 'verify.md')
@@ -68,110 +30,96 @@ export function hqFiles (m) {
   return out
 }
 
-// verify.md is `##`-sectioned and review.md `#`-sectioned. The spec added the section to both
-// without saying which level, so read either rather than silently finding nothing in one of them —
-// and EVERY matching section, not the first: reading only the first hid every later round's entries
-// from the counter and from the tag check at once. The section walker caps heading depth at six
-// (v0.5.4), so a `####### Human queue` is not a heading and therefore not a section, here as
-// everywhere. EACH section separately (v0.5.17): a queue is an append-per-round log, and joining
-// the bodies put one round's last line above the next round's first, so the walk below read a new
-// entry as detail of an old one and dropped it.
-// FENCES TOO, not just comments (external review, v0.5.21). This read stripped `<!-- -->` and
-// stopped there, so a fenced EXAMPLE of an entry — the way documentation writes one — was a real
-// waiting decision to `status` and a contract violation to `validate`. Measured on a normal file:
-// a fenced `- [open] [user-only] …` was listed as one open entry, and a fenced `- [open] …` without
-// an ownership tag blocked the mine with HQ-UNTAGGED. Worse in the other direction: replacing the
-// real `## Human queue` with a FENCED one satisfied validate's required-section check, so a mine
-// that had lost the section entirely passed. gaps.md has read through `defence` since v0.5.4 for
-// exactly this; the twin ledger simply never got it. `fenceOpen` is what an unterminated fence
-// leaves behind — everything after it is blanked, so entries vanish and both surfaces must say so.
-export function hqRead (file) {
-  const df = defence(nocomment(readOr(file)))
-  return { text: df.text, fenceOpen: df.open }
-}
-export const hqBodies = file => sectionEach(hqRead(file).text, 'Human queue')
+const malformedSlot = s => ['missing', 'unclosed', 'unreachable', 'blank', 'placeholder', 'unknown'].includes(s.type)
 
-// THE WALK. Returns every ENTRY in order, each with:
-//   kind — 'open' | 'ruled' | 'untagged'   (template noise is not an entry and is not returned)
-//   raw  — the entry's own line, never mutated: state and ownership are judged HERE. Classifying
-//          the folded display line once put an entry in status's "machine can just do" bucket while
-//          validate rejected it — two surfaces disagreeing about one entry (cold review, v0.5.10).
-//   line — the display, which folding extends with the entry's continuations
-//   lead — the entry's own indentation, which is what makes the next line detail or a peer
-//
-// The structural rule, spelled out because WHICH indentation makes a bullet an entry has moved five
-// times: a bullet is an entry unless it is nested STRICTLY DEEPER than the entry above it — a lead
-// that starts with the parent's and is longer. Peers share a lead and are each their own entry; a
-// lead that is not an extension of the parent's (a tab under two spaces) is not nesting either and
-// surfaces rather than being absorbed. A control-only lead is always an entry (see CTRL_ONLY_LEAD).
-export function scanHq (bodies) {
+function parseSections (sections, contract = {}) {
   const entries = []
-  for (const body of bodies) {
-    let last = null // index of the entry a continuation folds into, or null
-    let held = null // { raw, lead } — a pure placeholder stub awaiting realization
-    let parentLead = null
-    // `''` is a legal parentLead (a column-0 entry), so the test is `!== null`, never truthiness.
-    const deeper = lead => parentLead !== null && lead.length > parentLead.length && lead.startsWith(parentLead)
-    const push = (kind, raw, lead, line = raw) => entries.push({ kind, raw, lead, line }) - 1
-    for (const l of splitLines(body)) {
-      // A BLANK LINE IS NOT A TERMINATOR (external review, v0.5.21). Resetting the whole state here
-      // destroyed the ordinary LOOSE LIST — `- [{state}] [{ownership}]`, blank line, `  실제 결정
-      // 내용` — which is legal markdown and which a person writes without thinking: the held stub
-      // was dropped and the decision VANISHED from every surface at once (status 0, `--open`
-      // "nothing is waiting on you", validate rc 0, measured). The mirror defect blocked instead of
-      // dropping: a blank line before a nested `- [open]` made it a peer, so validate demanded an
-      // ownership tag on a line that is detail. Structure is decided by the LEAD, and a blank line
-      // carries none. What closes an item is an unindented line, which the branch below handles.
-      if (!/[^ \t]/.test(l)) continue
-      const lead = TAG_LEAD.exec(l)[0]
-      const rest = l.slice(lead.length)
-      if (rest.startsWith('- ') && !NONE_IDIOM.test(l) && (CTRL_ONLY_LEAD.test(lead) || !deeper(lead))) {
-        held = null
-        last = null
-        parentLead = lead
-        // A placeholder-OPENING bullet: the remainder decides (FORMATS), same as everywhere else.
-        // Empty remainder → a stub, HELD for a continuation to realize (dropping it immediately
-        // left the continuation carrying the actual content with nothing to attach to, and the item
-        // vanished — external review, v0.5.10). Real remainder → an entry whose state slot is still
-        // a template, i.e. an entry with no valid state tag, surfaced rather than dropped.
-        if (PLACEHOLDER_BULLET.test(l)) {
-          if (stubLine(l, HQ_TAG)) { held = { raw: l, lead }; continue }
-          const i = push('untagged', l, lead)
-          if (emptyRemainder(l, HQ_TAG)) last = i
-          continue
-        }
-        if (HQ_OPEN.test(l)) {
-          const i = push('open', l, lead)
-          if (emptyRemainder(l, HQ_TAG)) last = i
-          continue
-        }
-        // A `ruled` entry is closed: nothing reads its ownership and status does not list it. It is
-        // still an ENTRY, which is what makes its nested bullets detail rather than waiting items —
-        // and since v0.5.18 that holds at any indentation, not only at column 0.
-        if (/^- \[ruled\]/.test(rest)) { push('ruled', l, lead); continue }
-        const i = push('untagged', l, lead)
-        if (emptyRemainder(l, HQ_TAG)) last = i
-        continue
+  const nodes = []
+  const sentinels = []
+  const diagnostics = []
+  const states = contract.states || HQ_STATES
+  const ownerships = contract.ownerships || HQ_OWNERS
+
+  const structure = walkLedgerSections(sections, {
+    rootMode: 'literal-peer',
+    invalidMode: 'reset',
+    fenceMode: 'suspend',
+    blankMode: 'preserve'
+  })
+
+  for (const group of structure.groups) {
+    const groupEntries = []
+    const groupSentinels = []
+    for (const item of group.items) {
+      const parsed = parseTaggedBullet(item.lineNode, ['state', 'ownership'], {
+        state: states,
+        ownership: ownerships
+      })
+      const sentinel = exactLiveLine(item.lineNode, NONE_IDIOM)
+      const state = sentinel ? missingSlot() : parsed.slots.state
+      const ownership = sentinel ? missingSlot() : parsed.slots.ownership
+      const templateOwnership = ['missing', 'placeholder', 'known'].includes(ownership.type)
+      const facts = itemBodyFacts(item, sentinel ? '' : parsed.remainder, {
+        holdUntilReal: !sentinel && state.type === 'placeholder' && templateOwnership
+      })
+      const template = !sentinel && state.type === 'placeholder' && templateOwnership && facts.body !== 'real'
+      const materializedSentinel = sentinel && facts.body === 'real'
+      const syntax = sentinel
+        ? (materializedSentinel ? 'malformed' : 'valid')
+        : (state.type === 'known' && (
+            (state.value === 'open' && ownership.type === 'known') ||
+            (state.value === 'ruled' && ['known', 'missing'].includes(ownership.type))
+          ) ? 'valid' : 'malformed')
+      const node = {
+        ...item,
+        nodeType: sentinel && !materializedSentinel ? 'sentinel' : (template ? 'template' : 'entry'),
+        line: facts.line,
+        parentId: null,
+        materialization: sentinel && !materializedSentinel ? 'sentinel' : (template ? 'template' : 'record'),
+        syntax,
+        inlineBody: facts.inlineBody,
+        body: facts.body,
+        content: sentinel ? '' : parsed.remainder,
+        slots: { state, ownership },
+        kind: sentinel && !materializedSentinel ? 'sentinel' : (state.type === 'known' ? state.value : 'untagged'),
+        diagnostics: []
       }
-      // NOT an entry: detail of the one above, a continuation, the empty idiom, or prose.
-      if (/^[ \t]+[^ \t]/.test(l)) {
-        const cont = l.replace(/^[ \t]+/, '')
-        // A held stub is realized only by a continuation that HAS content once template tokens are
-        // stripped — the register's own rule (v0.5.11); a placeholder-only continuation leaves the
-        // hold standing, so a real line further down still realizes it. The realized entry lives
-        // where the STUB was, so its lead is the stub's: reading the continuation's lead instead put
-        // the parent one level too deep and split one entry into two (v0.5.17).
-        if (held !== null && hasContent(cont)) {
-          last = push('untagged', held.raw, held.lead, `${held.raw} ${cont}`)
-          parentLead = held.lead
-          held = null
-        } else if (held === null && last !== null) entries[last].line += ` ${cont}`
-      } else if (!/^[ \t]/.test(l)) {
-        last = null
-        held = null
-        parentLead = null
+      delete node.lineNode
+
+      if (materializedSentinel) node.diagnostics.push({ code: 'HQ_SENTINEL_CONTENT' })
+      else if (!template && malformedSlot(state)) node.diagnostics.push({ code: 'HQ_STATE', slot: state.type })
+      if (!sentinel && state.type === 'known' && malformedSlot(ownership) &&
+          (state.value === 'open' || (state.value === 'ruled' && ownership.type !== 'missing'))) {
+        node.diagnostics.push({ code: 'HQ_OWNERSHIP', slot: ownership.type, enforced: state.value === 'open' })
+      }
+
+      nodes.push(node, ...item.detailLines)
+      if (node.materialization === 'sentinel') {
+        sentinels.push(node)
+        groupSentinels.push(node)
+      } else if (node.materialization === 'record') {
+        entries.push(node)
+        groupEntries.push(node)
       }
     }
+    if (groupSentinels.length > 0 && groupEntries.length > 0) {
+      diagnostics.push({ code: 'HQ_EMPTY_CONTRADICTION', source: groupSentinels[0].source })
+    }
   }
-  return entries
+
+  for (const e of entries) {
+    diagnostics.push(...e.diagnostics.map(d => ({ ...d, source: e.source })))
+  }
+  diagnostics.push(...structure.diagnostics)
+  return { entries, nodes, sentinels, diagnostics, structure }
+}
+
+export function parseHumanQueues (document, contract = {}) {
+  return parseSections(sectionNodes(document, 'Human queue'), contract)
+}
+
+export function readHumanQueues (file, contract = {}) {
+  const source = readOrNull(file)
+  const document = scanMarkdown(source ?? '', { frontmatter: true })
+  return { readable: source !== null, document, ...parseHumanQueues(document, contract) }
 }

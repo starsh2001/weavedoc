@@ -39,6 +39,10 @@ bash tests/in-container.sh sh '<셸 명령>'    # 그 외, /work가 트리
 - 워커는 부모의 workspace를 env로 상속하며, mktemp를 **만든** 호출만 제거를 담당한다.
 - **git 환경**: `tests/git-env.sh`가 `git rev-parse --local-env-vars`가 세는 변수를 **전부 unset**하고, 거기에 없는 **pathspec 4종**(`GIT_LITERAL_PATHSPECS`·`GIT_NOGLOB_PATHSPECS`·`GIT_GLOB_PATHSPECS`·`GIT_ICASE_PATHSPECS`)도 함께 지운다 (`regress.sh`·`make-manifest.sh`·`release-notes.sh`가 소싱). 훅·`rebase --exec`·`bisect run`·`submodule foreach`는 `GIT_DIR`과 `GIT_INDEX_FILE`을 내보내고 `git -c`는 `GIT_CONFIG_PARAMETERS`로 전파되므로, "커밋 전에 스윕"이 바로 그 환경이다. v0.5.16은 셋만, 그것도 찾은 호출 지점에서만 지웠고 — 상속된 `GIT_OBJECT_DIRECTORY`에서 임시 저장소가 **무관한 저장소에 object 79개를 썼으며**(케이스는 PASS), 상속된 `GIT_INDEX_FILE`에서 **키와 매니페스트가 서로 다른 인덱스를 읽었다**(false-green). 호출 지점을 열거하는 대신 프로세스 환경을 정리하므로 앞으로 추가되는 git 호출도 자동으로 격리된다.
 
+## Parser/state property matrix
+
+`node tests/markdown-model-properties.mjs` runs the fast, deterministic Cartesian model checks without creating a mine. It covers lexical context precedence, EOLs, fence forms, slot/body states, continuation hierarchy, section boundaries and writer postconditions. `regress.sh` also runs it as a black-box meta case; an empty or shortened matrix is a failure, not a vacuous pass.
+
 ## CI
 
 [.github/workflows/ci.yml](../.github/workflows/ci.yml) — **트리거마다 도는 OS가 다르다.**
@@ -55,7 +59,7 @@ bash tests/in-container.sh sh '<셸 명령>'    # 그 외, /work가 트리
 | 파일 | 내용 |
 |---|---|
 | `case-manifest.txt` | Phase 0 시점 182개 케이스 ID (기준선 — 이후 케이스는 suite가 자체 열거) |
-| `bundle.manifest` (+`.sha256`) | Phase 0 시점 21개 동작 결정 파일의 SHA-256 (git blob 기준). 재생성: `bash tests/make-manifest.sh` (현재 48개 — VERSION·`.weavedoc/.gitattributes`·lock.mjs·gaps-register.mjs·hq-ledger.mjs 포함). 생성기는 **fail-closed**: 저장소가 없거나 필수 경로가 빠지면 빈 매니페스트에 rc 0이 아니라 **rc 2로 거부**한다(v0.5.18) |
+| `bundle.manifest` (+`.sha256`) | Phase 0 시점 21개 동작 결정 파일의 SHA-256 (git blob 기준). 재생성: `bash tests/make-manifest.sh` (현재 54개 — VERSION·`.weavedoc/.gitattributes`·공유 scanner/state adapters·`PARSER-MODEL.md`·templates 포함). 생성기는 **fail-closed**: 저장소가 없거나 필수 경로가 빠지면 빈 매니페스트에 rc 0이 아니라 **rc 2로 거부**한다(v0.5.18) |
 | `parity-final-2026-08-05.md` | **bash 판 삭제 직전의 마지막 대조** — 회귀·코퍼스·쓰기 명령 전수·실광산·장애 주입. 삭제하면 다시 잴 수단이 없으므로 이력에 고정했다 |
 | `fidtest-inventory.md` | 구 fidtest.sh 11개 실험의 판정 기록 — Phase 2에서 흡수 3 · 폐기 8로 완결, 파일 자체 제거 |
 | `golden/` | 최소 정상 fixture에 대한 각 명령의 human output 스냅샷 (동작 변경 시 커밋 단위로 갱신) |

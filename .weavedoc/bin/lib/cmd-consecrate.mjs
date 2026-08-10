@@ -9,8 +9,8 @@ import { existsSync, statSync, writeFileSync, renameSync, rmSync, cpSync, copyFi
 import { U, M } from './core.mjs'
 import { join, docDraftPath, docFinalPath, contextDigest, fm } from './mine.mjs'
 import { artifactDigest } from './verify.mjs'
-import { fidBody, isNoise } from './review.mjs'
-import { clearFileCaches, fmvB } from './read.mjs'
+import { readReview } from './review-model.mjs'
+import { clearFileCaches, fmvB, loadSchema } from './read.mjs'
 
 const isDirAt = p => { try { return statSync(p).isDirectory() } catch { return false } }
 const isFileAt = p => { try { return statSync(p).isFile() } catch { return false } }
@@ -67,10 +67,24 @@ export function cmdConsecrate (m, out, errln, docId, ops = realOps) {
   }
 
   // 1. The gate must be empty — read through the SAME judge validate uses, or the two could disagree.
-  const sections = (m.sch.get('review.sections') ?? '').split('|')
-  const kinds = (m.sch.get('review.enum.kind') ?? '').split('|').filter(Boolean)
-  for (const line of fidBody(rev, sections)) {
-    if (isNoise(line, kinds)) continue
+  const schB = loadSchema(m.schemaPath, 'latin1')
+  const sections = (schB.get('review.sections') ?? '').split('|')
+  const kinds = (schB.get('review.enum.kind') ?? '').split('|').filter(Boolean)
+  const review = readReview(rev, { sections, kinds })
+  if (review.document.commentOpen || review.document.fenceOpen || review.document.frontmatter.state === 'open') {
+    out('consecrate: review.md has an unterminated comment, code fence or frontmatter block — the gate cannot be read completely; close it before consecrating')
+    return 2
+  }
+  if (review.lostSections.length > 0 || review.commentIncidents.length > 0) {
+    out('consecrate: review.md has comment structure that hides a declared section or violation-shaped history before live prose — repair the comment boundary before consecrating')
+    return 2
+  }
+  if (review.headingCount(review.gateName) !== 1) {
+    out(`consecrate: review.md must have exactly one readable '${review.gateName}' heading — found ${review.headingCount(review.gateName)}`)
+    return 2
+  }
+  if (review.blockingMarks.length > 0) {
+    const line = review.blockingMarks[0].text
     say(M`consecrate: open gate — review.md 'Fidelity violations' is non-empty ('${line}'). Refine until the gate is clean`)
     return 2
   }

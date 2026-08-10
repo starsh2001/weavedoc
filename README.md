@@ -80,7 +80,7 @@ gaps.md                 the mine completeness register (# Open / # Accepted)
 .weavedoc/VERSION        runtime bundle label (date) — identity is `version`'s fingerprint, not the date
 ```
 
-**Field names and section headers are fixed English — the parser contract. Content is written in your project's language** (`config.language`, set once at init). Plain language, no coined terms. Full spec: [.weavedoc/FORMATS.md](.weavedoc/FORMATS.md).
+**Field names and section headers are fixed English — the parser contract. Content is written in your project's language** (`config.language`, set once at init). Plain language, no coined terms. Artifact spec: [.weavedoc/FORMATS.md](.weavedoc/FORMATS.md). Parser/state architecture: [.weavedoc/PARSER-MODEL.md](.weavedoc/PARSER-MODEL.md).
 
 ## Using it
 

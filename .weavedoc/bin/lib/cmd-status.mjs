@@ -4,17 +4,13 @@
 // on the user — the listing is pasted/rendered, never re-composed from memory).
 import { existsSync, statSync } from 'node:fs'
 import { readFileSync } from 'node:fs'
-import { splitLines, TAG_SEP } from './core.mjs'
-import { nocomment, defence, commentBalanced } from './sections.mjs'
+import { pipes } from './core.mjs'
 import { fmvB, loadSchema } from './read.mjs'
 import { fm, join, docIds, materialIds, truthFiles, basename } from './mine.mjs'
-import { fidBody, isNoise } from './review.mjs'
-import { scanRegister, stubEntry, emptyRemainder, hasContent } from './gaps-register.mjs'
-import { scanHq, hqFiles, hqBodies, hqRead, NONE_IDIOM } from './hq-ledger.mjs'
-
-// questions.md's entry PREFIX — the state slot. The Human queue's lives with the shared walk
-// (hq-ledger.mjs), which is where every judgment about that ledger's structure now happens.
-const Q_TAG = /^- \[[^\]]*\]/
+import { parseReview } from './review-model.mjs'
+import { gapRegisterContract, parseGapText } from './gaps-register.mjs'
+import { hqFiles, readHumanQueues } from './hq-ledger.mjs'
+import { readQuestions } from './questions-ledger.mjs'
 
 const isDir = p => { try { return statSync(p).isDirectory() } catch { return false } }
 
@@ -39,19 +35,40 @@ export function hqEntries (m) {
   const rel = p => (p.startsWith(`${m.root}/`) ? p.slice(m.root.length + 1) : p)
   const open = []
   const untagged = []
+  const models = new Map()
+  // THE SCHEMA IN THE LEDGER'S OWN DOMAIN, and in validate's exact spelling. These names are
+  // compared against latin1 ledger bytes, so reading them from the utf8 map is the domain split
+  // v0.5.6 measured: a non-ASCII renamed state matches nothing here while validate — byte-domain —
+  // enforces ownership on the same entry, which is one entry with two answers again. No default
+  // either: validate has none, and a fallback vocabulary this side alone believed in is a third.
+  const schB = loadSchema(m.schemaPath, 'latin1')
+  const contract = {
+    states: new Set(pipes(schB.get('humanqueue.enum.state') ?? '').filter(Boolean)),
+    ownerships: new Set(pipes(schB.get('humanqueue.enum.ownership') ?? '').filter(Boolean))
+  }
   for (const f of hqFiles(m)) {
     const label = rel(f)
-    for (const e of scanHq(hqBodies(f))) {
+    const model = readHumanQueues(f, contract)
+    models.set(f, model)
+    for (const e of model.entries) {
       // `raw` is the ENTRY LINE, never mutated; `line` is the display, which folding extends. The
       // bucket classifiers downstream read raw: ownership lives on the entry line (FORMATS — two
       // fixed tags, then prose), and classifying the FOLDED line once put an entry in "machine can
       // just do" while validate rejected it — the two surfaces disagreeing about one entry, the
       // exact class this whole lane exists to end (cold review, v0.5.10 — critical).
-      if (e.kind === 'open') open.push({ file: label, line: e.line, raw: e.raw })
-      else if (e.kind === 'untagged') untagged.push({ file: label, line: e.line, raw: e.raw })
+      //
+      // THE RESIDUE IS SHOWN, NOT DROPPED. `kind` carries whatever state word the schema declared,
+      // and only two of them have a policy here: `open` waits, `ruled` is closed. Testing for
+      // `untagged` alone meant a THIRD declared state — the shape `humanqueue.enum.state` makes
+      // representable — matched no bucket and left the listing entirely. Reading the enum in the
+      // ledger's own domain widened that silence rather than closing it, which is the wrong
+      // direction for a command whose rule is that what a reader cannot see is named. An unhandled
+      // state is not a closed one: it surfaces as untagged, which is what it is to every consumer.
+      if (e.kind === 'open') open.push({ file: label, line: e.line, raw: e.raw, slots: e.slots, source: e.source })
+      else if (e.kind !== 'ruled') untagged.push({ file: label, line: e.line, raw: e.raw, slots: e.slots, source: e.source })
     }
   }
-  return { open, untagged }
+  return { open, untagged, models }
 }
 
 export function cmdStatus (m, out) {
@@ -102,10 +119,10 @@ export function cmdStatus (m, out) {
       // through TAG_SEP, the one class checkHqTags strips, at BOTH positions (before the bullet and
       // between the tags). Every earlier spelling of this comment named a narrower class and
       // claimed `\r` could not reach here; a mid-line `\r` can, and did (v0.5.11).
-      const owned = own => new RegExp(`^${TAG_SEP}*- \\[open\\]${TAG_SEP}*\\[${own}\\]`)
-      const u = open.filter(e => owned('user-only').test(e.raw)).length
-      const r = open.filter(e => owned('recommended').test(e.raw)).length
-      const mm = open.filter(e => owned('machine').test(e.raw)).length
+      const owned = own => open.filter(e => e.slots.ownership.type === 'known' && e.slots.ownership.value === own).length
+      const u = owned('user-only')
+      const r = owned('recommended')
+      const mm = owned('machine')
       let rest = hqOpen - u - r - mm
       if (rest < 0) rest = 0
       let line = `human queue: open ${hqOpen} — you decide ${u} · recommendation ready ${r} · machine can just do ${mm}`
@@ -134,10 +151,9 @@ export function cmdStatus (m, out) {
 //
 // Each category rides an EXISTING judge, never a parser of its own — v0.5.5 got this wrong in the
 // one place it mattered (the gaps register, where it copied the looser tally rule and reported a
-// blocking gap as "nothing is waiting"), so the rule is now literal: gaps through `scanRegister`,
-// the SAME function validate counts with; fidelity violations through the gate's own fidBody +
-// isNoise with consecrate's derivation; the Human queue through the shared classifier above; question
-// entries through isNoise's remainder rule, which already covers both template dialects.
+// blocking gap as "nothing is waiting"). The rule is now structural: every category selects from
+// the shared Markdown scanner and its typed adapter (`parseGapText`, `parseReview`, Human queue or
+// questions); this command owns no second grammar.
 //
 // What a reader cannot see is NAMED — an unreadable file, an unterminated '<!--' or code fence each
 // get their own warning line, and the nothing-waiting sentence is withheld while any of them
@@ -159,27 +175,11 @@ export function cmdStatusOpen (m, out) {
   // THE SCHEMA IS READ IN THE FILE'S DOMAIN for anything matched AGAINST file text. `m.sch` is
   // utf8; the ledgers here are bytes. A non-ASCII `gaps.sections` (this is a Korean-first product,
   // and v0.5.4 review #6 measured a renamed register on purpose) then matched no heading at all,
-  // `scanRegister` received an empty body, and the listing said "nothing is waiting" over a gap
+  // the gap model received no matching section, and the listing said "nothing is waiting" over a gap
   // validate blocks on — the EXACT defect this release repairs, re-entering through the domain
   // door (cold review, v0.5.6). Same reason validate keeps its own latin1 schema map.
   const schB = loadSchema(m.schemaPath, 'latin1')
   const warns = []
-  const seen = new Set()
-  // Read + diagnose in one place: a file that cannot be READ must not be reported as one that ends
-  // inside a comment (commentBalanced answers false for both, which conflated them in v0.5.5).
-  const readLedger = (label, file) => {
-    const text = readOrNull(file)
-    if (text === null) {
-      warns.push(`warning: ${label} exists but cannot be read — its entries are missing from this listing`)
-      return null
-    }
-    if (!seen.has(file)) {
-      seen.add(file)
-      if (!commentBalanced(file)) warns.push(`warning: ${label} ends inside an unterminated '<!--' — entries behind it are invisible to this listing`)
-    }
-    return text
-  }
-
   // conflicts — every truth whose status is `conflict`, both sides of each pair by construction
   // (map stamps both files), each with the SOURCE material behind it: the skills' rule is that a
   // conflict names both sides and where each comes from. truthFiles is bytewise-sorted, so the
@@ -219,128 +219,128 @@ export function cmdStatusOpen (m, out) {
   const questions = []
   const qUnknown = []
   if (existsSync(qPath)) {
-    const raw = readLedger('questions.md', qPath)
-    if (raw !== null) {
-      const df = defence(nocomment(raw))
-      if (df.open) warns.push("warning: questions.md ends inside an unterminated code fence — entries behind it are invisible to this listing")
-      // `qlast` — the listed entry a continuation folds into, as an APPENDER rather than an index
-      // (the two buckets hold different shapes). `qheld` — a pure template stub waiting for a
-      // continuation to REALIZE it: dropping the stub on sight left `- [<status>]` + an indented
-      // real question with nothing to attach to, and the ledger no validator reads printed
-      // "nothing is waiting" over it (external review, v0.5.10 — the gaps machine, applied here).
-      let qlast = null
-      let qheld = null
-      for (const l of splitLines(df.text)) {
-        if (!/[^ \t]/.test(l)) { qlast = null; qheld = null; continue }
-        if (!/^- /.test(l)) {                         // an entry opens at column 0 (FORMATS)
-          // …so an indented line is a continuation: it realizes a held stub (the entry's content
-          // lives here — its state slot is a template, so it surfaces as unrecognized, the same
-          // bucket its inline-filled twin lands in), or continues an empty-remainder entry.
-          if (/^[ \t]+[^ \t]/.test(l)) {
-            const cont = l.replace(/^[ \t]+/, '')
-            // Same realization rule as the Human queue and the register: template tokens are not
-            // content, so the shipped template's own `<where> — <what>` line cannot turn a
-            // template into a reported waiting item (v0.5.11).
-            if (qheld !== null && hasContent(cont)) {
-              qUnknown.push({ line: `${qheld} ${cont}`, why: 'unrecognized state' })
-              const e = qUnknown[qUnknown.length - 1]
-              qlast = s => { e.line += ` ${s}` }
-              qheld = null
-            } else if (qheld === null && qlast !== null) qlast(cont)
-          } else if (!/^[ \t]/.test(l)) { qlast = null; qheld = null }
-          continue
-        }
-        qlast = null
-        qheld = null
-        if (NONE_IDIOM.test(l)) continue              // the empty-ledger idiom (FORMATS)
-        const mm = /^- \[([^\]]*)\]/.exec(l)
-        // NO BRACKET IS JUDGED BEFORE isNoise, not after: isNoise answers "prose or entry" for a
-        // ledger whose entries all carry brackets, so a bracket-less bullet reads as prose there —
-        // which is exactly the shape that must NOT be dropped here (a question nobody tagged is
-        // still a question waiting on the user, and no validator reads this file).
-        if (!mm) {
-          qUnknown.push({ line: l, why: 'no state tag' })
-          // No bracket at all, so the whole line is content — nothing to fold into.
-          continue
-        }
-        const foldable = emptyRemainder(l, Q_TAG)
-        // THE STUB TEST IS THE REGISTER'S, not isNoise's. isNoise carries a documented known limit
-        // — prose holding a `<…>`/`{…}` token reads as a placeholder — whose safe direction is
-        // "never a new false block". In THIS consumer the same limit points the other way: a real
-        // question mentioning `<미정>` would be silently dropped and the run would report "nothing
-        // is waiting" (cold review, v0.5.6). `stubEntry` asks the register's question instead —
-        // is the slot a placeholder AND is what follows empty once template tokens are removed —
-        // which is the rule FORMATS states for both ledgers. HELD, not dropped (v0.5.10): a
-        // continuation below may be carrying the entry's actual content.
-        if (stubEntry(l)) { qheld = l; continue }
-        if (qWaiting.includes(mm[1])) {
-          questions.push(l)
-          if (foldable) { const i = questions.length - 1; qlast = s => { questions[i] += ` ${s}` } }
-        } else if (qStates.includes(mm[1])) continue  // a recognized closed state
-        else {
-          qUnknown.push({ line: l, why: 'unrecognized state' })
-          if (foldable) { const e = qUnknown[qUnknown.length - 1]; qlast = s => { e.line += ` ${s}` } }
+    const qModel = readQuestions(qPath, { states: new Set(qStates), waiting: new Set(qWaiting) })
+    if (!qModel.readable) {
+      warns.push('warning: questions.md exists but cannot be read — its entries are missing from this listing')
+    } else {
+      if (qModel.document.commentOpen) warns.push("warning: questions.md ends inside an unterminated '<!--' — entries behind it are invisible to this listing")
+      if (qModel.document.fenceOpen) warns.push('warning: questions.md ends inside an unterminated code fence — entries behind it are invisible to this listing')
+      if (qModel.diagnostics.some(d => d.code === 'QUESTION_EMPTY_CONTRADICTION')) warns.push("warning: questions.md says '- (none)' but also contains a question — the explicit-empty marker contradicts the ledger")
+      if (qModel.diagnostics.some(d => d.code === 'QUESTION_SENTINEL_CONTENT')) warns.push("warning: questions.md has real content continued under '- (none)' — it is listed as an unrecognized question, not discarded")
+      if (qModel.diagnostics.some(d => d.code === 'ambiguous-detail')) warns.push('warning: questions.md has an indented continuation whose whitespace is not a strict extension of its item — the text is preserved and listed, but normalize the indentation to make the attachment unambiguous')
+      for (const e of qModel.entries) {
+        if (e.bucket === 'waiting') questions.push(e.line)
+        else if (e.bucket === 'unrecognized') {
+          const why = e.diagnostics.some(d => d.code === 'QUESTION_ORPHAN')
+            ? 'misindented entry (must start at column 0)'
+            : (e.slots.state.type === 'missing' ? 'no state tag' : 'unrecognized state')
+          qUnknown.push({ line: e.line, why })
         }
       }
     }
   }
 
-  // Human queue — the same single CLASSIFIER the `status` counters derive from (the file is read
-  // again below for its own diagnostics; what is single is the judgment, not the read).
-  const { open: hqO, untagged: hqU } = hqEntries(m)
+  // Human queue — the same single classifier the counters derive from. Its command-local document
+  // snapshots are also reused by the review adapter below, so one physical review.md cannot yield
+  // two generations of truth during one listing.
+  const { open: hqO, untagged: hqU, models: hqModels } = hqEntries(m)
   // …and the same silence the gaps listing already names: a queue file that ends inside an
   // unterminated fence hides every entry below the opener from this listing (v0.5.21). validate
   // blocks on it; the listing says it at any setting, because the entries are missing either way.
   for (const f of hqFiles(m)) {
-    if (hqRead(f).fenceOpen) warns.push(Buffer.concat([T('warning: '), B(rel(f)), T(' ends inside an unterminated code fence — Human queue entries behind it are invisible to this listing')]))
+    const model = hqModels.get(f)
+    if (!model.readable) {
+      warns.push(`warning: ${rel(f)} exists but cannot be read — its entries are missing from this listing`)
+      continue
+    }
+    if (model.document.fenceOpen) warns.push(Buffer.concat([T('warning: '), B(rel(f)), T(' ends inside an unterminated code fence — Human queue entries behind it are invisible to this listing')]))
+    if (model.document.commentOpen) warns.push(Buffer.concat([T('warning: '), B(rel(f)), T(" ends inside an unterminated '<!--' — Human queue entries behind it are invisible to this listing")]))
+    if (model.document.frontmatter.state === 'open') warns.push(Buffer.concat([T('warning: '), B(rel(f)), T(" ends inside unterminated frontmatter — its Human queue is inside metadata and invisible to this listing")]))
+    if (model.diagnostics.some(d => d.code === 'HQ_EMPTY_CONTRADICTION')) warns.push(Buffer.concat([T('warning: '), B(rel(f)), T(" says '- (none)'/'- (없음)' but also contains a Human-queue record — the explicit-empty marker contradicts the ledger")]))
+    if (model.diagnostics.some(d => d.code === 'HQ_SENTINEL_CONTENT')) warns.push(Buffer.concat([T('warning: '), B(rel(f)), T(" has real content continued under an explicit-empty marker — it is listed as untagged, not discarded")]))
+    if (model.diagnostics.some(d => d.code === 'ambiguous-detail')) warns.push(Buffer.concat([T('warning: '), B(rel(f)), T(' has an indented Human-queue continuation whose whitespace is not a strict extension of its item — the text is preserved and listed, but normalize the indentation')]))
   }
-  for (const f of hqFiles(m)) readLedger(rel(f), f)
 
   // fidelity violations — the gate's entries through the gate's sole readers. The sections/kinds
   // derivation is CONSECRATE'S spelling, character for character — this reader sits on the utf8
   // side of the pre-existing schema-domain split, and a third spelling would be a third answer.
-  const sections = (m.sch.get('review.sections') ?? '').split('|')
-  const kinds = (m.sch.get('review.enum.kind') ?? '').split('|').filter(Boolean)
+  const sections = (schB.get('review.sections') ?? '').split('|')
+  const kinds = (schB.get('review.enum.kind') ?? '').split('|').filter(Boolean)
   const viol = []
   for (const d of docIds(m)) {
     const rev = join(m.documents, d, 'review.md')
     if (!existsSync(rev)) continue
-    for (const line of fidBody(rev, sections)) {
-      if (isNoise(line, kinds)) continue
-      viol.push({ rev, line })
+    const snapshot = hqModels.get(rev)
+    if (snapshot === undefined) {
+      warns.push(`warning: ${rel(rev)} has no command-local source snapshot — its fidelity gate is missing from this listing`)
+      continue
     }
+    const model = { readable: snapshot.readable, ...parseReview(snapshot.document, { sections, kinds }) }
+    if (!model.readable) {
+      warns.push(`warning: ${rel(rev)} exists but cannot be read — its fidelity gate is missing from this listing`)
+      continue
+    }
+    if (model.document.commentOpen) warns.push(`warning: ${rel(rev)} ends inside an unterminated '<!--' — review sections and violations may be invisible`)
+    if (model.document.fenceOpen) warns.push(`warning: ${rel(rev)} ends inside an unterminated code fence — review section boundaries may be invisible`)
+    if (model.document.frontmatter.state === 'open') warns.push(`warning: ${rel(rev)} ends inside unterminated frontmatter — the fidelity gate is invisible`)
+    if (model.headingCount(model.gateName) !== 1) warns.push(`warning: ${rel(rev)} has ${model.headingCount(model.gateName)} readable '${model.gateName}' headings — exactly one gate is required`)
+    for (const section of model.lostSections) {
+      warns.push(Buffer.concat([T(`warning: ${rel(rev)} has a declared review section hidden by an HTML comment: '`), B(section), T("' — the listing is incomplete")]))
+    }
+    for (const incident of model.commentIncidents) {
+      warns.push(Buffer.concat([T(`warning: ${rel(rev)} has an HTML comment that swallows ${incident.count} violation-shaped entry(s), then closes before live prose: `), B(incident.suffix)]))
+    }
+    for (const entry of model.blockingMarks) viol.push({ rev, line: entry.text })
   }
 
-  // open gaps — through `scanRegister`, the function validate counts with. Not a copy of its rules
-  // and not the looser tally rule: the same call, so "how many gaps are open" has one answer.
+  // Open gaps come from `parseGapText`, the same typed adapter validate and `gaps` consume. Not a
+  // copy of its rules: one model decides which records exist; consumers only select/count them.
   const gPath = join(m.root, 'gaps.md')
   let gaps = []
   let gapsBad = []
   if (existsSync(gPath)) {
-    const raw = readLedger('gaps.md', gPath)
+    const raw = readOrNull(gPath)
     if (raw !== null) {
-      const df = defence(nocomment(raw))
-      if (df.open) warns.push("warning: gaps.md ends inside an unterminated code fence — entries behind it are invisible to this listing")
       // Both from the BYTE-domain schema map: the section name is matched against byte text, and
       // the kind vocabulary is compared to bytes the register holds.
-      const secOpen = (schB.get('gaps.sections') || 'Open|Accepted').split('|')[0] || 'Open'
-      const kindSet = new Set((schB.get('gaps.enum.kind') || 'declared|reference|enumeration|symmetry').split('|').filter(Boolean))
-      const reg = scanRegister(df.text, secOpen, kindSet)
-      gaps = reg.entries
+      const gapContract = gapRegisterContract(schB)
+      const secOpen = gapContract.openName
+      const secAccepted = gapContract.acceptedName
+      const model = parseGapText(raw, gapContract)
+      if (model.document.commentOpen) warns.push("warning: gaps.md ends inside an unterminated '<!--' — entries behind it are invisible to this listing")
+      if (model.document.fenceOpen) warns.push("warning: gaps.md ends inside an unterminated code fence — entries behind it are invisible to this listing")
+      for (const diagnostic of model.structureDiagnostics) {
+        if (diagnostic.code === 'invalid-contract') {
+          warns.push(Buffer.concat([T('warning: schema gaps register contract is invalid — '), B(diagnostic.reason), T('; both role views are disabled')]))
+        } else if (diagnostic.code === 'section-count') {
+          warns.push(Buffer.concat([T("warning: gaps.md must have exactly one '# "), B(diagnostic.name), T(`' register section; found ${diagnostic.count} — entries may be missing from this listing`)]))
+        } else if (diagnostic.code === 'stray-entry') {
+          warns.push(Buffer.concat([T('warning: gaps.md has a register-looking entry outside its Open/Accepted sections, so no register count owns it: '), B(diagnostic.entry.raw)]))
+        }
+      }
+      for (const [sectionName, register] of gapContract.valid ? [[secOpen, model.open], [secAccepted, model.accepted]] : []) {
+        const malformed = register.entries.filter(entry => entry.syntax === 'malformed')
+        if (malformed.length > 0) {
+          warns.push(Buffer.concat([T("warning: gaps.md '# "), B(sectionName), T(`' has ${malformed.length} malformed register entry(s) — they are surfaced but are not valid routed decisions`)]))
+        }
+        if (register.badLine !== null) {
+          warns.push(Buffer.concat([T("warning: gaps.md '# "), B(sectionName), T("' holds a line the register grammar cannot read, so nothing after it is listed — validate names it under 'completeness: required'")]))
+        }
+      }
+      gaps = model.open.entries.map(e => e.line)
       // WHICH of them names a kind, from the same scan (v0.5.18). A bullet with no usable kind slot
       // is not an open gap — it is a register entry nobody can route — and listing it as a gap put
       // the word "none" in a run's closing message as a waiting item. A real mine wrote `- (없음)`
       // here, reaching for the empty-ledger idiom the Human queue and questions.md have; this
       // register does not have one (ruled 2026-08-07: every bullet is a routable record, and an
       // empty section is zero bullets), so the honest report is that the line is malformed.
-      gapsBad = reg.kinds
+      gapsBad = model.open.entries.map(e => !e.countsAsGap)
       // The scanner's own "I could not read this line" is a reader-blind spot like the others, and
       // it TRUNCATES the rest of the section — silence here would print a short list as if it were
       // the whole one (cold review, v0.5.6). validate blocks on this under `required`; the listing
       // says it at any setting, because the entries behind it are missing either way.
       // secOpen is latin1-domain — emitted as bytes, the same repair cmd-gaps' twin got (v0.5.10).
-      if (reg.badline !== '') warns.push(Buffer.concat([T("warning: gaps.md '# "), B(secOpen), T("' holds a line the register grammar cannot read, so nothing after it is listed — validate names it under 'completeness: required'")]))
-    }
+    } else warns.push('warning: gaps.md exists but cannot be read — its entries are missing from this listing')
   }
 
   for (const w of warns) out(w)
@@ -384,7 +384,7 @@ export function cmdStatusOpen (m, out) {
     // kind validate names under `required`. What `- (없음)` is, is a bullet with no kind slot
     // whatsoever: nothing to route, nothing to count. The first spelling of this line subtracted
     // every unusable kind and two existing cases went red, correctly.
-    const bad = i => gapsBad[i] === ''
+    const bad = i => gapsBad[i]
     const nbad = gaps.map((_, i) => i).filter(bad).length
     // OPEN AND MALFORMED ARE DIFFERENT NUMBERS, and validate now agrees (external review,
     // v0.5.21). v0.5.18 made this line print the total because validate counted the malformed

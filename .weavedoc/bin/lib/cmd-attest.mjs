@@ -17,16 +17,18 @@ export const realOps = {
 // compensating rollback without mutual exclusion erases a neighbour's rc-0 row — and why a lock is
 // NEVER auto-reclaimed both live there.
 import { acquireLedgerLock, releaseLedgerLock } from './lock.mjs'
-import { canonId, inList, splitLines } from './core.mjs'
+import { canonId, inList } from './core.mjs'
 import { clearFileCaches } from './read.mjs'
 import { join, fm, tfileFor, unitDigest } from './mine.mjs'
-import { today, writeAtomic, readText, textBuf, U } from './write.mjs'
+import { today, writeAtomic, textBuf, U } from './write.mjs'
+import { insertMirrorRow, readVerifiedUnits, verifiedUnitsContract } from './verified-units.mjs'
 
 // `-f` and `-d`, not "exists". The distinction is not pedantry here: readFileSync on a directory
 // THROWS, so an `existsSync` gate would turn a mine where `verify.md` is a folder from bash's quiet
 // skip into an uncaught stack trace. Every test below is the one the original spells.
 const isFile = p => { try { return statSync(p).isFile() } catch { return false } }
 const isDir = p => { try { return statSync(p).isDirectory() } catch { return false } }
+const exists = p => { try { statSync(p); return true } catch { return false } }
 
 const LEDGER_HEADER =
   '# machine-owned verification ledger — append-only; LAST row per id wins. Written by `weavedoc attest`.\n' +
@@ -187,25 +189,26 @@ export function cmdAttest (m, out, argv, ops = realOps) {
   // Failed verdicts stay sidecar-only: a markdown row ending in a verdict would be read as covering
   // the units it names, and a failed round covers nothing.
   const vmd = join(m.truths, 'verify.md')
-  if (verdict === 'verified' && isFile(vmd)) {
-    // Read as BYTES. The rest of this file is prose nobody asked us to touch, and some of it can be
-    // CP949 — decoding it as UTF-8 to insert one line would rewrite every one of those bytes.
-    const lines = splitLines(readText(vmd))
-    const isHead = l => /^#+[ \t]*Verified units[ \t]*$/.test(l)
-    if (lines.some(isHead)) {
-      const mline = U(`- ${names.join(' · ')} — R${round} ${day} · ${standard} · verified`)
-      const outl = []
-      let done = false
-      for (const l of lines) {
-        outl.push(l)
-        if (!done && isHead(l)) { outl.push(mline); done = true }
-      }
+  if (verdict === 'verified' && exists(vmd)) {
+    // The same source-position model scope reads chooses the live heading. A commented/fenced fake
+    // heading cannot receive a mirror row, and splicing one offset preserves every unrelated byte.
+    const model = readVerifiedUnits(vmd, verifiedUnitsContract(m.sch))
+    const mline = U(`- ${names.join(' · ')} — R${round} ${day} · ${standard} · verified`)
+    const mirrored = model.readable ? insertMirrorRow(model, mline) : null
+    if (mirrored !== null) {
       // The ledger row is already committed, so a mirror failure does not fail the command — but it
       // is NAMED now (v0.5.1): the mirror is the same fact on a second surface, and two surfaces
       // silently disagreeing about one fact is the exact split the -v/ENVIRON episode taught.
-      if (!writeAtomic(vmd, textBuf(outl.map(l => `${l}\n`).join('')))) {
+      if (!writeAtomic(vmd, textBuf(mirrored))) {
         out(`attest: warning — the ledger row is recorded, but the human mirror in truths/verify.md could not be written; the two surfaces now disagree until you add the line by hand or re-run a mirrorable attest`)
       }
+    } else {
+      const why = !model.readable
+        ? 'it could not be read'
+        : model.headings.length === 0
+          ? 'it has no live level-1/2 Verified units heading (commented or fenced lookalikes do not count)'
+          : 'the runtime could not prove that inserting after its heading would produce a live row (for example, the heading opens a multi-line comment)'
+      out(`attest: warning — the ledger row is recorded, but the human mirror in truths/verify.md was not written because ${why}; the two surfaces now disagree until you restore that section and re-run a mirrorable attest`)
     }
   }
 

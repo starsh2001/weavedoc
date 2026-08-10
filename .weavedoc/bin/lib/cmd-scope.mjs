@@ -8,13 +8,12 @@
 import { existsSync, readFileSync } from 'node:fs'
 import { basename } from 'node:path'
 import { splitLines } from './core.mjs'
-import { nocomment, sectionAll } from './sections.mjs'
 import { join, materialIds, truthFiles } from './mine.mjs'
 import { fmv, fmLoad } from './read.mjs'
 import { ledgerRowsOf, ledgerIndex, matDigest, truthDigest } from './verify.mjs'
+import { readVerifiedUnits, verifiedUnitsContract } from './verified-units.mjs'
 
 const readOr = p => { try { return readFileSync(p, 'utf8') } catch { return '' } }
-const lowerAscii = s => s.replace(/[A-Z]/g, c => c.toLowerCase())
 const pad = (p, n) => `${p}${String(n).padStart(3, '0')}`
 
 // Sorted canonical ids -> one line, consecutive runs collapsed to a-b.
@@ -37,43 +36,9 @@ export function compressIds (ids) {
 export function scanVerifiedUnits (m) {
   const f = join(m.truths, 'verify.md')
   if (!existsSync(f)) return { V: [], U: [] }
-  const mark = lowerAscii(m.sch.get('verify.units.verified') || 'verified')
-  const V = []; const U = []
-  // Normalised first so every bracket below stays pure ASCII. `·` becomes a space — it only ever
-  // separates ids (`t194·t195`).
-  const body = sectionAll(nocomment(readOr(f)), 'Verified units')
-    .replace(/[–—]/g, '-').replace(/·/g, ' ')
-  for (const line of splitLines(body)) {
-    if (!/^[ \t]*[|-]/.test(line)) continue          // prose, not a ledger entry
-    if (/^[ \t]*\|[ \t|:-]*$/.test(line)) continue   // table separator row
-    if (!/[mt][0-9]/.test(line)) continue            // names no unit (header row, note)
-    // THE VERDICT DECIDES, not the presence of ids: entries name units while reporting them failed
-    // or unrun, so harvesting ids blind would certify what the ledger refused. A substring test
-    // fails too (`unverified` contains `verified`), so the entry must END with the marker once
-    // trailing decoration is stripped.
-    const v = line.replace(/[ \t|*.-]+$/, '')
-    if (!new RegExp(`(^|[^a-z_])${mark}$`).test(lowerAscii(v))) { U.push(line); continue }
-    // Ranges validated BEFORE anything from this line is emitted: a reversed span expands to zero
-    // (silent), an absurd one to millions (one typo minting coverage) — either way the LINE covers
-    // nothing and is named with the other cover-nothing entries.
-    const spans = [...line.matchAll(/[mt][0-9]+-[mt][0-9]+/g)].map(x => x[0])
-    let bad = false
-    for (const r of spans) {
-      const i = r.indexOf('-'); const a = r.slice(0, i); const b = r.slice(i + 1)
-      if (a[0] !== b[0]) continue
-      const an = parseInt(a.slice(1), 10); const bn = parseInt(b.slice(1), 10)
-      if (bn < an || bn - an > 9999) { bad = true; break }
-    }
-    if (bad) { U.push(line); continue }
-    for (const r of spans) {
-      const i = r.indexOf('-'); const a = r.slice(0, i); const b = r.slice(i + 1)
-      if (a[0] !== b[0]) continue
-      for (let k = parseInt(a.slice(1), 10); k <= parseInt(b.slice(1), 10); k++) V.push(pad(a[0], k))
-    }
-    // Range endpoints print twice; the dedup downstream makes that free.
-    for (const tok of line.match(/[mt][0-9]+/g) ?? []) V.push(pad(tok[0], parseInt(tok.slice(1), 10)))
-  }
-  return { V, U }
+  const model = readVerifiedUnits(f, verifiedUnitsContract(m.sch))
+  if (!model.readable) return { V: [], U: [] }
+  return { V: model.coveredIds, U: model.uncoveredRows.map(row => row.raw) }
 }
 
 const uniqSort = a => [...new Set(a)].sort()
@@ -273,7 +238,7 @@ export function cmdScope (m, out, json) {
   // SHOWN, never absorbed — the same discipline `status` applies to untagged queue entries.
   if (scan.U.length) {
     out(`  ledger: ${scan.U.length} entry(s) name units but end in no "${m.sch.get('verify.units.verified') || 'verified'}" verdict — they cover nothing; add the verdict or leave the units owed:`)
-    for (const l of scan.U) out(l.replace(/^[ \t]*/, '    '))
+    for (const l of scan.U) out(Buffer.from(l.replace(/^[ \t]*/, '    '), 'latin1'))
   }
   // NO trailing space (fixed 2026-08-04, caught by the corpus scale, since retired with the bash runtime it compared against). The bash line rendered
   // `printf '%s' "$ledger_bad" | tr '\n' ' '` — a command substitution has already eaten the final

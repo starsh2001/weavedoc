@@ -701,6 +701,11 @@ block_gate_arrow_swallows_entries() {
 
 정정 흐름: 초안 --> 검토 --> 재작성
 EOF
+  vrun status --open
+  expect_has "comment that swallows"
+  expect_hasnt "nothing is waiting on you"
+  vrun consecrate d1
+  expect_block "comment structure that hides"
   vrun validate; expect_block "closing '-->' is followed by"
 }
 pass_gate_prose_arrow_no_comment() {
@@ -766,6 +771,11 @@ block_gate_stray_arrow() {
   REV '<!-- 보관
 - [contradiction] 3장 — t001과 모순'
   printf '\n초안 2장 --> 3장 순서로 읽는다.\n' >> "$W/documents/d1/review.md"
+  vrun status --open
+  expect_has "declared review section hidden"
+  expect_hasnt "nothing is waiting on you"
+  vrun consecrate d1
+  expect_block "comment structure that hides"
   vrun validate; expect_block "gone once comments are stripped"
 }
 block_gate_heading_in_comment() {
@@ -803,6 +813,13 @@ block_gate_no_review() {
   rm -f "$W/documents/d1/review.md"
   vrun validate; expect_block "no review.md"
 }
+block_review_directory_is_unknown_not_absent() {
+  rm -f "$W/documents/d1/review.md"
+  mkdir "$W/documents/d1/review.md"
+  vrun validate
+  expect_block "[REVIEW-UNREADABLE]"
+  expect_hasnt "[GATE-NO-REVIEW]"
+}
 block_gate_dup_heading() {
   REV '- [contradiction] 3장 — t001과 모순'
   printf '\n# Fidelity violations\n\n- 보관\n' >> "$W/documents/d1/review.md"
@@ -822,6 +839,56 @@ block_gate_kind_space() {
 block_gate_kind_dual() {
   REV '- [<contradiction / unsupported>] 2장 — 어느 쪽인지 정하지 않았다'
   vrun validate; expect_block "not an exact violation kind"
+}
+block_gate_unknown_kind_deep_heading() {
+  # A heading is not an escape hatch for an unknown, non-placeholder gate slot.
+  REV '## [typo] OPEN'
+  vrun validate; expect_block "[REVIEW-KIND-UNKNOWN]"
+}
+block_gate_unknown_kind_boundary_heading() {
+  # This same-level heading ends the zone for following lines, but it was encountered while the
+  # gate was live and must be classified before the boundary takes effect.
+  REV '# [typo] OPEN'
+  vrun validate; expect_block "[REVIEW-KIND-UNKNOWN]"
+}
+block_gate_template_boundary_cannot_close_clean() {
+  # A pure placeholder is template noise only inside the gate. At the gate's heading tier it also
+  # closes the Markdown section, so accepting it as noise would launder the real record after it.
+  REV '# [<kind>] <where> — <what>'
+  sed -i '/^# Findings$/i - [typo] REAL-VIOLATION-AFTER-TEMPLATE-BOUNDARY' "$W/documents/d1/review.md"
+  vrun status --open
+  expect_has "fidelity violations (1):"
+  expect_has "[<kind>]"
+  expect_hasnt "nothing is waiting on you"
+  vrun validate; expect_block "consecrated through an open gate"
+  vrun consecrate d1
+  expect_block "open gate"
+  expect_has "[<kind>]"
+}
+block_gate_boundary_heading_kind_not_laundered() {
+  # A boundary line was encountered while the gate was live, so a known kind on that line remains
+  # a gate blocker even though the heading owns subsequent lines as outside-zone history.
+  REV '# Section [contradiction] OPEN'
+  vrun status --open
+  expect_has "[contradiction] OPEN"
+  vrun validate; expect_block "consecrated through an open gate"
+}
+block_gate_unknown_kind_after_arrow() {
+  REV '--> [typo] OPEN'
+  vrun validate; expect_block "[REVIEW-KIND-UNKNOWN]"
+}
+acct_openlist_unknown_gate_shape_surfaces() {
+  REV '## [typo] OPEN'
+  vrun status --open
+  expect_has "fidelity violations (1):"
+  expect_has "[typo] OPEN"
+  expect_hasnt "nothing is waiting on you"
+}
+block_consecrate_unknown_gate_shape() {
+  REV '## [typo] OPEN'
+  vrun consecrate d1
+  expect_block "open gate"
+  expect_has "[typo] OPEN"
 }
 block_gate_kind_outside() {
   # a near-miss parked OUTSIDE the section: the zone rule catches it (bracketed kind, any shape,
@@ -1034,6 +1101,12 @@ block_adjudication_bracketed_kind() {
   vrun validate; expect_block "outside the 'Fidelity violations' section"
   expect_has "without brackets"
 }
+block_gate_kind_in_frontmatter() {
+  # Frontmatter is not a Markdown heading context, but it is still outside the fidelity gate. A
+  # bracketed violation kind cannot be parked in metadata to escape the review-wide zone rule.
+  sed -i '1a note: [contradiction] PARKED' "$W/documents/d1/review.md"
+  vrun validate; expect_block "outside the 'Fidelity violations' section"
+}
 pass_adjudication_kind_unbracketed() {
   # the legal record spelling: kind as a bare word
   REV ''
@@ -1090,7 +1163,7 @@ nodeshape_single_judges() {
   # a cold reviewer three rounds later.
   local bad="" fn n
   local -a SRC; mapfile -t SRC < <(node_sources)
-  for fn in isNoise hasFm fidMark fidBody nocomment canonId isPlaceholder isFence \
+  for fn in isNoise hasFm scanMarkdown parseReview parseCoverage parseHumanQueues parseQuestions parseGapText parseVerifiedUnits parseTaggedBullet walkLedgerSections canonId isPlaceholder isFence \
             truthDigest matDigest unitDigest ledgerRows artifactDigest contextDigest \
             docDraftPath docFinalPath splitLines fmVal fmKey; do
     # Any binding form, at any indentation: `export const`, a bare `function`, a `let`, or a
@@ -1111,6 +1184,12 @@ nodeshape_single_judges() {
   # most likely thing a porter reaches for — sailed past a grep that only looked for the bracket.
   n=$(grep -hv "^[[:space:]]*//" "${SRC[@]}" | grep -cE '/\^---(\[|\\s|\\t| )' || true)
   [ "${n:-0}" -le 1 ] || bad="$bad inline-fence-judges=${n};"
+  # validate/status use review.md for both fidelity and Human queue policy. A private readReview
+  # call there creates a second source generation inside one command; both adapters must receive
+  # the command-local document already cached by the HQ pass. Consecrate reads review only once and
+  # may keep its dedicated readReview convenience wrapper.
+  n=$(grep -hcE '\breadReview\b' "$REPO/.weavedoc/bin/lib/cmd-validate.mjs" "$REPO/.weavedoc/bin/lib/cmd-status.mjs" 2>/dev/null | awk '{s+=$1} END{print s+0}')
+  [ "${n:-0}" -eq 0 ] || bad="$bad duplicate-review-snapshots=${n};"
   # A diagnostic must go through prob/warn. `out(\`  [CODE] …\`)` prints exactly what prob prints and
   # is invisible to BOTH the code-table arm and the ratchet — a whole diagnostic outside the contract.
   n=$(grep -hv "^[[:space:]]*//" "${SRC[@]}" | grep -cE 'out\(`[[:space:]]+\[[A-Z][A-Z0-9-]+\]' || true)
@@ -1151,11 +1230,26 @@ meta_single_judges() {
   # be seen from outside.
   nodeshape_single_judges
 }
+meta_markdown_state_model_properties() {
+  # One cheap Node process grades the whole Cartesian model. The exact total is a vacuity guard:
+  # deleting an axis or a loop is a failure even when every remaining assertion stays green.
+  OUT=$(node "$REPO/tests/markdown-model-properties.mjs" 2>&1); RC=$?
+  expect_pass
+  expect_has "groups=15 cases=1844 cartesian=complete"
+}
 pass_hq_kind_mention() {
   # a Human-queue entry whose prose mentions a kind — first slot is [open], not a kind (kind-bearing filter)
   REV ''
   printf -- '\n- [open] [user-only] contradiction 처리 방침 — 병기 허용 여부\n' >> "$W/documents/d1/review.md"
   vrun validate; expect_pass
+}
+block_review_comment_cannot_manufacture_gate_heading() {
+  # Deleting an inline comment joined two source spans and manufactured this heading in the old
+  # review reader. The shared scanner keeps columns/provenance, so a final cannot ship through a
+  # gate heading that never existed in the source.
+  sed -i 's/^# Fidelity violations$/<!--x--># Fidelity violations/' "$W/documents/d1/review.md"
+  vrun validate
+  expect_block "GATE-NO-HEADING"
 }
 
 # heading shapes the reader cannot match -> that silence is itself a failure
@@ -1244,6 +1338,43 @@ pass_coverage_unpadded_mention() {
   # t001.md — not read as "no such truth file", and not leave t001 reported missing
   sed -i 's/^- 위약금 조항: t001$/- 위약금 조항: t1/' "$W/truths/coverage.md"
   vrun validate; expect_pass
+}
+pass_coverage_fenced_example_is_inert() {
+  # validate and census consume one coverage model. A fenced tutorial may spell a real material
+  # heading and dangling truth id, but it is evidence text: it neither creates a section nor a
+  # dangling reference, and it cannot inflate the census numerator.
+  addm2 m002
+  cat >> "$W/truths/coverage.md" <<'EOF'
+
+```md
+## m002
+- example: t999
+```
+EOF
+  vrun validate; expect_pass
+  vrun census; expect_has "coverage records 1/2"
+}
+block_coverage_unterminated_comment() {
+  printf '\n<!--\n## m999\n- hidden: t999\n' >> "$W/truths/coverage.md"
+  vrun validate; expect_block "COVERAGE-MALFORMED"
+  expect_has "unterminated '<!--'"
+}
+block_coverage_unterminated_fence() {
+  printf '\n```md\n## m999\n- hidden: t999\n' >> "$W/truths/coverage.md"
+  vrun validate; expect_block "COVERAGE-MALFORMED"
+  expect_has "unterminated code fence"
+}
+block_coverage_unreadable_object() {
+  # Present-but-unreadable is unknown evidence, not the same state as an absent optional register.
+  rm -f "$W/truths/coverage.md"
+  mkdir "$W/truths/coverage.md"
+  vrun validate; expect_block "COVERAGE-MALFORMED"
+  expect_has "exists but cannot be read"
+}
+acct_census_coverage_unterminated_fence_warns() {
+  printf '\n```md\n## m999\n- hidden: t999\n' >> "$W/truths/coverage.md"
+  vrun census; expect_has "unterminated code fence"
+  expect_has "validate blocks this file"
 }
 block_empty_source() {
   sed -i 's/^source: m001$/source:/' "$W/truths/t001.md"
@@ -1416,6 +1547,15 @@ acct_census_bare_coverage_heading() {
   # a skip-with-reason line IS map's audit record — with one, the section counts
   printf -- '- 일정 항목: (추출 대상 아님 — 보조 자료)\n' >> "$W/truths/coverage.md"
   vrun census; expect_has "coverage records 2/2"
+}
+acct_census_unreadable_coverage_warns() {
+  # A present-but-unreadable register is unknown, not an empty register. A directory wearing the
+  # file's name produces that state deterministically on every supported OS.
+  rm -f "$W/truths/coverage.md"
+  mkdir "$W/truths/coverage.md"
+  vrun census
+  expect_has "coverage records are unknown, not zero"
+  expect_has "validate blocks this path"
 }
 addm2() { # $1=id — a second material, in catalog, sourced from m001's shape
   mkdir -p "$W/materials/$1"
@@ -1806,6 +1946,13 @@ acct_scope_unmarked_entry_covers_nothing() {
   expect_has 'end in no "verified" verdict'
   expect_has "0 verified"
 }
+acct_scope_uncovered_row_preserves_source_bytes() {
+  # Verified-units is parsed in the byte domain. A raw uncovered row must be emitted as those same
+  # bytes, not handed to a string writer that UTF-8-encodes the latin1 projection into mojibake.
+  sed -i '/^## Verified units$/a - t001 · 검증 실패 · no-verdict' "$W/truths/verify.md"
+  vrun scope
+  expect_has "검증 실패"
+}
 acct_scope_unverified_is_not_verified() {
   # The substring trap: `unverified` contains `verified`. Matching anywhere in the line would read
   # the ledger's own denial as coverage.
@@ -1843,6 +1990,38 @@ acct_scope_legacy_unbound() {
   # legacy-unbound and excluded from the digest-bound count (WD-COR-003).
   vrun scope
   expect_has "truths     1 live · 0 verified (digest-bound) · 1 legacy-unbound"
+}
+acct_scope_fenced_verified_heading_covers_nothing() {
+  # A heading-looking line inside a code fence is payload, not the verification register. The
+  # shared Markdown model must not let it mint legacy coverage merely because it has the right
+  # spelling. There is deliberately no live Verified-units heading in this fixture.
+  printf -- '---\nstatus: passed\nround: 1\nverified_at: 2026-07-30\n---\n\n```md\n## Verified units\n- m001 · t001 — R1 2026-07-30 · verified\n```\n\n## Adjudications\n\n## Human queue\n' > "$W/truths/verify.md"
+  vrun scope
+  expect_has "truths     1 live · 0 verified (digest-bound) · 0 legacy-unbound"
+  expect_has "1 unverified"
+}
+acct_scope_known_verify_sibling_is_boundary() {
+  # A schema-known sibling is a real section boundary even when it is deeper than Verified units.
+  # Otherwise Human-queue text is harvested as verification evidence and silently pays truth debt.
+  printf -- '# Verified units\n\n## Human queue\n- [open] [user-only] Is t001 verified\n\n## Adjudications\n' > "$W/truths/verify.md"
+  vrun scope
+  expect_has "truths     1 live"
+  expect_has "0 legacy-unbound"
+  expect_has "1 unverified"
+}
+block_schema_verify_sections_are_positional() {
+  # Empty positional roles never shift Human queue into the evidence lane. Scope fails safe, the
+  # validator names the schema contract, and migration refuses before its first write.
+  sed -i 's/^verify.sections:.*/verify.sections: |Human queue|Adjudications/' "$W/.weavedoc/schema"
+  printf -- '# Human queue\n- [open] [user-only] Is t001 verified\n# Adjudications\n' > "$W/truths/verify.md"
+  vrun scope
+  expect_has "0 legacy-unbound"
+  expect_has "1 unverified"
+  vrun validate; expect_block "[SCHEMA-VERIFY-SECTIONS]"
+  vrun upgrade --apply
+  expect_block "invalid verification-section contract"
+  OUT=$(grep -m1 '^version:' "$W/project.md"); RC=0
+  expect_has "version: 1"
 }
 acct_scope_bound_verified() {
   # attest pins current bytes; the unit counts digest-bound verified and nothing is owed on it.
@@ -1921,6 +2100,44 @@ pass_attest_standard_newline_stays_one_line() {
   # tests nothing. (It did. This case was written that way first and passed against the defect.)
   vrun attest verified 2 'a\nb' m001
   OUT=$(grep -c '^- m001 — R2.*· verified$' "$W/truths/verify.md"); RC=0
+  expect_has "1"
+}
+acct_attest_fenced_verified_heading_is_not_a_write_target() {
+  # The append-only sidecar remains the source of truth, but its human mirror may only be spliced
+  # after a LIVE register heading. A fenced lookalike must neither receive the row nor make the
+  # disagreement silent.
+  printf -- '---\nstatus: passed\nround: 1\nverified_at: 2026-07-30\n---\n\n```md\n## Verified units\n```\n\n## Adjudications\n\n## Human queue\n' > "$W/truths/verify.md"
+  vrun attest verified 2 standard t001
+  expect_pass
+  expect_has "human mirror"
+  OUT=$(cat "$W/truths/verify.md"); RC=0
+  expect_hasnt "R2"
+  OUT=$(grep -c $'t001\t' "$W/truths/verify-ledger.tsv"); RC=0
+  expect_has "1"
+}
+acct_attest_comment_spanning_heading_is_not_a_write_target() {
+  # A heading can be live while opening a comment that closes later. Inserting after the physical
+  # heading would place the mirror inside that comment. The sidecar remains authoritative, but the
+  # optional mirror must prove that its exact row became live or report that it skipped the write.
+  printf -- '## Verified units <!--\narchived note\n-->\n\n## Human queue\n' > "$W/truths/verify.md"
+  vrun attest verified 2 standard t001
+  expect_pass
+  expect_has "human mirror"
+  OUT=$(cat "$W/truths/verify.md"); RC=0
+  expect_hasnt "R2"
+  OUT=$(grep -c $'t001\t' "$W/truths/verify-ledger.tsv"); RC=0
+  expect_has "1"
+}
+acct_attest_unreadable_verify_names_skipped_mirror() {
+  # The authoritative sidecar can still accept the verdict, but a present unreadable human view is
+  # not the same as an absent optional mirror. Name the disagreement instead of silently skipping it.
+  rm -f "$W/truths/verify.md"
+  mkdir "$W/truths/verify.md"
+  vrun attest verified 2 standard t001
+  expect_pass
+  expect_has "human mirror"
+  expect_has "could not be read"
+  OUT=$(grep -c $'t001\t' "$W/truths/verify-ledger.tsv"); RC=0
   expect_has "1"
 }
 block_attest_control_byte_in_standard() {
@@ -2470,6 +2687,131 @@ acct_upgrade_apply_golden() {
   expect_has "legacy-unbound"
   vrun upgrade --check
   expect_has "nothing to do"
+}
+acct_upgrade_fenced_verified_rows_are_not_rewritten() {
+  # Migration appends a verdict only to rows in the live Verified-units section. A complete-pass
+  # lookalike inside a fence is literal evidence text, not a writable register row.
+  mkv1
+  sed -i '/^## Verified units$/i ```md\n## Verified units\n- t999 — R1 2026-07-30 · passes 1/1\n```\n' "$W/truths/verify.md"
+  vrun upgrade --apply
+  expect_pass
+  OUT=$(grep '^- t999 ' "$W/truths/verify.md"); RC=0
+  expect_has "passes 1/1"
+  expect_hasnt "verified"
+  OUT=$(grep '^- m1 .*passes 2/2' "$W/truths/verify.md"); RC=0
+  expect_has "verified"
+}
+block_upgrade_unreadable_verify_refuses_before_write() {
+  mkv1
+  rm -f "$W/truths/verify.md"
+  mkdir "$W/truths/verify.md"
+  vrun upgrade --apply
+  expect_block "verification history is unknown"
+  expect_has "Nothing written"
+  OUT=$(grep -c '^version: 1$' "$W/project.md"); RC=0
+  expect_has "1"
+}
+block_upgrade_unreadable_review_refuses_before_write() {
+  mkv1
+  rm -f "$W/documents/d1/review.md"
+  mkdir "$W/documents/d1/review.md"
+  vrun upgrade --apply
+  expect_block "unknown review history"
+  expect_has "Nothing written"
+  OUT=$(grep -c '^version: 1$' "$W/project.md"); RC=0
+  expect_has "1"
+}
+acct_upgrade_deep_verified_heading_does_not_mint_evidence() {
+  # Readers, writers and the required-section gate admit only level 1/2. A v1 `###` lookalike must
+  # not receive a verdict or mint a legacy sidecar row before upgrade adds the missing real section.
+  mkv1
+  sed -i 's/^## Verified units$/### Verified units/' "$W/truths/verify.md"
+  vrun upgrade --apply
+  expect_pass
+  vrun scope
+  expect_has "truths     1 live · 0 verified (digest-bound) · 0 legacy-unbound"
+  expect_has "1 unverified"
+}
+block_upgrade_gate_subheading_is_not_history() {
+  # Migration and validate must share the review zone. A deeper heading inside Fidelity violations
+  # does not close the gate; the old history walker changed `sec` on every heading and stripped the
+  # brackets, laundering this open violation into harmless record prose before post-validation.
+  mkv1
+  REV $'## Detail\n\n- [contradiction] STILL-OPEN'
+  vrun upgrade --apply
+  expect_block "rolled back"
+  OUT=$(cat "$W/documents/d1/review.md"); RC=0
+  expect_has "[contradiction] STILL-OPEN"
+  OUT=$(grep -c '^version: 1$' "$W/project.md"); RC=0
+  expect_has "1"
+}
+block_upgrade_comment_interrupted_kind_requires_manual() {
+  # Detection sees through a column-preserving comment, but mutation authority requires the exact
+  # canonical source token. Upgrade must neither erase the comment nor guess across it.
+  mkv1
+  printf -- '\n- [contra<!-- audit -->diction] HISTORY\n' >> "$W/documents/d1/review.md"
+  local before after
+  before=$(sha256sum "$W/documents/d1/review.md" | awk '{print $1}')
+  vrun upgrade --apply
+  expect_block "review history needs a human ruling"
+  after=$(sha256sum "$W/documents/d1/review.md" | awk '{print $1}')
+  [ "$before" = "$after" ] || bad "manual comment-interrupted history refusal changed review.md"
+}
+block_upgrade_fenced_history_requires_manual() {
+  # A fenced kind is still outside the gate and validate must see it, but migration has no authority
+  # to rewrite source-code examples. It stops before any write and leaves the exact bytes for a
+  # human to classify.
+  mkv1
+  cat >> "$W/documents/d1/review.md" <<'EOF'
+
+```js
+const finding = "[contradiction]"
+```
+EOF
+  local before after
+  before=$(sha256sum "$W/documents/d1/review.md" | awk '{print $1}')
+  vrun upgrade --apply
+  expect_block "review history needs a human ruling"
+  expect_has "nothing written"
+  after=$(sha256sum "$W/documents/d1/review.md" | awk '{print $1}')
+  [ "$before" = "$after" ] || bad "manual review-history refusal changed review.md"
+}
+block_upgrade_markdown_kind_literals_require_manual() {
+  # Detection is shape-free, but mutation authority is not. A Markdown link or inline-code literal
+  # is not a legacy record token; stripping its brackets corrupts the document while calling the
+  # change migration. Both must stop before the first write and remain byte-identical.
+  mkv1
+  cat >> "$W/documents/d1/review.md" <<'EOF'
+
+# Migration examples
+- see [contradiction](https://example.test) for the old label
+- run `[unsupported]` in the checker
+- [^contradiction] footnote citation
+- [@unsupported] pandoc citation
+EOF
+  sed -i '/^# Fidelity violations$/a [contradiction]: https://example.test "title <!-- audit -->"' "$W/documents/d1/review.md"
+  printf -- '\n- [contradiction] shortcut link plus prose\n' >> "$W/documents/d1/review.md"
+  local before after
+  before=$(sha256sum "$W/documents/d1/review.md" | awk '{print $1}')
+  vrun upgrade --apply
+  expect_block "review history needs a human ruling"
+  expect_has "nothing written"
+  after=$(sha256sum "$W/documents/d1/review.md" | awk '{print $1}')
+  [ "$before" = "$after" ] || bad "manual Markdown-literal refusal changed review.md"
+}
+acct_upgrade_verified_suffix_stays_live_before_comment() {
+  # A complete v1 row may open a multi-line comment after its evidence. Appending at physical EOL
+  # hid the verdict inside that comment, so migration claimed success without preserving the v1
+  # verification. The writer now anchors before the opener and reparses its own result.
+  mkv1
+  sed -i '/^- m1 .*passes 2\/2$/s/$/ <!--/' "$W/truths/verify.md"
+  sed -i '/^- m1 .*passes 2\/2 <!--$/a audit\n-->' "$W/truths/verify.md"
+  vrun upgrade --apply
+  expect_pass
+  OUT=$(grep '^- m1 .*passes 2/2' "$W/truths/verify.md"); RC=0
+  expect_has 'verified <!--'
+  vrun scope
+  expect_has "1 legacy-unbound"
 }
 acct_upgrade_rollback() {
   # Post-apply full validation fails (a broken verbatim seal the scan does not look for) → every
@@ -3584,8 +3926,8 @@ block_gaps_fenced_fake_register() {
   # Review #11 blocker 1: the WHOLE register lived inside a code fence — real Markdown has no
   # register at all — and validate passed it, because only ONE of the four gaps readers knew
   # fences (the heading counter and the register scanner counted the fenced lines, and the
-  # 2-space-indented closing fence even read as the fake entry's continuation). One defence()
-  # pass feeds every reader now. Red vs 942ccdc: rc 0.
+  # 2-space-indented closing fence even read as the fake entry's continuation). One lexical
+  # scanner now feeds every reader. Red vs 942ccdc: rc 0.
   req_completeness
   printf '```text\n# Open\n# Accepted\n- [declared] fake accepted decision — reason\n  ```\n' > "$W/gaps.md"
   vrun validate
@@ -4084,6 +4426,44 @@ block_completeness_sections_degenerate_roster() {
   printf '# Open\n\n# Accepted\n' > "$W/gaps.md"
   OUT=$( ( cd "$W" && $TO node .weavedoc/bin/weavedoc.mjs validate ) 2>&1 ); RC=$?
   expect_block "SCHEMA-UNREADABLE"
+}
+block_completeness_sections_leading_empty_role() {
+  # The section roster is positional. Removing its first value must not shift Accepted into Open
+  # in validate, status or the non-blocking tally.
+  req_completeness
+  cp -r "$REPO/.weavedoc/bin" "$W/.weavedoc/bin"
+  cp "$REPO/.weavedoc/schema" "$W/.weavedoc/schema"
+  cp "$REPO/.weavedoc/VERSION" "$W/.weavedoc/VERSION"
+  sed -i 's/^gaps.sections: Open|Accepted$/gaps.sections: |Accepted/' "$W/.weavedoc/schema"
+  grep -q '^gaps.sections: |Accepted$' "$W/.weavedoc/schema" || { bad "fixture no-op: leading-empty roster swap missed"; return; }
+  printf '# Accepted\n\n- [declared] MUST-NOT-BECOME-OPEN\n' > "$W/gaps.md"
+  OUT=$( ( cd "$W" && $TO node .weavedoc/bin/weavedoc.mjs validate ) 2>&1 ); RC=$?
+  expect_block "SCHEMA-UNREADABLE"
+  OUT=$( ( cd "$W" && $TO node .weavedoc/bin/weavedoc.mjs status --open ) 2>&1 ); RC=$?
+  expect_has "gaps register contract is invalid"
+  expect_hasnt "nothing is waiting on you"
+  OUT=$( ( cd "$W" && $TO node .weavedoc/bin/weavedoc.mjs gaps ) 2>&1 ); RC=$?
+  expect_has "accepted tally is disabled"
+  expect_hasnt "records 0 already accepted"
+}
+block_completeness_sections_extra_positional_role() {
+  # Extra roles are not ignored. All three consumers disable the register instead of choosing the
+  # first two values and creating a hidden fourth interpretation of the schema.
+  req_completeness
+  cp -r "$REPO/.weavedoc/bin" "$W/.weavedoc/bin"
+  cp "$REPO/.weavedoc/schema" "$W/.weavedoc/schema"
+  cp "$REPO/.weavedoc/VERSION" "$W/.weavedoc/VERSION"
+  sed -i 's/^gaps.sections: Open|Accepted$/gaps.sections: Open|Accepted|Archive/' "$W/.weavedoc/schema"
+  grep -q '^gaps.sections: Open|Accepted|Archive$' "$W/.weavedoc/schema" || { bad "fixture no-op: extra-role roster swap missed"; return; }
+  printf '# Open\n\n- [declared] MUST-NOT-ROUTE\n# Accepted\n# Archive\n' > "$W/gaps.md"
+  OUT=$( ( cd "$W" && $TO node .weavedoc/bin/weavedoc.mjs validate ) 2>&1 ); RC=$?
+  expect_block "SCHEMA-UNREADABLE"
+  OUT=$( ( cd "$W" && $TO node .weavedoc/bin/weavedoc.mjs status --open ) 2>&1 ); RC=$?
+  expect_has "gaps register contract is invalid"
+  expect_hasnt "nothing is waiting on you"
+  OUT=$( ( cd "$W" && $TO node .weavedoc/bin/weavedoc.mjs gaps ) 2>&1 ); RC=$?
+  expect_has "accepted tally is disabled"
+  expect_hasnt "records 0 already accepted"
 }
 block_completeness_sections_from_schema() {
   # Review #6 P1: gaps.sections joined SCH_KEYS (presence) while the counter spelled
@@ -4595,7 +4975,7 @@ acct_gaps_accepted_tally_counts_filled_placeholder() {
   # `status --open` report a blocking gap as "nothing is waiting" in v0.5.5. Here it under-counts
   # accepted decisions instead: an entry whose kind slot kept its template but whose body is
   # written out is a real decision (FORMATS: the remainder decides) and was tallied as nothing.
-  # Revert cmd-gaps.mjs's scanRegister call to countLines(…, ENTRY) → this goes red.
+  # Revert cmd-gaps.mjs to a raw entry-pattern count instead of parseGapRegister → this goes red.
   cat > "$W/gaps.md" <<'EOF'
 # Open
 
@@ -4609,6 +4989,26 @@ EOF
   expect_pass
   # 2, not 3: the pure stub stays template noise in every reader.
   expect_has "records 2 already accepted"
+}
+acct_gaps_accepted_malformed_is_named() {
+  # Typed syntax cannot disappear at the final consumer. Keep the historical record tally, but say
+  # explicitly that an unknown kind is not a valid routed acceptance.
+  printf '# Open\n\n# Accepted\n\n- [typo] decision\n' > "$W/gaps.md"
+  vrun gaps
+  expect_pass
+  expect_has "records 1 already accepted (0 valid, 1 malformed)"
+  expect_has "malformed entry"
+}
+acct_gaps_same_section_cannot_hold_both_roles() {
+  # Model-level contract closure: status/gaps consume the register without validate's schema
+  # preflight, so they too must refuse to treat one physical row as both open and accepted.
+  sed -i 's/^gaps\.sections:.*/gaps.sections: Same|Same/' "$W/.weavedoc/schema"
+  printf '# Same\n\n- [symmetry] ONE-ROLE\n' > "$W/gaps.md"
+  vrun status --open
+  expect_has "one section cannot hold both roles"
+  vrun gaps
+  expect_has "accepted tally is disabled"
+  expect_hasnt "records 0 already accepted"
 }
 acct_gaps_unterminated_fence_named() {
   # A fence nobody closed makes everything after it invisible to the tally, and this command said
@@ -4725,7 +5125,9 @@ meta_git_env_ignored_by_key_and_manifest() {
   # what they answer. The alternate index restages VERSION with schema's blob — a difference the
   # unfixed script reported and the key never saw.
   mkdir -p "$sc/.weavedoc" "$sc/tests" "$sc/.claude/skills/weavedoc-x"
-  cp "$REPO/.weavedoc/VERSION" "$REPO/.weavedoc/schema" "$REPO/.weavedoc/READ.md"      "$REPO/.weavedoc/FORMATS.md" "$REPO/.weavedoc/.gitattributes" "$sc/.weavedoc"/ 2>/dev/null
+  cp "$REPO/.weavedoc/VERSION" "$REPO/.weavedoc/schema" "$REPO/.weavedoc/READ.md" \
+     "$REPO/.weavedoc/FORMATS.md" "$REPO/.weavedoc/PARSER-MODEL.md" \
+     "$REPO/.weavedoc/.gitattributes" "$sc/.weavedoc"/ 2>/dev/null
   mkdir -p "$sc/.weavedoc/bin" && cp "$REPO/.weavedoc/bin/weavedoc.mjs" "$sc/.weavedoc/bin"/ 2>/dev/null
   printf 'skill
 ' > "$sc/.claude/skills/weavedoc-x/SKILL.md"
@@ -4784,7 +5186,9 @@ meta_manifest_generator_fails_closed() {
   local sc2="$W/mmfc2" obj
   mkdir -p "$sc2/tests" "$sc2/.weavedoc/bin"
   cp "$REPO/tests/make-manifest.sh" "$REPO/tests/git-env.sh" "$sc2/tests"/ 2>/dev/null
-  cp "$REPO/.weavedoc/VERSION" "$REPO/.weavedoc/schema" "$REPO/.weavedoc/READ.md"      "$REPO/.weavedoc/FORMATS.md" "$REPO/.weavedoc/.gitattributes" "$sc2/.weavedoc"/ 2>/dev/null
+  cp "$REPO/.weavedoc/VERSION" "$REPO/.weavedoc/schema" "$REPO/.weavedoc/READ.md" \
+     "$REPO/.weavedoc/FORMATS.md" "$REPO/.weavedoc/PARSER-MODEL.md" \
+     "$REPO/.weavedoc/.gitattributes" "$sc2/.weavedoc"/ 2>/dev/null
   cp "$REPO/.weavedoc/bin/weavedoc.mjs" "$sc2/.weavedoc/bin"/ 2>/dev/null
   ( cd "$sc2" && git init -q . && git add -A >/dev/null 2>&1 ) || { bad "could not build the second scratch repo"; return; }
   out=$( cd "$sc2" && bash tests/make-manifest.sh 2>/dev/null ); rc=$?
@@ -4807,7 +5211,9 @@ meta_manifest_required_path_is_exact() {
   local sc="$W/mmex" out rc
   mkdir -p "$sc/tests" "$sc/.weavedoc/bin"
   cp "$REPO/tests/make-manifest.sh" "$REPO/tests/git-env.sh" "$sc/tests"/ 2>/dev/null
-  cp "$REPO/.weavedoc/VERSION" "$REPO/.weavedoc/schema" "$REPO/.weavedoc/READ.md"      "$REPO/.weavedoc/FORMATS.md" "$REPO/.weavedoc/.gitattributes" "$sc/.weavedoc"/ 2>/dev/null
+  cp "$REPO/.weavedoc/VERSION" "$REPO/.weavedoc/schema" "$REPO/.weavedoc/READ.md" \
+     "$REPO/.weavedoc/FORMATS.md" "$REPO/.weavedoc/PARSER-MODEL.md" \
+     "$REPO/.weavedoc/.gitattributes" "$sc/.weavedoc"/ 2>/dev/null
   cp "$REPO/.weavedoc/bin/weavedoc.mjs" "$sc/.weavedoc/bin/weavedoc.mjs.bak" 2>/dev/null
   ( cd "$sc" && git init -q . && git add -A >/dev/null 2>&1 ) || { bad "could not build a scratch git repo"; return; }
   # The vacuity check reads the INDEX, not the manifest: on refusal the generator prints nothing,
@@ -5330,6 +5736,18 @@ EOF
   expect_hasnt "의도적 공백"
   expect_hasnt "<where>"
 }
+acct_openlist_gaps_structure_warns_when_off() {
+  # The typed register owns headings and stray records even when completeness enforcement is off.
+  # A likely section-name typo must not end an agent run with "nothing is waiting".
+  printf '# Oepn\n- [declared] ORPHANED-BY-TYPO\n# Accepted\n' > "$W/gaps.md"
+  vrun status --open
+  expect_has "must have exactly one '# Open'"
+  expect_has "outside its Open/Accepted sections"
+  expect_hasnt "nothing is waiting on you"
+  vrun gaps
+  expect_has "must have exactly one '# Open'"
+  expect_has "ORPHANED-BY-TYPO"
+}
 acct_openlist_gaps_filled_placeholder() {
   # P1 (external review, v0.5.5): the listing dropped every bullet whose kind slot opened with a
   # placeholder — the PREFIX rule validate abandoned in v0.5.4 review #9 — so a gap validate counts
@@ -5458,11 +5876,21 @@ acct_openlist_hq_continuation_shown() {
 acct_openlist_question_continuation_shown() {
   # …and the third ledger. Same rule, same narrowing (an entry WITH content keeps its sub-bullets
   # as dropped detail — acct_openlist_subbullets_stay_detail pins that side).
-  # Revert the `qlast` appender in the questions loop → this goes red.
+  # Drop questions-ledger's structural detail from itemBodyFacts → this goes red.
   printf -- '# 질문\n\n- [open]\n  지체상금 상한 값이 필요합니다\n' > "$W/questions.md"
   vrun status --open
   expect_has "questions (1):"
   expect_has "- [open] 지체상금 상한 값이 필요합니다"
+}
+acct_openlist_inert_context_suspends_parent_state() {
+  # Closed comments and fences are inert lexical nodes, not structural resets. A placeholder stays
+  # held across them and real source-authentic detail after/interrupted by them materialises it.
+  printf -- '\n- [{state}] [{ownership}]\n  <!-- audit -->REAL-HQ-AFTER-COMMENT\n' >> "$W/truths/verify.md"
+  printf -- '- [{state}]\n  ```md\n  TEMPLATE EXAMPLE\n  ```\n  REAL-QUESTION-AFTER-FENCE\n' > "$W/questions.md"
+  vrun status --open
+  expect_has "REAL-HQ-AFTER-COMMENT"
+  expect_has "REAL-QUESTION-AFTER-FENCE"
+  expect_hasnt "nothing is waiting on you"
 }
 acct_openlist_none_idiom_anchored() {
   # `- (없음)` / `- (none)` is the EMPTY-ledger idiom; the pattern was not anchored, so a real entry
@@ -5484,6 +5912,17 @@ acct_openlist_none_idiom_still_empty() {
   vrun status --open
   expect_has "nothing is waiting on you"
 }
+acct_openlist_none_idiom_continuation_surfaces() {
+  # Explicit empty is a typed sentinel, not `continue`. Real content below it materializes one
+  # malformed record in each ledger and is shown instead of disappearing behind the idiom.
+  printf -- '\n- (none)\n  REAL-HQ-BELOW-EMPTY\n' >> "$W/truths/verify.md"
+  printf -- '- (none)\n  REAL-QUESTION-BELOW-EMPTY\n' > "$W/questions.md"
+  vrun status --open
+  expect_has "REAL-HQ-BELOW-EMPTY"
+  expect_has "REAL-QUESTION-BELOW-EMPTY"
+  expect_has "real content continued under"
+  expect_hasnt "nothing is waiting on you"
+}
 acct_openlist_gaps_none_idiom_is_malformed() {
   # THE REGISTER HAS NO EMPTY-LEDGER IDIOM (ruled 2026-08-07, after an external review measured the
   # consequence). `- (없음)` / `- (none)` is the Human queue's and questions.md's way of writing "no
@@ -5491,7 +5930,7 @@ acct_openlist_gaps_none_idiom_is_malformed() {
   # line here is a bullet with no routable kind. A real mine had one, and `status --open` reported
   # ONE WAITING GAP whose entire text was the word "none". The ruling keeps the invariant and names
   # the line instead of inventing a sentinel for it. Empty means zero bullets.
-  # Drop the per-entry `kinds` from scanRegister (or the label below) → this goes red.
+  # Drop the per-entry typed kind diagnostics from parseGapRegister (or the label below) → red.
   printf -- '# Open
 
 - (없음)
@@ -5589,6 +6028,14 @@ acct_openlist_gaps_badline_warns() {
   expect_has "the register grammar cannot read"
   expect_hasnt "셋째 항목"
 }
+acct_openlist_gaps_accepted_badline_warns() {
+  # Accepted is the same fail-closed register. With completeness off validate is not the immediate
+  # user surface, so status must not print "nothing is waiting" after truncating this half silently.
+  printf '# Open\n\n# Accepted\n\nprose no register owns\n- [declared] hidden after prose\n' > "$W/gaps.md"
+  vrun status --open
+  expect_has "'# Accepted' holds a line the register grammar cannot read"
+  expect_hasnt "nothing is waiting on you"
+}
 acct_openlist_question_pure_stub_silent() {
   # The other side of the question rule, and the line that had ZERO coverage: a bullet that is
   # placeholders THROUGHOUT is an untouched template and must stay silent — while a real question
@@ -5611,7 +6058,7 @@ acct_openlist_question_pure_stub_silent() {
 acct_openlist_q_stub_realized() {
   # questions.md: a pure template stub is HELD, and an indented line with real content REALIZES it
   # — same machine as gaps. Unrealized, it stays template noise (the case below pins that side).
-  # Revert the `qheld` hold in the questions loop → this goes red.
+  # Disable placeholder holding in questions-ledger → this goes red.
   printf -- '# 질문\n\n- [<status>]\n  실제 질문이 필요함\n' > "$W/questions.md"
   vrun status --open
   expect_has "실제 질문이 필요함"
@@ -5766,7 +6213,7 @@ acct_openlist_hq_fenced_example_is_not_an_entry() {
   # comment stripper and nothing else, so the way documentation shows an entry — inside a code
   # fence — was a real waiting decision to `status` and a real entry to the gate. gaps.md has read
   # through `defence` since v0.5.4; the twin ledger never got it.
-  # Revert hqRead to plain nocomment() -> this goes red.
+  # Reintroduce sequential comment deletion before fence scanning -> this goes red.
   printf -- '\n\n```md\n- [open] [user-only] FENCED-EXAMPLE\n```\n' >> "$W/truths/verify.md"
   vrun status; expect_has "human queue: 0"
   vrun status --open; expect_has "nothing is waiting on you"
@@ -5782,12 +6229,60 @@ block_hq_fenced_example_does_not_block() {
   expect_pass
   expect_hasnt "HQ-UNTAGGED"
 }
+acct_openlist_hq_comment_fence_precedence() {
+  # A comment marker inside a fence is literal; a fence marker inside a comment is literal. Both
+  # status and validate consume the one scanner result rather than erasing the constructs in order.
+  cat >> "$W/truths/verify.md" <<'EOF'
+
+```md
+<!-- COMMENT-MARKER-IS-LITERAL
+- [open] [user-only] HIDDEN-IN-FENCE
+```
+<!--
+```md
+- [open] [user-only] HIDDEN-IN-COMMENT
+-->
+- [open] [user-only] REAL-AFTER-CONTEXTS
+EOF
+  vrun validate; expect_pass
+  expect_hasnt "HQ-UNTERMINATED"
+  vrun status --open
+  expect_has "human queue (1):"
+  expect_has "REAL-AFTER-CONTEXTS"
+  expect_hasnt "HIDDEN-IN-FENCE"
+  expect_hasnt "HIDDEN-IN-COMMENT"
+  expect_hasnt "unterminated"
+}
+acct_openlist_hq_comment_mask_preserves_columns() {
+  # Deleting this inline comment manufactures a column-zero fence opener. Column-preserving masks
+  # retain the source position, and provenance prevents a mask itself from supplying grammar space.
+  cat >> "$W/truths/verify.md" <<'EOF'
+
+<!--x-->```md
+- [open] [user-only] REAL-AFTER-INLINE-COMMENT
+EOF
+  vrun validate; expect_pass
+  expect_hasnt "HQ-UNTERMINATED-FENCE"
+  vrun status --open
+  expect_has "human queue (1):"
+  expect_has "REAL-AFTER-INLINE-COMMENT"
+  expect_hasnt "unterminated code fence"
+}
+block_hq_unterminated_frontmatter() {
+  # Frontmatter is an explicit capability of verify/review, not a heuristic enabled for every
+  # ledger. When enabled, an unclosed block cannot hide the queue without a named gate and warning.
+  sed -i '5d' "$W/truths/verify.md"
+  vrun validate
+  expect_block "HQ-UNTERMINATED-FRONTMATTER"
+  vrun status --open
+  expect_has "unterminated frontmatter"
+}
 block_verify_fenced_section_is_not_a_section() {
   # …AND A FENCED HEADING IS NOT A SECTION. Replacing the real `## Human queue` with a fenced copy
   # left the mine with no queue at all and validate green (measured) — the required-section check
   # read the file with the comment stripper only, so the fence satisfied it. It reads through the
-  # same hqRead the walk uses now: one file, one idea of what is in it.
-  # Revert the required-section reader to nocomment() -> this goes red.
+  # same scanned document the walk uses now: one file, one idea of what is in it.
+  # Reintroduce a comment-only required-section reader -> this goes red.
   { printf '```md\n'; cat "$W/truths/verify.md"; } > "$W/v.tmp"
   printf '\n```\n' >> "$W/v.tmp"
   # The real section is now INSIDE the fence, so the file has none the reader can see.
@@ -5816,6 +6311,16 @@ acct_openlist_hq_loose_list_stub_realizes() {
   vrun status --open
   expect_has "human queue (0 open, 1 untagged):"
   expect_has "LOOSE-LIST-DECISION"
+}
+acct_openlist_hq_mixed_lead_continuation_surfaces() {
+  # Literal-prefix structure cannot prove that a TAB continuation belongs under a two-space item.
+  # The typed model records that ambiguity, but the safe display direction is to retain the text:
+  # an agent decision must not disappear merely because its whitespace styles differ.
+  printf -- '\n  - [{state}] [{ownership}]\n\tMIXED-LEAD-DECISION\n' >> "$W/truths/verify.md"
+  vrun status --open
+  expect_has "MIXED-LEAD-DECISION"
+  expect_has "normalize the indentation"
+  expect_hasnt "nothing is waiting on you"
 }
 acct_openlist_hq_blank_then_nested_is_detail() {
   # …and the mirror defect, which BLOCKED instead of dropping: the blank line made the nested
@@ -6051,6 +6556,29 @@ acct_gaps_accepted_badline_named() {
   expect_has "cannot read"
   expect_has "records 1 already accepted"
 }
+block_gaps_accepted_blank_orphan_is_not_continuation() {
+  # Human queues explicitly allow loose-list continuation across a blank line. The completeness
+  # register does not: prose after a blank has no attributable acceptance and must fail closed,
+  # never inherit the preceding decision merely because both ledgers share structural primitives.
+  req_completeness
+  printf '# Open\n\n# Accepted\n\n- [symmetry] DECISION\n\n  ORPHAN-ACCEPTANCE-PROSE\n' > "$W/gaps.md"
+  vrun validate
+  expect_block "ORPHAN-ACCEPTANCE-PROSE"
+}
+block_gaps_directory_is_unknown_not_absent() {
+  rm -f "$W/gaps.md"
+  mkdir "$W/gaps.md"
+  req_completeness
+  vrun validate
+  expect_block "[COMP-MALFORMED]"
+  expect_hasnt "[COMP-NO-REGISTER]"
+  vrun status --open
+  expect_has "gaps.md exists but cannot be read"
+  expect_hasnt "nothing is waiting on you"
+  vrun gaps
+  expect_has "accepted tally is unknown"
+  expect_hasnt "gaps.md records 0 already accepted"
+}
 acct_openlist_question_stateless() {
   # A question bullet with no state tag at all: validate never reads questions.md, so nothing else
   # catches it, and dropping it silently prints "nothing is waiting" over a visibly open question.
@@ -6142,6 +6670,25 @@ acct_openlist_question_unknown_state() {
   vrun status --open
   expect_has "questions (0 waiting, 1 unrecognized):"
   expect_has "(unrecognized state — the enum is open|proposed|answered): - [Open] 대문자 상태"
+  expect_hasnt "nothing is waiting on you"
+}
+acct_openlist_question_blank_continuation_materializes() {
+  # A physical blank does not invent a new parent, but neither does it erase the only structural
+  # parent of a later indented continuation. The placeholder is held until the real line arrives.
+  printf -- '- [{state}]\n\n  REAL-QUESTION-AFTER-BLANK\n' > "$W/questions.md"
+  vrun status --open
+  expect_has "questions (0 waiting, 1 unrecognized):"
+  expect_has "REAL-QUESTION-AFTER-BLANK"
+  expect_hasnt "nothing is waiting on you"
+}
+acct_openlist_question_misindented_entry_is_named() {
+  # Column zero remains the admission rule. An attempted root below it is a typed orphan rather
+  # than a valid waiting question or invisible prose, and status names the actual structural fault.
+  printf -- '  - [open] MISINDENTED-QUESTION\n' > "$W/questions.md"
+  vrun status --open
+  expect_has "questions (0 waiting, 1 unrecognized):"
+  expect_has "misindented entry (must start at column 0)"
+  expect_has "MISINDENTED-QUESTION"
   expect_hasnt "nothing is waiting on you"
 }
 acct_openlist_unterminated_fence_warns() {

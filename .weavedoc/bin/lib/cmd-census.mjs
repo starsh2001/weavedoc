@@ -4,7 +4,7 @@
 import { readFileSync, existsSync } from 'node:fs'
 import { basename } from 'node:path'
 import { canonId, fmVal, isFence, splitLines } from './core.mjs'
-import { nocomment, sectionAll } from './sections.mjs'
+import { readCoverage } from './coverage-model.mjs'
 import { fm, join, materialIds, truthFiles } from './mine.mjs'
 
 const readOr = p => { try { return readFileSync(p, 'utf8') } catch { return '' } }
@@ -114,18 +114,13 @@ export function cmdCensus (m, out) {
   // HOLDS a record — a bare `## m002` heading is not a record.
   const covPath = join(m.truths, 'coverage.md')
   const mstatus = id => { const f = join(m.materials, id, 'converted.md'); return existsSync(f) ? fm(f, 'status') : '' }
-  let nCov = 0; let nLegacy = 0; let nLegparsed = 0
+  let nCov = 0; let nLegacy = 0; let nLegparsed = 0; let nLegbullets = 0
+  let coverage = null
   if (existsSync(covPath)) {
-    const stripped = nocomment(readOr(covPath))
-    const withRecord = []
-    let sec = ''; let has = false
-    for (const l of splitLines(stripped)) {
-      let mm = /^##[ \t]+(m[0-9]+)([ \t]|$)/.exec(l)
-      if (mm) { if (sec !== '' && has) withRecord.push(sec); sec = mm[1]; has = false; continue }
-      if (/^##[ \t]/.test(l)) { if (sec !== '' && has) withRecord.push(sec); sec = ''; continue }
-      if (sec !== '' && l.trim() !== '') has = true
-    }
-    if (sec !== '' && has) withRecord.push(sec)
+    coverage = readCoverage(covPath)
+    const withRecord = coverage.materialSections
+      .filter(section => section.lines.some(event => event.text.trim() !== ''))
+      .map(section => section.materialId)
     // Section ids are references, so `## m5` and `## m005` are ONE material: canon first, then dedup.
     const seen = new Set()
     for (const cid of withRecord) {
@@ -140,8 +135,10 @@ export function cmdCensus (m, out) {
     // ruling text is free prose that may mention other ids). nLegparsed counts bullets that PARSED,
     // nLegacy the ones that still subtract — one number cannot carry both, since a
     // skipped-retracted bullet and an all-malformed section would both read 0.
-    const legIds = [...new Set(splitLines(sectionAll(stripped, 'legacy'))
-      .map(l => (/^[ \t]*-[ \t]*(m[0-9]+)\b/.exec(l) ?? [])[1])
+    const legacyLines = coverage.legacySections.flatMap(section => section.lines.map(event => event.text))
+    nLegbullets = legacyLines.filter(line => /^[ \t]*- /.test(line)).length
+    const legIds = [...new Set(legacyLines
+      .map(line => (/^[ \t]*-[ \t]*(m[0-9]+)\b/.exec(line) ?? [])[1])
       .filter(Boolean))].sort()
     for (const lid of legIds) {
       nLegparsed++
@@ -168,14 +165,21 @@ export function cmdCensus (m, out) {
   if (nLegacy > 0) covline = `coverage records ${nCov}/${nDenom} of ${nMats} material(s) (${nLegacy} legacy-exempt)`
   const retline = nRetr > 0 ? ` · retracted ${nRetr}` : ''
   out(`census: truth files ${nFiles} · index entries ${idx.set.length} · live ${nLive} (ok ${nOk} · conflict ${nConf} · unsupported ${nUnsup}) · discarded ${nRes}${retline} · ${covline}`)
+  if (coverage !== null && !coverage.readable) {
+    out('  ⚠ truths/coverage.md exists but cannot be read — coverage records are unknown, not zero; validate blocks this path')
+  }
+  if (coverage !== null && coverage.document.commentOpen) {
+    out("  ⚠ truths/coverage.md ends inside an unterminated '<!--' — mappings behind it are invisible; validate blocks this file")
+  }
+  if (coverage !== null && coverage.document.fenceOpen) {
+    out('  ⚠ truths/coverage.md ends inside an unterminated code fence — mappings behind it are invisible; validate blocks this file')
+  }
   if (unexplained.length) out(`  numbering holes (ids never assigned or files lost — confirm which): ${unexplained.join(' ')}`)
   if (explained.length) out(`  numbering holes, explained by changelog 'removed:': ${explained.join(' ')}`)
   if (nCov > nDenom) out(`  ✗ coverage numerator exceeds denominator (${nCov}/${nDenom}) — a '## legacy' entry names a material that also has its own '## m<id>' section, so it is subtracted from the denominator while still counted in the numerator; drop the legacy exemption (it is covered, not exempt)`)
   // Complain only when bullets were present and NONE parsed — nLegparsed, not nLegacy, which is
   // also 0 when every bullet parsed and then named a retracted material.
-  if (existsSync(covPath) && nLegparsed === 0 &&
-      splitLines(readOr(covPath)).some(l => /^##[ \t]+legacy/i.test(l)) &&
-      countLines(sectionAll(nocomment(readOr(covPath)), 'legacy'), /^[ \t]*- /) > 0) {
+  if (coverage !== null && nLegparsed === 0 && coverage.looseLegacyHeading && nLegbullets > 0) {
     out("  ✗ truths/coverage.md '## legacy' has bullets, but none begins with an m-id — no exemption was applied (format: '- m001 — <ruling>')")
   }
 

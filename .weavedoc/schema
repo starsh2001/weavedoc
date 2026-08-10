@@ -30,6 +30,16 @@ questions.enum.status: open|proposed|answered
 verify.fm.required: status|round|verified_at
 verify.fm.optional: consecutive_passes
 verify.fm.enum.status: passed|failed|escalated|stale|in-progress
+# RECOGNITION, NOT ROLE — and the header's "wire it or say here that it is descriptive" rule applies
+# to the half as much as to the whole. These four (`verify.sections`, `review.sections`,
+# `humanqueue.enum.*`, `questions.enum.status`) are read to decide which words a reader RECOGNISES.
+# What each word MEANS is hardcoded in the consumers: `open`/`ruled` for the queue, the three
+# ownership words for status's split, `open`/`proposed` for a waiting question, and the literal
+# `Human queue` heading for the queue's own section. FORMATS states the reason — section headers and
+# enum values are fixed English — so this file is where that fixed vocabulary is WRITTEN DOWN, not a
+# rename knob. Renaming a value leaves its entries recognised and unrouted: ownership is not enforced
+# on them and `status` shows them as untagged. `gaps.sections`/`gaps.enum.kind` are the exception:
+# those two ARE positional role contracts, wired end to end (see PARSER-MODEL.md §5).
 verify.sections: Verified units|Human queue|Adjudications
 # The verdict word an entry in `## Verified units` must END with to mean "this unit is covered".
 # Read by `weavedoc scope`, which counts the mine's unverified set from it. One spelling, because
