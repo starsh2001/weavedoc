@@ -10,6 +10,7 @@
 // must stay green against the old spellings, and switching consumers is Phase 2's completion
 // condition. What this file has to earn now is that its v2 answer is the SAME answer production
 // already gives, so the switch is a deletion rather than a behaviour change.
+import { dirname, join } from 'node:path'
 import { pipes } from './core.mjs'
 
 // The runtime's own supported range — deliberately NOT `schema.version` from the mine's schema.
@@ -22,6 +23,18 @@ export const SUPPORTED_ARTIFACT_VERSIONS = [2, 3]
 // The one v1 runtime a below-floor mine is sent to. Pinned as a commit, not a moving branch: a
 // bridge whose bytes drift is not a bridge.
 export const V1_BRIDGE = { tag: 'v0.5.21', commit: '0257167' }
+
+// EXPLICIT TABLES, never `version === ARTIFACT_FLOOR`. Deriving "is this v2" from the floor means
+// the day the floor rises to 3, v3 mines quietly start being read by the v2 adapter — the format
+// equivalent of a positional shift. A version that is not in the table is not readable, full stop.
+// `null` means "the single shipped .weavedoc/schema": there is exactly one copy of the v2 contract.
+export const CONTRACT_FILE = { 2: null, 3: 'v3' }
+// Exported so a property can pin the TABLE itself. At today's floor of 2 the table and the old
+// `version === ARTIFACT_FLOOR` test are behaviourally identical, so no fixture can tell them apart
+// — the failure it guards against is the day the floor rises, which is exactly when nobody is
+// looking. What a test CAN hold is that the mapping exists and covers every supported version, so
+// simplifying it back into a comparison against the floor goes red.
+export const ADAPTER = { 2: 'v2', 3: 'v3' }
 
 const isInt = s => typeof s === 'string' && s !== '' && /^[0-9]+$/.test(s)
 
@@ -62,10 +75,18 @@ export function resolveArtifactVersion (projectVersion, configVersion) {
 // Which bundled contract file a version reads. v2 is the runtime's existing `.weavedoc/schema` —
 // there is exactly one copy of the v2 contract and this is it, because a second copy is a second
 // answer waiting to drift. v3 gets its own file beside it.
+// NATIVE PATH SPLITTING, FORWARD-SLASH OUTPUT — the spelling `mine.mjs` fixed for this runtime.
+// The hand-rolled `replace(/\/[^/]*$/, '')` found no `/` in `D:\mine\.weavedoc\schema`, so it
+// returned the whole path with `schemas/v3` glued on the end: every Windows install would have read
+// the wrong file the moment a consumer was wired to this. node:path splits correctly on both
+// platforms, and `fwd` keeps the result in the one separator every other path in this runtime uses,
+// so a returned path can still be string-compared against `m.root`-derived prefixes.
+const fwd = p => p.replace(/\\/g, '/')
+
 export function contractFileFor (version, schemaPath) {
-  if (version === ARTIFACT_FLOOR) return schemaPath
-  const dir = schemaPath.replace(/\/[^/]*$/, '')
-  return `${dir}/schemas/v${version}`
+  const file = CONTRACT_FILE[version]
+  if (file === undefined) throw new Error(`unsupported artifact version ${version} — this runtime reads ${SUPPORTED_ARTIFACT_VERSIONS.join(', ')}`)
+  return file === null ? schemaPath : fwd(join(dirname(schemaPath), 'schemas', file))
 }
 
 // ---- role assembly ---------------------------------------------------------------------------
@@ -86,6 +107,33 @@ function roleSet (get, specs, artifact) {
   return { roles, errors }
 }
 
+// THE ROLE NAMESPACE IS CLOSED. A key under a reserved prefix that names no role is the same event
+// this whole file exists to end: a token the schema recognises that no consumer can route. Left
+// open, `verify.section.notes` reads as a declared section forever and blocks nothing, which is the
+// v2 known limit rebuilt one release after removing it. Non-role schema keys are untouched — only
+// these prefixes are owned, and only in v3, where the role keys live.
+const ROLE_ROSTER = {
+  humanQueue: { 'humanqueue.state.': ['waiting', 'closed'], 'humanqueue.ownership.': ['user', 'recommended', 'machine'] },
+  questions: { 'questions.state.': ['waiting', 'proposed', 'closed'] },
+  verify: { 'verify.section.': ['units', 'human_queue', 'adjudications'], 'verify.verdict.': ['covered'] },
+  review: { 'review.section.': ['violations', 'findings', 'adjudications', 'human_queue'] },
+  gaps: { 'gaps.section.': ['open', 'accepted'] }
+}
+
+function rejectExtraRoles (schemaMap, artifact, errors) {
+  const roster = ROLE_ROSTER[artifact]
+  const keys = typeof schemaMap?.keys === 'function' ? [...schemaMap.keys()] : []
+  for (const key of keys) {
+    for (const [prefix, allowed] of Object.entries(roster)) {
+      if (!key.startsWith(prefix)) continue
+      const suffix = key.slice(prefix.length)
+      if (!allowed.includes(suffix)) {
+        errors.push(`${artifact}: '${key}' is not a role this runtime routes — the ${prefix}* namespace is exactly ${allowed.join(', ')}`)
+      }
+    }
+  }
+}
+
 function requireDistinct (roles, groups, artifact, errors) {
   for (const [axis, members] of groups) {
     const present = members.filter(role => roles[role] !== undefined).map(role => roles[role])
@@ -101,7 +149,7 @@ function requireDistinct (roles, groups, artifact, errors) {
 // sections are a membership set whose gate is the fixed English name every consumer matches, and
 // the queue/question words are fixed vocabulary validated against the enum that declares them.
 const V2_FIXED = {
-  humanQueue: { waiting: 'open', closed: 'ruled', user: 'user-only', recommended: 'recommended', machine: 'machine', section: 'Human queue' },
+  humanQueue: { waiting: 'open', closed: 'ruled', user: 'user-only', recommended: 'recommended', machine: 'machine' },
   questions: { waiting: 'open', proposed: 'proposed', closed: 'answered' },
   review: { violations: 'Fidelity violations', findings: 'Findings', adjudications: 'Adjudications', human_queue: 'Human queue' }
 }
@@ -119,7 +167,7 @@ function v2Model (get, encode) {
   // "closed is ruled" from a constant would be this module inventing the very thing it removes.
   const hqStates = pipes(get('humanqueue.enum.state')).filter(Boolean)
   const hqOwn = pipes(get('humanqueue.enum.ownership')).filter(Boolean)
-  const hq = { state: {}, ownership: {}, section: fx(V2_FIXED.humanQueue.section) }
+  const hq = { state: {}, ownership: {} }
   for (const [role, token] of [['waiting', 'waiting'], ['closed', 'closed']]) {
     const t = fx(V2_FIXED.humanQueue[token])
     if (!memberOf(hqStates, t)) errors.humanQueue.push(`humanQueue: state role '${role}' expects the fixed v2 token '${V2_FIXED.humanQueue[token]}', absent from humanqueue.enum.state`)
@@ -182,8 +230,7 @@ function v3Model (get) {
 
   const hqState = roleSet(get, [['waiting', 'humanqueue.state.waiting'], ['closed', 'humanqueue.state.closed']], 'humanQueue')
   const hqOwn = roleSet(get, [['user', 'humanqueue.ownership.user'], ['recommended', 'humanqueue.ownership.recommended'], ['machine', 'humanqueue.ownership.machine']], 'humanQueue')
-  const hqSection = roleSet(get, [['section', 'humanqueue.section']], 'humanQueue')
-  errors.humanQueue.push(...hqState.errors, ...hqOwn.errors, ...hqSection.errors)
+  errors.humanQueue.push(...hqState.errors, ...hqOwn.errors)
   requireDistinct(hqState.roles, [['state', ['waiting', 'closed']]], 'humanQueue', errors.humanQueue)
   requireDistinct(hqOwn.roles, [['ownership', ['user', 'recommended', 'machine']]], 'humanQueue', errors.humanQueue)
 
@@ -215,7 +262,7 @@ function v3Model (get) {
   } else kinds = new Set(gapsKinds)
 
   return {
-    humanQueue: { state: hqState.roles, ownership: hqOwn.roles, section: hqSection.roles.section },
+    humanQueue: { state: hqState.roles, ownership: hqOwn.roles },
     questions: { state: qState.roles },
     verify: { section: vSection.roles, verdict: vVerdict.roles },
     review: { section: rSection.roles },
@@ -241,10 +288,34 @@ export function loadArtifactContracts (version, schemaMap, { domain } = {}) {
   const get = key => schemaMap?.get?.(key)
   // In the byte domain a fixed ASCII v2 token is its own encoding; keeping the hook explicit means
   // a non-ASCII fixed token added later cannot be compared across domains by accident.
+  // NOT KILLABLE BY ANY FIXTURE, and said out loud so the next mutation pass does not hunt for one:
+  // every fixed v2 token is ASCII, so `s => s` is behaviourally identical today. The hook guards the
+  // two-encoder class that has bitten this repo repeatedly (v0.5.6, v0.5.10) and only starts paying
+  // the day a fixed token is not ASCII — which is also the day nobody would think to add it.
   const encode = s => (domain === 'latin1' ? Buffer.from(s, 'utf8').toString('latin1') : s)
-  const model = version === ARTIFACT_FLOOR ? v2Model(get, encode) : v3Model(get)
+  // THE FILE MUST BE THE VERSION IT WAS ASKED FOR. Without this, handing the v3 contract to the v2
+  // adapter answered `valid: true` — a dispatcher that resolved the wrong path would have produced
+  // a fully-formed contract for a file nobody asked for, and every downstream role would be right
+  // about the wrong document. The declaration in the file is the only evidence of what it is.
+  const declared = get('schema.version')
   const artifacts = ['humanQueue', 'questions', 'verify', 'review', 'gaps']
   const out = { version, domain, valid: true, errors: [] }
+  if (declared !== String(version)) {
+    const why = `artifact contract file declares schema.version '${declared ?? ''}' but version ${version} was requested — the wrong contract was loaded; no role is exposed`
+    out.valid = false
+    out.errors.push(why)
+    out.versionMismatch = true
+    for (const name of artifacts) out[name] = { valid: false, errors: [why] }
+    return out
+  }
+  out.versionMismatch = false
+  const model = ADAPTER[version] === 'v2' ? v2Model(get, encode) : v3Model(get)
+  // Extra roles are a v3 event: v3 owns the `*.state.*`/`*.section.*` namespaces, while in a v2
+  // schema such a key names nothing and is an unknown key like any other, which this format has
+  // always treated as a named warning rather than a failure.
+  if (ADAPTER[version] === 'v3') {
+    for (const name of artifacts) rejectExtraRoles(schemaMap, name, model.errors[name])
+  }
   for (const name of artifacts) {
     const errs = model.errors[name]
     const ok = errs.length === 0

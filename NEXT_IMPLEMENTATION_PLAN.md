@@ -785,7 +785,7 @@ B를 A나 validate에 합치지 않는다. B는 v3 core와 A 이식이 끝난 �
 
 - schema 변경과 migrator를 같은 release에 포함한다.
 - 중간 schema 상태를 공개하지 않는다.
-- v3 runtime bundle은 versioned contract `schemas/v2`와 `schemas/v3`를 함께 싣고 project/config의 artifact version으로 reader를 고른다. runtime max version과 mine artifact version을 한 값으로 취급하지 않는다.
+- v3 runtime bundle은 versioned contract를 함께 싣고 project/config의 artifact version으로 reader를 고른다. **v2 계약의 정본은 기존 `.weavedoc/schema` 한 장이고 `schemas/v3`만 그 옆에 추가한다**(구현 2026-08-08.3 — v2를 `schemas/v2`로 복제하면 같은 계약의 사본이 둘이 돼 표류한다; 설치된 광산도 깨지지 않는다). 어느 version이 어느 파일·adapter로 가는지는 floor 비교가 아니라 명시 표다. runtime max version과 mine artifact version을 한 값으로 취급하지 않는다.
 - `project.md`와 `config.yaml`의 artifact version은 의도적으로 중복된 agreement field다. 둘 다 있어야 하고 같은 지원 version이어야 한다. missing·불일치·runtime-max 초과는 모든 일반 명령에서 `VERSION-MISMATCH`로 fail-closed하며 한쪽을 임의 권위로 선택하지 않는다.
 - version 협상은 아래로도 total하다. 지원 하한 미만(v1)은 future와 뭉뚱그리지 않고 별도 진단으로 fail-closed하며, 고정 bridge runtime — v0.5.21(commit `0257167`) — 으로 v1→v2 upgrade를 먼저 수행하라고 안내한다. v3 출하 시점에 더 나중의 v2-max 릴리스가 있으면 UPGRADING.md의 bridge 표기만 그것으로 교체한다. v3 runtime bundle은 v1 reader를 싣지 않는다(디딤돌 방식). 근거: 알려진 실광산은 v2다(테스트베드 실측 `version: 2`). Phase 7 preflight의 실광산 census에서 v1 광산이 나오면 그때 v1→v2→v3 합성 transaction을 재론하되, 어느 방식이든 중간 version 상태를 commit하지 않는 원칙은 같다.
 - v2 지원 수명은 릴리스 단위로 고정한다: ① 최초 v3 릴리스 — 일반 명령의 v2/v3 병행 + migrator, ② v2 일반 명령 지원 종료 릴리스 — 일반 consumer v2 branch 제거, isolated migrator만 잔존, ③ migrator 보존 종료 릴리스 — v2→v3 upgrade 경로 제거. ②·③의 구체 버전은 v3 출하 시 UPGRADING.md 지원 수명표에 명시한다. 이 계획의 구현 범위는 ①이다.
@@ -909,7 +909,7 @@ Phase 0에서 남긴 것(차단 등급 아님, Phase 1과 독립):
 
 ### Phase 1 — versioned contract와 비활성 v3 모델
 
-- bundled `schemas/v2`·`schemas/v3`, runtime-max/artifact-version dispatch와 v2/v3 병렬 `truth-model` reader 구현
+- bundled versioned contract(v2=기존 `.weavedoc/schema`, v3=`schemas/v3`), runtime-max/artifact-version dispatch와 v2/v3 병렬 `truth-model` reader 구현
 - 기존 mine은 v2로 계속 읽고 새 v3 contract는 fixture/API에서만 활성화; 이 중간 상태를 release하지 않음
 - temporary conflict JSON schema 구현
 - current `pending-decisions.json` schema와 content-addressed candidate/refresh model 구현
@@ -1266,6 +1266,8 @@ Phase 0에서 남긴 것(차단 등급 아님, Phase 1과 독립):
 
 ### 12.7 parser/artifact role 사례
 
+> 진행(2026-08-10, 번들 `2026-08-08.4`): **1·2·3·4·5는 `tests/artifact-contract-properties.mjs`에서 충족**(1·2·3은 typed role object 층에서, 4는 비ASCII 4종 양 도메인 동치, 5는 missing·duplicate·empty·leading-empty·extra role + trailing delimiter 정책). **6·7·8·9는 미충족** — 6은 소비자 전환(Phase 2) 전에는 대조할 green fixture가 없고, 7·8은 v3 review 절/migration이 아직 없으며, 9의 doccheck 변이 검사도 소비자 전환 뒤에 붙는다. **§12.7 전체 완료로 표시하지 말 것.**
+
 1. Human queue waiting/closed와 ownership 세 역할을 status·validate·writer가 같은 typed object로 판정
 2. questions waiting/proposed/closed를 listing·count·gate가 같은 역할로 판정
 3. verify/review의 Human queue heading을 literal이 아니라 contract role로 찾음
@@ -1292,7 +1294,7 @@ Phase 0에서 남긴 것(차단 등급 아님, Phase 1과 독립):
 | 영역 | 주요 파일 |
 |---|---|
 | entrypoint/config/read | `.weavedoc/bin/weavedoc.mjs`, `core.mjs`, `mine.mjs`, `read.mjs` |
-| schema/format | 현 `.weavedoc/schema`를 versioned `.weavedoc/schemas/{v2,v3}`로 분리, `.weavedoc/FORMATS.md`, `.weavedoc/READ.md`, `.weavedoc/PARSER-MODEL.md` |
+| schema/format | 기존 `.weavedoc/schema`가 v2 계약 정본으로 유지되고 `.weavedoc/schemas/v3` 추가, `.weavedoc/FORMATS.md`, `.weavedoc/READ.md`, `.weavedoc/PARSER-MODEL.md` |
 | artifact roles | 신규 `artifact-contracts.mjs`, `ledger-model.mjs`, `hq-ledger.mjs`, `questions-ledger.mjs`, `verified-units.mjs`, `review-model.mjs`, status/validate/doccheck consumers |
 | init/templates | `.claude/skills/weavedoc-init/SKILL.md`, `.weavedoc/templates/{config.yaml,project.md,material.md,truth.md,gaps.md,plan.md,review.md}`, 신규 `.weavedoc-state/` 생성·빈 디렉터리 보존 규칙 |
 | shared current state | 신규 `truth-model.mjs`, `derived-model.mjs`, finite operator registry, `raw-source-model.mjs`, `material-dependency-model.mjs`, locus-registry adapter, conflict-store adapter, pending-decision adapter, confirmation-map adapter, typed id allocator, `coverage-model.mjs` |

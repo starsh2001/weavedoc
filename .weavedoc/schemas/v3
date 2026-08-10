@@ -26,7 +26,6 @@ truth.fm.enum.provenance: stated|adopted|derived
 truth.fm.resolution.type: supersedes|authority|pick|value|attribute
 truth.fm.resolution.decision_kind: supplied|ratified
 truth.fm.resolution.decided_by: machine|user
-questions.enum.status: open|proposed|answered
 verify.fm.required: status|round|verified_at
 verify.fm.optional: consecutive_passes
 verify.fm.enum.status: passed|failed|escalated|stale|in-progress
@@ -40,14 +39,10 @@ verify.fm.enum.status: passed|failed|escalated|stale|in-progress
 # rename knob. Renaming a value leaves its entries recognised and unrouted: ownership is not enforced
 # on them and `status` shows them as untagged. `gaps.sections`/`gaps.enum.kind` are the exception:
 # those two ARE positional role contracts, wired end to end (see PARSER-MODEL.md §5).
-verify.sections: Verified units|Human queue|Adjudications
 # The verdict word an entry in `## Verified units` must END with to mean "this unit is covered".
 # Read by `weavedoc scope`, which counts the mine's unverified set from it. One spelling, because
 # the section's LAYOUT is deliberately free (table or bullets) and the verdict is the only thing a
 # machine can read across both; an entry ending in anything else covers nothing and `scope` names it.
-verify.units.verified: verified
-humanqueue.enum.state: open|ruled
-humanqueue.enum.ownership: user-only|recommended|machine
 coverage.section.optional: legacy
 changelog.line.kinds: added|superseded|edited|removed|confirmed
 project.fm.optional: authority|required_tags|tone|gap_density
@@ -70,11 +65,9 @@ review.enum.kind: contradiction|unsupported|missing-required
 # stays off: it would fail any review.md written before the template grew its fourth section, and a
 # format tightening with a migration cost belongs to the user. (verify.sections IS enforced for
 # existence: it was, by the audit lane, and removing that lane orphaned it — that is a repair.)
-review.sections: Fidelity violations|Findings|Adjudications|Human queue
 config.enum.completeness: off|required
 config.enum.detection: standard|deep
 config.enum.attribution: ask|allow
-gaps.sections: Open|Accepted
 gaps.enum.kind: declared|reference|enumeration|symmetry
 # Machine-owned verification sidecar (WD-COR-003). Append-only TSV in truths/: one row per unit
 # per attest — id<TAB>sha256<TAB>verdict<TAB>round<TAB>standard<TAB>date. LAST row per id wins, so
@@ -96,7 +89,9 @@ verify.ledger.origin.truths: v1-truths-ledger
 # Artifact schema version this runtime reads and writes (WD-MIG-002). A project declares its own
 # in project.md AND config.yaml `version:` — two records of one fact, checked for agreement. A
 # project NEWER than this is fail-closed (guessing at a future format is how corruption ships);
-# a v1 project stays readable (dual-reader) and validate points it at `weavedoc upgrade --check`.
+# a project BELOW the floor is fail-closed too, and separately: this bundle carries no v1 reader.
+# The stepping-stone decision is deliberate — a v1 mine migrates to 2 with the pinned bridge
+# runtime v0.5.21 (0257167) and then comes back, rather than this runtime carrying a third format.
 schema.version: 3
 # Config contract (WD-CFG-001) — every knob has a type/range; verify/review are section-aware
 # (a flat first-match reader can never see review.strength behind verify.strength). Unknown
@@ -123,7 +118,6 @@ humanqueue.state.closed: ruled
 humanqueue.ownership.user: user-only
 humanqueue.ownership.recommended: recommended
 humanqueue.ownership.machine: machine
-humanqueue.section: Human queue
 questions.state.waiting: open
 questions.state.proposed: proposed
 questions.state.closed: answered

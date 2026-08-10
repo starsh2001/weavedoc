@@ -65,7 +65,7 @@ WD_ENTRY=${WDRUN[${#WDRUN[@]}-1]}
 # not reproduce. make-manifest.sh reads the INDEX (`git ls-files` + `git cat-file blob :<path>`),
 # which a working-tree rename does not touch, and a STAGED rename moves the key through the index
 # hash anyway. Keeping it only widened the surface on which a stray untracked file fires the seal.
-key_paths() { ( cd "$1" && find tests .weavedoc/templates .weavedoc/bin -type f -print0 | sort -z | tr '\0' '\n' ); }
+key_paths() { ( cd "$1" && find tests .weavedoc/templates .weavedoc/bin .weavedoc/schemas -type f -print0 2>/dev/null | sort -z | tr '\0' '\n' ); }
 
 # WORKERS INHERIT THE KEY — they do not recompute it (v0.5.12). The block below spawns ~25
 # processes (git, find, sort, xargs, sha256sum ×6, node/uname/bash/awk/sed --version …), which is
@@ -101,6 +101,12 @@ compute_key() { { git -C "$REPO" rev-parse HEAD 2>/dev/null
            # before measuring it (WD_BIN takes any project-relative path, and one outside bin/ went
            # unkeyed). Corrected with the line, v0.5.17.
            { sha256sum "$REPO/.weavedoc/schema"
+           # THE VERSIONED CONTRACTS TOO (bundle 2026-08-08.4). `schema` is one file and from v3 the
+           # bundle ships more beside it; keying only the old path meant a dirty `schemas/v3` edit
+           # was invisible to `--resume`, which replayed the previous PASS while a fresh key failed
+           # — measured, and the same class v0.5.14/.15 closed for `bin/`. A whole tree, never named
+           # files, for the same reason: a contract added later must not be able to ship unkeyed.
+           find "$REPO/.weavedoc/schemas" -type f -print0 2>/dev/null | sort -z | xargs -0 -r sha256sum
            find "$REPO/.weavedoc/bin" -type f -print0 | sort -z | xargs -0 sha256sum
            # EVERYTHING a case consumes is configuration (v0.5.2 keyed the faultinject drivers;
            # review #6 named the rest of the class): doccheck.sh and ctlscan.mjs are RUN by cases,
@@ -1301,6 +1307,27 @@ meta_markdown_state_model_properties() {
   expect_pass
   expect_has "groups=15 cases=1844 cartesian=complete"
 }
+meta_key_covers_the_versioned_contracts() {
+  # A DIRTY CONTRACT EDIT MUST MOVE THE KEY. `.weavedoc/schema` was keyed by name and the versioned
+  # contracts beside it were not, so editing `schemas/v3` changed nothing the cache could see:
+  # `--resume` replayed the previous PASS while a fresh key ran and failed — the exact false-green
+  # v0.5.14/.15 closed for `bin/`, rebuilt one directory over. Measured before this line existed.
+  # The probe asks the harness for its own key rather than reimplementing the hash: two spellings of
+  # one key would be the thing this suite keeps deleting.
+  local k0 k1 backup="$W/v3.bak"
+  [ -f "$REPO/.weavedoc/schemas/v3" ] || { bad "no versioned contract to key — the probe would be vacuous"; return; }
+  k0=$( WD_REG_RES= WD_REG_KEY= TMPDIR="$W" bash "$REPO/tests/regress.sh" --seal-check zzzzzzzzzzzz 2>&1 | sed -n 's/.*, \([0-9a-f]*\) now\..*/\1/p' )
+  [ -n "$k0" ] || { bad "no key from a clean run — the comparison would be vacuous"; return; }
+  # Edit the live contract, take the key, put it back. The tree is restored before any assertion so
+  # a failure here cannot leave the repository dirty for the rest of the sweep.
+  cp "$REPO/.weavedoc/schemas/v3" "$backup" || { bad "could not back up the contract"; return; }
+  printf '# key probe\n' >> "$REPO/.weavedoc/schemas/v3"
+  k1=$( WD_REG_RES= WD_REG_KEY= TMPDIR="$W" bash "$REPO/tests/regress.sh" --seal-check zzzzzzzzzzzz 2>&1 | sed -n 's/.*, \([0-9a-f]*\) now\..*/\1/p' )
+  cp "$backup" "$REPO/.weavedoc/schemas/v3"
+  [ -n "$k1" ] || { bad "no key from the edited tree"; return; }
+  OUT="clean=$k0 edited=$k1"
+  if [ "$k0" = "$k1" ]; then bad "editing .weavedoc/schemas/v3 did not move the cache key"; else ok; fi
+}
 meta_artifact_contract_properties() {
   # The versioned role contract (schema v3, Phase 1). Same vacuity guard as above: the exact total
   # is asserted, so deleting an axis is a failure even when every remaining assertion is green.
@@ -1308,7 +1335,7 @@ meta_artifact_contract_properties() {
   # so this case is the ONLY thing executing it, which is precisely why the count is pinned.
   OUT=$(node "$REPO/tests/artifact-contract-properties.mjs" 2>&1); RC=$?
   expect_pass
-  expect_has "groups=6 cases=126"
+  expect_has "groups=10 cases=216"
 }
 pass_hq_kind_mention() {
   # a Human-queue entry whose prose mentions a kind — first slot is [open], not a kind (kind-bearing filter)

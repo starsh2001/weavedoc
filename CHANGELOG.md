@@ -4,6 +4,24 @@
 
 ---
 
+## 2026-08-08.4
+
+**Unreleased — the Phase 1 contract loader, corrected by review before anything is built on it.** Still read-only and unwired. Five defects, all in code shipped one bundle earlier, all found by an independent review of `2026-08-08.3` rather than by its own tests.
+
+**A dirty contract could reuse a stale PASS.** The regression cache key hashed `.weavedoc/schema` by name and the versioned contracts beside it not at all, so editing `schemas/v3` moved nothing the cache could see: `--resume` replayed the previous PASS while a fresh key ran and failed. That is the same false-green v0.5.14/.15 closed for `bin/`, rebuilt one directory over — and it means the previous bundle's "KEY seal held" was true of the old files and vacuous for the new one. The key now walks the whole `schemas/` tree, and a probe edits the live contract, takes the key, restores it, and fails if the two keys match.
+
+**The contract file was not bound to the version that asked for it.** `loadArtifactContracts(2, v3SchemaMap)` returned a fully-formed valid contract. A dispatcher that resolved the wrong path would have produced correct-looking roles for a document nobody asked for. The file's own `schema.version` is now checked against the request, and a mismatch exposes no role at all.
+
+**Every Windows install would have read the wrong file.** `contractFileFor` stripped the trailing path component with a forward-slash regex, which finds nothing in `D:\mine\.weavedoc\schema` and glued `schemas/v3` onto the whole path. It is `node:path` now, normalised back to the forward slashes the rest of this runtime compares against, and asserted on both platform spellings. Version→file and version→adapter are explicit tables rather than a comparison against the floor: deriving "is this v2" from the floor means the day the floor rises, v3 mines quietly route through the v2 adapter.
+
+**One token still had three answers.** `humanqueue.section`, `verify.section.human_queue` and `review.section.human_queue` were independent, and changing one left them split while the contract reported valid — the exact defect this module exists to end, reintroduced by the module itself. The heading is owned by the artifacts that declare it; the third opinion is gone, along with every v2 recognition key that `schemas/v3` was still carrying beside the role that replaces it (`gaps.enum.kind` stays: it assigns no role by position).
+
+**Unroutable roles were accepted silently.** `verify.section.notes` and friends validated cleanly — a token the schema recognises that no consumer can route, which is the v2 known limit rebuilt one release after removing it. The role namespace is now closed by a roster per reserved prefix, in v3 only: in a v2 schema such a key names nothing and stays an unknown key, which this format has always treated as a named warning rather than a failure.
+
+**Two mutations are unkillable by construction, and are named rather than hidden.** At the current floor the adapter table and a floor comparison are the same behaviour, so no input distinguishes them — the tables are pinned structurally instead, so collapsing them goes red. The byte-domain `encode` hook is a no-op because every fixed v2 token is ASCII; it guards the two-encoder class that bit v0.5.6 and v0.5.10 and only starts paying when a fixed token is not ASCII. Both are recorded at the code so the next mutation pass does not hunt for a fixture that cannot exist.
+
+Also: the gaps-vocabulary equivalence compared sizes and one-way membership, so a vocabulary swapped word for word at the same count passed — both directions now. Acceptance §12.7 cases 1–5 are met; 6–9 need the Phase 2 consumer switch and are recorded as outstanding in the plan rather than counted.
+
 ## 2026-08-08.3
 
 **Unreleased — schema v3 Phase 1 begins: a token's role is declared in one place, for two versions at once.** Read-only and unwired. No production consumer reads the new model yet, the mine's own contract is untouched, and the v2 suite grades the same runtime it did before; switching consumers is Phase 2's completion condition.
