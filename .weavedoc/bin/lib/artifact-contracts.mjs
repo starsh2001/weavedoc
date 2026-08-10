@@ -80,9 +80,15 @@ export function resolveArtifactVersion (projectVersion, configVersion) {
 // forward-slash, the one separator every other path in this runtime is compared against.
 const fwd = p => p.replace(/\\/g, '/')
 
+// OWN PROPERTIES ONLY, and an integer. A plain object inherits `toString`, `constructor` and the
+// rest, so `CONTRACT_FILE[version]` answered for `'toString'` and produced a path ending in the
+// function's source text. No dispatcher passes that today; the point is that a lookup table used as
+// a membership test has to be asked the membership question, or "total" is a claim and not a fact.
+const supported = version => Number.isInteger(version) && Object.hasOwn(CONTRACT_FILE, version)
+
 export function contractFileFor (version, schemaPath) {
+  if (!supported(version)) throw new Error(`unsupported artifact version ${JSON.stringify(version)} — this runtime reads ${SUPPORTED_ARTIFACT_VERSIONS.join(', ')}`)
   const file = CONTRACT_FILE[version]
-  if (file === undefined) throw new Error(`unsupported artifact version ${version} — this runtime reads ${SUPPORTED_ARTIFACT_VERSIONS.join(', ')}`)
   if (file === null) return schemaPath
   // BOTH SEPARATORS, EXPLICITLY — not node:path. `path.dirname` is platform-dependent by design:
   // on POSIX a backslash is an ordinary character, so `D:\mine\.weavedoc\schema` has no directory

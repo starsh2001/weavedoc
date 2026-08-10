@@ -36,6 +36,12 @@ const edit = (path, mutate) => {
   return m
 }
 const ARTIFACTS = ['humanQueue', 'questions', 'verify', 'review', 'gaps']
+// ONE judgment for "are these the same vocabulary", used by every comparison below. The first fix
+// for this defect added a two-way test to the one comparison that was ALREADY sound (size plus
+// one-way inclusion is set equality) and left the v3↔v2 comparison — which really did compare only
+// sizes — untouched. A swap of one kind for another at the same count passed. Two spellings of one
+// question is how that happens, so there is one.
+const sameSet = (a, b) => a.size === b.size && [...a].every(x => b.has(x)) && [...b].every(x => a.has(x))
 
 // ---- 1. version negotiation is total and picks no winner ---------------------------------------
 groups++
@@ -93,9 +99,8 @@ groups++
     'gaps section roles disagree with gaps-register.mjs', { a: c.gaps.section, b: [gr.openName, gr.acceptedName] })
   // BOTH DIRECTIONS. Comparing sizes and one-way membership passed for a vocabulary swapped word
   // for word at the same count — measured, which is why the reverse inclusion is here too.
-  check(c.gaps.kinds.size === gr.kinds.size &&
-    [...c.gaps.kinds].every(k => gr.kinds.has(k)) && [...gr.kinds].every(k => c.gaps.kinds.has(k)),
-  'gaps kind vocabulary disagrees with gaps-register.mjs', { a: [...c.gaps.kinds], b: [...gr.kinds] })
+  check(sameSet(c.gaps.kinds, gr.kinds),
+    'gaps kind vocabulary disagrees with gaps-register.mjs', { a: [...c.gaps.kinds], b: [...gr.kinds] })
 
   // The words the consumers hardcode today, read back out of the schema that declares them.
   check(c.humanQueue.state.waiting === 'open' && c.humanQueue.state.closed === 'ruled',
@@ -130,7 +135,8 @@ groups++
   check(JSON.stringify(v2.questions.state) === JSON.stringify(v3.questions.state),
     'v3 question roles differ from the v2 tokens they declare')
   check(v2.verify.verdict.covered === v3.verify.verdict.covered, 'v3 verdict marker differs from v2')
-  check(v3.gaps.kinds.size === v2.gaps.kinds.size, 'v3 kind vocabulary differs from v2')
+  check(sameSet(v3.gaps.kinds, v2.gaps.kinds), 'v3 kind vocabulary differs from v2',
+    { v2: [...v2.gaps.kinds], v3: [...v3.gaps.kinds] })
 }
 
 // ---- 4. an invalid role set fails as a UNIT, and never shifts -----------------------------------
@@ -187,10 +193,32 @@ groups++
     const artifact = key.startsWith('verify') ? 'verify' : key.startsWith('gaps') ? 'gaps' : 'humanQueue'
     check(!blank[artifact].valid, `an empty token satisfied role key ${key}`)
   }
-  // A single trailing delimiter adds no member anywhere else in the runtime and must not here.
-  const trailing = loadArtifactContracts(ARTIFACT_FLOOR, edit(V2_PATH, m => m.set('verify.sections', 'Verified units|Human queue|Adjudications|')), { domain: 'latin1' })
-  check(trailing.verify.valid && trailing.verify.section.units === 'Verified units',
-    'a trailing pipe disabled the verification contract', trailing.verify)
+  // THE FULL POSITIONAL MATRIX, both contracts (plan 12.7 #5). Leading-empty was covered above and
+  // trailing only on verify, which left interior-empty untested on either and the trailing policy
+  // asserted on half the contracts it is supposed to be uniform across.
+  const positional = [
+    ['verify', 'verify.sections', 'Verified units|Human queue|Adjudications', 'units', 'Verified units'],
+    ['gaps', 'gaps.sections', 'Open|Accepted', 'open', 'Open']
+  ]
+  for (const [artifact, key, good, firstRole, firstToken] of positional) {
+    const members = good.split('|')
+    // interior empty: a hole in the middle is as fatal as one at the front — it either shifts a
+    // later name forward or leaves a role with no token, and neither may pass as a contract.
+    const interior = [members[0], '', ...members.slice(1)].join('|')
+    const withHole = loadArtifactContracts(ARTIFACT_FLOOR, edit(V2_PATH, m => m.set(key, interior)), { domain: 'latin1' })
+    check(!withHole[artifact].valid && withHole[artifact].section === undefined,
+      `${artifact}: an interior empty member was accepted: '${interior}'`, withHole[artifact])
+    // ...and with a compensating member, so the count check cannot be what rejects it.
+    const interiorPadded = [members[0], '', ...members.slice(1), 'Extra'].join('|')
+    const padded = loadArtifactContracts(ARTIFACT_FLOOR, edit(V2_PATH, m => m.set(key, interiorPadded)), { domain: 'latin1' })
+    check(!padded[artifact].valid && padded[artifact].section === undefined,
+      `${artifact}: an interior empty member shifted a later name into an earlier role: '${interiorPadded}'`, padded[artifact])
+    // ONE trailing delimiter adds no member anywhere else in this runtime, and the policy has to be
+    // the same on every positional contract or "uniform" is just a word in the changelog.
+    const trailing = loadArtifactContracts(ARTIFACT_FLOOR, edit(V2_PATH, m => m.set(key, `${good}|`)), { domain: 'latin1' })
+    check(trailing[artifact].valid && trailing[artifact].section[firstRole] === firstToken,
+      `${artifact}: a trailing pipe disabled the contract`, trailing[artifact])
+  }
   // A v2 mine whose enum dropped a word has no role for it — the adapter must not answer from a
   // constant, which would be this module inventing the vocabulary it claims to read.
   const noRuled = loadArtifactContracts(ARTIFACT_FLOOR, edit(V2_PATH, m => m.set('humanqueue.enum.state', 'open')), { domain: 'latin1' })
@@ -354,10 +382,18 @@ groups++
   for (const input of [['D:', 'm', '.weavedoc', 'schema'].join(B), '/srv/m/.weavedoc/schema']) {
     check(contractFileFor(2, input) === input, 'v2 resolved to something other than the schema it was given')
   }
-  for (const v of [1, 4, 99]) {
+  // Unsupported versions, and the INHERITED property names a plain object answers for. A lookup
+  // table doubling as a membership test must be asked the membership question: `CONTRACT_FILE`
+  // answered for 'toString' and built a path out of the function's source text.
+  for (const v of [1, 4, 99, 2.5, '2', 'toString', 'constructor', '__proto__', 'valueOf', null, undefined, {}]) {
     let threw = false
     try { contractFileFor(v, '/x/.weavedoc/schema') } catch { threw = true }
-    check(threw, `contractFileFor accepted unsupported version ${v}`)
+    check(threw, `contractFileFor accepted unsupported version ${JSON.stringify(String(v))}`)
+  }
+  for (const v of SUPPORTED_ARTIFACT_VERSIONS) {
+    let threw = false
+    try { contractFileFor(v, '/x/.weavedoc/schema') } catch { threw = true }
+    check(!threw, `contractFileFor rejected supported version ${v}`)
   }
   // VERSION DISPATCH IS A TABLE, and this is the honest limit of what a fixture can hold. At the
   // current floor of 2, `version === ARTIFACT_FLOOR` and `ADAPTER[version] === 'v2'` are the same

@@ -29,16 +29,14 @@ truth.fm.resolution.decided_by: machine|user
 verify.fm.required: status|round|verified_at
 verify.fm.optional: consecutive_passes
 verify.fm.enum.status: passed|failed|escalated|stale|in-progress
-# RECOGNITION, NOT ROLE — and the header's "wire it or say here that it is descriptive" rule applies
-# to the half as much as to the whole. These four (`verify.sections`, `review.sections`,
-# `humanqueue.enum.*`, `questions.enum.status`) are read to decide which words a reader RECOGNISES.
-# What each word MEANS is hardcoded in the consumers: `open`/`ruled` for the queue, the three
-# ownership words for status's split, `open`/`proposed` for a waiting question, and the literal
-# `Human queue` heading for the queue's own section. FORMATS states the reason — section headers and
-# enum values are fixed English — so this file is where that fixed vocabulary is WRITTEN DOWN, not a
-# rename knob. Renaming a value leaves its entries recognised and unrouted: ownership is not enforced
-# on them and `status` shows them as untagged. `gaps.sections`/`gaps.enum.kind` are the exception:
-# those two ARE positional role contracts, wired end to end (see PARSER-MODEL.md §5).
+# ROLE, NOT RECOGNITION  this is the v3 file, and the difference is the whole point of it.
+# v2 declared which words a reader RECOGNISES (`humanqueue.enum.state`, `verify.sections`,
+# `review.sections`, `questions.enum.status`) and left what each word MEANT hardcoded in the
+# consumers. Those keys are GONE here: the explicit role block at the end of this file names each
+# token exactly once, and `artifact-contracts.mjs` is the only thing that reads them. Do not
+# reintroduce a recognition key beside the role that replaced it  two declarations of one fact is
+# the defect this version exists to remove. `gaps.enum.kind` is the one survivor and is not a
+# role list: it is a distinct membership SET that assigns nothing by position.
 # The verdict word an entry in `## Verified units` must END with to mean "this unit is covered".
 # Read by `weavedoc scope`, which counts the mine's unverified set from it. One spelling, because
 # the section's LAYOUT is deliberately free (table or bullets) and the verdict is the only thing a
@@ -56,15 +54,13 @@ project.fm.required: version|language|roles
 review.fm.optional: round|consecutive_passes|reviewed_kind|reviewed_digest|review_context_digest|review_legacy
 review.enum.reviewed_kind: draft|final
 review.enum.kind: contradiction|unsupported|missing-required
-# review.sections is READ but its EXISTENCE is not enforced, and the split is deliberate. fid_body
-# reads the list to know which headings END the violations section: a heading that names a sibling
-# section closes it at any level, anything else is a sub-heading and stays inside. Without that list
-# both obvious terminators are wrong in opposite directions — stopping at the same level lets a file
-# whose other sections are `##` run the section to EOF, stopping at any heading lets a sub-heading end
-# it early and the gate reads empty. Requiring the sections to EXIST is the separate question, and it
-# stays off: it would fail any review.md written before the template grew its fourth section, and a
-# format tightening with a migration cost belongs to the user. (verify.sections IS enforced for
-# existence: it was, by the audit lane, and removing that lane orphaned it — that is a repair.)
+# review's four sections are declared as ROLES at the end of this file, not as the v2 `review.sections`
+# list. The reason the list existed is still true  a reader has to know which headings END the
+# violations section, since stopping at the same level lets a file whose other sections are `##` run
+# to EOF while stopping at any heading lets a sub-heading close the gate early  but the answer now
+# comes from the role contract rather than a positional list. Whether the four must EXIST is a
+# separate question and Phase 2 owns it: v3 requires all four, and migration adds the missing ones
+# without reissuing a seal (plan section 7.1).
 config.enum.completeness: off|required
 config.enum.detection: standard|deep
 config.enum.attribution: ask|allow

@@ -1,6 +1,6 @@
 # WeaveDoc 다음 구현 통합 계획
 
-> 상태: **Phase 0 완료(2026-08-10) · Phase 1부터 구현 전 확정 계획**<br>
+> 상태: **Phase 0 완료 · Phase 1 진행 중(artifact-contracts 슬라이스 완료, 번들 `2026-08-08.6`) · Phase 2부터 구현 전 확정 계획**<br>
 > 작성 기준: 2026-08-09 · 검토 반영 2026-08-10 — derived 전수 이송, material `converted` 분류, 광산 로그 commit-후 경계, v1/v2 지원 수명, 계산 불능 dependent 처분, `LEDGER-ORPHAN` 출구 외 경미 확정 · 2차 보완 동일자 — §10.2 분류 우선순위, 처분 선택지 정밀화, §3.3 로그 순서, reconcile selector 3종, v1 bridge 고정 · 3차 보완 동일자 — migration 사례 정합, answer 재분류 전이, semantic/write 실패 분리, rederive 처분, absent-material inbound 가드, §2.8 로그 순서 명문화 · 4차 보완 동일자 — §2.3.2 고정 전이표, migration non-derived 한정·structural 입력, resolve 결과형 확장, stage/rename 실패 3분할, absent-`tNNN` cascade, `--drop-support` 표면 · 5차 보완 동일자 — 축 라벨 2글자화(MC·MQ·TD·TG·TL·SG), payload identity 4종·fan-out·absence terminal·`blocked_by`, 강제 이송의 `derivation_candidate` 변환, 첫 rename 전/후 실패 경계, `preparing`+manifest recovery, `CLEANUP`/`TRANSACTION` 진단 구분 · 6차 보완 동일자 — MC-remove cascade(교착 해소), 1→N 보존식+`candidate_id`, typed manifest(create/replace/delete·absent state), 방향별 guard·target vector 판정·진단 사다리 4단 · 7차 보완 동일자 — directory target은 consecrate 전용 transaction으로 명시 제외, 0-change abort 선-terminalize, MC cascade를 공용 inbound graph 전체로 정합, allocator·typed state·apply 문구 정리, fan-out `candidate_id` 결정성 · 8차 보완 동일자(동결) — MC cascade에 SG 처분+미열거 inbound catch-all, §2.2 write 실패 문구 vector 기준 정합<br>
 > 목표 릴리스: schema v3 계열(정확한 버전 번호는 구현 완료 후 결정)<br>
 > 범위: canonical-current 전환, 임시 충돌 상태, migration, source 봉인, 사람용 출력, 공통 작업 보고, 기존 gaps 이식, 선택적 enrichment 추가
@@ -1266,7 +1266,7 @@ Phase 0에서 남긴 것(차단 등급 아님, Phase 1과 독립):
 
 ### 12.7 parser/artifact role 사례
 
-> 진행(2026-08-10, 번들 `2026-08-08.4`): **1·2·3·4·5는 `tests/artifact-contract-properties.mjs`에서 충족**(1·2·3은 typed role object 층에서, 4는 비ASCII 4종 양 도메인 동치, 5는 missing·duplicate·empty·leading-empty·extra role + trailing delimiter 정책). **6·7·8·9는 미충족** — 6은 소비자 전환(Phase 2) 전에는 대조할 green fixture가 없고, 7·8은 v3 review 절/migration이 아직 없으며, 9의 doccheck 변이 검사도 소비자 전환 뒤에 붙는다. **§12.7 전체 완료로 표시하지 말 것.**
+> 진행(2026-08-10, 번들 `2026-08-08.6`): **어느 항목도 완료가 아니다.** 1~4는 status·validate·writer가 *같은* typed object로 판정하는 것을 요구하는데 **production import가 아직 0개**라 E2E 동치는 검사되지 않았다 — 지금 충족된 것은 **contract-layer 선행조건**뿐이다(1·2·3의 role object 형태, 4의 비ASCII 4종 양 도메인 동치). **5만 계약 층에서 완결**(missing·duplicate·empty·leading-empty·interior-empty·extra role + 두 positional 계약 모두의 trailing delimiter 정책). **6·7·8·9는 미착수** — 6은 소비자 전환(Phase 2) 전에는 대조할 green fixture가 없고, 7·8은 v3 review 절/migration이 아직 없으며, 9의 doccheck 변이 검사도 소비자 전환 뒤에 붙는다. **§12.7 전체 완료로 표시하지 말 것.**
 
 1. Human queue waiting/closed와 ownership 세 역할을 status·validate·writer가 같은 typed object로 판정
 2. questions waiting/proposed/closed를 listing·count·gate가 같은 역할로 판정

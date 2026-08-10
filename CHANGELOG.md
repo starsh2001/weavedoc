@@ -4,6 +4,20 @@
 
 ---
 
+## 2026-08-08.6
+
+**Unreleased — closing the correction slice, including a rule I broke while writing the probe that enforces it.**
+
+**The cache-key probe edited the live repository.** It appended to `$REPO/.weavedoc/schemas/v3`, took the key, and copied the file back. A SIGKILL in that window leaves the tree dirty, a concurrent edit is clobbered by the restore, the restoring copy was not checked, and A→B→A is no net change so the final seal cannot see any of it. The case sitting six lines away already says a test must not modify the tree it grades and uses an isolated copy for exactly that reason. The probe is one line in that copy now, and the live-tree case is deleted.
+
+**The vocabulary fix went into the sound comparison.** The v2↔production check was already `size + one-way inclusion`, which is set equality; the hole was the v3↔v2 check, which compared sizes alone. Swapping one kind for another at the same count passed 216 of 216. Both now call one `sameSet()` — two spellings of one question is how the first fix landed in the wrong place.
+
+**The positional matrix was half a matrix.** Interior-empty was untested on both contracts and the trailing-delimiter policy was asserted only on `verify.sections`, which is not a uniform policy, it is one example. Both contracts now carry leading-empty, interior-empty, interior-empty-with-a-compensating-member, and trailing.
+
+**`contractFileFor` answered for inherited property names.** A plain object used as a membership test replies to `toString`, so the resolver built a path out of a function's source text. Own-property and integer checks make the API as total as it claims.
+
+Also: `schemas/v3` still carried v2 comment blocks describing keys this bundle removed, which would have pointed a Phase 2 implementer back at the deleted path.
+
 ## 2026-08-08.5
 
 **Unreleased — the contract path resolver gave a different answer per host.** `2026-08-08.4` fixed the Windows path bug with `node:path`, which is platform-dependent *by design*: on POSIX a backslash is an ordinary character, so `D:mine.weavedocschema` has no directory component there at all. The Windows leg of CI passed and Linux and macOS went red on the property count — the fixture asserted Windows spellings that only hold on Windows. A resolver for a bundled contract must not answer differently by host, so it now cuts at the last separator of either kind and emits forward slashes, with no import and one answer everywhere. Measured on all three legs rather than on the one that agreed.
@@ -24,7 +38,7 @@
 
 **Two mutations are unkillable by construction, and are named rather than hidden.** At the current floor the adapter table and a floor comparison are the same behaviour, so no input distinguishes them — the tables are pinned structurally instead, so collapsing them goes red. The byte-domain `encode` hook is a no-op because every fixed v2 token is ASCII; it guards the two-encoder class that bit v0.5.6 and v0.5.10 and only starts paying when a fixed token is not ASCII. Both are recorded at the code so the next mutation pass does not hunt for a fixture that cannot exist.
 
-Also: the gaps-vocabulary equivalence compared sizes and one-way membership, so a vocabulary swapped word for word at the same count passed — both directions now. Acceptance §12.7 cases 1–5 are met; 6–9 need the Phase 2 consumer switch and are recorded as outstanding in the plan rather than counted.
+Also: the gaps-vocabulary equivalence compared sizes and one-way membership, so a vocabulary swapped word for word at the same count passed — both directions now. Acceptance §12.7: only #5 is complete at the contract layer. Cases 1–4 ask that status, validate and the writers judge through the SAME typed object, and no production consumer imports it yet — what exists is the prerequisite, not the equivalence. Recorded that way in the plan rather than counted as met.
 
 ## 2026-08-08.3
 

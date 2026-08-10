@@ -1307,27 +1307,6 @@ meta_markdown_state_model_properties() {
   expect_pass
   expect_has "groups=15 cases=1844 cartesian=complete"
 }
-meta_key_covers_the_versioned_contracts() {
-  # A DIRTY CONTRACT EDIT MUST MOVE THE KEY. `.weavedoc/schema` was keyed by name and the versioned
-  # contracts beside it were not, so editing `schemas/v3` changed nothing the cache could see:
-  # `--resume` replayed the previous PASS while a fresh key ran and failed — the exact false-green
-  # v0.5.14/.15 closed for `bin/`, rebuilt one directory over. Measured before this line existed.
-  # The probe asks the harness for its own key rather than reimplementing the hash: two spellings of
-  # one key would be the thing this suite keeps deleting.
-  local k0 k1 backup="$W/v3.bak"
-  [ -f "$REPO/.weavedoc/schemas/v3" ] || { bad "no versioned contract to key — the probe would be vacuous"; return; }
-  k0=$( WD_REG_RES= WD_REG_KEY= TMPDIR="$W" bash "$REPO/tests/regress.sh" --seal-check zzzzzzzzzzzz 2>&1 | sed -n 's/.*, \([0-9a-f]*\) now\..*/\1/p' )
-  [ -n "$k0" ] || { bad "no key from a clean run — the comparison would be vacuous"; return; }
-  # Edit the live contract, take the key, put it back. The tree is restored before any assertion so
-  # a failure here cannot leave the repository dirty for the rest of the sweep.
-  cp "$REPO/.weavedoc/schemas/v3" "$backup" || { bad "could not back up the contract"; return; }
-  printf '# key probe\n' >> "$REPO/.weavedoc/schemas/v3"
-  k1=$( WD_REG_RES= WD_REG_KEY= TMPDIR="$W" bash "$REPO/tests/regress.sh" --seal-check zzzzzzzzzzzz 2>&1 | sed -n 's/.*, \([0-9a-f]*\) now\..*/\1/p' )
-  cp "$backup" "$REPO/.weavedoc/schemas/v3"
-  [ -n "$k1" ] || { bad "no key from the edited tree"; return; }
-  OUT="clean=$k0 edited=$k1"
-  if [ "$k0" = "$k1" ]; then bad "editing .weavedoc/schemas/v3 did not move the cache key"; else ok; fi
-}
 meta_artifact_contract_properties() {
   # The versioned role contract (schema v3, Phase 1). Same vacuity guard as above: the exact total
   # is asserted, so deleting an axis is a failure even when every remaining assertion is green.
@@ -1335,7 +1314,7 @@ meta_artifact_contract_properties() {
   # so this case is the ONLY thing executing it, which is precisely why the count is pinned.
   OUT=$(node "$REPO/tests/artifact-contract-properties.mjs" 2>&1); RC=$?
   expect_pass
-  expect_has "groups=10 cases=216"
+  expect_has "groups=10 cases=232"
 }
 pass_hq_kind_mention() {
   # a Human-queue entry whose prose mentions a kind — first slot is [open], not a kind (kind-bearing filter)
@@ -5155,6 +5134,13 @@ meta_key_covers_every_live_input() {
   }
   # bin/ top level (not the entrypoint, not under lib/) — the v0.5.15 hole
   printf 'export const x = 1\n' > "$copy/.weavedoc/bin/extra.mjs"; probe_moves bin-toplevel "$copy/.weavedoc/bin/extra.mjs"
+  # the VERSIONED CONTRACTS beside the schema (bundle 2026-08-08.6). `.weavedoc/schema` was keyed by
+  # name and `schemas/` not at all, so a dirty `schemas/v3` edit was invisible to `--resume`, which
+  # replayed the previous PASS while a fresh key failed — the v0.5.14/.15 hole one directory over.
+  # It belongs HERE, in the isolated copy: the first spelling of this probe edited $REPO itself and
+  # restored it, which a SIGKILL in the window leaves dirty, lets a concurrent edit be clobbered by
+  # the restore, and hides from the final seal anyway because A→B→A is no net change.
+  probe_moves schemas-v3 "$copy/.weavedoc/schemas/v3"
   # a nested lib module, and a tests/ helper below the top level — the recursive halves
   mkdir -p "$copy/.weavedoc/bin/lib/sub" && printf 'export const y = 1\n' > "$copy/.weavedoc/bin/lib/sub/m.mjs"
   probe_moves bin-nested "$copy/.weavedoc/bin/lib/sub/m.mjs"
