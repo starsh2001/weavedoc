@@ -43,6 +43,8 @@ bash tests/in-container.sh sh '<셸 명령>'    # 그 외, /work가 트리
 
 `node tests/markdown-model-properties.mjs` runs the fast, deterministic Cartesian model checks without creating a mine. It covers lexical context precedence, EOLs, fence forms, slot/body states, continuation hierarchy, section boundaries and writer postconditions. `regress.sh` also runs it as a black-box meta case; an empty or shortened matrix is a failure, not a vacuous pass.
 
+`node tests/artifact-contract-properties.mjs` does the same for the versioned artifact-role contract (schema v3 Phase 1) — version negotiation, v2↔production equivalence, fail-closed role sets, positional shift, and the declared schema domain. **Nothing in the runtime consumes that model yet** (production consumers switch in Phase 2), so its meta case is the only thing executing it and the exact assertion total is pinned for that reason.
+
 ## CI
 
 [.github/workflows/ci.yml](../.github/workflows/ci.yml) — **트리거마다 도는 OS가 다르다.**

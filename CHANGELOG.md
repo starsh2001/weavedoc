@@ -4,6 +4,22 @@
 
 ---
 
+## 2026-08-08.3
+
+**Unreleased — schema v3 Phase 1 begins: a token's role is declared in one place, for two versions at once.** Read-only and unwired. No production consumer reads the new model yet, the mine's own contract is untouched, and the v2 suite grades the same runtime it did before; switching consumers is Phase 2's completion condition.
+
+**The known limit gets a mechanism.** [`PARSER-MODEL.md`](.weavedoc/PARSER-MODEL.md) §5 records that the schema decided which words a reader *recognises* while what each word *meant* stayed hardcoded in the consumers — `open` waits, `ruled` is closed, the queue is the literal `Human queue`. `artifact-contracts.mjs` turns that into declared roles: `humanqueue.state.waiting`, `verify.section.units`, `review.section.violations` and the rest name their tokens once, and a consumer selects a role instead of splitting an enum or matching English. The bundled `schemas/v3` carries those keys; v2 keeps the single `.weavedoc/schema` it always had, because a second copy of one contract is a second answer waiting to drift.
+
+**The v2 adapter's job is to agree, not to improve.** The properties assert equivalence with what production already computes — `verified-units.mjs`'s positional boundaries and marker, `gaps-register.mjs`'s open/accepted names and kind set — so the Phase 2 switch can be a deletion rather than a behaviour change. Where the three v2 shapes genuinely differ they are translated as they are, not harmonised: gaps and verify sections are positional lists, review's sections are a membership set whose gate is the fixed English name, and the queue/question words are fixed vocabulary that must still be present in the enum that declares them. A mine whose enum dropped `ruled` has no closed state, and the adapter says so rather than answering from a constant.
+
+**One schema domain rule, stated by the caller.** `verifiedUnitsContract` takes the utf8 map and re-encodes; `gapRegisterContract` takes the byte map and does not. Both are correct today and having two conventions is a trap for the next edit — the class that made `status` and validate disagree about a non-ASCII state word in v0.5.6. The loader transcodes nothing, requires an explicit `domain`, and stamps it on the answer so a consumer can assert the tokens match the bytes it is about to compare.
+
+**Version negotiation is total and picks no winner.** `project.md` and `config.yaml` are two records of one fact: missing, non-integer, disagreeing or above the runtime maximum all fail closed as `VERSION-MISMATCH` with no side adopted as authority, and a failed negotiation never returns a version. Below the floor is a *different* event with its own code and the pinned v1 bridge runtime (`v0.5.21`, `0257167`) named in it — telling a v1 user to upgrade the runtime would send them the wrong way. Runtime maximum is the runtime's own constant, never the mine's `schema.version`.
+
+**Fail-closed as a unit.** An invalid, missing, duplicated or empty role leaves its artifact exposing *no* roles rather than the subset that parsed, and never shifts a later member into an earlier role. The positional property now uses a list with a compensating extra member as well as a short one: without the extra member the count check rejects the input anyway, so a reader that drops empties before assigning positions still looks correct. That combination was found by mutation, not by inspection.
+
+**The fingerprint follows what ships.** `version`'s digest walks the versioned contracts beside the schema. From v3 the bundle carries more than one artifact contract, and a file deciding how a mine is read must not differ between two installs reporting the same fingerprint. An install predating the directory contributes nothing instead of losing its fingerprint. The bundle manifest gains the same path, fail-closed on its absence.
+
 ## 2026-08-08.2
 
 **Unreleased — the comment-swallow contract says what it enforces, and the diagnostics added in `2026-08-08.1` are now executed by cases.** No parser behaviour changes: this bundle moves words and adds fixtures, so a mine that passed under `2026-08-08.1` passes here.

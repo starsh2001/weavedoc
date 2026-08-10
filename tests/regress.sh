@@ -1301,6 +1301,15 @@ meta_markdown_state_model_properties() {
   expect_pass
   expect_has "groups=15 cases=1844 cartesian=complete"
 }
+meta_artifact_contract_properties() {
+  # The versioned role contract (schema v3, Phase 1). Same vacuity guard as above: the exact total
+  # is asserted, so deleting an axis is a failure even when every remaining assertion is green.
+  # Nothing in the runtime consumes this model yet — switching production consumers is Phase 2 —
+  # so this case is the ONLY thing executing it, which is precisely why the count is pinned.
+  OUT=$(node "$REPO/tests/artifact-contract-properties.mjs" 2>&1); RC=$?
+  expect_pass
+  expect_has "groups=6 cases=126"
+}
 pass_hq_kind_mention() {
   # a Human-queue entry whose prose mentions a kind — first slot is [open], not a kind (kind-bearing filter)
   REV ''
@@ -5188,10 +5197,15 @@ meta_git_env_ignored_by_key_and_manifest() {
   # does not). Two tracked files are enough: what is asserted is that both runs answer alike, not
   # what they answer. The alternate index restages VERSION with schema's blob — a difference the
   # unfixed script reported and the key never saw.
-  mkdir -p "$sc/.weavedoc" "$sc/tests" "$sc/.claude/skills/weavedoc-x"
+  # THIS LIST IS make-manifest.sh's REQUIRED-PATH GUARD, and the two move together: adding a path
+  # there without adding it here makes the generator refuse this scratch repo, which is what the
+  # vacuity guard below then reports (measured when `.weavedoc/schemas/v3` was added). The guard
+  # catching it loudly is the design; keeping the two lists in step is the maintenance.
+  mkdir -p "$sc/.weavedoc/schemas" "$sc/tests" "$sc/.claude/skills/weavedoc-x"
   cp "$REPO/.weavedoc/VERSION" "$REPO/.weavedoc/schema" "$REPO/.weavedoc/READ.md" \
      "$REPO/.weavedoc/FORMATS.md" "$REPO/.weavedoc/PARSER-MODEL.md" \
      "$REPO/.weavedoc/.gitattributes" "$sc/.weavedoc"/ 2>/dev/null
+  cp "$REPO/.weavedoc/schemas/v3" "$sc/.weavedoc/schemas"/ 2>/dev/null
   mkdir -p "$sc/.weavedoc/bin" && cp "$REPO/.weavedoc/bin/weavedoc.mjs" "$sc/.weavedoc/bin"/ 2>/dev/null
   printf 'skill
 ' > "$sc/.claude/skills/weavedoc-x/SKILL.md"
@@ -5248,11 +5262,13 @@ meta_manifest_generator_fails_closed() {
   # as though it were the file's digest, and the script exited 0. Built by staging the required
   # paths and then deleting one loose object out from under the index.
   local sc2="$W/mmfc2" obj
-  mkdir -p "$sc2/tests" "$sc2/.weavedoc/bin"
+  mkdir -p "$sc2/tests" "$sc2/.weavedoc/bin" "$sc2/.weavedoc/schemas"
   cp "$REPO/tests/make-manifest.sh" "$REPO/tests/git-env.sh" "$sc2/tests"/ 2>/dev/null
+  # Same coupling to make-manifest.sh's required-path guard as the case above.
   cp "$REPO/.weavedoc/VERSION" "$REPO/.weavedoc/schema" "$REPO/.weavedoc/READ.md" \
      "$REPO/.weavedoc/FORMATS.md" "$REPO/.weavedoc/PARSER-MODEL.md" \
      "$REPO/.weavedoc/.gitattributes" "$sc2/.weavedoc"/ 2>/dev/null
+  cp "$REPO/.weavedoc/schemas/v3" "$sc2/.weavedoc/schemas"/ 2>/dev/null
   cp "$REPO/.weavedoc/bin/weavedoc.mjs" "$sc2/.weavedoc/bin"/ 2>/dev/null
   ( cd "$sc2" && git init -q . && git add -A >/dev/null 2>&1 ) || { bad "could not build the second scratch repo"; return; }
   out=$( cd "$sc2" && bash tests/make-manifest.sh 2>/dev/null ); rc=$?

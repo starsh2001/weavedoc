@@ -123,6 +123,20 @@ function cmdVersion (json) {
     }
     walk(join(SCRIPT_DIR, 'lib'), '')
     h.update(readFileSync(SCHEMA))
+    // The VERSIONED contracts beside it, for the same reason lib/ is walked whole: from schema v3
+    // the runtime bundles more than one artifact contract, and a file that decides how a mine is
+    // read must not be able to differ between two installs that report the same fingerprint. The
+    // label says "bin+schema" and this is what keeps that true. Absent (an install from before the
+    // directory existed) contributes nothing rather than throwing the whole fingerprint away.
+    const versioned = join(SCHEMA, '..', 'schemas')
+    let versionedNames = []
+    try { versionedNames = readdirSync(versioned).sort() } catch { versionedNames = [] }
+    for (const n of versionedNames) {
+      const p = join(versioned, n)
+      if (statSync(p).isDirectory()) continue
+      h.update(`schemas/${n}`)
+      h.update(readFileSync(p))
+    }
     fp = h.digest('hex')
   } catch { /* a runtime that cannot read itself still reports its label */ }
   if (json) {

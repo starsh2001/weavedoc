@@ -1,0 +1,139 @@
+# WeaveDoc format schema — the single source of truth for artifact formats.
+# Both bin/weavedoc.mjs (the checker) and FORMATS.md (human prose) defer to THIS file.
+# Kept flat with |-separated lists so it parses with no yq/jq dependency.
+# `*.fm.optional` lists are DESCRIPTIVE: validate does not reject unknown frontmatter keys, so they
+# document what a writer may add rather than gating anything. Every other key here is read by
+# bin/weavedoc.mjs via the schema map. If you add a key, wire it or say here that it is descriptive —
+# a declared-but-unread key looks exactly like an enforced one, and `repeat` sat unwired that way.
+
+# An UNTOUCHED template placeholder: a required value that is nothing but one brace group, the
+# shape every shipped template writes (`tone: {the project tone, copied here, …}`). Read by the
+# required-field checks for project/material/truth/plan so the rule has ONE spelling. Deliberately
+# narrow: only a value that is entirely `{…}`. A value that merely CONTAINS braces is real content
+# (a claim quoting a config fragment), and a list of placeholders (`tags: [{tag1}, {tag2}]`) opens
+# with `[`, so neither is touched. Escape: put any character outside the braces.
+fm.placeholder: ^[{][^{}]*[}]$
+material.fm.required: id|title|origin|role|topics|format|source_path|added|status|summary
+material.fm.optional: stage|corrects|url|retrieved_at|dated
+material.fm.enum.origin: file|user-answer|prior-doc|conversation|research
+material.fm.enum.status: collected|converted|verified|used|retracted
+material.fm.enum.stage: plan|applied
+material.fm.required_when.research: url|retrieved_at
+truth.fm.required: id|claim|source|tags|status
+truth.fm.optional: location|conflict_with|resolution|superseded|provenance|derived_from|assumptions|as_of|corroborated_by
+truth.fm.enum.status: ok|conflict|unsupported|discarded|retracted
+truth.fm.enum.provenance: stated|adopted|derived
+truth.fm.resolution.type: supersedes|authority|pick|value|attribute
+truth.fm.resolution.decision_kind: supplied|ratified
+truth.fm.resolution.decided_by: machine|user
+questions.enum.status: open|proposed|answered
+verify.fm.required: status|round|verified_at
+verify.fm.optional: consecutive_passes
+verify.fm.enum.status: passed|failed|escalated|stale|in-progress
+# RECOGNITION, NOT ROLE — and the header's "wire it or say here that it is descriptive" rule applies
+# to the half as much as to the whole. These four (`verify.sections`, `review.sections`,
+# `humanqueue.enum.*`, `questions.enum.status`) are read to decide which words a reader RECOGNISES.
+# What each word MEANS is hardcoded in the consumers: `open`/`ruled` for the queue, the three
+# ownership words for status's split, `open`/`proposed` for a waiting question, and the literal
+# `Human queue` heading for the queue's own section. FORMATS states the reason — section headers and
+# enum values are fixed English — so this file is where that fixed vocabulary is WRITTEN DOWN, not a
+# rename knob. Renaming a value leaves its entries recognised and unrouted: ownership is not enforced
+# on them and `status` shows them as untagged. `gaps.sections`/`gaps.enum.kind` are the exception:
+# those two ARE positional role contracts, wired end to end (see PARSER-MODEL.md §5).
+verify.sections: Verified units|Human queue|Adjudications
+# The verdict word an entry in `## Verified units` must END with to mean "this unit is covered".
+# Read by `weavedoc scope`, which counts the mine's unverified set from it. One spelling, because
+# the section's LAYOUT is deliberately free (table or bullets) and the verdict is the only thing a
+# machine can read across both; an entry ending in anything else covers nothing and `scope` names it.
+verify.units.verified: verified
+humanqueue.enum.state: open|ruled
+humanqueue.enum.ownership: user-only|recommended|machine
+coverage.section.optional: legacy
+changelog.line.kinds: added|superseded|edited|removed|confirmed
+project.fm.optional: authority|required_tags|tone|gap_density
+plan.fm.required: doc_id|doc_type|tone|status
+plan.fm.optional: continues|cited_truths|scope_tags|audience|publication_labels
+plan.fm.enum.status: planned|drafting|reviewing|done|stale
+# `audience: external` requires publication_labels (WD-CFG-001): an external document ships with
+# its labels or not at all.
+plan.fm.enum.audience: internal|external
+project.fm.required: version|language|roles
+review.fm.optional: round|consecutive_passes|reviewed_kind|reviewed_digest|review_context_digest|review_legacy
+review.enum.reviewed_kind: draft|final
+review.enum.kind: contradiction|unsupported|missing-required
+# review.sections is READ but its EXISTENCE is not enforced, and the split is deliberate. fid_body
+# reads the list to know which headings END the violations section: a heading that names a sibling
+# section closes it at any level, anything else is a sub-heading and stays inside. Without that list
+# both obvious terminators are wrong in opposite directions — stopping at the same level lets a file
+# whose other sections are `##` run the section to EOF, stopping at any heading lets a sub-heading end
+# it early and the gate reads empty. Requiring the sections to EXIST is the separate question, and it
+# stays off: it would fail any review.md written before the template grew its fourth section, and a
+# format tightening with a migration cost belongs to the user. (verify.sections IS enforced for
+# existence: it was, by the audit lane, and removing that lane orphaned it — that is a repair.)
+review.sections: Fidelity violations|Findings|Adjudications|Human queue
+config.enum.completeness: off|required
+config.enum.detection: standard|deep
+config.enum.attribution: ask|allow
+gaps.sections: Open|Accepted
+gaps.enum.kind: declared|reference|enumeration|symmetry
+# Machine-owned verification sidecar (WD-COR-003). Append-only TSV in truths/: one row per unit
+# per attest — id<TAB>sha256<TAB>verdict<TAB>round<TAB>standard<TAB>date. LAST row per id wins, so
+# re-verification is an append and the round history stays. `## Verified units` markdown rows
+# without a digest stay readable as `legacy-unbound`: preserved history that binds no bytes and
+# never counts digest-bound verified. Truth digest = whole file raw bytes; material digest =
+# converted.md minus its frontmatter `status:` line (lifecycle must not invalidate verification).
+verify.ledger.file: verify-ledger.tsv
+# Verdicts ATTESTABLE by `weavedoc attest`. Migration additionally writes `legacy-unbound` rows
+# (digest column `-`) for pre-digest history — readers count those as legacy, never stale/bound.
+verify.ledger.verdicts: verified|failed
+# Origin tokens migration writes into a legacy-unbound row's `standard` column (v0.3.2): they
+# record WHICH v1 record minted the row. `scope` reads them — an m-id legacy row is material
+# evidence ONLY with the material origin (an origin-less m row is a pre-0.3.2 cross-lane mint
+# from the truths ledger: shown, ignored, the material falls back to its own frontmatter).
+# t-id rows accept `-` too: the truths lane was always the right lane, so 0.3.1 rows stay valid.
+verify.ledger.origin.material: v1-material-frontmatter
+verify.ledger.origin.truths: v1-truths-ledger
+# Artifact schema version this runtime reads and writes (WD-MIG-002). A project declares its own
+# in project.md AND config.yaml `version:` — two records of one fact, checked for agreement. A
+# project NEWER than this is fail-closed (guessing at a future format is how corruption ships);
+# a v1 project stays readable (dual-reader) and validate points it at `weavedoc upgrade --check`.
+schema.version: 3
+# Config contract (WD-CFG-001) — every knob has a type/range; verify/review are section-aware
+# (a flat first-match reader can never see review.strength behind verify.strength). Unknown
+# top-level keys are a NAMED WARNING, never a failure: extension vs typo is not machine-decidable.
+config.toplevel: version|language|paths|fidelity|conflicts|verify|review|gaps
+config.enum.scale: skip|light|standard|full
+config.strength.range: 1|2|3
+config.repeat.scales: skip|light|standard|full
+
+# ---- explicit artifact ROLES (schema v3) ----------------------------------------------------
+# THE DIFFERENCE FROM v2 IS WHERE MEANING LIVES, not how many words there are. v2 declares which
+# words a reader RECOGNISES (`humanqueue.enum.state: open|ruled`) and leaves what each word MEANS
+# hardcoded in the consumers — `open` waits, `ruled` is closed, the queue heading is the literal
+# `Human queue`. That is the known limit PARSER-MODEL.md section 5 records: rename a value and its
+# entries stay recognised but unrouted. Here each ROLE names its token, one place, and every
+# consumer asks the shared contract loader instead of splitting an enum or matching English.
+#
+# These tokens are the format's fixed vocabulary, NOT a rename knob and NOT a translation surface.
+# Only user-facing messages are translated; artifact bytes are not. What changes in v3 is that the
+# mapping is declared rather than implied, so an invalid or duplicated role fails the whole model
+# closed instead of shifting a later member into an earlier role.
+humanqueue.state.waiting: open
+humanqueue.state.closed: ruled
+humanqueue.ownership.user: user-only
+humanqueue.ownership.recommended: recommended
+humanqueue.ownership.machine: machine
+humanqueue.section: Human queue
+questions.state.waiting: open
+questions.state.proposed: proposed
+questions.state.closed: answered
+verify.section.units: Verified units
+verify.section.human_queue: Human queue
+verify.section.adjudications: Adjudications
+verify.verdict.covered: verified
+review.section.violations: Fidelity violations
+review.section.findings: Findings
+review.section.adjudications: Adjudications
+review.section.human_queue: Human queue
+gaps.section.open: Open
+gaps.section.accepted: Accepted
