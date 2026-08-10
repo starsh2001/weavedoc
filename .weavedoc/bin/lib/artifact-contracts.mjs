@@ -10,7 +10,6 @@
 // must stay green against the old spellings, and switching consumers is Phase 2's completion
 // condition. What this file has to earn now is that its v2 answer is the SAME answer production
 // already gives, so the switch is a deletion rather than a behaviour change.
-import { dirname, join } from 'node:path'
 import { pipes } from './core.mjs'
 
 // The runtime's own supported range — deliberately NOT `schema.version` from the mine's schema.
@@ -75,18 +74,25 @@ export function resolveArtifactVersion (projectVersion, configVersion) {
 // Which bundled contract file a version reads. v2 is the runtime's existing `.weavedoc/schema` —
 // there is exactly one copy of the v2 contract and this is it, because a second copy is a second
 // answer waiting to drift. v3 gets its own file beside it.
-// NATIVE PATH SPLITTING, FORWARD-SLASH OUTPUT — the spelling `mine.mjs` fixed for this runtime.
-// The hand-rolled `replace(/\/[^/]*$/, '')` found no `/` in `D:\mine\.weavedoc\schema`, so it
-// returned the whole path with `schemas/v3` glued on the end: every Windows install would have read
-// the wrong file the moment a consumer was wired to this. node:path splits correctly on both
-// platforms, and `fwd` keeps the result in the one separator every other path in this runtime uses,
-// so a returned path can still be string-compared against `m.root`-derived prefixes.
+// The first spelling here stripped the trailing component with `replace(/\/[^/]*$/, '')`, which
+// finds no `/` in `D:\mine\.weavedoc\schema` and glued `schemas/v3` onto the whole path — every
+// Windows install would have read the wrong file the moment a consumer was wired to this. Output is
+// forward-slash, the one separator every other path in this runtime is compared against.
 const fwd = p => p.replace(/\\/g, '/')
 
 export function contractFileFor (version, schemaPath) {
   const file = CONTRACT_FILE[version]
   if (file === undefined) throw new Error(`unsupported artifact version ${version} — this runtime reads ${SUPPORTED_ARTIFACT_VERSIONS.join(', ')}`)
-  return file === null ? schemaPath : fwd(join(dirname(schemaPath), 'schemas', file))
+  if (file === null) return schemaPath
+  // BOTH SEPARATORS, EXPLICITLY — not node:path. `path.dirname` is platform-dependent by design:
+  // on POSIX a backslash is an ordinary character, so `D:\mine\.weavedoc\schema` has no directory
+  // at all there. That made the answer differ by host, which a contract resolver must never do and
+  // which no Windows-only test would have caught — CI's Linux and macOS legs did. Cutting at the
+  // last separator of either kind and emitting the forward slashes the rest of this runtime
+  // compares against gives one answer everywhere, and needs no import.
+  const cut = Math.max(schemaPath.lastIndexOf('/'), schemaPath.lastIndexOf('\\'))
+  const dir = cut < 0 ? '.' : schemaPath.slice(0, cut)
+  return `${fwd(dir)}/schemas/${file}`
 }
 
 // ---- role assembly ---------------------------------------------------------------------------

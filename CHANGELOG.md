@@ -4,6 +4,10 @@
 
 ---
 
+## 2026-08-08.5
+
+**Unreleased — the contract path resolver gave a different answer per host.** `2026-08-08.4` fixed the Windows path bug with `node:path`, which is platform-dependent *by design*: on POSIX a backslash is an ordinary character, so `D:mine.weavedocschema` has no directory component there at all. The Windows leg of CI passed and Linux and macOS went red on the property count — the fixture asserted Windows spellings that only hold on Windows. A resolver for a bundled contract must not answer differently by host, so it now cuts at the last separator of either kind and emits forward slashes, with no import and one answer everywhere. Measured on all three legs rather than on the one that agreed.
+
 ## 2026-08-08.4
 
 **Unreleased — the Phase 1 contract loader, corrected by review before anything is built on it.** Still read-only and unwired. Five defects, all in code shipped one bundle earlier, all found by an independent review of `2026-08-08.3` rather than by its own tests.
