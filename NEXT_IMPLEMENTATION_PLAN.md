@@ -894,7 +894,7 @@ migration 성공 직후 material을 자동 대량 삭제하지 않는다.
 - ~~현재 staged parser/state 리팩터링만 검토·검증~~ → 콜드 diff 리뷰 완료, truth model 변경 미혼입
 - ~~회귀 재실행~~ → `2026-08-08.1`에서 575/575, `2026-08-08.2`에서 **580/580**(Windows 네이티브, KEY seal 유지)
 - ~~property 1,844건 재실행~~ → 1,844 / 15 groups, 두 번들 모두
-- ~~3-OS CI~~ → `2026-08-08.1` green(dispatch `31359492780`); `.2`도 같은 경로로 확인
+- ~~3-OS CI~~ → 둘 다 green: `2026-08-08.1`은 dispatch `31359492780`(`e524511`), `2026-08-08.2`는 dispatch `31370959951`(`cf99658`). lint·powershell-smoke·linux·manifest·windows·macos 전부 통과, release는 태그가 없어 skipped
 - ~~manifest/fingerprint/doccheck~~ → 54행 재현 동일 · fingerprint golden 일치 · doccheck green
 - ~~실제 광산 read-only 명령 무변동 확인~~ → eclypse 9개 명령 v0.5.21과 바이트 동일, 427파일 무변동
 - ~~별도 commit으로 고정~~ → `e524511`(parser/state) · `bcf804d`(문구 정합 + 커버리지 0건 진단 4개 케이스). 둘 다 Unreleased
