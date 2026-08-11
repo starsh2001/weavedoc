@@ -1314,7 +1314,7 @@ meta_quote_marker_properties() {
   # — hence the pinned total.
   OUT=$(node "$REPO/tests/quote-marker-properties.mjs" 2>&1); RC=$?
   expect_pass
-  expect_has "groups=10 cases=68"
+  expect_has "groups=13 cases=125"
 }
 meta_raw_source_properties() {
   # The shared raw-source model (schema v3, Phase 1). Same vacuity guard as its siblings: the exact
@@ -1324,7 +1324,7 @@ meta_raw_source_properties() {
   # loud instead of quietly covering one branch less.
   OUT=$(node "$REPO/tests/raw-source-properties.mjs" 2>&1); RC=$?
   expect_pass
-  expect_has "groups=8 cases=76"
+  expect_has "groups=8 cases=78"
   expect_has "nonregular="
   expect_has "rootalias="
   expect_has "hardlink="

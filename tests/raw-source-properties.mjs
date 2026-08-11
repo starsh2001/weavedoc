@@ -262,6 +262,23 @@ try {
     })
     check(late.state !== 'complete', 'a hardlink installed after the read still produced a complete set', late.state)
     check(late.treeDigest === null, 'a set aliased mid-read still produced a tree digest', late)
+
+    // THE ROOT ITSELF CAN BE SWAPPED. Names matching is not the same as the directory being the same
+    // directory: rename the material aside, put a fresh one with identical filenames back, and every
+    // child re-lists identically while the snapshot describes files no longer at that path.
+    const d4 = fresh('root-swap')
+    put(d4, 'source.md', 'original\n')
+    const swapped = read(d4, {
+      hooks: {
+        afterEntries: () => {
+          renameSync(d4, join(mine, 'root-swap-moved'))
+          mkdirSync(d4, { recursive: true })
+          writeFileSync(join(d4, 'source.md'), 'IMPOSTOR\n')
+        }
+      }
+    })
+    check(swapped.state === 'unstable', 'the material root was replaced mid-read and the set still published', swapped.state)
+    check(swapped.treeDigest === null, 'a swapped root still produced a tree digest', swapped)
   }
 
   // ---- 7. the manifest shape, and the snapshot it hands out -------------------------------------

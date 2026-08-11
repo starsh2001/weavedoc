@@ -136,6 +136,28 @@ schema is where the fixed vocabulary is written down, not a rename knob — but 
 mistake these keys for a configuration surface. Renaming a value makes its entries recognised and
 then unrouted; only the residue rule in `status` keeps them visible.
 
+## 5b. Blockquotes and standalone comments (schema v3)
+
+Two more typed populations come from the scanner, for the quote seal that v3 adds. Both exist
+because the first consumer took lexical context from here and then decided *structure* with its own
+regexes, which leaked in six directions at once.
+
+A **blockquote** is a maximal run of lines whose live text begins at column zero with `>`. What
+follows the `>` is content: requiring a space made `>alpha` neither a quote nor a rejection. The
+grammar is narrow on purpose — this runtime is not a CommonMark renderer — so every other shape that
+*renders* as quoted text is refused by name rather than half-supported: an indented `>`
+(`MD_QUOTE_INDENTED`), a `>` after a list marker (`MD_QUOTE_NESTED`), and a lazy continuation
+(`MD_QUOTE_LAZY`), which stays attached to its run so the compared span is the span a reader sees.
+A heading, list marker, thematic break, fence or comment after a quote is an ordinary block boundary
+and ends it cleanly; only bare prose is lazy.
+
+A **standalone comment** is one whose lines hold nothing else live, and which is not nested inside
+another comment. Only that shape can carry an instruction: a marker embedded in a sentence declared
+a seal from inside prose.
+
+Consumers of these populations return one span per region with a single terminal state. A region may
+not be both refused and sealed, and spans do not overlap — one region, one verdict.
+
 ## 6. Review detection versus mutation
 
 The review zone is deliberately not a bullet ledger. A bracketed violation kind is detected outside

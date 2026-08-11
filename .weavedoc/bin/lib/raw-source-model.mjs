@@ -77,7 +77,18 @@ export function openMaterialRoot (materialDir, trustedRoot) {
   if (rel.startsWith('..') || /^[A-Za-z]:/.test(rel)) {
     return { ok: false, code: 'RAW-SOURCE-ROOT-ESCAPE', state: 'invalid', detail: `${materialDir} resolves outside the trusted root`, real }
   }
-  return { ok: true, code: null, state: null, detail: null, real }
+  // The root's own identity is carried out, so the caller can prove at the END of the read that the
+  // directory it enumerated is still the directory at that path.
+  return { ok: true, code: null, state: null, detail: null, real, ino: st.ino, dev: st.dev }
+}
+
+// Re-examining the ROOT after the read, for the reason the entries are re-examined: a material
+// directory can be renamed aside and a fresh directory — or a junction — installed under the same
+// name while the walk is in flight. The names then match, every child re-lists identically, and the
+// snapshot describes files that are no longer at that path. Measured before this existed.
+function rootUnchanged (materialDir, trustedRoot, opened) {
+  const now = openMaterialRoot(materialDir, trustedRoot)
+  return now.ok && now.real === opened.real && now.ino === opened.ino && now.dev === opened.dev
 }
 
 // One file, read so that its identity and its bytes come from the SAME open description. The first
@@ -191,6 +202,10 @@ export function readRawSources (materialDir, { trustedRoot, hooks } = {}) {
   const second = listing()
   if (unstable === null && (second === null || second.join('\0') !== first.join('\0'))) {
     unstable = `${materialDir} changed while it was being read`
+  }
+  // Names matching is not the same as the directory being the same directory.
+  if (unstable === null && !rootUnchanged(materialDir, trustedRoot, opened)) {
+    unstable = `${materialDir} was replaced while its sources were being read`
   }
   if (unstable !== null) return fail('unstable', materialDir, 'RAW-SOURCE-UNSTABLE', unstable, { realRoot: opened.real })
 

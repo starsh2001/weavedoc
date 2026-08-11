@@ -4,6 +4,22 @@
 
 ---
 
+## 2026-08-08.12
+
+**Unreleased — the quote layer becomes one total result.** Six defects in `2026-08-08.11`, all found by independent review. The previous round moved the regexes into the shared file; this one makes the answer total.
+
+**Moving a regex is not owning the structure.** `blockQuoteNodes` still judged one line at a time, so `- item` with a two-space `> alpha` became a *top-level* quote while the same thing at four spaces vanished with no rejection at all — one shape admitted wrongly, its neighbour lost entirely. In the other direction a heading or a list marker after a quote was called a lazy continuation, when both are ordinary block boundaries. The grammar is stated now: `>` at column zero, anything after it is content, and the shapes this runtime will not judge — indented, list-nested, lazy — are refused by name. Requiring a space after `>` had itself opened a fresh exit (`>alpha` was neither quote nor rejection), so it does not.
+
+**A refused structure could still be sealed.** `quotes[]` reported `sealed: true` on a block the same scan had rejected in its diagnostics list — two answers about one span, and a graph reading `quotes[]` would have inherited the wrong one. There is now one span per region with a single terminal state (`sealed`, `mismatch`, `empty`, `unmarked`, `malformed-marker`, `unsupported-structure`, `source-unavailable`, `unresolved`, `binary-cold-debt`), spans do not overlap, and `quotes` is a view of that population rather than a second one. Every span carries its byte range, including unmarked and refused ones, so a `quote-attribution-required` payload needs no second scan.
+
+**A non-breaking space was stripped as quote syntax.** `\s` in a JS regex is Unicode whitespace; in the byte domain U+00A0 is the single byte 0xA0, which is content. `>\xA0alpha` sealed against a source reading `alpha` — a false positive in the one comparison that exists to catch forgeries. Markdown's syntax classes are ASCII and are now written out.
+
+**`self` and a material's own id were two providers.** Keying the snapshot cache on the marker's spelling read one directory twice. The key is the canonical material id, and naming your own id is refused so one provider has one address.
+
+**The raw root could be swapped after the read.** Child files were re-examined; the directory was not. Rename the material aside, put a fresh one with identical filenames back, and every child re-lists identically while the snapshot describes files no longer at that path. The root's identity is captured at open and re-verified at the end.
+
+**And the tests were shape checks.** `/^[0-9a-f]{64}$/` passes for any hex, so swapping the entry digest for the tree digest, replacing the converted digest with a constant, or shifting a range by one byte all went unnoticed. Everything a dependency graph will consume is recomputed from the bytes on disk now, and the ranges are sliced back out of the file and compared. Six mutations survived the first pass of this round — every one of them a rule I had verified by hand and never turned into an assertion.
+
 ## 2026-08-08.11
 
 **Unreleased — the quote scanner stops re-interpreting Markdown.** Six defects in `2026-08-08.10`, all found by independent review, and they were one defect wearing six shapes.

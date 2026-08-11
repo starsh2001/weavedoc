@@ -271,13 +271,32 @@ export function sectionNodes (doc, name, { boundaries = [name] } = {}) {
 //
 // `live` is used throughout, so a commented-out quote is not a quote; `context` excludes fenced and
 // frontmatter lines, so an example is documentation.
-const QUOTE_OPEN = /^ {0,3}>/
-const NESTED_QUOTE = /^[ \t]*(?:[-+*]|[0-9]+[.)])[ \t]+ {0,3}>/
+// THE MACHINE GRAMMAR IS NARROW ON PURPOSE, and everything a renderer would also call a blockquote
+// is DETECTED and refused by name. The alternative — modelling list containers and paragraph
+// interruption properly — is a CommonMark engine, which this runtime deliberately is not. So the
+// admitted shape is exactly one: `>` at column zero. Anything else that renders as quoted text is
+// rejected, never silently admitted and never silently dropped.
+//
+// Both halves are the point. An earlier version tested the current line alone, so `- item` +
+// two-space `> alpha` became a TOP-LEVEL quote while the same thing at four spaces vanished with no
+// rejection at all — one shape admitted wrongly, its neighbour lost entirely. And a heading or a
+// list marker after a quote was called a lazy continuation, when both are ordinary block boundaries
+// that simply end the quote.
+// `>` at column zero, followed by ANYTHING. The space after it is optional in Markdown, so
+// requiring one made `>alpha` neither a quote nor a rejection — a brand-new way out of the
+// population, introduced while closing the others. What follows the `>` is content, not syntax.
+const QUOTE_OPEN = /^>/
+const QUOTE_INDENTED = /^[ \t]+ *>/
+const LIST_NESTED_QUOTE = /^[ \t]*(?:[-+*]|[0-9]+[.)])[ \t]+ {0,3}>/
+// What legitimately ENDS a quote instead of continuing it lazily: the block-level constructs that
+// interrupt a paragraph. Ordinary prose does not, which is what makes it lazy.
+const BOUNDARY = /^(?:#{1,6}(?:[ \t]|$)|(?:[-+*]|[0-9]+[.)])(?:[ \t]|$)|(?:\*[ \t]*){3,}$|(?:-[ \t]*){3,}$|(?:_[ \t]*){3,}$|<!--)/
 
 export function blockQuoteNodes (doc) {
   const nodes = []
   const rejected = []
   let current = null
+  const reject = (code, line) => rejected.push({ code, line: line.number, start: line.start, end: line.end, raw: line.live })
   for (const line of doc.lines) {
     const structural = line.context === 'live' || line.context === 'comment-mixed'
     const live = line.live
@@ -291,15 +310,14 @@ export function blockQuoteNodes (doc) {
       current.end = line.end
       continue
     }
-    if (NESTED_QUOTE.test(live)) {
-      // Refused by name. Admitting it would need a container model this runtime does not have, and
-      // ignoring it lets a real quotation sit outside every population that checks one.
-      rejected.push({ code: 'MD_QUOTE_NESTED', line: line.number, start: line.start, end: line.end, raw: live })
-      current = null
-      continue
-    }
+    if (LIST_NESTED_QUOTE.test(live)) { reject('MD_QUOTE_NESTED', line); current = null; continue }
+    // An indented `>` is a quote to a renderer at 1-3 spaces and a code block at 4+, and inside a
+    // list item it is quoted text at any depth. This grammar judges none of those, so it says so
+    // rather than guessing — the four-space form used to disappear from every population.
+    if (QUOTE_INDENTED.test(live)) { reject('MD_QUOTE_INDENTED', line); current = null; continue }
     if (current !== null && /[^ \t]/.test(live)) {
-      rejected.push({ code: 'MD_QUOTE_LAZY', line: line.number, start: line.start, end: line.end, raw: live })
+      if (BOUNDARY.test(live)) { current = null; continue }
+      reject('MD_QUOTE_LAZY', line)
       // The lazy line is still attached, so the span a consumer compares is the span a human reads.
       // Dropping it would seal half a quotation, which is worse than refusing the whole thing.
       current.lines.push(line)

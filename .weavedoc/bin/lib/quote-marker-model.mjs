@@ -137,49 +137,92 @@ export function parseQuoteMarkers (text) {
 }
 
 // ---- scanning a converted material ---------------------------------------------------------------
-const quoteSpan = run => run.lines.map(l => l.live.replace(/^ {0,3}>\s?/, '')).join('\n')
+// ASCII, EXPLICITLY. `\s` in a JS regex is Unicode whitespace, so it eats U+00A0 — and in the byte
+// domain that is the single byte 0xA0, which is CONTENT. Stripping it as if it were quote syntax
+// made `>\xA0alpha` seal against a source reading `alpha`: a false positive in the one comparison
+// that exists to catch forgeries. Markdown's own syntax classes are ASCII, so they are written out.
+const QUOTE_PREFIX = /^>[ \t]?/
+const quoteSpan = run => run.lines.map(l => l.live.replace(QUOTE_PREFIX, '')).join('\n')
+
+// EVERY MEMBER OF THE POPULATION IS A SPAN WITH ONE TERMINAL STATE. The first version returned
+// `quotes[]` for marked blocks and pushed everything else into a global diagnostic list, so a
+// consumer reading `quotes[]` saw `sealed: true` on a block the scan had separately rejected as
+// structurally unsupported — two answers about one span, which is what a graph would have inherited.
+// Nothing here is a boolean combination a caller has to reassemble.
+export const SPAN_STATES = [
+  'sealed', 'mismatch', 'empty', 'unmarked', 'malformed-marker', 'unsupported-structure',
+  'source-unavailable', 'unresolved', 'binary-cold-debt'
+]
+const SEALABLE = new Set(['sealed'])
 
 export function scanQuotedMaterial (materialDir, { trustedRoot, materialsRoot } = {}) {
-  const diagnostics = []
-  const quotes = []
   const convertedPath = `${materialDir}/converted.md`
+  const materialId = materialDir.replace(/[\\/]+$/, '').split(/[\\/]/).pop()
   let convertedBytes
   try {
     convertedBytes = readFileSync(convertedPath)
   } catch {
-    return { readable: false, quotes: [], providers: new Map(), diagnostics: [{ code: 'QUOTE-CONVERTED-UNREADABLE', detail: `${convertedPath} cannot be read` }] }
+    return {
+      state: 'unreadable',
+      readable: false,
+      materialId,
+      spans: [],
+      quotes: [],
+      providers: new Map(),
+      convertedDigest: null,
+      diagnostics: [{ code: 'QUOTE-CONVERTED-UNREADABLE', detail: `${convertedPath} cannot be read` }]
+    }
   }
   const source = convertedBytes.toString('latin1')
   const doc = scanMarkdown(source, { frontmatter: true })
   const convertedDigest = sha256(convertedBytes)
+  const spans = []
+  const structural = []
 
   // An unterminated fence, comment or frontmatter block does not just hide a quote — it means the
-  // structure below it is unknown. Reported, never absorbed: the first version returned an empty
-  // quote list and no diagnostic, so a material could escape the checked population by opening a
-  // fence and never closing it.
+  // structure below it is unknown. Reported, never absorbed: a material could otherwise leave the
+  // checked population by opening a fence and never closing it.
   for (const d of doc.diagnostics) {
-    diagnostics.push({ code: `QUOTE-${d.code.replace(/^MD_/, '')}`, line: d.line, detail: 'the document structure below this point is unknown, so its quotes cannot be judged' })
+    structural.push({ code: `QUOTE-${d.code.replace(/^MD_/, '')}`, line: d.line, detail: 'the document structure below this point is unknown, so its quotes cannot be judged' })
   }
 
   const { nodes: runs, rejected } = blockQuoteNodes(doc)
+  const REJECT_CODE = {
+    MD_QUOTE_LAZY: 'QUOTE-LAZY-CONTINUATION',
+    MD_QUOTE_NESTED: 'QUOTE-NESTED-UNSUPPORTED',
+    MD_QUOTE_INDENTED: 'QUOTE-INDENTED-UNSUPPORTED'
+  }
+  // A refused structure is a SPAN with a range, not a line number in a side list. Downstream builds
+  // `quote-attribution-required` payloads out of converted digest plus exact offsets; a consumer
+  // that has to re-run the scanner to find them is the second reader this model exists to remove.
+  const unsupported = new Set()
   for (const r of rejected) {
-    diagnostics.push({
-      code: r.code === 'MD_QUOTE_LAZY' ? 'QUOTE-LAZY-CONTINUATION' : 'QUOTE-NESTED-UNSUPPORTED',
+    // A lazy line lives INSIDE the run it continues, so the run's own span already covers those
+    // bytes. Emitting a second span for the line reported one event twice and produced two
+    // overlapping spans for one region — the opposite of a total, non-overlapping population.
+    const owner = runs.find(run => r.start >= run.start && r.end <= run.end)
+    if (owner !== undefined) { unsupported.add(owner); continue }
+    spans.push({
+      kind: 'blockquote',
+      state: 'unsupported-structure',
+      range: { start: r.start, end: r.end },
       line: r.line,
-      detail: r.code === 'MD_QUOTE_LAZY'
-        ? 'a bare line continues this quote in rendered Markdown; write it with its own > so the compared span is the span a reader sees'
-        : 'a quote inside a list item is outside this grammar; move it to its own block so it can be checked'
+      text: r.raw,
+      marker: null,
+      resolved: null,
+      sealed: false,
+      convertedDigest,
+      diagnostics: [{ code: REJECT_CODE[r.code] ?? 'QUOTE-STRUCTURE-UNSUPPORTED', detail: 'this shape renders as quoted text but is outside the machine grammar, so it is refused rather than half-checked' }]
     })
   }
 
-  // ONE SNAPSHOT PER PROVIDER, for the whole scan. The first version called readRawSources() per
-  // marker, so two quotes naming one provider could be judged against two different generations of
-  // its bytes inside a single result — the second answer the raw model exists to prevent,
-  // reintroduced by its first consumer.
+  // ONE SNAPSHOT PER PROVIDER, keyed by CANONICAL material id. `self` and the material's own id name
+  // one provider; keying on the marker's spelling read the same directory twice and could put two
+  // generations of it in a single result.
   const providers = new Map()
   const providerOf = id => {
     if (!providers.has(id)) {
-      const dir = id === 'self' ? materialDir : `${materialsRoot}/${id}`
+      const dir = id === materialId ? materialDir : `${materialsRoot}/${id}`
       providers.set(id, readRawSources(dir, { trustedRoot }))
     }
     return providers.get(id)
@@ -193,43 +236,59 @@ export function scanQuotedMaterial (materialDir, { trustedRoot, materialsRoot } 
   for (const { comment, parsed } of markers) {
     const run = runs.find(r => !used.has(r) && r.start > comment.end &&
       !/[^ \t\r\n]/.test(source.slice(comment.end, r.start)))
+    const span = {
+      kind: 'quote',
+      state: null,
+      range: run === undefined ? { start: comment.start, end: comment.end } : { start: run.start, end: run.end },
+      line: comment.line,
+      text: run === undefined ? '' : quoteSpan(run),
+      marker: { attrs: parsed.attrs, valid: parsed.valid, errors: parsed.errors, range: { start: comment.start, end: comment.end } },
+      attrs: parsed.attrs,
+      resolved: null,
+      providerSnapshot: null,
+      sealed: false,
+      mechanicallyCheckable: parsed.attrs.mode === 'verbatim',
+      coldDebt: false,
+      convertedDigest,
+      diagnostics: []
+    }
+    spans.push(span)
+    const settle = (state, d) => { span.state = state; if (d !== undefined) span.diagnostics.push(d) }
     if (run === undefined) {
-      diagnostics.push({ code: 'QUOTE-MARKER-ORPHAN', line: comment.line, detail: 'a marker is not followed by a quote block, so it seals nothing' })
+      settle('malformed-marker', { code: 'QUOTE-MARKER-ORPHAN', detail: 'a marker is not followed by a quote block, so it seals nothing' })
       continue
     }
     used.add(run)
-    const text = quoteSpan(run)
-    const quote = {
-      marker: { attrs: parsed.attrs, valid: parsed.valid, errors: parsed.errors, range: { start: comment.start, end: comment.end } },
-      attrs: parsed.attrs,
-      text,
-      range: { start: run.start, end: run.end },
-      convertedDigest,
-      sealed: false,
-      mechanicallyCheckable: parsed.attrs.mode === 'verbatim',
-      coldDebt: parsed.attrs.mode === 'not-checkable',
-      resolved: null,
-      diagnostics: []
+    if (unsupported.has(run)) {
+      settle('unsupported-structure', { code: 'QUOTE-LAZY-CONTINUATION', detail: 'the block this marker names extends past the machine grammar, so no verdict is issued for it' })
+      continue
     }
-    quotes.push(quote)
-    const note = d => { quote.diagnostics.push(d); diagnostics.push({ ...d, line: comment.line }) }
-    if (!parsed.valid) { for (const e of parsed.errors) note(e); continue }
-
+    if (!parsed.valid) { settle('malformed-marker'); span.diagnostics.push(...parsed.errors); continue }
+    // `self` and this material's own id are ONE provider. Accepting both spellings read the same
+    // directory twice and put two snapshots of one material in a single scan.
+    if (parsed.attrs.source === materialId) {
+      settle('malformed-marker', { code: 'QUOTE-SOURCE-SELF-BY-ID', detail: `source '${parsed.attrs.source}' is this material; write source=self so one provider has one address` })
+      continue
+    }
     // AN EMPTY SPAN IS NOT A QUOTE. `includes('')` is true of every string, so a bare `>` sealed
     // against anything at all — the strongest possible false positive, and it passed silently.
-    if (wsnorm(text) === '') { note({ code: 'QUOTE-SPAN-EMPTY', detail: 'the quote block has no content, so there is nothing to compare' }); continue }
+    if (wsnorm(span.text) === '') {
+      settle('empty', { code: 'QUOTE-SPAN-EMPTY', detail: 'the quote block has no content, so there is nothing to compare' })
+      continue
+    }
 
-    const raw = providerOf(parsed.attrs.source)
+    const providerId = parsed.attrs.source === 'self' ? materialId : parsed.attrs.source
+    const raw = providerOf(providerId)
     if (raw.state !== 'complete') {
       // Distinct codes, because "this material has no raw source" and "its source set is aliased"
-      // are different repairs. Collapsing them told every case to go look at the same thing.
+      // are different repairs. Collapsing them told every case to look at the same thing.
       const code = raw.state === 'empty' ? 'QUOTE-SOURCE-ABSENT' : raw.state === 'unreadable' ? 'QUOTE-SOURCE-UNREADABLE' : raw.state === 'unstable' ? 'QUOTE-SOURCE-UNSTABLE' : 'QUOTE-SOURCE-INVALID-SET'
-      note({ code, detail: `the raw source set for '${parsed.attrs.source}' is '${raw.state}', so this quote cannot be checked` })
+      settle('source-unavailable', { code, detail: `the raw source set for '${providerId}' is '${raw.state}', so this quote cannot be checked` })
       continue
     }
     const resolved = resolveRawSource(raw, parsed.attrs.file ?? null)
     if (!resolved.ok) {
-      note({
+      settle('unresolved', {
         code: resolved.code === 'RAW-SOURCE-AMBIGUOUS' ? 'QUOTE-SOURCE-AMBIGUOUS' : 'QUOTE-SOURCE-UNRESOLVED',
         detail: resolved.detail ?? `address did not resolve (${resolved.code})`
       })
@@ -237,12 +296,12 @@ export function scanQuotedMaterial (materialDir, { trustedRoot, materialsRoot } 
     }
     const bytes = raw.bytesOf(resolved.entry.name)
     const content = classifyContent(bytes)
-    // The SNAPSHOT OBJECT, not just its digest. Two quotes on one provider must hold the same
-    // object, which is what proves the scan read it once; equal digests would also be true of two
-    // separate reads that happened to agree, so the digest alone cannot tell those apart.
-    quote.providerSnapshot = raw
-    quote.resolved = {
-      material: parsed.attrs.source,
+    // The SNAPSHOT OBJECT, not just its digest: two quotes on one provider must hold the same
+    // object, which is what proves the scan read it once. Equal digests would also be true of two
+    // separate reads that happened to agree.
+    span.providerSnapshot = raw
+    span.resolved = {
+      material: providerId,
       file: resolved.entry.name,
       entryDigest: resolved.entry.digest,
       providerTreeDigest: raw.treeDigest,
@@ -250,23 +309,81 @@ export function scanQuotedMaterial (materialDir, { trustedRoot, materialsRoot } 
     }
     if (parsed.attrs.mode === 'not-checkable') {
       if (content.kind !== 'binary') {
-        note({ code: 'QUOTE-NOT-CHECKABLE-ON-TEXT', detail: `${resolved.entry.name} is text, so this quote must be compared, not excused` })
+        settle('mismatch', { code: 'QUOTE-NOT-CHECKABLE-ON-TEXT', detail: `${resolved.entry.name} is text, so this quote must be compared, not excused` })
+        continue
       }
+      span.coldDebt = true
+      settle('binary-cold-debt')
       continue
     }
     if (content.kind === 'binary') {
-      note({ code: 'QUOTE-BINARY-NOT-VERBATIM', detail: `${resolved.entry.name} is binary (${content.reason}); a verbatim claim cannot be compared against it` })
+      settle('mismatch', { code: 'QUOTE-BINARY-NOT-VERBATIM', detail: `${resolved.entry.name} is binary (${content.reason}); a verbatim claim cannot be compared against it` })
       continue
     }
-    quote.sealed = wsnorm(bytes.toString('latin1')).includes(wsnorm(text))
-    if (!quote.sealed) note({ code: 'QUOTE-SPAN-MISSING', detail: `the quoted span is not present in ${resolved.entry.name} (laundering risk)` })
+    if (wsnorm(bytes.toString('latin1')).includes(wsnorm(span.text))) {
+      span.sealed = true
+      settle('sealed')
+    } else {
+      settle('mismatch', { code: 'QUOTE-SPAN-MISSING', detail: `the quoted span is not present in ${resolved.entry.name} (laundering risk)` })
+    }
   }
 
   // THE POPULATION RULE. An unmarked blockquote is the escape hatch: delete the marker and the claim
-  // leaves the checked set while still reading as a quotation. So the absence is the diagnostic.
+  // leaves the checked set while still reading as a quotation. It is a span with a range like every
+  // other member, so a caller never has to find it again.
   for (const run of runs) {
     if (used.has(run)) continue
-    diagnostics.push({ code: 'QUOTE-UNMARKED', line: run.lines[0].number, detail: 'a quote block carries no wd:quote marker, so nothing checks it' })
+    // An unmarked run that also broke the grammar is UNSUPPORTED, not unmarked: telling a writer to
+    // add a marker to a block this grammar refuses would send them in a circle.
+    if (unsupported.has(run)) {
+      spans.push({
+        kind: 'blockquote',
+        state: 'unsupported-structure',
+        range: { start: run.start, end: run.end },
+        line: run.lines[0].number,
+        text: quoteSpan(run),
+        marker: null,
+        resolved: null,
+        sealed: false,
+        convertedDigest,
+        diagnostics: [{ code: 'QUOTE-LAZY-CONTINUATION', detail: 'this block extends past the machine grammar, so it is refused rather than half-checked' }]
+      })
+      continue
+    }
+    spans.push({
+      kind: 'blockquote',
+      state: 'unmarked',
+      range: { start: run.start, end: run.end },
+      line: run.lines[0].number,
+      text: quoteSpan(run),
+      marker: null,
+      resolved: null,
+      sealed: false,
+      convertedDigest,
+      diagnostics: [{ code: 'QUOTE-UNMARKED', detail: 'a quote block carries no wd:quote marker, so nothing checks it' }]
+    })
   }
-  return { readable: true, quotes, providers, convertedDigest, diagnostics, document: doc }
+
+  spans.sort((a, b) => a.range.start - b.range.start)
+  // NOTHING REFUSED MAY ALSO BE SEALED. The previous shape let one block carry `sealed: true` in
+  // one field and a structural rejection in another, so the invariant is enforced here rather than
+  // trusted to every branch above. NOT KILLABLE BY A FIXTURE, and said so plainly: no branch sets
+  // `sealed` except the one that settles `sealed`, so removing this line changes no output today.
+  // It is the guard that keeps that true the next time a branch is added.
+  for (const span of spans) if (!SEALABLE.has(span.state)) span.sealed = false
+  return {
+    state: structural.length > 0 ? 'invalid' : 'complete',
+    readable: true,
+    materialId,
+    spans,
+    // A VIEW of `spans`, never a separate population — the two disagreeing is the defect removed.
+    quotes: spans.filter(s => s.kind === 'quote'),
+    providers,
+    convertedDigest,
+    // Diagnostics carry the span's RANGE as well as its line, so a consumer building a
+    // `quote-attribution-required` payload has converted digest plus exact offsets without going
+    // back to the scanner.
+    diagnostics: [...structural, ...spans.flatMap(s => s.diagnostics.map(d => ({ ...d, line: s.line, range: s.range })))],
+    document: doc
+  }
 }

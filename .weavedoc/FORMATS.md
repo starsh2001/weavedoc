@@ -186,6 +186,41 @@ Body:
   - **Gate-slot clarification:** “a bracketed line inside the gate” above means a bracket occupying the entry-slot position: first after `- `, a hash pseudo-entry such as `#[kind]`, a hash-numbered pseudo-entry such as `#1 [kind]`, or a stray `-->` prefix. A bracket later in a normally spaced heading (for example `# 1 [draft]` or `# round 2 note [draft]`) is prose unless its bracket contains a known violation kind, which the shape-free zone rule still blocks. Slot-position brackets are typed before a heading may end the zone; any non-placeholder unknown slot blocks.
 - `final.md` (single-file) or `final/` (multi-file) — the finished document. Written only when the fidelity gate is clean (zero open fidelity violations). Re-enters as an `origin: prior-doc` material for later documents — the gate is the membrane that keeps the growing material set free of contradictions.
 
+## Quote markers in `converted.md` (schema v3 — not yet enforced)
+
+**Status: declared, implemented read-only, and NOT wired to any gate.** The parser and its fixtures
+exist; no command reads them yet. Recorded here so the grammar is written down in one place before
+anything enforces it.
+
+A verbatim claim in a machine-authored `converted.md` carries a marker immediately above its quote
+block:
+
+```markdown
+<!-- wd:quote source=self file=source.md location="§4" mode=verbatim -->
+> the sentence exactly as the raw source has it
+```
+
+- `source` — `self` (this material's own raw source) or `mNNN` (another material's). A material may
+  not name **itself by id**: `self` is the one spelling, so one provider has one address. `tNNN` is
+  refused outright — a truth proving a material that proves the truth is circular.
+- `file` — the raw source's filename. Required when the material has more than one `source.*`, and
+  always required for `mode=not-checkable`. Never inferred from "there was only one".
+- `location` — human attribution, for a cold reviewer. Required for `mode=not-checkable`.
+- `mode` — `verbatim` (default) or `not-checkable`. `not-checkable` is allowed only where the source
+  is genuinely binary; it never reads as sealed and opens cold-verification debt instead. A text
+  mismatch may not be relabelled into it.
+
+The marker must occupy its own line(s) entirely — a marker inside a sentence, or nested in another
+comment, is not a marker. **Every blockquote needs one:** an unmarked quote block is reported,
+because deleting the marker would otherwise remove the claim from the checked set while it still
+reads as a quotation.
+
+The quote grammar is narrow: `>` at column zero. An indented `>`, a `>` inside a list item, and a
+lazy continuation (a bare line a renderer folds into the quote) are **refused by name** rather than
+half-checked — see [`PARSER-MODEL.md`](PARSER-MODEL.md) §5b. Comparison is byte-domain with the same
+whitespace rule as the truth seal, so a re-wrapped quote is the same quote and a non-breaking space
+is content rather than syntax.
+
 ## Truth → document propagation (change tracking)
 
 When the data mine changes, documents drawn from it may become inconsistent. Two propagation triggers:

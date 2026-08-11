@@ -8,10 +8,13 @@
 // dangerous direction is not a false alarm — it is a quote that reads as sealed while nothing
 // checked it, so every "cannot tell" here has to land on fail-closed.
 import assert from 'node:assert/strict'
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
+import { createHash } from 'node:crypto'
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { parseQuoteMarkers, scanQuotedMaterial } from '../.weavedoc/bin/lib/quote-marker-model.mjs'
+import { SPAN_STATES, parseQuoteMarkers, scanQuotedMaterial } from '../.weavedoc/bin/lib/quote-marker-model.mjs'
+
+const sha = buf => createHash('sha256').update(buf).digest('hex')
 
 let cases = 0
 let groups = 0
@@ -377,6 +380,126 @@ try {
     check(q.range.end > q.range.start && q.marker.range.end > q.marker.range.start &&
       q.marker.range.end <= q.range.start, 'the marker and quote byte ranges are not ordered source spans', { m: q.marker.range, q: q.range })
     check(q.resolved.content === 'text', 'the resolved source did not carry its content classification', q.resolved)
+  }
+
+  // ---- 11. the published result is recomputed, not just shaped ----------------------------------
+  groups++
+  {
+    // SHAPE ASSERTIONS ARE NOT VALUE ASSERTIONS. `/^[0-9a-f]{64}$/` passes for any hex, so swapping
+    // the entry digest for the tree digest, or the converted digest for a constant, went unnoticed.
+    // Everything a dependency graph will consume is recomputed here from the bytes on disk.
+    const p1 = material('m080', { 'source.md': 'from eighty\n' })
+    const p2 = material('m081', { 'source.md': 'from eighty-one\n' })
+    const d = material('m082', {
+      'converted.md': ['# c', '', '<!-- wd:quote source=m080 -->', '> from eighty', '',
+        '<!-- wd:quote source=m081 -->', '> from eighty-one', ''].join('\n')
+    })
+    const r = scan('m082')
+    const conv = readFileSync(join(d, 'converted.md'))
+    check(r.convertedDigest === sha(conv), 'convertedDigest is not the hash of converted.md', r.convertedDigest)
+    check(r.state === 'complete' && r.materialId === 'm082', 'the scan did not report its own identity and state', { s: r.state, id: r.materialId })
+    check(r.providers.size === 2, 'two distinct providers were not snapshotted separately', [...r.providers.keys()])
+
+    for (const [span, dir] of [[r.quotes[0], p1], [r.quotes[1], p2]]) {
+      const bytes = readFileSync(join(dir, 'source.md'))
+      check(span.state === 'sealed' && span.sealed === true, 'a matching quote did not settle as sealed', span.state)
+      check(span.resolved.entryDigest === sha(bytes), 'entryDigest is not the hash of the resolved source file', span.resolved)
+      check(span.resolved.entryDigest !== span.resolved.providerTreeDigest,
+        'entryDigest and providerTreeDigest are the same value, so one of them is wrong')
+      check(span.resolved.providerTreeDigest === r.providers.get(span.resolved.material).treeDigest,
+        'providerTreeDigest does not come from that provider snapshot', span.resolved)
+      check(span.resolved.content === 'text', 'the content classification was not published', span.resolved)
+      check(span.mechanicallyCheckable === true && span.coldDebt === false,
+        'the verbatim flags do not describe a verbatim span', span)
+      // THE RANGES SLICE BACK TO THE EXACT BYTES. A one-byte drift passes every shape check.
+      const markerText = conv.toString('latin1').slice(span.marker.range.start, span.marker.range.end)
+      const quoteText = conv.toString('latin1').slice(span.range.start, span.range.end)
+      check(markerText.startsWith('<!--') && markerText.endsWith('-->') && markerText.includes('wd:quote'),
+        'the marker range does not slice back to the marker', markerText)
+      check(quoteText.startsWith('>') && quoteText.replace(/^>[ \t]?/, '') === span.text,
+        'the quote range does not slice back to the span text', { quoteText, text: span.text })
+    }
+    // The two providers are different snapshots with different digests — a cache collapsed to one
+    // entry would hand the second quote the first provider's bytes.
+    check(r.quotes[0].resolved.providerTreeDigest !== r.quotes[1].resolved.providerTreeDigest,
+      'two different providers reported the same tree digest')
+    check(r.quotes[0].providerSnapshot !== r.quotes[1].providerSnapshot,
+      'two different providers shared one snapshot object')
+  }
+
+  // ---- 12. every span has exactly one terminal state --------------------------------------------
+  groups++
+  {
+    // A structurally refused block used to carry `sealed: true` in one field and a rejection in
+    // another. The population is now total: every span has a state from the declared set, only
+    // `sealed` may be sealed, and the ranges do not overlap.
+    const d = material('m090', { 'source.md': 'alpha\ncontinued\n' })
+    writeFileSync(join(d, 'converted.md'), ['# c', '', '<!-- wd:quote source=self -->', '> alpha', 'continued', '',
+      '> unmarked one', '', '- item', '    > indented', '', '<!-- wd:quote source=self -->', '', 'prose'].join('\n'))
+    const r = scan('m090')
+    check(r.spans.length >= 4, 'the population lost members', r.spans.map(s => s.state))
+    for (const s of r.spans) {
+      check(SPAN_STATES.includes(s.state), `a span carries an undeclared state: ${s.state}`, s)
+      check(s.sealed === (s.state === 'sealed'), 'sealed disagrees with the span state', { state: s.state, sealed: s.sealed })
+      check(Number.isInteger(s.range.start) && s.range.end > s.range.start, 'a span has no usable range', s.range)
+    }
+    const sorted = r.spans.map(s => s.range.start)
+    check(sorted.every((v, i) => i === 0 || v >= sorted[i - 1]), 'spans are not in source order', sorted)
+    // No two spans cover the same bytes: one region, one verdict.
+    for (let i = 1; i < r.spans.length; i++) {
+      check(r.spans[i].range.start >= r.spans[i - 1].range.end,
+        'two spans overlap, so one region has two verdicts', [r.spans[i - 1].range, r.spans[i].range])
+    }
+    check(r.spans.some(s => s.state === 'unsupported-structure') && r.spans.some(s => s.state === 'unmarked') &&
+      r.spans.some(s => s.state === 'malformed-marker'),
+    'the fixture did not actually produce the three refusal states it is here to check', r.spans.map(s => s.state))
+    // `quotes` is a VIEW: every member is a span, and no span is missing from the union.
+    check(r.quotes.every(q => r.spans.includes(q)), 'quotes[] holds objects that are not spans')
+  }
+
+  // ---- 13. the grammar's edges, asserted rather than probed --------------------------------------
+  groups++
+  {
+    // These were verified by hand while the rewrite was in progress and NOT turned into assertions,
+    // so the mutations they guard survived. Each one is here now.
+    const L = (...l) => l.join('\n') + '\n'
+    const d = material('m100', { 'source.md': 'alpha\n' })
+    const at = body => { writeFileSync(join(d, 'converted.md'), body); return scan('m100') }
+
+    // A HEADING OR LIST AFTER A QUOTE IS A BLOCK BOUNDARY, not a lazy continuation. Calling them
+    // lazy refused perfectly ordinary Markdown.
+    for (const next of ['# Next', '## Next', '- next', '1. next', '***', '<!-- note -->']) {
+      const r = at(L('<!-- wd:quote source=self -->', '> alpha', next))
+      check(r.quotes[0].state === 'sealed', `a block boundary was treated as a lazy continuation: '${next}'`, r.diagnostics)
+      check(!codes(r).includes('QUOTE-LAZY-CONTINUATION'), `'${next}' produced a lazy diagnostic`, r.diagnostics)
+    }
+    // ...and ordinary prose still IS lazy, so the boundary list is not just "accept everything".
+    const prose = at(L('<!-- wd:quote source=self -->', '> alpha', 'trailing prose'))
+    check(prose.quotes[0].state === 'unsupported-structure', 'bare prose after a quote stopped being lazy', prose.quotes[0].state)
+
+    // `>alpha` WITH NO SPACE is a blockquote in Markdown. Requiring the space made it neither a
+    // quote nor a rejection — a fresh way out of the population, opened while closing others.
+    const tight = at(L('> alpha'.replace('> ', '>')))
+    check(tight.spans.length === 1 && tight.spans[0].state === 'unmarked',
+      'a blockquote written without a space after > left the population', tight.spans)
+
+    // NBSP IS CONTENT, NOT SYNTAX. `\s` in a JS regex eats U+00A0, which in the byte domain is the
+    // single byte 0xA0: stripping it as quote syntax made `>\xA0alpha` seal against `alpha`.
+    writeFileSync(join(d, 'converted.md'), Buffer.concat([
+      Buffer.from('<!-- wd:quote source=self -->\n>', 'latin1'), Buffer.from([0xa0]), Buffer.from('alpha\n', 'latin1')]))
+    const nbsp = scan('m100')
+    check(nbsp.quotes[0].state === 'mismatch' && !nbsp.quotes[0].sealed,
+      'a non-breaking space was stripped as if it were quote syntax', nbsp.quotes[0])
+
+    // ONE PROVIDER, ONE ADDRESS. `self` and this material's own id are the same directory; accepting
+    // both read it twice and put two snapshots of one material in a single scan.
+    const own = material('m101', { 'source.md': 'x\n' })
+    writeFileSync(join(own, 'converted.md'), L('<!-- wd:quote source=m101 -->', '> x'))
+    const byId = scan('m101')
+    check(byId.quotes[0].state === 'malformed-marker' &&
+      byId.quotes[0].diagnostics.some(x => x.code === 'QUOTE-SOURCE-SELF-BY-ID'),
+    'a material quoting itself by id was accepted as a foreign provider', byId.quotes[0])
+    check(byId.providers.size === 0, 'the rejected own-id marker still read a provider', [...byId.providers.keys()])
   }
 
   console.log(`quote-marker-properties: groups=${groups} cases=${cases}`)
