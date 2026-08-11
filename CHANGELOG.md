@@ -4,6 +4,20 @@
 
 ---
 
+## 2026-08-08.8
+
+**Unreleased — the shared raw-source model.** Read-only and unwired, like everything else in Phase 1. Nothing in the runtime imports it yet.
+
+Everything downstream that has to say "the source bytes changed" — conflict envelopes, support projections, confirmation projections, the source→converted seal — will read this one model instead of walking the material directory again. A second walk is a second answer about which bytes were verified, and that answer is the warranty.
+
+**The manifest is an address list, not a bag of hashes.** Sorted `name NUL sha256 LF`, the shape [`verify.mjs`](.weavedoc/bin/lib/verify.mjs) already uses for a directory artifact, hashed whole. Sorting is bytewise so it cannot depend on locale or on UTF-16 surrogate order. That shape is what makes a RENAME detectable: identical bytes, different address, and a digest over contents alone cannot see it — asserted explicitly rather than assumed to fall out of add/delete/edit, together with a deleted-back-to-original check that an order- or history-dependent manifest would fail.
+
+**A non-regular `source.*` makes the manifest unknown, not partial.** Symlinks are refused via `lstat` — `stat` reports the target's type, so a link to a regular file would pass as one, and a source that can be re-aimed without changing a byte inside the mine is not evidence. When any entry is rejected there is no tree digest at all: a digest over the files that happened to be regular is a complete-looking answer about an incomplete set. An unlistable material is likewise not an empty one, so a seal cannot be computed over "no sources" and reported as verified.
+
+**Written addresses are refused before normalisation.** `..`, absolute and drive-qualified forms are rejected as written; normalising first and comparing after is how an escape becomes a prefix match on a sibling name. With several sources an address is required — choosing one silently attributes a quote to a file the writer never named, which is the attribution this seal exists to make checkable.
+
+**One platform limit, recorded rather than papered over.** Creating a symlink needs a privilege Windows does not always grant, so the fixture falls back to a directory for the same rejection rule and the property output ends with `nonregular=symlink` or `nonregular=directory`. The assertion demands exactly the kind that was created, so the symlink branch cannot rot unnoticed on a host that can make links: a mutation replacing `lstat` with `stat` survives the Windows fallback and dies on POSIX. Measured both ways.
+
 ## 2026-08-08.7
 
 **Unreleased — bundle hygiene on the frozen contract.** No behaviour change; `artifact-contracts` is unchanged and stays frozen.

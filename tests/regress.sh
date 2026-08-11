@@ -1307,6 +1307,17 @@ meta_markdown_state_model_properties() {
   expect_pass
   expect_has "groups=15 cases=1844 cartesian=complete"
 }
+meta_raw_source_properties() {
+  # The shared raw-source model (schema v3, Phase 1). Same vacuity guard as its siblings: the exact
+  # total is pinned, and nothing in the runtime consumes this model yet, so this case is the only
+  # thing executing it. The `nonregular=` field is NOT part of the assertion — it records whether
+  # this host could create a symlink, so a run where the directory fallback stood in says so out
+  # loud instead of quietly covering one branch less.
+  OUT=$(node "$REPO/tests/raw-source-properties.mjs" 2>&1); RC=$?
+  expect_pass
+  expect_has "groups=6 cases=52"
+  expect_has "nonregular="
+}
 meta_bundled_contracts_have_no_control_chars() {
   # CI had this for runtime modules only, so four 0x14 bytes rode into `.weavedoc/schemas/v3` and
   # shipped green (2026-08-08.6): a comment rewrite wrote U+2014 through a latin1 writer, which
