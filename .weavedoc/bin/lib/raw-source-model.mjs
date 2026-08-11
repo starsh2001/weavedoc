@@ -126,6 +126,19 @@ function readEntry (dir, name, hooks) {
         after.mtimeMs !== before.mtimeMs || after.size !== bytes.length) {
       return { kind: 'unstable', detail: `${name} changed while it was being read` }
     }
+    // AND THE NAME, AFTER THE READ. The link count was checked before, so a file could be renamed
+    // aside and a hardlink to it put back under the same name while the read was in flight: the fd
+    // still described a singly-linked file, the final path was `nlink=2`, and the set published as
+    // complete — measured. The descriptor tells us about the object; only lstat tells us what the
+    // NAME points at now, and the seal is about the name.
+    let post
+    try { post = lstatSync(path) } catch (e) { return { kind: 'unstable', detail: `${name} disappeared while it was being read (${e.code ?? 'EUNKNOWN'})` } }
+    if (post.isSymbolicLink()) return { kind: 'symlink' }
+    if (!post.isFile()) return { kind: 'irregular' }
+    if (post.nlink > 1) return { kind: 'hardlink', nlink: post.nlink }
+    if (post.ino !== before.ino || post.dev !== before.dev) {
+      return { kind: 'unstable', detail: `${name} was repointed at a different file while it was being read` }
+    }
     return { kind: 'file', bytes }
   } catch (e) {
     return { kind: 'unreadable', code: e.code ?? 'EUNKNOWN' }

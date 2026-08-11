@@ -22,7 +22,7 @@
 // below are spelled as the C locale defines them rather than as a JS `\s`, which would additionally
 // swallow NBSP and the Unicode spaces.
 import { readFileSync } from 'node:fs'
-import { splitLines, isFence, U, M } from './core.mjs'
+import { splitLines, isFence, wsnorm, U, M } from './core.mjs'
 import { join } from './mine.mjs'
 
 const readOr = p => { try { return readFileSync(p, 'utf8') } catch { return '' } }
@@ -66,7 +66,8 @@ function tval (line) {
 // Whitespace-collapsed, so a seal does not fail on spacing. The class covers the newline here: this
 // is the text as markdown renders it, where an extra blank line is the same quote and a skipped line
 // is not.
-const wsnorm = s => s.replace(SP, ' ').replace(/^ /, '').replace(/ $/, '')
+// Imported from core: one spelling for every consumer that asks whether two texts are the same.
+// SP stays below for the other uses in this file.
 
 // Zero-padding normalised, with the original's exact guard: `t000` collapses to a bare `t`, and the
 // callers that care fall back to the raw id while the callers that do not, do not. Reproduced per

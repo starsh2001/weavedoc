@@ -4,6 +4,24 @@
 
 ---
 
+## 2026-08-08.11
+
+**Unreleased — the quote scanner stops re-interpreting Markdown.** Six defects in `2026-08-08.10`, all found by independent review, and they were one defect wearing six shapes.
+
+**"One Markdown reader" was not true when I wrote it.** The module took lexical context from the shared scanner and then decided *structure* with its own regexes — `/^\s{0,3}>/` against raw lines, `<!-- wd:quote` against raw text. Everything else followed from that. A quote inside an HTML comment counted as live. A quote behind an unterminated fence vanished with no diagnostic, so a material could leave the checked population by opening a fence and never closing it. `- > alpha` was invisible to every population. A lazy continuation (`> a` then bare prose) sealed only the first line while a reader sees one quotation. `prose <!-- wd:quote … --> prose` declared a seal from inside a sentence, and a marker nested in an outer comment read as live. Blockquotes and standalone comments are typed nodes from `markdown-scan` now, and the two forms this grammar will not judge — lazy continuations and list-nested quotes — are **refused by name** rather than half-supported.
+
+**An empty quote sealed against anything.** `includes('')` is true of every string, so a bare `>` was the strongest possible false positive and it passed in silence. A normalised span that is empty is now `QUOTE-SPAN-EMPTY`.
+
+**The first consumer broke the snapshot contract it was built on.** `readRawSources()` ran per marker, so two quotes naming one provider could be judged against two generations of its bytes inside a single result — the second answer the raw model exists to prevent. One snapshot per provider per scan now, and the result carries the addresses a dependency graph and a confirmation projection will need: marker and quote byte ranges, entry digest, provider tree digest, converted digest, content classification, and the snapshot object itself.
+
+**Korean `file=` could not resolve and `location=` came back as mojibake.** `converted.md` is read as latin1 because the comparison must be bytes; attribute *values* are human text and are now decoded strictly from their byte slice, with invalid UTF-8 a typed error rather than a best-effort string. The grammar fixtures were passing JS Unicode strings straight to the parser, so they never crossed that boundary at all — they go through the byte domain now.
+
+**`not-checkable` was a weaker promise than the plan's.** It required only a `location`; the plan requires an exact `file=` too, because an unverifiable claim is the one place a reader has nothing but the address. And `looksBinary` tested NUL alone while calling the result "binary", so `01 02 03 41 42` was text and a verbatim quote of `AB` sealed against it. The classifier is stated now: NUL, any other C0 control, or DEL. Bytes ≥ 0x80 are deliberately *not* a tell — a CP949 material is ordinary legacy text, and treating undecodable-as-UTF-8 as binary would make the byte-domain seal moot.
+
+**A hardlink could arrive after the read.** `raw-source-model` checked the link count before taking the bytes, so a file could be renamed aside and a hardlink dropped back under the same name mid-read: the descriptor still described a singly-linked file and the set published as complete. The name is re-examined after the read and bound to the same inode.
+
+Also: `wsnorm` was described as reused from the truth seal and was in fact a copy. It is one exported function in `core.mjs` now, which both consumers import. Fifteen mutations, all killed — four survived the first pass because the fixtures did not actually target the rules they claimed to (a `not-checkable` case that always passed `file=`, a binary fixture that always contained a NUL, a snapshot check that compared digests rather than object identity, and a marker fixture whose prose on *both* sides was rejected by a different rule).
+
 ## 2026-08-08.10
 
 **Unreleased — the v3 quote marker: grammar, scanner, and the resolver that stops at a raw source.** Read-only and unwired; it is deliberately **not** connected to the v2 gate. Written red-first against a module that did not exist, which is what the plan asks for.

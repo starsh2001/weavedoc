@@ -104,6 +104,13 @@ export function listField (s) {
 // same as "split and drop empties" (the differential caught this): with a NON-whitespace IFS every
 // delimiter delimits, so interior and leading empty fields SURVIVE — `a||b` is three fields, `|a|`
 // is two. Only a single trailing delimiter adds nothing, and an empty string is zero fields.
+// The quote seal's whitespace rule, in ONE place. `validate-truths` and the v3 quote marker both
+// decide "is this the same text", and until now each carried its own copy of this line — two
+// spellings of one question, which is the class this runtime keeps deleting. `[[:space:]]` in the C
+// locale, collapsed to a single space, ends trimmed: a re-wrapped quote is the same quote and a
+// skipped line is not.
+export const wsnorm = s => s.replace(/[ \t\n\v\f\r]+/g, ' ').replace(/^ /, '').replace(/ $/, '')
+
 export function pipes (s) {
   if (typeof s !== 'string' || s === '') return []
   const parts = s.split('|')

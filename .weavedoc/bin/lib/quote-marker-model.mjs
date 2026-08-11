@@ -1,66 +1,92 @@
 // The v3 quote marker: what a verbatim claim looks like, and whether it is true.
 //
-// This is the hop the mine did not have. The truth seal already proves a truth's body is in its
-// material's `converted.md`; this proves the marked spans of `converted.md` are in the RAW source.
-// Between them a claim has no unchecked stretch — which is the whole point, because a conversion is
-// exactly where a sentence can quietly become a better sentence.
+// This is the hop the mine did not have. The truth seal proves a truth's body is in its material's
+// `converted.md`; this proves the marked spans of `converted.md` are in the RAW source. Between them
+// a claim has no unchecked stretch — and a conversion is exactly where a sentence can quietly become
+// a better sentence.
 //
-// Three boundaries, all fail-closed. The resolver ends at a REGULAR raw source and never follows a
-// second marker; the comparison is bytes; and anything the machine cannot decide is named rather
-// than passed. A quote that reads as sealed while nothing checked it is worse than no seal.
+// STRUCTURE IS NOT DECIDED HERE. The first version claimed to use the shared scanner and then
+// matched `/^\s{0,3}>/` against raw lines and `<!-- wd:quote` against raw text. That is a consumer
+// re-interpreting Markdown, and it leaked in every direction: quotes inside comments counted, quotes
+// behind an unterminated fence vanished, `- > x` was invisible, a lazy continuation sealed half a
+// span, and `prose <!-- wd:quote … --> prose` declared a seal from inside a sentence. Blockquote and
+// standalone-comment populations now come from `markdown-scan` as typed nodes.
 //
-// READ-ONLY AND UNWIRED (Phase 1). No production consumer imports this, and it is not connected to
-// the v2 gate.
+// TWO VIEWS OF ONE FILE, the split `validate-truths` already uses. Bytes decide the comparison —
+// decoding first maps invalid bytes onto U+FFFD, so two different byte strings compare equal and the
+// seal passes on a forgery. But `file=` and `location=` are SEMANTIC values a human wrote, so they
+// are decoded strictly from their byte slice; the first version returned `location="장4"` as three
+// Latin-1 code points and could not resolve a Korean filename at all.
+//
+// READ-ONLY AND UNWIRED (Phase 1). No production consumer imports this; it is not connected to the
+// v2 gate.
+import { createHash } from 'node:crypto'
 import { readFileSync } from 'node:fs'
-import { scanMarkdown } from './markdown-scan.mjs'
+import { wsnorm } from './core.mjs'
+import { blockQuoteNodes, scanMarkdown, standaloneComments } from './markdown-scan.mjs'
 import { readRawSources, resolveRawSource } from './raw-source-model.mjs'
 
-const MARKER_OPEN = 'wd:quote'
 const MODES = new Set(['verbatim', 'not-checkable'])
 const MATERIAL_ID = /^m[0-9]+$/
 const TRUTH_ID = /^t[0-9]+$/
 const ATTRS = new Set(['source', 'file', 'location', 'mode'])
+const sha256 = buf => createHash('sha256').update(buf).digest('hex')
 
-// The existing truth seal's spelling, deliberately reused rather than re-derived: `[[:space:]]` in
-// the C locale, collapsed to one space, ends trimmed. A re-wrapped quote is the same quote; a
-// skipped line is not. Two spellings of "same text" would be two answers about one seal.
-const wsnorm = s => s.replace(/[ \t\n\v\f\r]+/g, ' ').replace(/^ /, '').replace(/ $/, '')
-
-// Bytes, never a decoded string. Decoding maps every invalid byte to U+FFFD, so two DIFFERENT byte
-// strings compare equal and the seal passes on a forgery — measured on a CP949 material when the
-// truth seal was ported, and the same rule has to hold one hop earlier.
-const asBytes = buf => Buffer.from(buf).toString('latin1')
-
-// Binary is decided by CONTENT. Naming it by extension would let a rename change a verdict, and the
-// plan says so outright. A NUL is the classic tell and is what a text file cannot contain.
-export function looksBinary (buf) {
+// TEXT vs BINARY, by content and with a stated rule rather than a vibe. A NUL is the classic tell,
+// and so is any other C0 control that text does not use: the first version tested NUL alone and
+// called the result "binary", so `01 02 03 41 42` was text and a verbatim quote of `AB` sealed
+// against it. Bytes at or above 0x80 are NOT a tell — a CP949 material is ordinary legacy text, and
+// treating undecodable-as-UTF-8 as binary would have made the whole byte-domain seal moot.
+const TEXT_CONTROLS = new Set([0x09, 0x0a, 0x0b, 0x0c, 0x0d])
+export function classifyContent (buf) {
   const bytes = Buffer.from(buf)
-  for (let i = 0; i < bytes.length; i++) if (bytes[i] === 0) return true
-  return false
+  for (let i = 0; i < bytes.length; i++) {
+    const b = bytes[i]
+    if (b === 0) return { kind: 'binary', reason: 'NUL byte' }
+    if (b < 0x20 && !TEXT_CONTROLS.has(b)) return { kind: 'binary', reason: `C0 control 0x${b.toString(16).padStart(2, '0')}` }
+    if (b === 0x7f) return { kind: 'binary', reason: 'DEL byte' }
+  }
+  return { kind: 'text', reason: null }
+}
+
+// A byte slice back to the text a human wrote. STRICT: an attribute that is not valid UTF-8 is a
+// typed error, not a best-effort string, because it is about to be compared against a filename.
+function decodeStrict (latin1Value) {
+  const bytes = Buffer.from(latin1Value, 'latin1')
+  const text = bytes.toString('utf8')
+  return Buffer.from(text, 'utf8').equals(bytes) ? { ok: true, text } : { ok: false, text: null }
 }
 
 // ---- grammar -----------------------------------------------------------------------------------
-// `<!-- wd:quote source=self mode=verbatim location="§4" -->`. Values are bare (no whitespace) or
-// double-quoted. Everything unrecognised is an ERROR, never an ignored extra: a typo'd attribute
-// that is silently dropped leaves the writer believing they constrained a claim that nothing did.
+// `<!-- wd:quote source=self mode=verbatim location="§4" -->`, occupying its own line(s) entirely.
+// Everything unrecognised is an ERROR, never an ignored extra: a typo'd attribute silently dropped
+// leaves the writer believing they constrained a claim that nothing did.
+const MARKER_BODY = /^\s*wd:quote\b([\s\S]*)$/
+const ATTR_RX = /([A-Za-z_][A-Za-z0-9_-]*)\s*=\s*(?:"([^"]*)"|([^\s"]*))/g
+
 function parseAttrs (body) {
   const attrs = {}
   const errors = []
   const seen = new Set()
-  const rx = /([A-Za-z_][A-Za-z0-9_-]*)\s*=\s*(?:"([^"]*)"|([^\s"]*))/g
+  ATTR_RX.lastIndex = 0
   let match
-  while ((match = rx.exec(body)) !== null) {
+  while ((match = ATTR_RX.exec(body)) !== null) {
     const [, key, quoted, bare] = match
-    const value = quoted !== undefined ? quoted : bare
+    const raw = quoted !== undefined ? quoted : bare
     if (!ATTRS.has(key)) { errors.push({ code: 'QUOTE-ATTR-UNKNOWN', detail: `'${key}' is not a marker attribute` }); continue }
     if (seen.has(key)) { errors.push({ code: 'QUOTE-ATTR-DUPLICATE', detail: `'${key}' given more than once` }); continue }
     seen.add(key)
-    if (value === '') { errors.push({ code: 'QUOTE-ATTR-EMPTY', detail: `'${key}' has no value; an empty attribute is not a value` }); continue }
-    attrs[key] = value
+    if (raw === '') { errors.push({ code: 'QUOTE-ATTR-EMPTY', detail: `'${key}' has no value; an empty attribute is not a value` }); continue }
+    // `source` and `mode` are ASCII vocabulary; `file` and `location` are human text.
+    if (key === 'file' || key === 'location') {
+      const decoded = decodeStrict(raw)
+      if (!decoded.ok) { errors.push({ code: 'QUOTE-ATTR-ENCODING', detail: `'${key}' is not valid UTF-8` }); continue }
+      attrs[key] = decoded.text
+      continue
+    }
+    attrs[key] = raw
   }
-  // Anything left over that is not a recognised `k=v` pair is unparsed text inside a marker, which
-  // means the writer expressed something this grammar did not read.
-  const residue = body.replace(rx, '').replace(/\s+/g, '')
+  const residue = body.replace(ATTR_RX, '').replace(/\s+/g, '')
   if (residue !== '') errors.push({ code: 'QUOTE-ATTR-UNKNOWN', detail: `unparsed text in marker: '${residue}'` })
   return { attrs, errors }
 }
@@ -71,157 +97,176 @@ function validateMarker (attrs) {
   if (source === undefined) {
     errors.push({ code: 'QUOTE-SOURCE-MISSING', detail: 'a marker must name its source (self or mNNN)' })
   } else if (TRUTH_ID.test(source)) {
-    // A truth proving a material that proves the truth is circular laundering. Named on its own so
-    // the writer is told what is wrong rather than "unknown source".
     errors.push({ code: 'QUOTE-SOURCE-TRUTH', detail: `source '${source}' is a truth; quote the material's raw source directly, or the evidence proves itself` })
   } else if (source !== 'self' && !MATERIAL_ID.test(source)) {
     errors.push({ code: 'QUOTE-SOURCE-INVALID', detail: `source '${source}' is neither 'self' nor an mNNN material id` })
   }
   const mode = attrs.mode ?? 'verbatim'
   if (!MODES.has(mode)) errors.push({ code: 'QUOTE-MODE-INVALID', detail: `mode '${mode}' is not one of ${[...MODES].join(', ')}` })
-  // The human attribution is all a cold reviewer has when the machine cannot compare.
-  if (mode === 'not-checkable' && (attrs.location === undefined || attrs.location === '')) {
-    errors.push({ code: 'QUOTE-LOCATION-REQUIRED', detail: 'mode=not-checkable requires a location for the human attribution it stands on' })
+  if (mode === 'not-checkable') {
+    // EXACT source AND file, per the plan: an unverifiable claim is the one place where a reader has
+    // nothing but the address, so the address may not be inferred from "there was only one".
+    if (attrs.location === undefined) errors.push({ code: 'QUOTE-LOCATION-REQUIRED', detail: 'mode=not-checkable requires a location for the human attribution it stands on' })
+    if (attrs.file === undefined) errors.push({ code: 'QUOTE-FILE-REQUIRED', detail: 'mode=not-checkable requires an explicit file= so the unverifiable claim names exactly what it rests on' })
   }
   return { mode, errors }
 }
 
+// Parses a STANDALONE comment body. Callers hand it the comment's own bytes; nothing here searches
+// text for markers, because "is this a marker" is a structural question answered by the scanner.
+export function parseMarkerComment (bodyLatin1) {
+  const m = MARKER_BODY.exec(bodyLatin1)
+  if (m === null) return null
+  const parsed = parseAttrs(m[1])
+  const checked = validateMarker(parsed.attrs)
+  const errors = [...parsed.errors, ...checked.errors]
+  return { attrs: { ...parsed.attrs, mode: checked.mode }, errors, valid: errors.length === 0 }
+}
+
+// Convenience for grammar fixtures: find markers in a text without a material on disk. It still goes
+// through the shared scanner, so it agrees with a real scan about what a marker is.
 export function parseQuoteMarkers (text) {
+  const doc = scanMarkdown(typeof text === 'string' ? text : Buffer.from(text).toString('latin1'), { frontmatter: true })
   const markers = []
-  const rx = /<!--\s*wd:quote\b([\s\S]*?)-->/g
-  let match
-  while ((match = rx.exec(text)) !== null) {
-    const parsed = parseAttrs(match[1])
-    const checked = validateMarker(parsed.attrs)
-    const errors = [...parsed.errors, ...checked.errors]
-    markers.push({
-      raw: match[0],
-      start: match.index,
-      end: match.index + match[0].length,
-      attrs: { ...parsed.attrs, mode: checked.mode },
-      errors,
-      valid: errors.length === 0
-    })
+  for (const comment of standaloneComments(doc)) {
+    const parsed = parseMarkerComment(comment.body)
+    if (parsed === null) continue
+    markers.push({ ...parsed, start: comment.start, end: comment.end, line: comment.line, endLine: comment.endLine })
   }
-  return { markers, keyword: MARKER_OPEN }
+  return { markers, document: doc }
 }
 
 // ---- scanning a converted material ---------------------------------------------------------------
-// Structure comes from the shared scanner, so fence and comment precedence is decided once. A fenced
-// EXAMPLE of a marker is documentation; a regex over raw text would have counted it as a claim.
-function blockQuoteRuns (doc) {
-  const runs = []
-  let current = null
-  for (const line of doc.lines) {
-    const live = line.context === 'live' || line.context === 'comment-mixed'
-    const isQuote = live && /^\s{0,3}>/.test(line.raw)
-    if (isQuote) {
-      if (current === null) { current = { lines: [], startLine: line.number }; runs.push(current) }
-      current.lines.push(line)
-      continue
-    }
-    // A blank line inside a blockquote ends it for this purpose: the marker attaches to one block.
-    current = null
-  }
-  return runs
-}
-
-const quoteText = run => run.lines.map(l => l.raw.replace(/^\s{0,3}>\s?/, '')).join('\n')
+const quoteSpan = run => run.lines.map(l => l.live.replace(/^ {0,3}>\s?/, '')).join('\n')
 
 export function scanQuotedMaterial (materialDir, { trustedRoot, materialsRoot } = {}) {
   const diagnostics = []
   const quotes = []
   const convertedPath = `${materialDir}/converted.md`
-  let source
+  let convertedBytes
   try {
-    source = readFileSync(convertedPath).toString('latin1')
+    convertedBytes = readFileSync(convertedPath)
   } catch {
-    return { readable: false, quotes: [], diagnostics: [{ code: 'QUOTE-CONVERTED-UNREADABLE', detail: `${convertedPath} cannot be read` }] }
+    return { readable: false, quotes: [], providers: new Map(), diagnostics: [{ code: 'QUOTE-CONVERTED-UNREADABLE', detail: `${convertedPath} cannot be read` }] }
   }
+  const source = convertedBytes.toString('latin1')
   const doc = scanMarkdown(source, { frontmatter: true })
-  const markers = parseQuoteMarkers(source).markers.filter(m => {
-    // A marker inside a fence is an example. The shared scanner already decided which bytes are
-    // fenced; this asks it rather than re-deciding.
-    const line = doc.lines.find(l => m.start >= l.start && m.start <= l.end)
-    return line !== undefined && !line.context.startsWith('fence-')
-  })
-  const runs = blockQuoteRuns(doc)
+  const convertedDigest = sha256(convertedBytes)
 
-  // Each marker attaches to the first quote run that begins after it with no live prose between.
+  // An unterminated fence, comment or frontmatter block does not just hide a quote — it means the
+  // structure below it is unknown. Reported, never absorbed: the first version returned an empty
+  // quote list and no diagnostic, so a material could escape the checked population by opening a
+  // fence and never closing it.
+  for (const d of doc.diagnostics) {
+    diagnostics.push({ code: `QUOTE-${d.code.replace(/^MD_/, '')}`, line: d.line, detail: 'the document structure below this point is unknown, so its quotes cannot be judged' })
+  }
+
+  const { nodes: runs, rejected } = blockQuoteNodes(doc)
+  for (const r of rejected) {
+    diagnostics.push({
+      code: r.code === 'MD_QUOTE_LAZY' ? 'QUOTE-LAZY-CONTINUATION' : 'QUOTE-NESTED-UNSUPPORTED',
+      line: r.line,
+      detail: r.code === 'MD_QUOTE_LAZY'
+        ? 'a bare line continues this quote in rendered Markdown; write it with its own > so the compared span is the span a reader sees'
+        : 'a quote inside a list item is outside this grammar; move it to its own block so it can be checked'
+    })
+  }
+
+  // ONE SNAPSHOT PER PROVIDER, for the whole scan. The first version called readRawSources() per
+  // marker, so two quotes naming one provider could be judged against two different generations of
+  // its bytes inside a single result — the second answer the raw model exists to prevent,
+  // reintroduced by its first consumer.
+  const providers = new Map()
+  const providerOf = id => {
+    if (!providers.has(id)) {
+      const dir = id === 'self' ? materialDir : `${materialsRoot}/${id}`
+      providers.set(id, readRawSources(dir, { trustedRoot }))
+    }
+    return providers.get(id)
+  }
+
+  const markers = standaloneComments(doc)
+    .map(c => ({ comment: c, parsed: parseMarkerComment(c.body) }))
+    .filter(x => x.parsed !== null)
+
   const used = new Set()
-  for (const marker of markers) {
-    const markerLine = doc.lines.find(l => marker.start >= l.start && marker.start <= l.end)
-    const run = runs.find(r => !used.has(r) && markerLine !== undefined && r.startLine > markerLine.number &&
-      doc.lines.slice(markerLine.number, r.startLine - 1).every(l => l.raw.trim() === ''))
+  for (const { comment, parsed } of markers) {
+    const run = runs.find(r => !used.has(r) && r.start > comment.end &&
+      !/[^ \t\r\n]/.test(source.slice(comment.end, r.start)))
     if (run === undefined) {
-      diagnostics.push({ code: 'QUOTE-MARKER-ORPHAN', detail: 'a marker is not followed by a quote block, so it seals nothing' })
+      diagnostics.push({ code: 'QUOTE-MARKER-ORPHAN', line: comment.line, detail: 'a marker is not followed by a quote block, so it seals nothing' })
       continue
     }
     used.add(run)
-    const text = quoteText(run)
+    const text = quoteSpan(run)
     const quote = {
-      marker,
+      marker: { attrs: parsed.attrs, valid: parsed.valid, errors: parsed.errors, range: { start: comment.start, end: comment.end } },
+      attrs: parsed.attrs,
       text,
-      startLine: run.startLine,
+      range: { start: run.start, end: run.end },
+      convertedDigest,
       sealed: false,
-      mechanicallyCheckable: marker.attrs.mode === 'verbatim',
-      coldDebt: marker.attrs.mode === 'not-checkable',
+      mechanicallyCheckable: parsed.attrs.mode === 'verbatim',
+      coldDebt: parsed.attrs.mode === 'not-checkable',
+      resolved: null,
       diagnostics: []
     }
     quotes.push(quote)
-    if (!marker.valid) {
-      quote.diagnostics.push(...marker.errors)
-      diagnostics.push(...marker.errors)
-      continue
-    }
-    // RESOLVE, and stop at the raw source. `source=mNNN` reads that material's own raw root; it does
-    // not follow that material's markers, because chasing markers is how a claim ends up proving
-    // itself through a chain nobody read.
-    const targetDir = marker.attrs.source === 'self' ? materialDir : `${materialsRoot}/${marker.attrs.source}`
-    const raw = readRawSources(targetDir, { trustedRoot })
+    const note = d => { quote.diagnostics.push(d); diagnostics.push({ ...d, line: comment.line }) }
+    if (!parsed.valid) { for (const e of parsed.errors) note(e); continue }
+
+    // AN EMPTY SPAN IS NOT A QUOTE. `includes('')` is true of every string, so a bare `>` sealed
+    // against anything at all — the strongest possible false positive, and it passed silently.
+    if (wsnorm(text) === '') { note({ code: 'QUOTE-SPAN-EMPTY', detail: 'the quote block has no content, so there is nothing to compare' }); continue }
+
+    const raw = providerOf(parsed.attrs.source)
     if (raw.state !== 'complete') {
-      const d = { code: 'QUOTE-SOURCE-UNAVAILABLE', detail: `the raw source set for '${marker.attrs.source}' is '${raw.state}', so this quote cannot be checked` }
-      quote.diagnostics.push(d); diagnostics.push(d)
+      // Distinct codes, because "this material has no raw source" and "its source set is aliased"
+      // are different repairs. Collapsing them told every case to go look at the same thing.
+      const code = raw.state === 'empty' ? 'QUOTE-SOURCE-ABSENT' : raw.state === 'unreadable' ? 'QUOTE-SOURCE-UNREADABLE' : raw.state === 'unstable' ? 'QUOTE-SOURCE-UNSTABLE' : 'QUOTE-SOURCE-INVALID-SET'
+      note({ code, detail: `the raw source set for '${parsed.attrs.source}' is '${raw.state}', so this quote cannot be checked` })
       continue
     }
-    const resolved = resolveRawSource(raw, marker.attrs.file ?? null)
+    const resolved = resolveRawSource(raw, parsed.attrs.file ?? null)
     if (!resolved.ok) {
-      const d = {
+      note({
         code: resolved.code === 'RAW-SOURCE-AMBIGUOUS' ? 'QUOTE-SOURCE-AMBIGUOUS' : 'QUOTE-SOURCE-UNRESOLVED',
         detail: resolved.detail ?? `address did not resolve (${resolved.code})`
-      }
-      quote.diagnostics.push(d); diagnostics.push(d)
+      })
       continue
     }
     const bytes = raw.bytesOf(resolved.entry.name)
-    quote.resolved = { material: marker.attrs.source, file: resolved.entry.name, digest: resolved.entry.digest }
-    const binary = looksBinary(bytes)
-    if (marker.attrs.mode === 'not-checkable') {
-      // not-checkable is for sources a machine genuinely cannot compare. Allowing it over text is
-      // the downgrade path: any failing quote could be relabelled into silence.
-      if (!binary) {
-        const d = { code: 'QUOTE-NOT-CHECKABLE-ON-TEXT', detail: `${resolved.entry.name} is text, so this quote must be compared, not excused` }
-        quote.diagnostics.push(d); diagnostics.push(d)
+    const content = classifyContent(bytes)
+    // The SNAPSHOT OBJECT, not just its digest. Two quotes on one provider must hold the same
+    // object, which is what proves the scan read it once; equal digests would also be true of two
+    // separate reads that happened to agree, so the digest alone cannot tell those apart.
+    quote.providerSnapshot = raw
+    quote.resolved = {
+      material: parsed.attrs.source,
+      file: resolved.entry.name,
+      entryDigest: resolved.entry.digest,
+      providerTreeDigest: raw.treeDigest,
+      content: content.kind
+    }
+    if (parsed.attrs.mode === 'not-checkable') {
+      if (content.kind !== 'binary') {
+        note({ code: 'QUOTE-NOT-CHECKABLE-ON-TEXT', detail: `${resolved.entry.name} is text, so this quote must be compared, not excused` })
       }
       continue
     }
-    if (binary) {
-      const d = { code: 'QUOTE-BINARY-NOT-VERBATIM', detail: `${resolved.entry.name} is binary; a verbatim claim cannot be compared against it` }
-      quote.diagnostics.push(d); diagnostics.push(d)
+    if (content.kind === 'binary') {
+      note({ code: 'QUOTE-BINARY-NOT-VERBATIM', detail: `${resolved.entry.name} is binary (${content.reason}); a verbatim claim cannot be compared against it` })
       continue
     }
-    quote.sealed = wsnorm(asBytes(bytes)).includes(wsnorm(text))
-    if (!quote.sealed) {
-      const d = { code: 'QUOTE-SPAN-MISSING', detail: `the quoted span is not present in ${resolved.entry.name} (laundering risk)` }
-      quote.diagnostics.push(d); diagnostics.push(d)
-    }
+    quote.sealed = wsnorm(bytes.toString('latin1')).includes(wsnorm(text))
+    if (!quote.sealed) note({ code: 'QUOTE-SPAN-MISSING', detail: `the quoted span is not present in ${resolved.entry.name} (laundering risk)` })
   }
 
   // THE POPULATION RULE. An unmarked blockquote is the escape hatch: delete the marker and the claim
   // leaves the checked set while still reading as a quotation. So the absence is the diagnostic.
   for (const run of runs) {
     if (used.has(run)) continue
-    diagnostics.push({ code: 'QUOTE-UNMARKED', line: run.startLine, detail: 'a quote block carries no wd:quote marker, so nothing checks it' })
+    diagnostics.push({ code: 'QUOTE-UNMARKED', line: run.lines[0].number, detail: 'a quote block carries no wd:quote marker, so nothing checks it' })
   }
-  return { readable: true, quotes, diagnostics, document: doc }
+  return { readable: true, quotes, providers, convertedDigest, diagnostics, document: doc }
 }

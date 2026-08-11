@@ -20,6 +20,13 @@ const check = (condition, message, input = '') => {
   assert.ok(condition, `${message}\nINPUT=${JSON.stringify(input)}`)
 }
 
+// GRAMMAR FIXTURES GO THROUGH THE FILE DOMAIN. converted.md is read as latin1 bytes, so a marker
+// handed to the parser as a JS Unicode string never exercises the decode boundary — which is how a
+// Korean `file=` could fail to resolve and a `location` could come back as three Latin-1 code
+// points while every assertion passed. Encode the way the reader will see it.
+const asFile = text => Buffer.from(text, 'utf8').toString('latin1')
+const markersOf = text => parseQuoteMarkers(asFile(text))
+
 const root = mkdtempSync(join(tmpdir(), 'wd-quote-'))
 const mine = join(root, 'materials')
 mkdirSync(mine, { recursive: true })
@@ -37,7 +44,7 @@ try {
   // ---- 1. the marker grammar --------------------------------------------------------------------
   groups++
   {
-    const ok = parseQuoteMarkers('<!-- wd:quote source=self mode=verbatim location="§4" -->')
+    const ok = markersOf('<!-- wd:quote source=self mode=verbatim location="§4" -->')
     check(ok.markers.length === 1, 'a well-formed marker did not parse', ok)
     const m = ok.markers[0]
     check(m.attrs.source === 'self' && m.attrs.mode === 'verbatim' && m.attrs.location === '§4',
@@ -45,12 +52,12 @@ try {
     check(m.valid, 'a well-formed marker was rejected', m.errors)
 
     // Default mode is verbatim: an omitted mode must not mean "unchecked".
-    check(parseQuoteMarkers('<!-- wd:quote source=self -->').markers[0].attrs.mode === 'verbatim',
+    check(markersOf('<!-- wd:quote source=self -->').markers[0].attrs.mode === 'verbatim',
       'an omitted mode did not default to verbatim')
 
     // A comment that is not a marker is not a marker — and must not be mistaken for a broken one.
-    check(parseQuoteMarkers('<!-- an ordinary note -->').markers.length === 0, 'an ordinary comment parsed as a marker')
-    check(parseQuoteMarkers('<!-- wd:quotefoo source=self -->').markers.length === 0, 'a near-miss keyword parsed as a marker')
+    check(markersOf('<!-- an ordinary note -->').markers.length === 0, 'an ordinary comment parsed as a marker')
+    check(markersOf('<!-- wd:quotefoo source=self -->').markers.length === 0, 'a near-miss keyword parsed as a marker')
 
     // FAIL-CLOSED ON ANYTHING UNRECOGNISED. A typo'd attribute silently ignored is the
     // declared-but-unread class this format keeps closing: the writer believes they constrained
@@ -73,14 +80,14 @@ try {
     // `source=tNNN` is refused BY NAME: a truth proving a material that proves the truth is the
     // circular laundering the plan forbids, and it deserves its own diagnosis rather than
     // "unknown source".
-    const t = parseQuoteMarkers('<!-- wd:quote source=t001 -->').markers[0]
+    const t = markersOf('<!-- wd:quote source=t001 -->').markers[0]
     check(!t.valid && t.errors.some(e => e.code === 'QUOTE-SOURCE-TRUTH'),
       'a truth-sourced marker was not named as the cycle it is', t.errors)
 
     // Quoted values may hold spaces; bare values may not run past the marker.
-    check(parseQuoteMarkers('<!-- wd:quote source=self location="chapter 4, line 2" -->').markers[0].attrs.location === 'chapter 4, line 2',
+    check(markersOf('<!-- wd:quote source=self location="chapter 4, line 2" -->').markers[0].attrs.location === 'chapter 4, line 2',
       'a quoted attribute value lost its spaces')
-    check(parseQuoteMarkers('<!--wd:quote source=self-->').markers[0].valid, 'a marker without inner padding was rejected')
+    check(markersOf('<!--wd:quote source=self-->').markers[0].valid, 'a marker without inner padding was rejected')
   }
 
   // ---- 2. marker, quote block, and the population that must carry one ---------------------------
@@ -193,9 +200,18 @@ try {
     check(!v.quotes[0].sealed && codes(v).includes('QUOTE-BINARY-NOT-VERBATIM'),
       'a verbatim claim against a binary source was allowed', v.diagnostics)
 
+    // A BINARY WITH NO NUL. Testing NUL alone and calling the result "binary" left `01 02 03 41 42`
+    // classified as text, so a verbatim quote of `AB` sealed against it — measured.
+    material('m032', {})
+    writeFileSync(join(mine, 'm032', 'source.md'), Buffer.from([1, 2, 3, 0x41, 0x42]))
+    writeFileSync(join(mine, 'm032', 'converted.md'), ['# c', '', '<!-- wd:quote source=self -->', '> AB', ''].join('\n'))
+    const noNul = scan('m032')
+    check(!noNul.quotes[0].sealed && codes(noNul).includes('QUOTE-BINARY-NOT-VERBATIM'),
+      'a binary source with no NUL byte was treated as text', noNul.diagnostics)
+
     // not-checkable is allowed ONLY on a source the resolver judged binary, and it never reads as
     // sealed — it opens cold-verification debt instead.
-    writeFileSync(join(mine, 'm030', 'converted.md'), '# c\n\n<!-- wd:quote source=self mode=not-checkable location="p.1" -->\n> AB\n')
+    writeFileSync(join(mine, 'm030', 'converted.md'), '# c\n\n<!-- wd:quote source=self mode=not-checkable file=source.md location="p.1" -->\n> AB\n')
     const nc = scan('m030')
     check(nc.quotes[0].sealed === false && nc.quotes[0].mechanicallyCheckable === false,
       'a not-checkable quote reported as sealed', nc.quotes[0])
@@ -204,9 +220,15 @@ try {
     // ...and it may NOT be used to escape a text mismatch. This is the downgrade path the plan
     // names explicitly: a quote that simply does not match must not become "not checkable".
     material('m031', { 'source.md': 'plain text\n' })
-    writeFileSync(join(mine, 'm031', 'converted.md'), '# c\n\n<!-- wd:quote source=self mode=not-checkable location="p.1" -->\n> anything\n')
+    writeFileSync(join(mine, 'm031', 'converted.md'), '# c\n\n<!-- wd:quote source=self mode=not-checkable file=source.md location="p.1" -->\n> anything\n')
     check(codes(scan('m031')).includes('QUOTE-NOT-CHECKABLE-ON-TEXT'),
       'not-checkable was accepted on a text source, which is the laundering path', scan('m031').diagnostics)
+
+    // ...and without an explicit file=, because an unverifiable claim is the one place a reader has
+    // nothing but the address, so it may not be inferred from "there was only one source".
+    writeFileSync(join(mine, 'm030', 'converted.md'),
+      ['# c', '', '<!-- wd:quote source=self mode=not-checkable location="p.1" -->', '> AB', ''].join('\n'))
+    check(codes(scan('m030')).includes('QUOTE-FILE-REQUIRED'), 'not-checkable was accepted with no explicit file', scan('m030').diagnostics)
 
     // not-checkable without a location is incomplete: the human attribution is the only thing a
     // cold reviewer has to go on.
@@ -233,8 +255,128 @@ try {
     // mutation survived on `!sealed` alone. But the two refusals are different facts for a reader:
     // "the source set could not be read" is not "the address did not resolve", and a diagnostic
     // that quietly changes meaning is the drift this suite exists to catch.
-    check(codes(bad).includes('QUOTE-SOURCE-UNAVAILABLE'),
-      'an unreadable source set was reported as an unresolved address', bad.diagnostics)
+    check(codes(bad).includes('QUOTE-SOURCE-INVALID-SET'),
+      'an aliased/irregular source set was not distinguished from an unresolved address', bad.diagnostics)
+    // EACH RAW STATE GETS ITS OWN CODE. Collapsing them told every case to go look at the same
+    // thing, when "this material has no raw source" and "its source set is aliased" are different
+    // repairs. The absent case is checked here alongside the invalid one.
+    material('m042', { 'converted.md': ['# c', '', '<!-- wd:quote source=self -->', '> x', ''].join('\n') })
+    check(codes(scan('m042')).includes('QUOTE-SOURCE-ABSENT'),
+      'a material with no raw source at all was not named as absent', scan('m042').diagnostics)
+  }
+
+  // ---- 8. the population has no exits -----------------------------------------------------------
+  groups++
+  {
+    // EVERY ONE OF THESE WAS A HOLE, and they were one defect: the module matched `>` against raw
+    // lines and `<!-- wd:quote` against raw text instead of taking structure from the shared
+    // scanner. Each escape is pinned by the shape that used it.
+    const L = (...lines) => lines.join('\n') + '\n'
+    material('m050', { 'source.md': 'alpha\n' })
+    const at = body => { writeFileSync(join(mine, 'm050', 'converted.md'), body); return scan('m050') }
+
+    // An unterminated fence hid everything below it: quotes=0 and NO diagnostic, so a material
+    // could leave the checked population by opening a fence and never closing it.
+    const fenced = at(L('# c', '```md', '<!-- wd:quote source=self -->', '> alpha'))
+    check(codes(fenced).some(c => c.startsWith('QUOTE-UNTERMINATED')),
+      'an unterminated fence hid the rest of the document silently', fenced.diagnostics)
+
+    // A lazy continuation renders as ONE quote. Sealing only the first line while a reader sees two
+    // is the laundering this seal exists to stop.
+    const lazy = at(L('# c', '', '<!-- wd:quote source=self -->', '> alpha', 'forged continuation'))
+    check(codes(lazy).includes('QUOTE-LAZY-CONTINUATION'), 'a lazy continuation was silently dropped', lazy.diagnostics)
+    check(!lazy.quotes[0].sealed, 'a quote whose rendered span includes unchecked text was sealed', lazy.quotes[0])
+
+    // A quote inside a list item was invisible to every population.
+    const listed = at(L('# c', '', '- > alpha'))
+    check(codes(listed).includes('QUOTE-NESTED-UNSUPPORTED'), 'a list-nested quote was invisible', listed.diagnostics)
+
+    // A quote archived inside a comment is not a live quote — and must not be reported as unmarked.
+    const archived = at(L('# c', '', '<!-- archive', '> alpha', '-->'))
+    check(archived.quotes.length === 0 && !codes(archived).includes('QUOTE-UNMARKED'),
+      'a commented-out quote was treated as live', archived.diagnostics)
+
+    // A marker is only a marker when it owns its line: `prose <!-- … --> prose` declared a seal from
+    // inside a sentence, and a marker nested in an outer comment was read as live.
+    const inline = at(L('# c', '', 'prose <!-- wd:quote source=self --> prose', '> alpha'))
+    check(inline.quotes.length === 0 && codes(inline).includes('QUOTE-UNMARKED'),
+      'a marker embedded in a sentence sealed a quote', inline.diagnostics)
+    // Prose BEFORE the marker with nothing after it: the previous fixture had prose on both sides,
+    // so the "nothing between marker and quote" rule rejected it anyway and the standalone rule was
+    // never the thing under test.
+    const leading = at(L('# c', '', 'prose <!-- wd:quote source=self -->', '> alpha'))
+    check(leading.quotes.length === 0 && codes(leading).includes('QUOTE-UNMARKED'),
+      'a marker with prose before it on the same line sealed a quote', leading.diagnostics)
+    const nested = at(L('# c', '', '<!-- outer <!-- wd:quote source=self --> -->', '> alpha'))
+    // NOT `!some(sealed)` — that is vacuously true when there are no quotes at all, which is how a
+    // check passes while measuring nothing. The quote must be present in the population and UNSEALED.
+    check(nested.quotes.length === 0 && codes(nested).includes('QUOTE-UNMARKED'),
+      'a marker nested inside another comment was treated as live', nested.diagnostics)
+
+    // AN EMPTY SPAN SEALED AGAINST ANYTHING: `includes('')` is true of every string, so a bare `>`
+    // was the strongest possible false positive and it passed in silence.
+    for (const empty of ['>', '>   ', '>\n>  ']) {
+      const r = at(L('# c', '', '<!-- wd:quote source=self -->', empty))
+      check(!r.quotes[0].sealed && r.quotes[0].diagnostics.some(d => d.code === 'QUOTE-SPAN-EMPTY'),
+        `an empty quote block sealed: ${JSON.stringify(empty)}`, r.quotes[0])
+    }
+  }
+
+  // ---- 9. human text survives the byte domain ---------------------------------------------------
+  groups++
+  {
+    // THROUGH A REAL FILE, not a JS string handed to the parser. converted.md is read as latin1, so
+    // `file=` and `location=` arrive as bytes and must be decoded before they mean anything: the
+    // first version could not resolve a Korean filename and returned `location` as mojibake, while
+    // the grammar fixtures passed because they never crossed this boundary.
+    const d = material('m060', {})
+    writeFileSync(join(d, 'source.원본'), Buffer.from('한글 본문\n', 'utf8'))
+    writeFileSync(join(d, 'source.md'), Buffer.from('other\n', 'utf8'))
+    writeFileSync(join(d, 'converted.md'), Buffer.from(
+      '# c\n\n<!-- wd:quote source=self file="source.원본" location="장4" -->\n> 한글 본문\n', 'utf8'))
+    const r = scan('m060')
+    check(r.quotes[0].resolved?.file === 'source.원본', 'a Korean file= did not resolve to the file it names', r.quotes[0])
+    check(r.quotes[0].marker.attrs.location === '장4', 'a Korean location came back as bytes rather than text', r.quotes[0].marker.attrs)
+    check(r.quotes[0].sealed, 'a Korean verbatim quote did not seal against its own source', r.diagnostics)
+
+    // An attribute that is not valid UTF-8 is a typed error, not a best-effort string: it is about
+    // to be compared against a filename.
+    writeFileSync(join(d, 'converted.md'), Buffer.concat([
+      Buffer.from('# c\n\n<!-- wd:quote source=self file="', 'utf8'), Buffer.from([0xff, 0xfe]),
+      Buffer.from('" -->\n> 한글 본문\n', 'utf8')]))
+    check(codes(scan('m060')).includes('QUOTE-ATTR-ENCODING'),
+      'an attribute that is not valid UTF-8 was accepted', scan('m060').diagnostics)
+  }
+
+  // ---- 10. one snapshot per provider, and the addresses a graph will need ------------------------
+  groups++
+  {
+    material('m070', { 'source.md': 'shared line\n' })
+    material('m071', {
+      'converted.md': ['# c', '', '<!-- wd:quote source=m070 -->', '> shared line', '',
+        '<!-- wd:quote source=m070 -->', '> shared line', ''].join('\n')
+    })
+    const r = scan('m071')
+    check(r.quotes.length === 2 && r.quotes.every(q => q.sealed), 'two quotes on one provider did not both seal', r.diagnostics)
+    // ONE read for the whole scan: calling readRawSources per marker let two quotes naming one
+    // provider be judged against two generations of its bytes inside a single result.
+    check(r.providers.size === 1 && r.providers.has('m070'), 'the provider registry holds more than one entry', [...r.providers.keys()])
+    // IDENTITY, not equality. Re-reading per marker still yields one registry entry and equal
+    // digests, so only the object reference distinguishes one snapshot from two that agree.
+    check(r.quotes[0].providerSnapshot === r.providers.get('m070') &&
+      r.quotes[1].providerSnapshot === r.quotes[0].providerSnapshot,
+    'two quotes on one provider were judged against different snapshot objects')
+    check(r.quotes[0].resolved.providerTreeDigest === r.quotes[1].resolved.providerTreeDigest,
+      'two quotes on one provider saw different tree digests')
+
+    // The addresses the dependency graph and the confirmation projection will consume, so neither
+    // has to walk or parse anything again.
+    const q = r.quotes[0]
+    check(/^[0-9a-f]{64}$/.test(q.resolved.entryDigest) && /^[0-9a-f]{64}$/.test(q.resolved.providerTreeDigest) &&
+      /^[0-9a-f]{64}$/.test(q.convertedDigest), 'a digest in the published result is not a sha256', q.resolved)
+    check(q.range.end > q.range.start && q.marker.range.end > q.marker.range.start &&
+      q.marker.range.end <= q.range.start, 'the marker and quote byte ranges are not ordered source spans', { m: q.marker.range, q: q.range })
+    check(q.resolved.content === 'text', 'the resolved source did not carry its content classification', q.resolved)
   }
 
   console.log(`quote-marker-properties: groups=${groups} cases=${cases}`)

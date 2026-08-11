@@ -245,6 +245,23 @@ try {
     check(grew.treeDigest === null, 'a set that changed during the walk still produced a digest')
     // Once settled, the same directory reads clean — so the check is about the race, not the tree.
     check(read(d2).state === 'complete', 'the settled directory did not read complete afterwards')
+
+    // THE ALIAS THAT ARRIVES AFTER THE READ. nlink was checked before the bytes were taken, so a
+    // file could be renamed aside and a hardlink to it dropped back under the same name mid-read:
+    // the descriptor still described a singly-linked file, the final path was nlink=2, and the set
+    // published as `complete` with a tree digest. Measured before the post-read lstat existed.
+    const d3 = fresh('late-alias')
+    put(d3, 'source.md', 'original\n')
+    const late = read(d3, {
+      hooks: {
+        afterRead: () => {
+          renameSync(join(d3, 'source.md'), join(d3, 'held.md'))
+          linkSync(join(d3, 'held.md'), join(d3, 'source.md'))
+        }
+      }
+    })
+    check(late.state !== 'complete', 'a hardlink installed after the read still produced a complete set', late.state)
+    check(late.treeDigest === null, 'a set aliased mid-read still produced a tree digest', late)
   }
 
   // ---- 7. the manifest shape, and the snapshot it hands out -------------------------------------

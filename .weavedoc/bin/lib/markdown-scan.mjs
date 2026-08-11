@@ -253,6 +253,94 @@ export function sectionNodes (doc, name, { boundaries = [name] } = {}) {
   return out
 }
 
+// Blockquotes, as a TYPED population rather than a regex a consumer runs over `raw`.
+//
+// The quote seal's first implementation matched `/^\s{0,3}>/` against `line.raw` and called that
+// "using the shared scanner". It was not: a quote inside an HTML comment counted, a quote behind an
+// unterminated fence vanished, `- > x` was invisible, and a lazy continuation (`> a` followed by
+// bare prose) silently dropped the second line from the compared span while sealing the first.
+// Those are not five exceptions; they are one consumer re-deciding structure. So structure is
+// decided here, once, and the grammar is deliberately NARROW — this runtime is not a CommonMark
+// renderer, so the forms it will not judge are REFUSED by name instead of being half-supported.
+//
+//   admitted  — a run of lines whose live text begins with 0-3 spaces then `>`
+//   lazy      — a non-blank, non-`>` line directly after such a run: CommonMark folds it into the
+//               quote, this grammar does not, and silently keeping only the first half of a span a
+//               human reads as one quote is exactly the laundering gap the seal exists to close
+//   nested    — a `>` that is not at the line's own start (inside a list item, say)
+//
+// `live` is used throughout, so a commented-out quote is not a quote; `context` excludes fenced and
+// frontmatter lines, so an example is documentation.
+const QUOTE_OPEN = /^ {0,3}>/
+const NESTED_QUOTE = /^[ \t]*(?:[-+*]|[0-9]+[.)])[ \t]+ {0,3}>/
+
+export function blockQuoteNodes (doc) {
+  const nodes = []
+  const rejected = []
+  let current = null
+  for (const line of doc.lines) {
+    const structural = line.context === 'live' || line.context === 'comment-mixed'
+    const live = line.live
+    if (!structural) { current = null; continue }
+    if (QUOTE_OPEN.test(live)) {
+      if (current === null) {
+        current = { id: `Q${line.number}`, lines: [], start: line.start, end: line.end }
+        nodes.push(current)
+      }
+      current.lines.push(line)
+      current.end = line.end
+      continue
+    }
+    if (NESTED_QUOTE.test(live)) {
+      // Refused by name. Admitting it would need a container model this runtime does not have, and
+      // ignoring it lets a real quotation sit outside every population that checks one.
+      rejected.push({ code: 'MD_QUOTE_NESTED', line: line.number, start: line.start, end: line.end, raw: live })
+      current = null
+      continue
+    }
+    if (current !== null && /[^ \t]/.test(live)) {
+      rejected.push({ code: 'MD_QUOTE_LAZY', line: line.number, start: line.start, end: line.end, raw: live })
+      // The lazy line is still attached, so the span a consumer compares is the span a human reads.
+      // Dropping it would seal half a quotation, which is worse than refusing the whole thing.
+      current.lines.push(line)
+      current.end = line.end
+      continue
+    }
+    current = null
+  }
+  return { nodes, rejected }
+}
+
+// A comment that owns its lines completely — nothing live before it, nothing after. A marker is only
+// a marker in this shape: `prose <!-- wd:quote … --> prose` was accepted by the first reader, which
+// let a seal be declared from inside a sentence, and a marker nested in an outer comment was read as
+// live. Both are decided here from the scanner's own comment spans rather than by matching text.
+export function standaloneComments (doc) {
+  const out = []
+  for (const comment of doc.comments) {
+    if (!comment.closed || comment.end === null) continue
+    const first = doc.lines.find(l => l.number === comment.line)
+    const last = doc.lines.find(l => l.number === comment.endLine)
+    if (first === undefined || last === undefined) continue
+    if (first.context.startsWith('fence-') || first.context === 'frontmatter') continue
+    const before = doc.source.slice(first.start, comment.start)
+    const after = doc.source.slice(comment.end, last.end)
+    if (/[^ \t]/.test(before) || /[^ \t]/.test(after)) continue
+    // Nested inside another comment: the outer span already covers these bytes, so this one is
+    // archived text rather than a live instruction.
+    if (doc.comments.some(o => o !== comment && o.closed && o.end !== null && o.start < comment.start && o.end > comment.end)) continue
+    out.push({
+      id: `MC${comment.line}`,
+      start: comment.start,
+      end: comment.end,
+      line: first.number,
+      endLine: last.number,
+      body: doc.source.slice(comment.start + 4, comment.end - 3)
+    })
+  }
+  return out
+}
+
 export function sectionTexts (doc, name) {
   return sectionNodes(doc, name).map(s => s.lines.length > 0 ? s.lines.map(l => l.live).join('\n') + '\n' : '')
 }
