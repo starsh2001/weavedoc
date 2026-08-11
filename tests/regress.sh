@@ -1307,6 +1307,15 @@ meta_markdown_state_model_properties() {
   expect_pass
   expect_has "groups=15 cases=1844 cartesian=complete"
 }
+meta_quote_marker_properties() {
+  # The v3 quote marker grammar, scanner and direct raw-source resolver (Phase 1). Written red-first
+  # against a module that did not exist yet, which is what the plan asks for. Nothing in the runtime
+  # consumes it and it is NOT connected to the v2 gate, so this case is the only thing executing it
+  # — hence the pinned total.
+  OUT=$(node "$REPO/tests/quote-marker-properties.mjs" 2>&1); RC=$?
+  expect_pass
+  expect_has "groups=7 cases=43"
+}
 meta_raw_source_properties() {
   # The shared raw-source model (schema v3, Phase 1). Same vacuity guard as its siblings: the exact
   # total is pinned, and nothing in the runtime consumes this model yet, so this case is the only

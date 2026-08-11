@@ -4,6 +4,24 @@
 
 ---
 
+## 2026-08-08.10
+
+**Unreleased — the v3 quote marker: grammar, scanner, and the resolver that stops at a raw source.** Read-only and unwired; it is deliberately **not** connected to the v2 gate. Written red-first against a module that did not exist, which is what the plan asks for.
+
+This is the hop the mine did not have. The truth seal already proves a truth's body is in its material's `converted.md`; this proves the marked spans of `converted.md` are in the raw source. Between them a claim has no unchecked stretch — and a conversion is exactly where a sentence can quietly become a better sentence.
+
+**The absence of a marker is the diagnostic.** An unmarked blockquote is the escape hatch: delete the marker and the claim leaves the checked set while still reading as a quotation. So the population rule is enforced from the other side — every live blockquote without a `wd:quote` marker is named, and a marker with no quote block after it is named too, because it seals nothing.
+
+**Everything unrecognised in a marker is an error.** An unknown attribute, a duplicate, an empty value or unparsed residue all fail closed. A typo'd attribute that is silently dropped leaves the writer believing they constrained a claim that nothing did — the declared-but-unread class this format keeps closing. `source=tNNN` gets its own diagnosis rather than "unknown source": a truth proving a material that proves the truth is circular laundering, and the writer should be told which mistake they made.
+
+**The comparison is bytes, in the truth seal's exact spelling.** Whitespace normalisation is reused rather than re-derived, because two spellings of "same text" would be two answers about one seal. A CP949 fixture whose quote differs from its source by two bytes fails; decoding first maps both onto U+FFFD and calls them equal, which is the forgery the truth seal was hardened against one hop later.
+
+**Binary is decided by content and never reads as passed.** A `.md` full of NULs is binary and a `.bin` full of text is not — naming it by extension would let a rename change a verdict. A verbatim claim against a binary source is refused; `mode=not-checkable` is allowed *only* where the resolver judged the source binary, requires a `location` for the human attribution it stands on, reports `sealed: false`, and opens cold-verification debt. It cannot be used to excuse a text mismatch, which is the downgrade path the plan names outright.
+
+**One Markdown reader.** Fence and comment precedence come from the shared scanner, so a fenced *example* of a marker is documentation rather than a claim. A regex over raw text would have counted it.
+
+Thirteen mutations, all killed. One needed a sharper assertion first: deleting the scanner's own source-state gate left the quote unsealed anyway, because the resolver refuses a non-`complete` model too — but the two refusals are different facts for a reader, so the test now pins the code rather than the absence of a seal.
+
 ## 2026-08-08.9
 
 **Unreleased — the raw-source model, rebuilt around a state and a snapshot.** Still read-only and unwired. Four defects in `2026-08-08.8`, all found by independent review, and the last of them is about my own claim rather than the code.
