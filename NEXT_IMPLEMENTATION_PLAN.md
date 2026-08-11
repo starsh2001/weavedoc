@@ -1266,7 +1266,7 @@ Phase 0에서 남긴 것(차단 등급 아님, Phase 1과 독립):
 
 ### 12.7 parser/artifact role 사례
 
-> 진행(2026-08-10, 번들 `2026-08-08.6`): **어느 항목도 완료가 아니다.** 1~4는 status·validate·writer가 *같은* typed object로 판정하는 것을 요구하는데 **production import가 아직 0개**라 E2E 동치는 검사되지 않았다 — 지금 충족된 것은 **contract-layer 선행조건**뿐이다(1·2·3의 role object 형태, 4의 비ASCII 4종 양 도메인 동치). **5만 계약 층에서 완결**(missing·duplicate·empty·leading-empty·interior-empty·extra role + 두 positional 계약 모두의 trailing delimiter 정책). **6·7·8·9는 미착수** — 6은 소비자 전환(Phase 2) 전에는 대조할 green fixture가 없고, 7·8은 v3 review 절/migration이 아직 없으며, 9의 doccheck 변이 검사도 소비자 전환 뒤에 붙는다. **§12.7 전체 완료로 표시하지 말 것.**
+> 진행(2026-08-10, 번들 `2026-08-08.7`): **§12.7 전체는 미완료.** 항목별로는: 1~4는 status·validate·writer가 *같은* typed object로 판정하는 것을 요구하는데 **production import가 아직 0개**라 E2E 동치는 검사되지 않았다 — 지금 충족된 것은 **contract-layer 선행조건**뿐이다(1·2·3의 role object 형태, 4의 비ASCII 4종 양 도메인 동치). **#5는 완료**(missing·duplicate·empty·leading-empty·interior-empty·extra role + 두 positional 계약 모두의 trailing delimiter 정책). **#6·7·8·9는 미착수** — 6은 소비자 전환(Phase 2) 전에는 대조할 green fixture가 없고, 7·8은 v3 review 절/migration이 아직 없으며, 9의 doccheck 변이 검사도 소비자 전환 뒤에 붙는다. **§12.7 전체 완료로 표시하지 말 것.**
 
 1. Human queue waiting/closed와 ownership 세 역할을 status·validate·writer가 같은 typed object로 판정
 2. questions waiting/proposed/closed를 listing·count·gate가 같은 역할로 판정

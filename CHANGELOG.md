@@ -4,6 +4,14 @@
 
 ---
 
+## 2026-08-08.7
+
+**Unreleased — bundle hygiene on the frozen contract.** No behaviour change; `artifact-contracts` is unchanged and stays frozen.
+
+**Four C0 control bytes were shipped inside `schemas/v3`.** A comment rewrite in `2026-08-08.6` wrote U+2014 through a latin1 writer, which keeps the low byte: 0x2014 becomes 0x14. They sat in comments, so the parser never saw them and every check stayed green — the control-character scan covered runtime modules only. The bytes are proper UTF-8 em-dashes now, and the scan covers `.weavedoc/schema` and `.weavedoc/schemas/*` in CI *and* in the local sweep, because a bundled contract edited here should go red here rather than one push later. This is the two-encoder trap this repository has recorded twice before, in a file that IS the format.
+
+**Two statements that were true of v2 and not yet of v3.** `schemas/v3` opened by saying the checker defers to it, and the role block said every consumer asks the shared loader. Nothing reads the file yet; both now say so and name Phase 2 as when it changes. And the plan's §12.7 status said both "no item is complete" and "#5 is complete" in one line — it is per-item now: #5 done, #1–4 contract-layer prerequisite only, #6–9 not started, §12.7 as a whole outstanding.
+
 ## 2026-08-08.6
 
 **Unreleased — closing the correction slice, including a rule I broke while writing the probe that enforces it.**

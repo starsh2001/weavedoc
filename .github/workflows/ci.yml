@@ -37,7 +37,13 @@ jobs:
         run: |
           # This workflow scans ITSELF: the first draft of the comment above put a real U+0001
           # into the YAML, which is the same invisible-character trap one layer out.
-          for f in .weavedoc/bin/weavedoc.mjs $(find .weavedoc/bin/lib -name '*.mjs') .github/workflows/ci.yml; do
+          # THE BUNDLED CONTRACTS TOO (2026-08-08.7). The scan covered runtime modules only, so four
+          # 0x14 bytes rode into `.weavedoc/schemas/v3` and shipped green: a comment rewrite wrote a
+          # U+2014 through a latin1 writer, which keeps the low byte. Comments, so the parser never
+          # saw them — but these files ARE the format, and a contract with control characters in it
+          # is not a contract anyone should have to diff twice.
+          for f in .weavedoc/bin/weavedoc.mjs $(find .weavedoc/bin/lib -name '*.mjs') \
+                   .weavedoc/schema $(find .weavedoc/schemas -type f) .github/workflows/ci.yml; do
             n=$(node tests/ctlscan.mjs "$f" | tail -1 | sed 's/[^0-9]//g')
             [ "$n" = 0 ] || { echo "$f holds $n line(s) with a literal control character"; exit 1; }
           done

@@ -1307,6 +1307,23 @@ meta_markdown_state_model_properties() {
   expect_pass
   expect_has "groups=15 cases=1844 cartesian=complete"
 }
+meta_bundled_contracts_have_no_control_chars() {
+  # CI had this for runtime modules only, so four 0x14 bytes rode into `.weavedoc/schemas/v3` and
+  # shipped green (2026-08-08.6): a comment rewrite wrote U+2014 through a latin1 writer, which
+  # keeps the low byte. They were in comments, so the parser never noticed — but these files ARE
+  # the format. The check belongs in the local sweep as well as in CI: a bundled contract edited
+  # here should go red HERE, not one push later.
+  local f bad="" n
+  for f in "$REPO/.weavedoc/schema" "$REPO/.weavedoc/schemas"/*; do
+    [ -f "$f" ] || continue
+    n=$(node "$REPO/tests/ctlscan.mjs" "$f" | tail -1 | sed 's/[^0-9]//g')
+    [ "${n:-1}" = 0 ] || bad="$bad ${f#$REPO/}($n)"
+  done
+  # VACUITY GUARD: a glob that matched nothing would make this pass while checking zero files.
+  [ -f "$REPO/.weavedoc/schemas/v3" ] || { bad "no bundled versioned contract to scan — the check would be vacuous"; return; }
+  OUT="control-chars:${bad:- none}"; RC=0
+  if [ -n "$bad" ]; then bad "bundled contract holds literal control characters:$bad"; else ok; fi
+}
 meta_artifact_contract_properties() {
   # The versioned role contract (schema v3, Phase 1). Same vacuity guard as above: the exact total
   # is asserted, so deleting an axis is a failure even when every remaining assertion is green.

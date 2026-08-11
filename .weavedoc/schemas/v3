@@ -1,5 +1,8 @@
 # WeaveDoc format schema — the single source of truth for artifact formats.
-# Both bin/weavedoc.mjs (the checker) and FORMATS.md (human prose) defer to THIS file.
+# STATUS (Phase 1): NOTHING READS THIS FILE YET. It is bundled and exercised by fixtures only —
+# artifact-contracts.mjs can load it, and no production consumer imports that loader. From Phase 2
+# the checker defers to this file for a v3 mine the way it defers to .weavedoc/schema for a v2 one;
+# until then .weavedoc/schema is what bin/weavedoc.mjs and FORMATS.md actually follow.
 # Kept flat with |-separated lists so it parses with no yq/jq dependency.
 # `*.fm.optional` lists are DESCRIPTIVE: validate does not reject unknown frontmatter keys, so they
 # document what a writer may add rather than gating anything. Every other key here is read by
@@ -29,12 +32,12 @@ truth.fm.resolution.decided_by: machine|user
 verify.fm.required: status|round|verified_at
 verify.fm.optional: consecutive_passes
 verify.fm.enum.status: passed|failed|escalated|stale|in-progress
-# ROLE, NOT RECOGNITION  this is the v3 file, and the difference is the whole point of it.
+# ROLE, NOT RECOGNITION — this is the v3 file, and the difference is the whole point of it.
 # v2 declared which words a reader RECOGNISES (`humanqueue.enum.state`, `verify.sections`,
 # `review.sections`, `questions.enum.status`) and left what each word MEANT hardcoded in the
 # consumers. Those keys are GONE here: the explicit role block at the end of this file names each
 # token exactly once, and `artifact-contracts.mjs` is the only thing that reads them. Do not
-# reintroduce a recognition key beside the role that replaced it  two declarations of one fact is
+# reintroduce a recognition key beside the role that replaced it — two declarations of one fact is
 # the defect this version exists to remove. `gaps.enum.kind` is the one survivor and is not a
 # role list: it is a distinct membership SET that assigns nothing by position.
 # The verdict word an entry in `## Verified units` must END with to mean "this unit is covered".
@@ -55,9 +58,9 @@ review.fm.optional: round|consecutive_passes|reviewed_kind|reviewed_digest|revie
 review.enum.reviewed_kind: draft|final
 review.enum.kind: contradiction|unsupported|missing-required
 # review's four sections are declared as ROLES at the end of this file, not as the v2 `review.sections`
-# list. The reason the list existed is still true  a reader has to know which headings END the
+# list. The reason the list existed is still true — a reader has to know which headings END the
 # violations section, since stopping at the same level lets a file whose other sections are `##` run
-# to EOF while stopping at any heading lets a sub-heading close the gate early  but the answer now
+# to EOF while stopping at any heading lets a sub-heading close the gate early — but the answer now
 # comes from the role contract rather than a positional list. Whether the four must EXIST is a
 # separate question and Phase 2 owns it: v3 requires all four, and migration adds the missing ones
 # without reissuing a seal (plan section 7.1).
@@ -102,8 +105,9 @@ config.repeat.scales: skip|light|standard|full
 # words a reader RECOGNISES (`humanqueue.enum.state: open|ruled`) and leaves what each word MEANS
 # hardcoded in the consumers — `open` waits, `ruled` is closed, the queue heading is the literal
 # `Human queue`. That is the known limit PARSER-MODEL.md section 5 records: rename a value and its
-# entries stay recognised but unrouted. Here each ROLE names its token, one place, and every
-# consumer asks the shared contract loader instead of splitting an enum or matching English.
+# entries stay recognised but unrouted. Here each ROLE names its token in one place, and from
+# Phase 2 every consumer will ask the shared contract loader instead of splitting an enum or
+# matching English. Today the roles are declared and loadable; the consumers have not moved yet.
 #
 # These tokens are the format's fixed vocabulary, NOT a rename knob and NOT a translation surface.
 # Only user-facing messages are translated; artifact bytes are not. What changes in v3 is that the
