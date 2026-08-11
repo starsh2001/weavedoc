@@ -4,6 +4,22 @@
 
 ---
 
+## 2026-08-08.9
+
+**Unreleased — the raw-source model, rebuilt around a state and a snapshot.** Still read-only and unwired. Four defects in `2026-08-08.8`, all found by independent review, and the last of them is about my own claim rather than the code.
+
+**The resolver answered from an incomplete set.** It read `readable` and `entries` and never looked at `rejected`, so a material with one regular source beside a rejected sibling — no tree digest, nothing sealed — still resolved that source as a valid address. The mirror was wrong too: a set of nothing but rejections reported `RAW-SOURCE-ABSENT`, which is a different fact. The cure is not another condition: the model now publishes ONE state — `complete`, `empty`, `invalid`, `unreadable`, `unstable` — where only the first two carry a manifest and only `complete` resolves an address. A discriminated state cannot be half-read; three fields a caller has to reassemble can, and were.
+
+**An alias was evidence.** Only children were checked, never the material root, so a junction standing in for the material directory sealed an external directory's `source.md` as ordinary evidence — measured. A hardlinked `converted.md` passed as a source for the same reason: it is a regular file. Both are refused now, through one verified root capability (`openMaterialRoot`) so no consumer re-derives the boundary, with containment by canonical path and `relative()` rather than a string prefix — `/a/b` is not inside `/a/bc`. The trusted root is a required argument: a boundary that can be omitted is one that will be.
+
+**It was not a snapshot.** `readdir`, then `lstat`, then a separate read: `size` came from one instant and `digest` from another, so a file rewritten in between produced an entry whose own two fields disagreed, and a set that changed mid-walk was published as complete. Identity and bytes now come from one open file description — fstat, read, fstat — and the directory is re-listed; anything that moved yields `unstable` rather than a digest. The model also keeps the bytes it hashed and hands out copies, because the quote scanner otherwise has to open the file again, which is the second answer this module exists to prevent.
+
+**"All 52 mutation-killed" was false.** The mutations were structural; the digest itself was never attacked. Swapping SHA-256 for SHA-1, returning a padded file size instead of a content hash, and hashing a UTF-8 round-trip instead of the bytes all passed 52 of 52 — the byte-edit fixture also changed the length, so a size-shaped digest satisfied it. There are known SHA-256 vectors now, a same-length edit, invalid UTF-8, an independently recomputed tree digest, and 64-lowercase-hex shape assertions. All four survivors die.
+
+The read race is injected through a fault seam, the way `consecrate` and `upgrade` take their write primitives: a race is the one condition a fixture cannot produce by waiting, and an unexercised stability check has never run. One clause of that check — the short-read guard — is not separately killable and says so at the code.
+
+**And the fallback hid a defect, exactly as the previous entry worried it might.** Binding identity and bytes to one descriptor was right, but asking that descriptor whether it was a symlink is dead code: `open` FOLLOWS a link, so `fstat` describes the target and always answers false. A symlink to a regular file was therefore accepted as a source — the very thing `2026-08-08.8` refused. The local Windows sweep was green because the host cannot create a file symlink and the fixture's directory fallback stood in; all three CI legs failed on the same line. `lstat` decides the type first now, and the descriptor is bound to it by inode so the name cannot be re-pointed in between. The fixture links to a DIRECTORY instead: a junction needs no privilege on Windows and the type argument is ignored on POSIX, so the symlink branch runs on every host and the fallback is gone. The lesson is not about symlinks — a platform fallback that keeps a suite green is a place where a defect can live, and this one did.
+
 ## 2026-08-08.8
 
 **Unreleased — the shared raw-source model.** Read-only and unwired, like everything else in Phase 1. Nothing in the runtime imports it yet.
@@ -16,7 +32,7 @@ Everything downstream that has to say "the source bytes changed" — conflict en
 
 **Written addresses are refused before normalisation.** `..`, absolute and drive-qualified forms are rejected as written; normalising first and comparing after is how an escape becomes a prefix match on a sibling name. With several sources an address is required — choosing one silently attributes a quote to a file the writer never named, which is the attribution this seal exists to make checkable.
 
-**One platform limit, recorded rather than papered over.** Creating a symlink needs a privilege Windows does not always grant, so the fixture falls back to a directory for the same rejection rule and the property output ends with `nonregular=symlink` or `nonregular=directory`. The assertion demands exactly the kind that was created, so the symlink branch cannot rot unnoticed on a host that can make links: a mutation replacing `lstat` with `stat` survives the Windows fallback and dies on POSIX. Measured both ways.
+**One platform limit, recorded rather than papered over.** Creating a symlink needs a privilege Windows does not always grant, so the fixture falls back to a directory for the same rejection rule and the property output ends with `nonregular=symlink` or `nonregular=directory`. The assertion demands exactly the kind that was created, and the fallback is Windows-only — on POSIX a failure raises. Measured here: the `lstat`→`stat` mutation survives the Windows fallback, and the refusal fires when the fallback is forced. The POSIX side is *inferred* from those two facts plus green Linux and macOS legs; the mutant itself was not run there.
 
 ## 2026-08-08.7
 

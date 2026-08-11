@@ -1315,8 +1315,10 @@ meta_raw_source_properties() {
   # loud instead of quietly covering one branch less.
   OUT=$(node "$REPO/tests/raw-source-properties.mjs" 2>&1); RC=$?
   expect_pass
-  expect_has "groups=6 cases=52"
+  expect_has "groups=8 cases=74"
   expect_has "nonregular="
+  expect_has "rootalias="
+  expect_has "hardlink="
 }
 meta_bundled_contracts_have_no_control_chars() {
   # CI had this for runtime modules only, so four 0x14 bytes rode into `.weavedoc/schemas/v3` and
