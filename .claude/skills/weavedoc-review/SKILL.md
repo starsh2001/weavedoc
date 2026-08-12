@@ -69,7 +69,7 @@ Fidelity violations **always block regardless of strength** — they are not adv
 
 **Count the clean rounds — one is not convergence.** `config.review.repeat` (read at this run's scale) is how many clean advisory rounds **in a row** end the loop. `refine` step 7 already loops on this number, so this is where the count is produced:
 - Round clean at the `strength` bar → `consecutive_passes` + 1.
-- Round has a blocking advisory finding → back to **0**, never decremented.
+- Round has a blocking advisory finding, **or the defender made a bar-crossing ticket-downgrade** (blocking at its claimed grade, non-blocking at the new one — reviewers.md ladder) → back to **0**, never decremented. The downgraded finding's test is the next fresh panel; the loop may not converge before it runs.
 - Record it in `review.md` next to the round number, after **every** round, so a cold session resumes the loop rather than restarting it.
 - After **every** round, run `node .weavedoc/bin/weavedoc.mjs seal-review <doc-id> draft` — it pins the exact bytes and context this round reviewed (`reviewed_digest` + `review_context_digest`, computed by the tool, never by hand). Refine's edits will then show as a digest mismatch until the next round re-seals; that mismatch is precisely the staleness signal `consecrate` and `validate` obey.
 - Count short of `repeat` → run another **fresh cold** panel (§2, new subagents, same adjudications) even though this round was clean. Reusing the panel measures reviewer fatigue, not the document.

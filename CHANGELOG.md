@@ -4,6 +4,12 @@
 
 ---
 
+## 2026-08-08.16
+
+**Unreleased — a downgrade's test is the next round, and the loop must not end before it.** One follow-up to `.15`, raised by the second cold review round and closed by the user's own sentence: "다음 라운드가 없으면 '불거질 수 있다'는 거짓이지."
+
+`.15` kept ticket-downgraded findings re-raisable — the accepted safety valve was "the next fresh cold panel may re-raise it with the ticket". But that promise presumed a next round exists: a downgrade that crosses the blocking bar could land in a round that counts as clean, satisfy `repeat`, and end the loop with no fresh panel ever testing it (at `verify.strength: 1`, a consequence-less real critical could ship that way). Now a **bar-crossing ticket-downgrade leaves the round not clean** — the convergence count resets, so the next fresh cold panel always runs. Nothing goes to the human and the grade is not re-argued: the panel either re-raises the finding with its ticket, or a grade that survived two independent cold reads stands. The two-strikes rule, guaranteed instead of hoped for. The engine and both counting owners (verify §6, review convergence) state it in the same words.
+
 ## 2026-08-08.15
 
 **Unreleased — a grade is argued by ticket, and the defender always sits.** Skill text only, no runtime bytes: review-grading discipline in the shipped skills, from a GroveSpec-alignment pass, cold-reviewed externally and corrected once by the user.

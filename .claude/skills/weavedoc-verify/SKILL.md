@@ -166,7 +166,7 @@ This section is a command and not advice because scope was a judgement call and 
 
    **Then count it — one clean round is not a pass.** `config.verify.repeat` (read at this run's scale) is how many clean rounds **in a row** finish the loop.
    - Round clean → `consecutive_passes` + 1.
-   - Round fails, **or step 0's baseline moved** → `consecutive_passes` back to **0**. Always 0, never decremented: a round that found something means the target was not quiet, and the count of quiet rounds restarts.
+   - Round fails, **or step 0's baseline moved**, **or the defender made a bar-crossing ticket-downgrade** (blocking at its claimed grade, non-blocking at the new one — the ladder in reviewers.md) → `consecutive_passes` back to **0**. Always 0, never decremented: a round that found something means the target was not quiet, and the count of quiet rounds restarts. The downgrade case keeps the ladder honest — its test is the next fresh panel, so the loop may not converge before that panel runs.
    - Write `consecutive_passes` into `truths/verify.md` frontmatter **after every round**, clean or not. It is the only reason a cold session can pick the loop up mid-way instead of starting over.
    - `consecutive_passes` < `repeat` → **re-spawn a fresh cold round (§7) even though this one was clean.** A clean round is evidence about that round, not about the target.
 
