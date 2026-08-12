@@ -72,7 +72,12 @@ export function canonId (s) {
   if (p !== 't' && p !== 'm') return null
   const n = s.slice(1)
   if (n === '' || /[^0-9]/.test(n)) return null
-  return p + String(parseInt(n, 10)).padStart(3, '0')
+  // STRING canonicalisation, never parseInt. Above 2^53 parseInt rounds — `m9007199254740993`
+  // canonicalised to `m9007199254740992`, a DIFFERENT material, and a quote sealed against the
+  // wrong file's bytes (measured). Past ~1e21 it produced `m1e+21`. Stripping leading zeros as text
+  // is exact at any length, and ids are text everywhere else in this runtime anyway.
+  const stripped = n.replace(/^0+(?=[0-9])/, '')
+  return p + stripped.padStart(3, '0')
 }
 
 // ---- dates --------------------------------------------------------------------------------

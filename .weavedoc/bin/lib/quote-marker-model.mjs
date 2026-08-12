@@ -111,9 +111,13 @@ function validateMarker (attrs) {
     // nothing but the address, so the address may not be inferred from "there was only one".
     // A blank or control-only location is not an attribution. It is the only thing a cold reviewer
     // has when the machine cannot compare, so "present" is not the test — legible is.
+    // `\s` alone is not enough: U+200B and its zero-width relatives are not Unicode whitespace, so
+    // a location made only of them counted as legible while rendering as nothing at all.
+    const INVISIBLE = /[­͏؜᠎​-‏‪-‮⁠-⁤﻿]/
     const legible = attrs.location === undefined
       ? ''
-      : [...attrs.location].filter(ch => !/\s/.test(ch) && ch.codePointAt(0) > 0x1f && ch.codePointAt(0) !== 0x7f).join('')
+      : [...attrs.location].filter(ch => !/\s/.test(ch) && !INVISIBLE.test(ch) &&
+          ch.codePointAt(0) > 0x1f && ch.codePointAt(0) !== 0x7f).join('')
     if (legible === '') {
       errors.push({ code: 'QUOTE-LOCATION-REQUIRED', detail: 'mode=not-checkable requires a legible location for the human attribution it stands on' })
     }
@@ -136,6 +140,13 @@ export function parseMarkerComment (bodyLatin1) {
 // Convenience for grammar fixtures: find markers in a text without a material on disk. It still goes
 // through the shared scanner, so it agrees with a real scan about what a marker is.
 export function parseQuoteMarkers (text) {
+  // THE INPUT IS BYTES — a Buffer, or a latin1 string where one char is one byte. A JS Unicode
+  // string with code points above 0xFF is neither: its Korean attribute values would be mangled by
+  // the byte-domain machinery below and come back as spurious encoding errors. That ambiguity is
+  // refused at the door rather than answered wrongly.
+  if (typeof text === 'string' && /[Ā-￿]/.test(text)) {
+    throw new Error('parseQuoteMarkers takes bytes (a Buffer or a latin1 string); encode a Unicode string with Buffer.from(s, "utf8") first')
+  }
   const doc = scanMarkdown(typeof text === 'string' ? text : Buffer.from(text).toString('latin1'), { frontmatter: true })
   const markers = []
   for (const comment of standaloneComments(doc)) {
@@ -209,6 +220,12 @@ export function scanQuotedMaterial (materialDir, { trustedRoot, materialsRoot } 
     code: REJECT_CODE[region.reason] ?? 'QUOTE-STRUCTURE-UNSUPPORTED',
     detail: 'this quotation renders as one block but part of it is outside the machine grammar, so the whole block is refused rather than half-checked'
   })
+  // ONE UNSUPPORTED QUOTATION FAILS THE FILE. Region-level refusal still let the *other* quotes in
+  // the same file seal, and a container form this grammar cannot segment means the population
+  // itself is not trustworthy — a `- > alpha` the machine misread as two regions could equally be
+  // hiding a third. Rather than growing a container model, the narrow grammar stays narrow and the
+  // whole `converted.md` is structural-invalid: no quote in it seals until the shape is rewritten.
+  const fileRefused = regions.some(r => !r.admitted)
 
   // ONE SNAPSHOT PER PROVIDER, keyed by CANONICAL material id. `self` and the material's own id name
   // one provider; keying on the marker's spelling read the same directory twice and could put two
@@ -273,6 +290,10 @@ export function scanQuotedMaterial (materialDir, { trustedRoot, materialsRoot } 
     // against anything at all — the strongest possible false positive, and it passed silently.
     if (wsnorm(span.text) === '') {
       settle('empty', { code: 'QUOTE-SPAN-EMPTY', detail: 'the quote block has no content, so there is nothing to compare' })
+      continue
+    }
+    if (fileRefused) {
+      settle('unsupported-structure', { code: 'QUOTE-FILE-STRUCTURE-UNSUPPORTED', detail: 'another quotation in this file is outside the machine grammar, so no quote in it is sealed until that shape is rewritten' })
       continue
     }
 
@@ -371,7 +392,7 @@ export function scanQuotedMaterial (materialDir, { trustedRoot, materialsRoot } 
   // It is the guard that keeps that true the next time a branch is added.
   for (const span of spans) if (!SEALABLE.has(span.state)) span.sealed = false
   return {
-    state: structural.length > 0 ? 'invalid' : 'complete',
+    state: structural.length > 0 || fileRefused ? 'invalid' : 'complete',
     readable: true,
     materialId,
     spans,

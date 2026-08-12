@@ -12,7 +12,7 @@ import { createHash } from 'node:crypto'
 import { mkdtempSync, mkdirSync, rmSync, symlinkSync, linkSync, writeFileSync, unlinkSync, renameSync, appendFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { RAW_SOURCE_STATES, manifestBytes, openMaterialRoot, readRawSources, resolveRawSource } from '../.weavedoc/bin/lib/raw-source-model.mjs'
+import { RAW_SOURCE_STATES, manifestBytes, openMaterialRoot, openTrustedRoot, readRawSources, resolveRawSource } from '../.weavedoc/bin/lib/raw-source-model.mjs'
 
 let cases = 0
 let groups = 0
@@ -21,7 +21,9 @@ let rootAlias = 'none'
 let hardlink = 'unsupported'
 const check = (condition, message, input = '') => {
   cases++
-  assert.ok(condition, `${message}\nINPUT=${JSON.stringify(input)}`)
+  // BigInt-safe serialisation: identity fields are BigInt by contract, and a FAILING assertion must
+  // not be replaced by a serialisation TypeError that hides which check failed.
+  assert.ok(condition, `${message}\nINPUT=${JSON.stringify(input, (k, v) => typeof v === 'bigint' ? `${v}n` : v)}`)
 }
 
 const root = mkdtempSync(join(tmpdir(), 'wd-raw-'))
@@ -299,6 +301,48 @@ try {
     })
     check(swapped.state === 'unstable', 'the material root was replaced mid-read and the set still published', swapped.state)
     check(swapped.treeDigest === null, 'a swapped root still produced a tree digest', swapped)
+
+    // IDENTITY IS BigInt. NTFS inodes are 64-bit; on the machine that found this,
+    // Number.isSafeInteger(stat.ino) is false and two different directories compared equal after
+    // rounding — so every pre/post identity check could miss a swap. The capability's fields are
+    // the proof the model asked for exact stats.
+    const capd = fresh('cap-types')
+    const cap = openTrustedRoot(mine)
+    check(cap.ok && typeof cap.ino === 'bigint' && typeof cap.dev === 'bigint',
+      'the trusted-root capability does not carry BigInt identity', { ino: typeof cap.ino, dev: typeof cap.dev })
+    put(capd, 'source.md', 'via capability\n')
+    const viaCap = readRawSources(capd, { trustedRoot: cap })
+    check(viaCap.state === 'complete', 'a capability-rooted read did not work', viaCap.state)
+
+    // A PARENT junction re-aimed between reads: the capability pins physical identity, so the same
+    // path stops resolving to the pinned root and every later read refuses. (A STABLE ancestor
+    // alias resolves once at creation and stays consistent — the boundary is "same physical
+    // directory throughout", not "no aliases anywhere".)
+    const realHome = join(root, 'real-home')
+    mkdirSync(join(realHome, 'mats', 'm001'), { recursive: true })
+    writeFileSync(join(realHome, 'mats', 'm001', 'source.md'), 'original home\n')
+    const aliasPath = join(root, 'home-alias')
+    let parentAlias = false
+    for (const type of ['junction', 'dir']) {
+      try { symlinkSync(realHome, aliasPath, type); parentAlias = true; break } catch { /* next */ }
+    }
+    if (!parentAlias) throw new Error(`no directory alias could be created on ${process.platform}`)
+    const aliasedMats = join(aliasPath, 'mats')
+    const pinned = openTrustedRoot(aliasedMats)
+    check(pinned.ok, 'a materials root behind a stable ancestor alias failed to open', pinned)
+    check(readRawSources(join(aliasedMats, 'm001'), { trustedRoot: pinned }).state === 'complete',
+      'a stable aliased ancestor blocked a legitimate read')
+    // Re-aim the ancestor: same textual path, different physical root.
+    const otherHome = join(root, 'other-home')
+    mkdirSync(join(otherHome, 'mats', 'm001'), { recursive: true })
+    writeFileSync(join(otherHome, 'mats', 'm001', 'source.md'), 'IMPOSTOR\n')
+    rmSync(aliasPath, { recursive: false, force: true })
+    for (const type of ['junction', 'dir']) {
+      try { symlinkSync(otherHome, aliasPath, type); break } catch { /* next */ }
+    }
+    const reaimed = readRawSources(join(aliasedMats, 'm001'), { trustedRoot: pinned })
+    check(reaimed.state === 'invalid' && reaimed.diagnostics[0].code === 'RAW-SOURCE-TRUSTED-ROOT-ALIAS',
+      'a re-aimed ancestor junction was not caught by the pinned capability', reaimed)
   }
 
   // ---- 7. the manifest shape, and the snapshot it hands out -------------------------------------

@@ -54,39 +54,78 @@ const fail = (state, root, code, detail, extra = {}) => ({
 // root that is itself a symlink or a Windows junction is an alias: the bytes it yields live outside
 // the mine and can be re-aimed without changing anything a digest covers. Measured — a junction
 // pointing at an external directory sealed that directory's `source.md` as ordinary evidence.
+// IDENTITY IS BigInt, EVERYWHERE IN THIS FILE. NTFS inodes are 64-bit and `Number` holds 53 exact
+// bits: on this very development machine `Number.isSafeInteger(stat.ino)` is already false, and two
+// DIFFERENT directories were measured comparing equal after rounding — which made every pre/post
+// identity check below capable of missing a swap. `{ bigint: true }` on every stat, `===` on the
+// BigInt fields, and a byte length is lifted with BigInt() before it meets a size.
+const bstat = { bigint: true }
+
+// THE TRUSTED ROOT IS A CAPABILITY, created once and verified thereafter — not a path re-judged
+// from scratch on every call. Checking the final component alone closed only one aiming point: a
+// junction ABOVE the trusted root re-aims everything under it while `materials/` itself stays an
+// innocent directory. What the capability pins is the PHYSICAL identity (canonical path + BigInt
+// dev/ino) of the root at the moment it was opened; every later check compares against that, so
+// re-aiming any ancestor changes the resolved identity and fails the comparison. A stable alias an
+// operator set up deliberately resolves once at creation and stays consistent — the boundary is
+// "same physical directory throughout", which is the property the seal actually needs.
+export function openTrustedRoot (rootDir) {
+  if (typeof rootDir !== 'string' || rootDir === '') {
+    throw new Error('openTrustedRoot needs the directory the mine trusts as its materials root')
+  }
+  let st
+  try { st = lstatSync(rootDir, bstat) } catch (e) { return { ok: false, code: 'RAW-SOURCE-UNREADABLE', state: 'unreadable', detail: `the trusted root ${rootDir} cannot be examined (${e.code ?? 'EUNKNOWN'})` } }
+  if (st.isSymbolicLink()) return { ok: false, code: 'RAW-SOURCE-TRUSTED-ROOT-ALIAS', state: 'invalid', detail: `the trusted root ${rootDir} is a symlink or junction, so it bounds nothing` }
+  if (!st.isDirectory()) return { ok: false, code: 'RAW-SOURCE-TRUSTED-ROOT-ALIAS', state: 'invalid', detail: `the trusted root ${rootDir} is not a directory` }
+  let real
+  try { real = realpathSync(rootDir) } catch (e) { return { ok: false, code: 'RAW-SOURCE-UNREADABLE', state: 'unreadable', detail: `the trusted root's canonical path is unavailable (${e.code ?? 'EUNKNOWN'})` } }
+  return { ok: true, kind: 'trusted-root', path: rootDir, real, ino: st.ino, dev: st.dev }
+}
+
+// A capability is verified, never trusted on age: the same lstat+realpath as creation, compared by
+// BigInt identity. A re-aimed ancestor changes `real`; a swapped directory changes `ino`/`dev`.
+function verifyTrustedRoot (cap) {
+  let st
+  try { st = lstatSync(cap.path, bstat) } catch { return false }
+  if (st.isSymbolicLink() || !st.isDirectory() || st.ino !== cap.ino || st.dev !== cap.dev) return false
+  try { return realpathSync(cap.path) === cap.real } catch { return false }
+}
+
+const asTrustedRoot = trustedRoot => {
+  if (trustedRoot !== null && typeof trustedRoot === 'object' && trustedRoot.kind === 'trusted-root') {
+    return verifyTrustedRoot(trustedRoot)
+      ? { ok: true, cap: trustedRoot }
+      : { ok: false, code: 'RAW-SOURCE-TRUSTED-ROOT-ALIAS', state: 'invalid', detail: `the trusted root ${trustedRoot.path} is no longer the directory this capability was created for` }
+  }
+  const opened = openTrustedRoot(trustedRoot)
+  return opened.ok ? { ok: true, cap: opened } : opened
+}
+
 export function openMaterialRoot (materialDir, trustedRoot) {
-  if (typeof trustedRoot !== 'string' || trustedRoot === '') {
+  if (trustedRoot === undefined || trustedRoot === null || trustedRoot === '') {
     // Required, not optional-with-a-default: a containment check that can be omitted is one that
     // will be, and then this boundary exists only in whichever caller remembered it.
     throw new Error('openMaterialRoot needs the trusted root the material must live inside')
   }
-  // THE TRUSTED ROOT MUST ITSELF BE REAL. Checking only the material meant a junction standing in
-  // for `materials/` passed containment trivially — both sides resolved to the same external path,
-  // so `relative()` returned '' and an outside directory sealed as ordinary evidence. A root that
-  // can be re-aimed is not a boundary.
-  let trusted
-  try { trusted = lstatSync(trustedRoot) } catch (e) { return { ok: false, code: 'RAW-SOURCE-UNREADABLE', state: 'unreadable', detail: `the trusted root ${trustedRoot} cannot be examined (${e.code ?? 'EUNKNOWN'})`, real: null } }
-  if (trusted.isSymbolicLink()) return { ok: false, code: 'RAW-SOURCE-TRUSTED-ROOT-ALIAS', state: 'invalid', detail: `the trusted root ${trustedRoot} is a symlink or junction, so it bounds nothing`, real: null }
-  if (!trusted.isDirectory()) return { ok: false, code: 'RAW-SOURCE-TRUSTED-ROOT-ALIAS', state: 'invalid', detail: `the trusted root ${trustedRoot} is not a directory`, real: null }
+  const trusted = asTrustedRoot(trustedRoot)
+  if (!trusted.ok) return { ok: false, code: trusted.code, state: trusted.state, detail: trusted.detail, real: null }
   let st
-  try { st = lstatSync(materialDir) } catch (e) { return { ok: false, code: 'RAW-SOURCE-UNREADABLE', state: 'unreadable', detail: `${materialDir} cannot be examined (${e.code ?? 'EUNKNOWN'})`, real: null } }
+  try { st = lstatSync(materialDir, bstat) } catch (e) { return { ok: false, code: 'RAW-SOURCE-UNREADABLE', state: 'unreadable', detail: `${materialDir} cannot be examined (${e.code ?? 'EUNKNOWN'})`, real: null } }
   if (st.isSymbolicLink()) return { ok: false, code: 'RAW-SOURCE-ROOT-ALIAS', state: 'invalid', detail: `${materialDir} is a symlink or junction, so its bytes are not inside the mine`, real: null }
   if (!st.isDirectory()) return { ok: false, code: 'RAW-SOURCE-ROOT-NOT-DIR', state: 'invalid', detail: `${materialDir} is not a directory`, real: null }
-  let real, realTrusted
+  let real
   try {
     real = realpathSync(materialDir)
-    realTrusted = realpathSync(trustedRoot)
   } catch (e) {
     return { ok: false, code: 'RAW-SOURCE-UNREADABLE', state: 'unreadable', detail: `canonical path unavailable (${e.code ?? 'EUNKNOWN'})`, real: null }
   }
   // `relative()` rather than a string prefix: `/a/b` is not inside `/a/bc`, and a prefix test says
-  // it is. An empty result means the root IS the trusted root, which is allowed.
-  const rel = pathRelative(realTrusted, real)
+  // it is. An empty result means the root IS the trusted root, which is allowed. Containment is
+  // against the capability's PINNED canonical root, not a fresh resolution of its path.
+  const rel = pathRelative(trusted.cap.real, real)
   if (rel.startsWith('..') || /^[A-Za-z]:/.test(rel)) {
     return { ok: false, code: 'RAW-SOURCE-ROOT-ESCAPE', state: 'invalid', detail: `${materialDir} resolves outside the trusted root`, real }
   }
-  // The root's own identity is carried out, so the caller can prove at the END of the read that the
-  // directory it enumerated is still the directory at that path.
   return { ok: true, code: null, state: null, detail: null, real, ino: st.ino, dev: st.dev }
 }
 
@@ -112,14 +151,14 @@ function readEntry (dir, name, hooks) {
   // so the fixture's directory fallback stood in and hid it. All three CI legs, where links are
   // creatable, failed on the same line.
   let pre
-  try { pre = lstatSync(path) } catch (e) { return { kind: 'unreadable', code: e.code ?? 'EUNKNOWN' } }
+  try { pre = lstatSync(path, bstat) } catch (e) { return { kind: 'unreadable', code: e.code ?? 'EUNKNOWN' } }
   if (pre.isSymbolicLink()) return { kind: 'symlink' }
   if (pre.isDirectory()) return { kind: 'directory' }
   if (!pre.isFile()) return { kind: 'irregular' }
   let fd
   try { fd = openSync(path, 'r') } catch (e) { return { kind: 'unreadable', code: e.code ?? 'EUNKNOWN' } }
   try {
-    const before = fstatSync(fd)
+    const before = fstatSync(fd, bstat)
     // The name could have been re-pointed between the lstat and the open. Binding the two by
     // identity is what makes "the thing I typed" and "the thing I read" the same object.
     if (before.ino !== pre.ino || before.dev !== pre.dev) {
@@ -129,20 +168,20 @@ function readEntry (dir, name, hooks) {
     // A hardlink makes one inode reachable under two names, so `converted.md` can also BE
     // `source.alias`: the same bytes counted as their own evidence. Refused for the same reason a
     // symlink is — evidence has to be a thing in the mine, not a second name for something else.
-    if (before.nlink > 1) return { kind: 'hardlink', nlink: before.nlink }
+    if (before.nlink > 1n) return { kind: 'hardlink', nlink: Number(before.nlink) }
     const bytes = readFileSync(fd)
     // FAULT SEAM, injectable the way consecrate's and upgrade's write primitives are: a race is
     // the one condition a fixture cannot produce by waiting, and an untested stability check is a
     // check that has never run. Never set by production callers.
     if (hooks?.afterRead) hooks.afterRead(name)
-    const after = fstatSync(fd)
+    const after = fstatSync(fd, bstat)
     // MUTATION NOTE: the condition as a whole is killed by the injected race, but the final clause
     // is not separately killable — every fixture that moves the size also moves mtime, so the
     // earlier clause fires first. `after.size !== bytes.length` guards a SHORT READ, where the file
     // never changed and the read simply returned less than it should have; no fixture can stage
     // that, so it is redundancy carried on purpose rather than coverage anyone should claim.
     if (after.ino !== before.ino || after.dev !== before.dev || after.size !== before.size ||
-        after.mtimeMs !== before.mtimeMs || after.size !== bytes.length) {
+        after.mtimeMs !== before.mtimeMs || after.size !== BigInt(bytes.length)) {
       return { kind: 'unstable', detail: `${name} changed while it was being read` }
     }
     // AND THE NAME, AFTER THE READ. The link count was checked before, so a file could be renamed
@@ -151,10 +190,10 @@ function readEntry (dir, name, hooks) {
     // complete — measured. The descriptor tells us about the object; only lstat tells us what the
     // NAME points at now, and the seal is about the name.
     let post
-    try { post = lstatSync(path) } catch (e) { return { kind: 'unstable', detail: `${name} disappeared while it was being read (${e.code ?? 'EUNKNOWN'})` } }
+    try { post = lstatSync(path, bstat) } catch (e) { return { kind: 'unstable', detail: `${name} disappeared while it was being read (${e.code ?? 'EUNKNOWN'})` } }
     if (post.isSymbolicLink()) return { kind: 'symlink' }
     if (!post.isFile()) return { kind: 'irregular' }
-    if (post.nlink > 1) return { kind: 'hardlink', nlink: post.nlink }
+    if (post.nlink > 1n) return { kind: 'hardlink', nlink: Number(post.nlink) }
     if (post.ino !== before.ino || post.dev !== before.dev) {
       return { kind: 'unstable', detail: `${name} was repointed at a different file while it was being read` }
     }

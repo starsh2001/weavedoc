@@ -575,13 +575,105 @@ try {
     const bin = material('m120', {})
     writeFileSync(join(bin, 'source.md'), Buffer.from([0, 1, 2, 0x41]))
     // Real whitespace and real control bytes — `'\\t'` as source text is the two characters
-    // backslash and t, which IS a legible attribution and must not be rejected.
-    for (const loc of ['   ', '\t \t', String.fromCharCode(11), '']) {
+    // backslash and t, which IS a legible attribution and must not be rejected. The zero-width
+    // space is here because it is NOT Unicode whitespace, so a `\s`-only rule calls it legible
+    // while it renders as nothing — verified by hand once, mutated back to life, now pinned.
+    for (const loc of ['   ', '\t \t', String.fromCharCode(11), '​​', '­', '']) {
       writeFileSync(join(bin, 'converted.md'),
         L(`<!-- wd:quote source=self file=source.md mode=not-checkable location="${loc}" -->`, '> A'))
       check(codes(scan('m120')).includes('QUOTE-LOCATION-REQUIRED'),
         `a blank location was accepted as an attribution: ${JSON.stringify(loc)}`, scan('m120').diagnostics)
     }
+  }
+
+  // ---- 16. one unsupported quotation fails the file ----------------------------------------------
+  groups++
+  {
+    const L = (...l) => l.join('\n') + '\n'
+    // A container form the grammar cannot segment means the POPULATION is untrustworthy: a marked
+    // quote elsewhere in the same file must not seal, because what the machine misread as two
+    // regions could equally be hiding a third.
+    const d = material('m130', { 'source.md': 'alpha\nbeta\n' })
+    writeFileSync(join(d, 'converted.md'), L(
+      '<!-- wd:quote source=self -->', '> alpha', '',
+      '- > listed', '  continuation'))
+    const r = scan('m130')
+    check(r.state === 'invalid', 'a file holding an unsupported quotation still read complete', r.state)
+    const marked = r.quotes[0]
+    check(marked.state === 'unsupported-structure' && !marked.sealed,
+      'a healthy quote sealed inside a file with an unsupported quotation', marked.state)
+    check(marked.diagnostics.some(x => x.code === 'QUOTE-FILE-STRUCTURE-UNSUPPORTED'),
+      'the file-level refusal was not named on the healthy quote', marked.diagnostics)
+    check(r.providers.size === 0, 'a structurally invalid file still read its providers', [...r.providers.keys()])
+    // The list container is ONE region, and a bare continuation under it is in the population.
+    const container = r.spans.find(s => s.text.includes('listed'))
+    check(container !== undefined && container.text.includes('continuation'),
+      'the list container split or dropped its continuation line', r.spans.map(s => s.text))
+  }
+
+  // ---- 17. the projection cannot be forged ------------------------------------------------------
+  groups++
+  {
+    const L = (...l) => l.join('\n') + '\n'
+    // The four mutations that survived: convertedDigest zeroed on all spans, a multiline marked
+    // range shrunk to its first line, a diagnostic range forged, and states deleted from
+    // SPAN_STATES. Each is a value assertion now, not a shape assertion.
+    check(SPAN_STATES.length === 9 && ['sealed', 'mismatch', 'empty', 'unmarked', 'malformed-marker',
+      'unsupported-structure', 'source-unavailable', 'unresolved', 'binary-cold-debt']
+      .every(x => SPAN_STATES.includes(x)),
+    'the declared span-state set changed shape', SPAN_STATES)
+
+    const d = material('m140', { 'source.md': 'first line\nsecond line\n' })
+    writeFileSync(join(d, 'converted.md'), L(
+      '<!-- wd:quote source=self -->', '> first line', '> second line', '',
+      '> unmarked block', '',
+      '<!-- wd:quote source=self -->'))
+    const r = scan('m140')
+    const conv = readFileSync(join(d, 'converted.md'))
+    const convText = conv.toString('latin1')
+    check(r.spans.length === 3, 'the mixed fixture lost a span', r.spans.map(s => s.state))
+    for (const s of r.spans) {
+      // EVERY span carries the real converted digest — zeroing them all passed when only the scan's
+      // own top-level field was checked.
+      check(s.convertedDigest === sha(conv), `a span carries a forged convertedDigest (${s.state})`, s.convertedDigest)
+      // EVERY diagnostic's range is its span's range, by identity of value.
+      for (const diag of r.diagnostics.filter(x => x.line === s.line && x.range !== undefined)) {
+        check(diag.range.start === s.range.start && diag.range.end === s.range.end,
+          `a diagnostic range does not match its span (${s.state})`, { d: diag.range, s: s.range })
+      }
+    }
+    // The MULTILINE marked range covers both lines: rebuilt from the slice, line by line, and
+    // compared to the span text — a range shrunk to the first line fails here.
+    const sealedSpan = r.spans.find(s => s.state === 'sealed')
+    const rebuilt = convText.slice(sealedSpan.range.start, sealedSpan.range.end)
+      .split('\n').map(l => l.replace(/^>[ \t]?/, '')).join('\n')
+    check(rebuilt === sealedSpan.text && sealedSpan.text.includes('second line'),
+      'the multiline marked range does not cover the whole quotation', { rebuilt, text: sealedSpan.text })
+    const unmarkedSpan = r.spans.find(s => s.state === 'unmarked')
+    check(convText.slice(unmarkedSpan.range.start, unmarkedSpan.range.end).includes('unmarked block'),
+      'the unmarked range does not cover its block', unmarkedSpan.range)
+  }
+
+  // ---- 18. ids are exact at any length ----------------------------------------------------------
+  groups++
+  {
+    // canonId used parseInt, which rounds above 2^53: `m9007199254740993` canonicalised to a
+    // DIFFERENT material and a quote sealed against the wrong file's bytes. String-exact now.
+    const big = '9007199254740993'
+    const d = material(`m${big}`, { 'source.md': 'huge id bytes\n' })
+    void d
+    const consumer = material('m150', {
+      'converted.md': ['<!-- wd:quote source=m' + big + ' -->', '> huge id bytes', ''].join('\n')
+    })
+    void consumer
+    const r = scan('m150')
+    check(r.quotes[0].state === 'sealed' && r.quotes[0].resolved.material === `m${big}`,
+      'a quote naming an id above 2^53 resolved to a rounded different material', r.quotes[0].resolved)
+    // And the domain guard: a JS Unicode string is neither bytes nor latin1, and answering it
+    // produced spurious encoding errors — refused at the door instead.
+    let threw = false
+    try { parseQuoteMarkers('<!-- wd:quote source=self location="장4" -->') } catch { threw = true }
+    check(threw, 'a supra-latin1 Unicode string was accepted as marker bytes')
   }
 
   console.log(`quote-marker-properties: groups=${groups} cases=${cases}`)

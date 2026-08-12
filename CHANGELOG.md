@@ -4,6 +4,22 @@
 
 ---
 
+## 2026-08-08.14
+
+**Unreleased — exact identity, and the file fails as one thing.** Four P1s in `2026-08-08.13`, all found by independent review, all in the same contract class as the round before.
+
+**Identity was compared in a type that rounds.** NTFS inodes are 64-bit and `Number` holds 53 exact bits — on the machine that found this, `Number.isSafeInteger(stat.ino)` is already false, and two *different* directories compared equal after rounding, which made every pre/post identity check capable of missing a swap. Every stat in the raw model is `{ bigint: true }` now, and a byte length is lifted before it meets a size.
+
+**The trusted root is a capability, not a path re-judged per call.** `.13` checked the final component, so a junction *above* the trusted root re-aimed everything under it while `materials/` stayed an innocent directory. `openTrustedRoot` pins the physical identity (canonical path + BigInt dev/ino) once; every later read verifies against the pin, so re-aiming any ancestor fails the comparison. A stable alias an operator set up deliberately resolves once at creation and stays consistent — the boundary is "same physical directory throughout", which is the property the seal actually needs, and that limit is stated rather than implied.
+
+**`canonId` rounded ids.** `parseInt` above 2^53: `m9007199254740993` canonicalised to a *different* material and a quote sealed against the wrong file's bytes — measured. Canonicalisation is string-exact at any length now. This touches the one helper v2 production also uses; the v2 suite is unaffected because no real mine holds an id above 2^53, and exactness is strictly wider.
+
+**A list container still split, and one unsupported quotation now fails the file.** `- > alpha` + `  > beta` were two refusals, and a bare `  beta` under a list quote vanished from every population. The container region stays open now so the block is one refused span with nothing dropped — and rather than growing a container model, a file holding *any* unsupported quotation is structural-invalid: no quote in it seals, because a population the grammar cannot segment is not a population to certify against.
+
+Also: `parseQuoteMarkers` refuses a supra-latin1 Unicode string at the door instead of answering it wrongly; a `location` of zero-width characters is no longer a legible attribution; and the previous entry said "four smaller ones" while listing three — the fourth was the docs alignment it forgot to count.
+
+Twelve mutations, all killed. One — the invisible-location rule — survived its first pass because the U+200B case had been verified by hand and never turned into an assertion, which is the exact failure the last three rounds keep re-teaching. It is a fixture now.
+
 ## 2026-08-08.13
 
 **Unreleased — a quotation is one region, and the trusted root is checked too.** Two P1s in `2026-08-08.12`, both found by independent review, plus four smaller ones.

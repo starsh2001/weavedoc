@@ -327,14 +327,15 @@ export function blockQuoteNodes (doc) {
       refuse('MD_QUOTE_INDENTED')
       continue
     }
-    // A list-nested quote starts its own refused region: the list marker is a block boundary, so it
-    // is not a continuation of anything above it.
+    // A list-nested quote starts its own refused region — the list marker is a block boundary, so
+    // it does not continue anything above it. The region then STAYS OPEN: closing it after one line
+    // split `- > alpha` + `  > beta` into two refusals, and dropped a bare `  beta` continuation
+    // from every population entirely, because the next line found no region to attach to.
     if (LIST_NESTED_QUOTE.test(live)) {
       current = null
       open(line)
       current.lines.push(line); current.end = line.end
       refuse('MD_QUOTE_NESTED')
-      current = null
       continue
     }
     if (current !== null && /[^ \t]/.test(live)) {
