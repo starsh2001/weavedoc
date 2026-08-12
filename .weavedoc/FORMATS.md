@@ -147,7 +147,7 @@ Written by `weavedoc-verify` (truths mode). Records the verification state of th
 Frontmatter:
 - `status` — enum: `passed` | `failed` | `escalated` | `stale` | `in-progress`. `passed` is written **only** when `consecutive_passes` reached `config.verify.repeat` — a clean round that leaves the count short is `in-progress`, not `passed`, because one clean round is evidence about that round and not about the target. `failed` = the last round found blocking findings. `escalated` = `max_rounds` exhausted with the count still short. `stale` = new truths added since the last pass; re-run needed.
 - `round` — int, last round number.
-- `consecutive_passes` — int, optional (absent = 0). Clean rounds **in a row** so far. +1 on a clean round; back to **0** on any failing round *and* on a moved baseline (the step-0 pin). Written after every round so a cold session resumes the loop instead of restarting it.
+- `consecutive_passes` — int, optional (absent = 0). Clean rounds **in a row** so far. +1 on a clean round; back to **0** on any failing round, on a moved baseline (the step-0 pin), *and* on a round whose defender made a **bar-crossing ticket-downgrade** (blocking at the claimed grade, non-blocking at the new one — the ladder in `weavedoc-review`'s reviewers.md): that downgrade's test is the next fresh panel, so the loop may not converge before it runs. Written after every round so a cold session resumes the loop instead of restarting it.
 - `verified_at` — date `YYYY-MM-DD`.
 
 Body:

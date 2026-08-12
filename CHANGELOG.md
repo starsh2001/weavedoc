@@ -4,6 +4,10 @@
 
 ---
 
+## 2026-08-08.17
+
+**Unreleased — a rule's describers are owners too.** Third cold-review round, two findings, both the class `.15` already named and then re-committed: the rule's *operating* owners were synced (engine + both counting SKILLs) while the documents that *describe* the contract were not counted. `verify.md`'s frontmatter contract in FORMATS and the shipped `review.md` template still said the count resets only on a failing/blocking round — a cold session resuming a loop from those words alone would count a bar-cross-downgraded round as clean and end the loop one round early, which is exactly the false-pass `.16` closed. Both now state the third reset condition. The evidence this time is a census, not a grep of the phrase being edited: every `consecutive_passes` mention in the tree (schema, schemas/v3, FORMATS, template, both SKILLs, engine, harness fixture, changelog history) was enumerated, and these two were the only remaining owners of the reset wording.
+
 ## 2026-08-08.16
 
 **Unreleased — a downgrade's test is the next round, and the loop must not end before it.** One follow-up to `.15`, raised by the second cold review round and closed by the user's own sentence: "다음 라운드가 없으면 '불거질 수 있다'는 거짓이지."
