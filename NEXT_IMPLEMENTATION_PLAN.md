@@ -159,8 +159,9 @@ v2 truth 계약에서 네 필드를 제거한다. 실측한 현행 스키마 기
 - `.weavedoc/schema` truth 계약 수정(§2.1 diff), fresh init이 v3 광산 생성(빈 conflicts.json·id-sequences.json 포함)
 - conflicts.json/id-sequences.json 리더 + 소형 CLI(conflict add/list/remove·alloc) + validate 인계철선(장부 위생·출하 차단·allocator 침범)
 - 소비자에서 status 분기 전수 삭제(grep 열거 → 삭제 → 케이스), `status --open` conflict lane
+- **기존 스위트 처분**: v2 계약을 검사하는 케이스는 전수 열거 후 **삭제** — 2026-08-13 실측 **22개**(resolution 문법·conflict 짝·discarded 라벨·superseded 표시 등, `block_resolution_type`·`block_conflict_oneside`류). truth 픽스처에 `status: ok` 줄만 쓰는 케이스는 픽스처 수정으로 보존 — 실측 **16개**. 남는 케이스는 전부 v3에서도 유효한 계약의 감시자여야 한다. 죽은 계약의 케이스를 green으로 유지하려는 시도는 폐기한 기계를 되살리는 압력이므로 금지("테스트가 결함을 잠근다"의 거울상) — 케이스 수 감소는 이 전환의 정상 산출물이다
 - `version ≠ 3` fail-closed 진단(v2 → upgrade 안내, v1 → bridge 안내)
-- 완료: fresh v3 광산에서 전 명령 green, v2 광산은 안내와 함께 거부
+- 완료: fresh v3 광산에서 전 명령 green, v2 광산은 안내와 함께 거부, 스위트에 v2 계약 감시자 0(삭제 목록을 커밋 메시지에 열거)
 
 ### 슬라이스 2 — migrator
 - upgrade 확장(§2.4 순서), 보존식·exact validate 대조·무관 파일 불변 검증
