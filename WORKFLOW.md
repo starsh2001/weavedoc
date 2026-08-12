@@ -59,7 +59,7 @@ Findings are written to `review.md` `# Fidelity violations` as `- [<kind>] <wher
 
 ### B. The advisory panel — optional, editable
 
-Cold, empty-context persona subagents run in parallel, each told "find flaws; assume there's a problem": **logic · gap-finder · reader-proxy · editor · breaker**. Counts/effort scale by `config.review.scale`. An over-strictness triage (KEEP / DOWNGRADE / DROP) drops nitpicks — **applied to advisory findings only, never to fidelity violations**. Written to `review.md` `# Findings` with severity `critical | should-fix | nice-to-have`; `adjudications` record dropped/accepted advisory calls so a later cold round doesn't re-litigate them.
+Cold, empty-context persona subagents run in parallel, each told "find flaws; assume there's a problem": **logic · gap-finder · reader-proxy · editor · breaker**. Counts/effort scale by `config.review.scale`. An over-strictness triage by a separate cold *defender* subagent (mandatory at `standard` and `full`; KEEP / DOWNGRADE / DROP) drops nitpicks — **applied to advisory findings only, never to fidelity violations**. Written to `review.md` `# Findings` with severity `critical | should-fix | nice-to-have`; `adjudications` record dropped/accepted advisory calls so a later cold round doesn't re-litigate them.
 
 ### The deterministic floor
 

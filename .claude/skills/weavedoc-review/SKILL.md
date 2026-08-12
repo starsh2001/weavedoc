@@ -54,7 +54,7 @@ Runs before anything else and is **never skipped** (even at `config.review.scale
 
 1. **Panel.** Propose review personas fit to this document/project; the user may edit or drop any (this panel is advisory, so that's safe). Default lenses: **logic** (connections hold, no leaps) · **gap-finder** (thin/weak spots that aren't outright unsupported) · **reader-proxy** (clear and persuasive to the target reader) · **editor** (wording, concision, consistency) · **breaker** (try to break the argument; name the weakest claim).
 2. **Cold spawn.** Run each persona as a subagent with **empty context**, in parallel, told: *"find flaws; assume there is a problem."* Scale count/effort by `config.review.scale` (`skip|light|standard|full`). `skip` skips the advisory panel entirely — **the fidelity gate still runs.**
-3. **Triage.** Run an over-strictness reviewer over the **advisory** findings only (KEEP / DOWNGRADE / DROP) to drop nitpicks. **Never touch fidelity violations.**
+3. **Triage.** Run an over-strictness reviewer (mandatory at `standard` and `full`; at `light` only under the producer rule — see reviewers.md) over the **advisory** findings only (KEEP / DOWNGRADE / DROP) to drop nitpicks. **Never touch fidelity violations.**
 4. **Don't re-litigate.** Skip advisory findings already settled in `review.md` `adjudications`.
 5. **Write findings** to `review.md` under `# Findings`: `- [severity] <where> — <what + why>`, severity `critical|should-fix|nice-to-have`. Set `status: reviewing`.
 

@@ -34,9 +34,13 @@ One finding per line:
 - [critical|should-fix|nice-to-have] <where: §section / M#·T# / file:location> — <what is wrong + what consequence it would have>
 ```
 
-- `critical` — the document/truth would **state something factually wrong** or **miss a fact that changes the document's meaning**. If you can't name the wrong claim and its consequence, it is not critical.
-- `should-fix` — fidelity is maintained, but **ambiguity or imprecision** would make two writers produce materially different documents from the same truths.
-- `nice-to-have` — wording, clarity, minor precision loss that doesn't change meaning.
+Each grade has an **entry ticket** — what the finding must present to claim it:
+
+- `critical` — the document/truth would **state something factually wrong** or **miss a fact that changes the document's meaning**. **Ticket: the wrong (or missing) statement + its consequence, both named.** Can't name them → not critical.
+- `should-fix` — fidelity is maintained, but the reader would be **misled or diverge**: an omission, distortion, or ambiguity. **Ticket: the exact spot + the concrete misreading or divergence it produces.** Can't show it → nice-to-have.
+- `nice-to-have` — wording, clarity, minor precision loss that doesn't change meaning. **Ticket: the better version or the reader benefit, in one line.** Can't state even that → non-finding.
+
+**A finding missing its ticket files one grade lower** (missing the nice-to-have ticket = dropped). This is a *formal* test the defender may finalize on its own — unlike a downgrade for **semantic** reasons, which still goes to the Human queue (see triage below). Grades are argued by ticket, never by adjective. The gate's kinds (contradiction/unsupported/missing-required) have no grades and no tickets — they are facts, outside this ladder. A ticket-downgraded finding is **not** condensed into do-not-raise — it stays open at its new grade, and the next round's fresh cold panel may re-raise it *with* the ticket. A finding that keeps failing to produce its ticket across fresh cold rounds has found its true grade.
 
 A finding with no named consequence ("this seems unclear", "what about edge X?") is a **non-finding** — drop it. If a lens finds nothing, it returns `none` with a one-line note on what it checked.
 
@@ -119,9 +123,9 @@ Write findings in {config.language}.
 
 Merge findings from all reviewers; dedupe by (where + what). On a severity clash, take the higher. On a **kind** clash (two lenses judged the same defect e.g. `contradiction` vs `unsupported`), keep the kind whose diagnosis carries **more evidence** — `contradiction` (names the conflicting truth) over `unsupported` (names only absence) over `missing-required` — and note the displaced kind in the entry's prose; `refine` routes the repair by kind, so the merged entry must say which repair path won and that the other reading existed.
 
-## Over-strictness triage (`full`; optional `standard`)
+## Over-strictness triage (`standard`·`full`: mandatory; `light`: producer rule only)
 
-One more cold reviewer (the *defender*) rules each finding KEEP / DOWNGRADE / DROP. **The defender is a separate cold subagent — the orchestrating session must never self-triage**, and the defender is mandatory (whatever the level) whenever the orchestrating session also produced the conversions under review: the producer defending its own work is how a twice-raised finding got dismissed twice in a real run — and it was the one the user later corrected.
+One more cold reviewer (the *defender*) rules each finding KEEP / DOWNGRADE / DROP. **The defender is a separate cold subagent — the orchestrating session must never self-triage.** At `standard` and `full` the defender always runs: a graded list is not final until each grade survived a cold re-judgment. At `light` it runs only under the **producer rule**, which holds at every level: whenever the orchestrating session also produced the conversions under review, the defender is mandatory — the producer defending its own work is how a twice-raised finding got dismissed twice in a real run, and it was the one the user later corrected.
 
 - **Drop:** anything out of scope (per the SCOPE rule above); anything failing the "name the consequence" test; anything in the do-not-raise categories; duplicates.
 - **Keep:** only findings with a named consequence at the stated severity.

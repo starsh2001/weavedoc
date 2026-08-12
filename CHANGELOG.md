@@ -4,6 +4,16 @@
 
 ---
 
+## 2026-08-08.15
+
+**Unreleased — a grade is argued by ticket, and the defender always sits.** Skill text only, no runtime bytes: review-grading discipline in the shipped skills, from a GroveSpec-alignment pass, cold-reviewed externally and corrected once by the user.
+
+**The defender runs at `standard`, not just `full`.** The engine heading said "`full`; optional `standard`" while review SKILL B.3 said "run triage" with no condition — two documents, two answers, and which one a round obeyed depended on where it entered. Both now say the same thing: mandatory at `standard` and `full`; at `light` only the producer rule (the session that produced the conversions never self-triages) forces one.
+
+**Each grade names its entry ticket.** critical: the wrong statement + its consequence. should-fix: the exact spot + the concrete misreading it produces. nice-to-have: the better version in one line. A finding missing its ticket files one grade lower — a *formal* call the defender may finalize; *semantic* downgrades still go to the Human queue. The prior text already let a consequence-less finding be dropped outright, so the ladder narrows that hole rather than opening one. And a ticket-downgrade is never condensed into do-not-raise: the next round's fresh cold panel may re-raise the finding *with* its ticket, and one that keeps failing to produce it has found its true grade (user-ruled 2026-08-12, against routing machine downgrades to the human — grading is the AI's job; the queue is for decisions).
+
+**One grade vocabulary, one owner.** verify SKILL carried its own severity definitions and they disagreed with the engine's — the engine's own T2 example, an omission graded should-fix, did not fit the engine's own "two writers diverge" wording. The three grades live once in reviewers.md now; verify points at them, and WORKFLOW.md's summary line names the cold defender and its floor.
+
 ## 2026-08-08.14
 
 **Unreleased — exact identity, and the file fails as one thing.** Four P1s in `2026-08-08.13`, all found by independent review, all in the same contract class as the round before.
