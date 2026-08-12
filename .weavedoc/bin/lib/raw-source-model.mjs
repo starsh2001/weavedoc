@@ -60,6 +60,14 @@ export function openMaterialRoot (materialDir, trustedRoot) {
     // will be, and then this boundary exists only in whichever caller remembered it.
     throw new Error('openMaterialRoot needs the trusted root the material must live inside')
   }
+  // THE TRUSTED ROOT MUST ITSELF BE REAL. Checking only the material meant a junction standing in
+  // for `materials/` passed containment trivially — both sides resolved to the same external path,
+  // so `relative()` returned '' and an outside directory sealed as ordinary evidence. A root that
+  // can be re-aimed is not a boundary.
+  let trusted
+  try { trusted = lstatSync(trustedRoot) } catch (e) { return { ok: false, code: 'RAW-SOURCE-UNREADABLE', state: 'unreadable', detail: `the trusted root ${trustedRoot} cannot be examined (${e.code ?? 'EUNKNOWN'})`, real: null } }
+  if (trusted.isSymbolicLink()) return { ok: false, code: 'RAW-SOURCE-TRUSTED-ROOT-ALIAS', state: 'invalid', detail: `the trusted root ${trustedRoot} is a symlink or junction, so it bounds nothing`, real: null }
+  if (!trusted.isDirectory()) return { ok: false, code: 'RAW-SOURCE-TRUSTED-ROOT-ALIAS', state: 'invalid', detail: `the trusted root ${trustedRoot} is not a directory`, real: null }
   let st
   try { st = lstatSync(materialDir) } catch (e) { return { ok: false, code: 'RAW-SOURCE-UNREADABLE', state: 'unreadable', detail: `${materialDir} cannot be examined (${e.code ?? 'EUNKNOWN'})`, real: null } }
   if (st.isSymbolicLink()) return { ok: false, code: 'RAW-SOURCE-ROOT-ALIAS', state: 'invalid', detail: `${materialDir} is a symlink or junction, so its bytes are not inside the mine`, real: null }

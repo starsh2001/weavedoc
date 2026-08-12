@@ -4,6 +4,20 @@
 
 ---
 
+## 2026-08-08.13
+
+**Unreleased — a quotation is one region, and the trusted root is checked too.** Two P1s in `2026-08-08.12`, both found by independent review, plus four smaller ones.
+
+**One quotation was still being split into two answers.** The span model was total, but the *regions* were built line by line: `> alpha` was admitted and sealed while the `  > forged` beneath it became a neighbouring refusal. A consumer reading the sealed spans got the quotation with its forged line removed — the same defect as "refused yet sealed", wearing an adjacent span instead of one field. And the test that was supposed to catch it checked byte ranges for overlap, which two adjacent spans trivially pass.
+
+Regions are built first now. A region is the maximal run of lines a reader sees as one quotation, and it is admitted only when *every* line is the machine shape; one indented `>`, one list-nested `>` or one lazy line refuses the whole region. A quotation is not partly checkable.
+
+**An aliased trusted root bounded nothing.** Only the material directory was examined, so a junction standing in for `materials/` passed containment trivially — both sides resolved to the same external path, `relative()` returned `''`, and outside bytes sealed as ordinary evidence. The trusted root is now checked for the same alias it is supposed to prevent.
+
+**Four smaller ones.** `m1` and `m001` are one material to every other reader in this runtime, so comparing the marker's spelling literally let `m1` inside `m001` become a second provider *and* slip past the self-reference refusal — ids are canonicalised before comparison. `\s` was still Unicode in the marker grammar, which cut a filename legitimately containing a UTF-8 non-breaking space; the classes are ASCII on both sides now. And `mode=not-checkable location="   "` passed as cold debt: the attribution a reviewer relies on has to be legible, not merely present.
+
+Nine mutations, all killed — two only after the fixtures were sharpened. The marker's ASCII class needed an input that actually tells the two spellings apart (a filename containing NBSP, where Unicode `\s` rejects a legal name), and the trusted-root guard's two branches turned out to be internally redundant, so it is exercised by removing the block rather than one line.
+
 ## 2026-08-08.12
 
 **Unreleased — the quote layer becomes one total result.** Six defects in `2026-08-08.11`, all found by independent review. The previous round moved the regexes into the shared file; this one makes the answer total.

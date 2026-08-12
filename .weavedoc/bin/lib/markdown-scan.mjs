@@ -292,41 +292,70 @@ const LIST_NESTED_QUOTE = /^[ \t]*(?:[-+*]|[0-9]+[.)])[ \t]+ {0,3}>/
 // interrupt a paragraph. Ordinary prose does not, which is what makes it lazy.
 const BOUNDARY = /^(?:#{1,6}(?:[ \t]|$)|(?:[-+*]|[0-9]+[.)])(?:[ \t]|$)|(?:\*[ \t]*){3,}$|(?:-[ \t]*){3,}$|(?:_[ \t]*){3,}$|<!--)/
 
+// REGION FIRST, never line by line. Judging each line separately split ONE quotation into two
+// answers: `> alpha` was admitted and sealed while the `  > forged` under it became a neighbouring
+// rejection, so a consumer reading the admitted spans got evidence with the forged line removed.
+// That is the same defect as "refused yet sealed", wearing an adjacent span instead of one field.
+//
+// A region is the maximal run of lines a reader sees as one quotation. It is ADMITTED only when
+// every one of them is the machine shape; a single indented `>`, list-nested `>` or lazy line makes
+// the WHOLE region unsupported, because a quotation is not partly checkable.
 export function blockQuoteNodes (doc) {
-  const nodes = []
-  const rejected = []
+  const regions = []
   let current = null
-  const reject = (code, line) => rejected.push({ code, line: line.number, start: line.start, end: line.end, raw: line.live })
+  const open = line => {
+    current = { id: `Q${line.number}`, lines: [], start: line.start, end: line.end, admitted: true, reason: null }
+    regions.push(current)
+    return current
+  }
+  const refuse = code => { if (current !== null && current.admitted) { current.admitted = false; current.reason = code } }
   for (const line of doc.lines) {
     const structural = line.context === 'live' || line.context === 'comment-mixed'
     const live = line.live
     if (!structural) { current = null; continue }
     if (QUOTE_OPEN.test(live)) {
-      if (current === null) {
-        current = { id: `Q${line.number}`, lines: [], start: line.start, end: line.end }
-        nodes.push(current)
-      }
-      current.lines.push(line)
-      current.end = line.end
+      if (current === null) open(line)
+      current.lines.push(line); current.end = line.end
       continue
     }
-    if (LIST_NESTED_QUOTE.test(live)) { reject('MD_QUOTE_NESTED', line); current = null; continue }
     // An indented `>` is a quote to a renderer at 1-3 spaces and a code block at 4+, and inside a
-    // list item it is quoted text at any depth. This grammar judges none of those, so it says so
-    // rather than guessing — the four-space form used to disappear from every population.
-    if (QUOTE_INDENTED.test(live)) { reject('MD_QUOTE_INDENTED', line); current = null; continue }
+    // list item it is quoted text at any depth. This grammar judges none of those — but it must not
+    // lose them either, so they join the region and refuse it.
+    if (QUOTE_INDENTED.test(live)) {
+      if (current === null) open(line)
+      current.lines.push(line); current.end = line.end
+      refuse('MD_QUOTE_INDENTED')
+      continue
+    }
+    // A list-nested quote starts its own refused region: the list marker is a block boundary, so it
+    // is not a continuation of anything above it.
+    if (LIST_NESTED_QUOTE.test(live)) {
+      current = null
+      open(line)
+      current.lines.push(line); current.end = line.end
+      refuse('MD_QUOTE_NESTED')
+      current = null
+      continue
+    }
     if (current !== null && /[^ \t]/.test(live)) {
+      // A heading, list marker, thematic break, fence or comment is an ordinary block boundary and
+      // ends the quote cleanly. Only bare prose is lazy.
       if (BOUNDARY.test(live)) { current = null; continue }
-      reject('MD_QUOTE_LAZY', line)
-      // The lazy line is still attached, so the span a consumer compares is the span a human reads.
-      // Dropping it would seal half a quotation, which is worse than refusing the whole thing.
-      current.lines.push(line)
-      current.end = line.end
+      current.lines.push(line); current.end = line.end
+      refuse('MD_QUOTE_LAZY')
       continue
     }
     current = null
   }
-  return { nodes, rejected }
+  // `rejected` is kept as a derived view for callers that want the refusals alone; the region is
+  // the unit of truth, so it carries its own verdict.
+  return {
+    regions,
+    nodes: regions.filter(r => r.admitted),
+    rejected: regions.filter(r => !r.admitted).map(r => ({
+      code: r.reason, line: r.lines[0].number, start: r.start, end: r.end, raw: r.lines.map(l => l.live).join('\n')
+    }))
+  }
 }
 
 // A comment that owns its lines completely — nothing live before it, nothing after. A marker is only

@@ -22,7 +22,7 @@
 // v2 gate.
 import { createHash } from 'node:crypto'
 import { readFileSync } from 'node:fs'
-import { wsnorm } from './core.mjs'
+import { canonId, wsnorm } from './core.mjs'
 import { blockQuoteNodes, scanMarkdown, standaloneComments } from './markdown-scan.mjs'
 import { readRawSources, resolveRawSource } from './raw-source-model.mjs'
 
@@ -61,8 +61,11 @@ function decodeStrict (latin1Value) {
 // `<!-- wd:quote source=self mode=verbatim location="§4" -->`, occupying its own line(s) entirely.
 // Everything unrecognised is an ERROR, never an ignored extra: a typo'd attribute silently dropped
 // leaves the writer believing they constrained a claim that nothing did.
-const MARKER_BODY = /^\s*wd:quote\b([\s\S]*)$/
-const ATTR_RX = /([A-Za-z_][A-Za-z0-9_-]*)\s*=\s*(?:"([^"]*)"|([^\s"]*))/g
+// ASCII WHITESPACE, on this side too. `\s` is Unicode, so a marker written with a non-breaking
+// space between attributes parsed as if it were an ordinary space — the same class as the quote
+// prefix, which stripped 0xA0 as syntax. Markdown and this grammar are ASCII.
+const MARKER_BODY = /^[ \t\r\n]*wd:quote(?![A-Za-z0-9_-])([\s\S]*)$/
+const ATTR_RX = /([A-Za-z_][A-Za-z0-9_-]*)[ \t\r\n]*=[ \t\r\n]*(?:"([^"]*)"|([^ \t\r\n"]*))/g
 
 function parseAttrs (body) {
   const attrs = {}
@@ -86,7 +89,7 @@ function parseAttrs (body) {
     }
     attrs[key] = raw
   }
-  const residue = body.replace(ATTR_RX, '').replace(/\s+/g, '')
+  const residue = body.replace(ATTR_RX, '').replace(/[ \t\r\n]+/g, '')
   if (residue !== '') errors.push({ code: 'QUOTE-ATTR-UNKNOWN', detail: `unparsed text in marker: '${residue}'` })
   return { attrs, errors }
 }
@@ -106,7 +109,14 @@ function validateMarker (attrs) {
   if (mode === 'not-checkable') {
     // EXACT source AND file, per the plan: an unverifiable claim is the one place where a reader has
     // nothing but the address, so the address may not be inferred from "there was only one".
-    if (attrs.location === undefined) errors.push({ code: 'QUOTE-LOCATION-REQUIRED', detail: 'mode=not-checkable requires a location for the human attribution it stands on' })
+    // A blank or control-only location is not an attribution. It is the only thing a cold reviewer
+    // has when the machine cannot compare, so "present" is not the test — legible is.
+    const legible = attrs.location === undefined
+      ? ''
+      : [...attrs.location].filter(ch => !/\s/.test(ch) && ch.codePointAt(0) > 0x1f && ch.codePointAt(0) !== 0x7f).join('')
+    if (legible === '') {
+      errors.push({ code: 'QUOTE-LOCATION-REQUIRED', detail: 'mode=not-checkable requires a legible location for the human attribution it stands on' })
+    }
     if (attrs.file === undefined) errors.push({ code: 'QUOTE-FILE-REQUIRED', detail: 'mode=not-checkable requires an explicit file= so the unverifiable claim names exactly what it rests on' })
   }
   return { mode, errors }
@@ -186,35 +196,19 @@ export function scanQuotedMaterial (materialDir, { trustedRoot, materialsRoot } 
     structural.push({ code: `QUOTE-${d.code.replace(/^MD_/, '')}`, line: d.line, detail: 'the document structure below this point is unknown, so its quotes cannot be judged' })
   }
 
-  const { nodes: runs, rejected } = blockQuoteNodes(doc)
+  // REGIONS, not runs. One quotation is one region and carries one verdict; the previous shape let
+  // `> alpha` seal while the `  > forged` beneath it became a separate refusal, so a consumer
+  // reading the sealed spans got the quotation with its forged line removed.
+  const { regions } = blockQuoteNodes(doc)
   const REJECT_CODE = {
     MD_QUOTE_LAZY: 'QUOTE-LAZY-CONTINUATION',
     MD_QUOTE_NESTED: 'QUOTE-NESTED-UNSUPPORTED',
     MD_QUOTE_INDENTED: 'QUOTE-INDENTED-UNSUPPORTED'
   }
-  // A refused structure is a SPAN with a range, not a line number in a side list. Downstream builds
-  // `quote-attribution-required` payloads out of converted digest plus exact offsets; a consumer
-  // that has to re-run the scanner to find them is the second reader this model exists to remove.
-  const unsupported = new Set()
-  for (const r of rejected) {
-    // A lazy line lives INSIDE the run it continues, so the run's own span already covers those
-    // bytes. Emitting a second span for the line reported one event twice and produced two
-    // overlapping spans for one region — the opposite of a total, non-overlapping population.
-    const owner = runs.find(run => r.start >= run.start && r.end <= run.end)
-    if (owner !== undefined) { unsupported.add(owner); continue }
-    spans.push({
-      kind: 'blockquote',
-      state: 'unsupported-structure',
-      range: { start: r.start, end: r.end },
-      line: r.line,
-      text: r.raw,
-      marker: null,
-      resolved: null,
-      sealed: false,
-      convertedDigest,
-      diagnostics: [{ code: REJECT_CODE[r.code] ?? 'QUOTE-STRUCTURE-UNSUPPORTED', detail: 'this shape renders as quoted text but is outside the machine grammar, so it is refused rather than half-checked' }]
-    })
-  }
+  const refusalOf = region => ({
+    code: REJECT_CODE[region.reason] ?? 'QUOTE-STRUCTURE-UNSUPPORTED',
+    detail: 'this quotation renders as one block but part of it is outside the machine grammar, so the whole block is refused rather than half-checked'
+  })
 
   // ONE SNAPSHOT PER PROVIDER, keyed by CANONICAL material id. `self` and the material's own id name
   // one provider; keying on the marker's spelling read the same directory twice and could put two
@@ -234,7 +228,7 @@ export function scanQuotedMaterial (materialDir, { trustedRoot, materialsRoot } 
 
   const used = new Set()
   for (const { comment, parsed } of markers) {
-    const run = runs.find(r => !used.has(r) && r.start > comment.end &&
+    const run = regions.find(r => !used.has(r) && r.start > comment.end &&
       !/[^ \t\r\n]/.test(source.slice(comment.end, r.start)))
     const span = {
       kind: 'quote',
@@ -259,14 +253,19 @@ export function scanQuotedMaterial (materialDir, { trustedRoot, materialsRoot } 
       continue
     }
     used.add(run)
-    if (unsupported.has(run)) {
-      settle('unsupported-structure', { code: 'QUOTE-LAZY-CONTINUATION', detail: 'the block this marker names extends past the machine grammar, so no verdict is issued for it' })
-      continue
-    }
+    if (!run.admitted) { settle('unsupported-structure', refusalOf(run)); continue }
     if (!parsed.valid) { settle('malformed-marker'); span.diagnostics.push(...parsed.errors); continue }
     // `self` and this material's own id are ONE provider. Accepting both spellings read the same
     // directory twice and put two snapshots of one material in a single scan.
-    if (parsed.attrs.source === materialId) {
+    // CANONICAL COMPARISON. `m1` and `m001` are one material to every other reader in this runtime,
+    // so comparing the marker's spelling literally let `m1` inside `m001` become a second provider —
+    // one directory, two snapshots, and a self-reference that slipped past the self-by-id refusal.
+    const askedId = parsed.attrs.source === 'self' ? materialId : canonId(parsed.attrs.source)
+    if (askedId === null) {
+      settle('malformed-marker', { code: 'QUOTE-SOURCE-INVALID', detail: `source '${parsed.attrs.source}' is not a canonical material id` })
+      continue
+    }
+    if (parsed.attrs.source !== 'self' && askedId === canonId(materialId)) {
       settle('malformed-marker', { code: 'QUOTE-SOURCE-SELF-BY-ID', detail: `source '${parsed.attrs.source}' is this material; write source=self so one provider has one address` })
       continue
     }
@@ -277,7 +276,7 @@ export function scanQuotedMaterial (materialDir, { trustedRoot, materialsRoot } 
       continue
     }
 
-    const providerId = parsed.attrs.source === 'self' ? materialId : parsed.attrs.source
+    const providerId = askedId
     const raw = providerOf(providerId)
     if (raw.state !== 'complete') {
       // Distinct codes, because "this material has no raw source" and "its source set is aliased"
@@ -331,11 +330,11 @@ export function scanQuotedMaterial (materialDir, { trustedRoot, materialsRoot } 
   // THE POPULATION RULE. An unmarked blockquote is the escape hatch: delete the marker and the claim
   // leaves the checked set while still reading as a quotation. It is a span with a range like every
   // other member, so a caller never has to find it again.
-  for (const run of runs) {
+  for (const run of regions) {
     if (used.has(run)) continue
-    // An unmarked run that also broke the grammar is UNSUPPORTED, not unmarked: telling a writer to
-    // add a marker to a block this grammar refuses would send them in a circle.
-    if (unsupported.has(run)) {
+    // An unmarked region that also broke the grammar is UNSUPPORTED, not unmarked: telling a writer
+    // to add a marker to a block this grammar refuses would send them in a circle.
+    if (!run.admitted) {
       spans.push({
         kind: 'blockquote',
         state: 'unsupported-structure',
@@ -346,7 +345,7 @@ export function scanQuotedMaterial (materialDir, { trustedRoot, materialsRoot } 
         resolved: null,
         sealed: false,
         convertedDigest,
-        diagnostics: [{ code: 'QUOTE-LAZY-CONTINUATION', detail: 'this block extends past the machine grammar, so it is refused rather than half-checked' }]
+        diagnostics: [refusalOf(run)]
       })
       continue
     }

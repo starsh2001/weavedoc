@@ -224,6 +224,26 @@ try {
     check(linked.rejected[0]?.reason === 'hardlink', 'the hardlink was not named as one', linked.rejected)
     check(linked.treeDigest === null, 'a hardlinked source still produced a tree digest')
     check(openMaterialRoot(fresh('plain'), mine).ok, 'a plain material root failed the capability check')
+
+    // THE TRUSTED ROOT MUST ITSELF BE REAL. Only the material was checked, so a junction standing in
+    // for the materials directory passed containment trivially — both sides resolved to the same
+    // external path, `relative()` returned '', and outside bytes sealed as ordinary evidence.
+    const outsideMine = join(root, 'outside-mine')
+    mkdirSync(join(outsideMine, 'm001'), { recursive: true })
+    writeFileSync(join(outsideMine, 'm001', 'source.md'), 'EXTERNAL\n')
+    const fakeMineParent = join(root, 'fake-mine')
+    mkdirSync(fakeMineParent, { recursive: true })
+    const fakeRoot = join(fakeMineParent, 'materials')
+    let aliasedRootMade = false
+    for (const type of ['junction', 'dir']) {
+      try { symlinkSync(outsideMine, fakeRoot, type); aliasedRootMade = true; break } catch { /* next form */ }
+    }
+    if (!aliasedRootMade) throw new Error(`no directory alias could be created on ${process.platform}; the trusted-root branch would go untested`)
+    const viaAliasedRoot = readRawSources(join(fakeRoot, 'm001'), { trustedRoot: fakeRoot })
+    check(viaAliasedRoot.state === 'invalid', 'an aliased trusted root bounded nothing', viaAliasedRoot.state)
+    check(viaAliasedRoot.treeDigest === null, 'an aliased trusted root still sealed external bytes', viaAliasedRoot)
+    check(viaAliasedRoot.diagnostics[0].code === 'RAW-SOURCE-TRUSTED-ROOT-ALIAS',
+      'the aliased trusted root was not named', viaAliasedRoot.diagnostics)
   }
 
   // ---- 6. a mixed-generation read is never published as complete --------------------------------

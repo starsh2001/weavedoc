@@ -502,6 +502,88 @@ try {
     check(byId.providers.size === 0, 'the rejected own-id marker still read a provider', [...byId.providers.keys()])
   }
 
+  // ---- 14. one quotation is one region ----------------------------------------------------------
+  groups++
+  {
+    // THE DEFECT THIS GROUP EXISTS FOR: judging line by line split ONE quotation into two answers.
+    // `> alpha` sealed while the `  > forged` beneath it became a neighbouring refusal, so a
+    // consumer reading the sealed spans got the quotation with its forged line removed. A
+    // non-overlap check cannot see that — two adjacent spans do not overlap. Region identity does.
+    const L = (...l) => l.join('\n') + '\n'
+    const d = material('m110', { 'source.md': 'alpha\n' })
+    const at = body => { writeFileSync(join(d, 'converted.md'), body); return scan('m110') }
+
+    for (const tail of ['  > forged', '    > forged', 'forged lazy']) {
+      const r = at(L('<!-- wd:quote source=self -->', '> alpha', tail))
+      check(r.spans.length === 1, `one quotation produced ${r.spans.length} spans with '${tail}'`, r.spans.map(s => [s.state, s.text]))
+      check(r.spans[0].state === 'unsupported-structure' && !r.spans[0].sealed,
+        `a partly-unsupported quotation was still sealed with '${tail}'`, r.spans[0])
+      check(r.spans[0].text.includes('alpha') && r.spans[0].text.includes('forged'),
+        `the refused region dropped part of the quotation with '${tail}'`, r.spans[0].text)
+      check(r.quotes.length === 1 && r.quotes[0] === r.spans[0],
+        `quotes[] disagreed with the span population for '${tail}'`, r.quotes.map(q => q.state))
+      // The range covers the WHOLE quotation, so a payload built from it holds every claimed byte.
+      const conv = readFileSync(join(d, 'converted.md')).toString('latin1')
+      check(conv.slice(r.spans[0].range.start, r.spans[0].range.end).includes('forged'),
+        `the region range stops before the forged line with '${tail}'`)
+    }
+    // ...and the admitted multi-line form is still one region that seals as a whole.
+    writeFileSync(join(d, 'source.md'), 'alpha beta\n')
+    const good = at(L('<!-- wd:quote source=self -->', '> alpha', '> beta'))
+    check(good.spans.length === 1 && good.spans[0].state === 'sealed',
+      'a legitimate two-line quotation did not seal as one region', good.spans)
+  }
+
+  // ---- 15. the grammar edges that were verified by hand ------------------------------------------
+  groups++
+  {
+    const L = (...l) => l.join('\n') + '\n'
+    // `m1` and `m001` are ONE material to every other reader here, so comparing the marker spelling
+    // literally let `m1` inside `m001` become a second provider — and slip past the self refusal.
+    const own = material('m001x', {})
+    const canon = material('m001', { 'source.md': 'x\n' })
+    writeFileSync(join(canon, 'converted.md'), L('<!-- wd:quote source=m1 -->', '> x'))
+    const byShort = scan('m001')
+    check(byShort.quotes[0].state === 'malformed-marker' &&
+      byShort.quotes[0].diagnostics.some(x => x.code === 'QUOTE-SOURCE-SELF-BY-ID'),
+    'a non-canonical spelling of this material id became a foreign provider', byShort.quotes[0])
+    check(byShort.providers.size === 0, 'the refused marker still read a provider', [...byShort.providers.keys()])
+    void own
+
+    // NBSP is content in the MARKER too: `\s` is Unicode, so a non-breaking space between attributes
+    // parsed as ordinary syntax on this side while the quote prefix had already been fixed.
+    const nbspMarker = Buffer.concat([
+      Buffer.from('<!-- wd:quote source=self', 'latin1'), Buffer.from([0xa0]),
+      Buffer.from('mode=verbatim -->\n> x\n', 'latin1')]).toString('latin1')
+    const m = parseQuoteMarkers(nbspMarker).markers[0]
+    check(m !== undefined && !m.valid, 'a non-breaking space was accepted as marker syntax', m)
+
+    // THE INPUT THAT TELLS THE TWO CLASSES APART: a filename legitimately CONTAINING a UTF-8
+    // non-breaking space (C2 A0). With ASCII classes the bare value keeps both bytes and decodes to
+    // the real name; with Unicode `\s` the value is cut at the NBSP and the tail becomes an
+    // encoding error. Rejecting a legal filename is the failure direction here, not accepting one.
+    const utf8Nbsp = Buffer.concat([
+      Buffer.from('<!-- wd:quote source=self file=a', 'latin1'), Buffer.from([0xc2, 0xa0]),
+      Buffer.from('b -->\n> x\n', 'latin1')]).toString('latin1')
+    const withNbspName = parseQuoteMarkers(utf8Nbsp).markers[0]
+    check(withNbspName.attrs.file === 'a b',
+      'a filename containing a non-breaking space was cut at the space', withNbspName.attrs)
+    check(withNbspName.valid, 'a legal filename with a non-breaking space was rejected', withNbspName.errors)
+
+    // A location that is only blanks or control characters is not an attribution — it is the one
+    // thing a cold reviewer has when the machine cannot compare.
+    const bin = material('m120', {})
+    writeFileSync(join(bin, 'source.md'), Buffer.from([0, 1, 2, 0x41]))
+    // Real whitespace and real control bytes — `'\\t'` as source text is the two characters
+    // backslash and t, which IS a legible attribution and must not be rejected.
+    for (const loc of ['   ', '\t \t', String.fromCharCode(11), '']) {
+      writeFileSync(join(bin, 'converted.md'),
+        L(`<!-- wd:quote source=self file=source.md mode=not-checkable location="${loc}" -->`, '> A'))
+      check(codes(scan('m120')).includes('QUOTE-LOCATION-REQUIRED'),
+        `a blank location was accepted as an attribution: ${JSON.stringify(loc)}`, scan('m120').diagnostics)
+    }
+  }
+
   console.log(`quote-marker-properties: groups=${groups} cases=${cases}`)
 } finally {
   rmSync(root, { recursive: true, force: true })
