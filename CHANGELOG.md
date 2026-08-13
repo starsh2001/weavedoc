@@ -4,6 +4,12 @@
 
 ---
 
+## 2026-08-08.22
+
+**Unreleased — the migrator learns the document mode FORMATS already declared.** An external probe (2026-08-13) found the .21 migrator reading only the single-file document spellings (`plan.md`/`draft.md`/`review.md`/`final.md`) in the two scans that walk documents — while FORMATS declares a second, multi-file mode (`draft/`·`final/` chapter trees). Both consumers of that assumption were live defects, one of each blocking class: the **high-water scan** never saw a `t250` citation sitting in `documents/d1/draft/01.md`, so the allocator seeded at 2 and a later grant would reissue t250 under a different fact — the data-destruction class, deferred until the collision; and the **cited-leaving preflight** let a chapter citing a to-be-deleted card pass silently — 오통과 on the stop whose whole job is refusing dangling citations BEFORE the first write.
+
+The fix is one enumerator, not two patches: `docFiles()` lists every document surface (the four single files plus a recursive walk of both chapter trees) and BOTH consumers iterate it — the port-lessons class where a rule taught to one consumer leaves its twin defenseless is closed by construction, because there is no longer a second copy of the assumption to drift. Two cases pin the probe's exact shapes (a chapter file lifting the high-water mark to 251; a chapter citation of a leaving card blocked and named `d1/draft/01.md: t002`), and the mutation that removes the tree walk reddens both.
+
 ## 2026-08-08.21
 
 **Unreleased — slice 2: the v2→v3 migrator, and the real mine walked through it.** backup → transform → verify, nothing cleverer: the backup is a CLEAN git worktree (checked read-only, never operated — recovery is `git restore . && rm -rf .weavedoc-state`, printed as words), and there is no transaction manifest or recovery state machine, because the plan discarded that class and git already is one.

@@ -34,7 +34,7 @@
 //   predicted in preflight so the failure never surprises)
 // `decided_by: machine` resolutions are REPORTED, never blocked: whether to re-litigate a v2
 // machine pick is the user's call, made after migration with the cards in hand.
-import { readFileSync, writeFileSync, readdirSync, unlinkSync, existsSync, mkdirSync } from 'node:fs'
+import { readFileSync, writeFileSync, readdirSync, unlinkSync, existsSync, mkdirSync, statSync } from 'node:fs'
 import { execFileSync } from 'node:child_process'
 import { join, materialIds, truthFiles } from './mine.mjs'
 import { fmLoad } from './read.mjs'
@@ -134,12 +134,40 @@ function highWater (m) {
   for (const id of materialIds(m)) { feed(id); feed(readOr(join(m.materials, id, 'converted.md'))) }
   for (const n of ['index.md', 'tree.md', 'coverage.md', 'changelog.md', 'verify.md', 'verify-ledger.tsv']) feed(readOr(join(m.truths, n)))
   feed(readOr(m.catalog))
-  let docDirs = []
-  try { docDirs = readdirSync(m.documents) } catch { docDirs = [] }
-  for (const d of docDirs) {
-    for (const n of ['plan.md', 'draft.md', 'review.md', 'final.md']) feed(readOr(join(m.documents, d, n)))
-  }
+  for (const f of docFiles(m)) feed(readOr(f.path))
   return { tmax, mmax }
+}
+
+// Every file of every document, BOTH modes: the single-file artifacts AND every page under the
+// multi-file trees (`draft/`, `final/` — FORMATS declares them; a scan that reads only the
+// single-file spellings has not counted the inputs its declaration covers). ONE enumerator feeds
+// both the high-water scan and the cited-leaving stop, so a mode added later cannot be counted by
+// one consumer and missed by the other. Found by an external probe: `t250` sitting in
+// `documents/d1/draft/01.md` seeded the allocator at 2 — the reissue class, live.
+function docFiles (m) {
+  const out = []
+  let dirs = []
+  try { dirs = readdirSync(m.documents) } catch { dirs = [] }
+  for (const d of dirs) {
+    for (const n of ['plan.md', 'draft.md', 'review.md', 'final.md']) {
+      out.push({ doc: d, rel: n, path: join(m.documents, d, n) })
+    }
+    for (const tree of ['draft', 'final']) {
+      const walk = (dir, prefix) => {
+        let names = []
+        try { names = readdirSync(dir) } catch { return }
+        for (const nm of names) {
+          const p = join(dir, nm)
+          let st = null
+          try { st = statSync(p) } catch { continue }
+          if (st.isDirectory()) walk(p, `${prefix}${nm}/`)
+          else out.push({ doc: d, rel: `${prefix}${nm}`, path: p })
+        }
+      }
+      walk(join(m.documents, d, tree), `${tree}/`)
+    }
+  }
+  return out
 }
 
 const gitState = root => {
@@ -203,19 +231,15 @@ export function cmdUpgrade (m, out, args, reindex, validateCollect) {
   const leaving = new Set(leavingDisp.keys())
   const citedLeaving = []
   {
-    let docDirs = []
-    try { docDirs = readdirSync(m.documents) } catch { docDirs = [] }
-    for (const d of docDirs) {
-      for (const n of ['plan.md', 'draft.md', 'review.md', 'final.md']) {
-        let text = ''
-        try { text = readFileSync(join(m.documents, d, n)).toString('latin1') } catch { continue }
-        const hits = new Set()
-        for (const t of text.match(/<!--[ \t]*t:(t[0-9]+)[ \t]*-->/g) ?? []) hits.add(normT(/t:(t[0-9]+)/.exec(t)[1]))
-        const ct = /cited_truths[ \t]*:[ \t]*\[([^\]]*)\]/.exec(text)
-        if (ct) for (const t of ct[1].match(/t[0-9]+/g) ?? []) hits.add(normT(t))
-        const bad = [...hits].filter(h => leaving.has(h)).sort().map(h => leavingDisp.get(h))
-        if (bad.length > 0) citedLeaving.push(`${d}/${n}: ${bad.join(' ')}`)
-      }
+    for (const f of docFiles(m)) {
+      let text = ''
+      try { text = readFileSync(f.path).toString('latin1') } catch { continue }
+      const hits = new Set()
+      for (const t of text.match(/<!--[ \t]*t:(t[0-9]+)[ \t]*-->/g) ?? []) hits.add(normT(/t:(t[0-9]+)/.exec(t)[1]))
+      const ct = /cited_truths[ \t]*:[ \t]*\[([^\]]*)\]/.exec(text)
+      if (ct) for (const t of ct[1].match(/t[0-9]+/g) ?? []) hits.add(normT(t))
+      const bad = [...hits].filter(h => leaving.has(h)).sort().map(h => leavingDisp.get(h))
+      if (bad.length > 0) citedLeaving.push(`${f.doc}/${f.rel}: ${bad.join(' ')}`)
     }
   }
 

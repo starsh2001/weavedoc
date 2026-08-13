@@ -6493,6 +6493,37 @@ acct_upgrade_verify_names_the_unexpected() {
   expect_block "does not validate to the EXACT expected state"
   expect_has "restore with: git restore ."
 }
+acct_upgrade_high_water_includes_chapters() {
+  # An external probe (2026-08-13) put t250 in a MULTI-FILE chapter (documents/d1/draft/01.md) and
+  # the allocator seeded at 2 — the reissue class, live: a later grant would hand t250 out again
+  # and the chapter's old citation would name a different fact. FORMATS declares both document
+  # modes; the scan that reads only the single-file spellings has not counted what its declaration
+  # covers.
+  mk_v2mine
+  rm -f "$W/documents/d1/draft.md"
+  mkdir -p "$W/documents/d1/draft"
+  printf '# 1장\n\n예전 장이 인용한 사실. <!-- t:t250 -->\n' > "$W/documents/d1/draft/01.md"
+  ( cd "$W" && git add -A >/dev/null 2>&1 && git -c user.email=x@x -c user.name=x commit -qm ch )
+  vrun upgrade --apply
+  expect_pass
+  expect_has "high water: truth 250"
+  OUT=$(cat "$W/.weavedoc-state/id-sequences.json"); RC=0
+  expect_has '"truth": 251'
+}
+block_upgrade_cited_leaving_in_chapter_blocks() {
+  # The same probe's second half: a chapter citing a card this migration would delete must stop it
+  # BEFORE the first write — §2.4's rule, which the single-file scan let through silently.
+  mk_v2mine
+  rm -f "$W/documents/d1/draft.md"
+  mkdir -p "$W/documents/d1/draft"
+  printf '# 1장\n\n지워질 사실을 인용한다. <!-- t:t002 -->\n' > "$W/documents/d1/draft/01.md"
+  ( cd "$W" && git add -A >/dev/null 2>&1 && git -c user.email=x@x -c user.name=x commit -qm ch )
+  vrun upgrade --apply
+  expect_block "cite card(s) this migration would delete or move"
+  expect_has "d1/draft/01.md: t002"
+  OUT=$(ls "$W/truths"); RC=0
+  expect_has "t002.md"
+}
 acct_upgrade_check_is_readonly() {
   mk_v2mine
   vrun upgrade --check
