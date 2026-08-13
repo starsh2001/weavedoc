@@ -12,7 +12,7 @@ a7c833d53e3d2b21fae97c9d92669ad0eba67bf9e403f74098a4adde55ce7835  .claude/skills
 ae3d1aeeb89129e22e8497ff6d3b672cbdb6c9beabf04f6171f69603c916ed1f  .weavedoc/FORMATS.md
 ec8c206b0985cfcd3786d8ada5ada3661b9ed2e5d4524ac9c5bcf5df073bb871  .weavedoc/PARSER-MODEL.md
 31a09c0977220ca0d6356313d52c81ee69d0de2331f4fee09f0b9c9a8a89b689  .weavedoc/READ.md
-01aa59c6181799b11dc98eed5de233c4a99f503f0f4698a70cd998f5db2547ca  .weavedoc/VERSION
+aff2e7bebff2bc4b24aa256ce6ac06aeb30fc1f0afa856bfbd80fa18caf91353  .weavedoc/VERSION
 b9b03017444b1b02a517ae9a0d8fc281bf15cd9a6a76a6811fe3efce7d313c3a  .weavedoc/bin/lib/artifact-contracts.mjs
 25150ac1c8654005fb340f4646686fa17adb946293af1d6bc71b84b09763f588  .weavedoc/bin/lib/cmd-attest.mjs
 cf6c9509957cbcf2d02bca7c68b7a36e32e1150a4ca486da17333111ca9df6cc  .weavedoc/bin/lib/cmd-census.mjs
@@ -27,11 +27,13 @@ c765555e2fdf77060fed2a2fdc8ee77e227c586c875d76ba983779232c5c6982  .weavedoc/bin/
 3f99ba6cda7e20ea9e8396e1eb681b001be1b47c5ec26a9c0c2a2687ef73ce4e  .weavedoc/bin/lib/cmd-status.mjs
 47ffbbc8c3b0034c142f5a7819fccdb541309f4092e2d785a260037885b57a5e  .weavedoc/bin/lib/cmd-upgrade.mjs
 d5e7bd8d4be5225b19dde475e0bec326f94edf37f17e1dddd7c5a012e978292e  .weavedoc/bin/lib/cmd-validate.mjs
+cc932ba4aa321119aa9239b052b3428d5394704cf75287fb1aac2a1d2d7dc190  .weavedoc/bin/lib/conflict-store.mjs
 9f3b2b485b06b03b44d98a72cc67004fbab12f7b9396d3f9c172350ee787ccd0  .weavedoc/bin/lib/core.mjs
 8e605056a1ddb59a06722f36f4ea76d360adfae0d805ce0f6f40d472eeb0cce9  .weavedoc/bin/lib/coverage-model.mjs
 ae91f98d9dcfe11b400def8e959627df1b1b02ac443b807b8fbb63eb4711f4f4  .weavedoc/bin/lib/diff.mjs
 2787eaf922a85daa830178a745f910f0c32eaa7d026408d311a609a45b7a4f0b  .weavedoc/bin/lib/gaps-register.mjs
 c3bcdf70b375b7e20c7f6cb6e24fa196bc1575e9626a55e2e1596a8760164417  .weavedoc/bin/lib/hq-ledger.mjs
+cd1881703c6b5c58045469417de6a23f6068169e1a80d240e158cc580c2da1fc  .weavedoc/bin/lib/id-sequences.mjs
 6bf9ee36258da19746d6ed67d2f5789fab5e78210fe406b327cf74bdb06ba293  .weavedoc/bin/lib/ledger-model.mjs
 9ae64057fd0d1253f4a58c81e4705b494b9d3fa55eccf958a0b835568aa26712  .weavedoc/bin/lib/ledger-structure.mjs
 43a24adcc9a075294bd1b2cfa0ae0bd2ccf7bfb540fa37598ee5f427b3fd9247  .weavedoc/bin/lib/lock.mjs

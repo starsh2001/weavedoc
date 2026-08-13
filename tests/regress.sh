@@ -1329,6 +1329,21 @@ meta_raw_source_properties() {
   expect_has "rootalias="
   expect_has "hardlink="
 }
+meta_id_sequences_properties() {
+  # The typed monotonic allocator (schema v3, slice 1, bundle A). Written red-first against a module
+  # that did not exist yet. Nothing in the runtime consumes it until bundle B2 wires the tripwires,
+  # so this case is the only thing executing it — hence the pinned totals.
+  OUT=$(node "$REPO/tests/id-sequences-properties.mjs" 2>&1); RC=$?
+  expect_pass
+  expect_has "groups=9 cases=141"
+}
+meta_conflict_store_properties() {
+  # The temporary conflict store (schema v3, slice 1, bundle A). Same standing as its sibling above:
+  # red-first, unwired until B2, exact totals as the vacuity guard.
+  OUT=$(node "$REPO/tests/conflict-store-properties.mjs" 2>&1); RC=$?
+  expect_pass
+  expect_has "groups=9 cases=138"
+}
 meta_bundled_contracts_have_no_control_chars() {
   # CI had this for runtime modules only, so four 0x14 bytes rode into `.weavedoc/schemas/v3` and
   # shipped green (2026-08-08.6): a comment rewrite wrote U+2014 through a latin1 writer, which

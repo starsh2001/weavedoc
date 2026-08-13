@@ -4,7 +4,15 @@
 
 ---
 
-## 2026-08-08.17
+## 2026-08-08.18
+
+**Unreleased — slice 1 of schema v3 opens: the two state-file models, unwired.** The v3 plan was approved 2026-08-13; this is bundle A of slice 1, in the same shape every Phase-1 model landed in (raw-source, quote-marker): the model plus its properties file, nothing importing it yet.
+
+**`id-sequences.mjs`** is the typed monotonic allocator (`.weavedoc-state/id-sequences.json`, namespaces `conflict|material|truth`). Canonical-current deletes cards, and max+1 scanning reuses the highest deleted number — after which an old `<!-- t:t042 -->` cites a different fact. Fail-closed both ways: a malformed file never reads as "start from 1", and counters are refused at the TEXT above 15 digits, because `9007199254740993` leaves `JSON.parse` already rounded and `isSafeInteger` then approves the rounded value (the canonId lesson, applied before the door instead of after it).
+
+**`conflict-store.mjs`** is the temporary conflict store (`.weavedoc-state/conflicts.json`): open entries only, resolution is deletion, `targets: []` is the legal *undecided* state — and the parser refuses an `archive`/`accepted` key outright, because history growing back as an "extra" key is how discarded machinery returns. Key vocabularies are closed at every level (a typo'd candidate key silently dropped is a claim the user can no longer adopt), id spellings are exact (`c001`, never `c1` — the m1↔m001 incident), and serialization is canonical: sorted by numeric id, fixed key order, absent optionals omitted, one byte spelling per store state.
+
+Both landed red-first (the properties files failed on `Cannot find module` before the models existed), 279 property cases across 18 groups, twelve targeted mutations all killed — after the mutation harness itself was fixed: its first run restored via `git checkout` on files git had never seen, so every mutation stacked silently and every verdict was noise. Restore is `cp`/`mv` now, with a `cmp` guard that a sed actually bit.
 
 **Unreleased — a rule's describers are owners too.** Third cold-review round, two findings, both the class `.15` already named and then re-committed: the rule's *operating* owners were synced (engine + both counting SKILLs) while the documents that *describe* the contract were not counted. `verify.md`'s frontmatter contract in FORMATS and the shipped `review.md` template still said the count resets only on a failing/blocking round — a cold session resuming a loop from those words alone would count a bar-cross-downgraded round as clean and end the loop one round early, which is exactly the false-pass `.16` closed. Both now state the third reset condition. The evidence this time is a census, not a grep of the phrase being edited: every `consecutive_passes` mention in the tree (schema, schemas/v3, FORMATS, template, both SKILLs, engine, harness fixture, changelog history) was enumerated, and these two were the only remaining owners of the reset wording.
 
