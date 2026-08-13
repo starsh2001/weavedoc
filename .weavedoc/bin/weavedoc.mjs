@@ -9,7 +9,7 @@
 //   attest <verdict> <round> <standard> <id...>   record a verification: digest-bound sidecar row
 //   seal-review <doc-id> [draft|final]   pin the clean review to the reviewed bytes + context
 //   consecrate <doc-id>   stage candidate → verify seals → ONE full validation → atomic promote
-//   upgrade [--check|--dry-run|--apply]   the migration surface (v2→v3 lands in slice 2; refuses meanwhile)
+//   upgrade [--check|--dry-run|--apply]   v2 mine → schema 3 (backup = clean git; blocked items stop before the first write; verify = conservation + exact validate)
 //   conflict list|add <entry.json>|remove <cNNN>   the open-disagreement ledger (id granted by the allocator; resolution IS removal)
 //   alloc <conflict|material|truth>   grant the next id from the monotonic allocator (never max+1 scanning)
 //   gaps              mine census + declared-marker scan (non-blocking floor for the weavedoc-gaps skill)
@@ -273,9 +273,11 @@ switch (cmd) {
     const { cmdReindex } = await import('./lib/cmd-reindex.mjs')
     const { cmdValidate } = await import('./lib/cmd-validate.mjs')
     const mine = openMine(SCRIPT_DIR)
+    // reindex output is swallowed; validate is CAPTURED — the migrator's verify layer compares
+    // the collected problem lines against its exact expectation instead of printing them raw.
     rc = cmdUpgrade(mine, outln, rest,
       () => cmdReindex(mine, () => {}, () => {}, []),
-      () => cmdValidate(mine, outln, false))
+      collect => cmdValidate(mine, collect, false))
     break
   }
   case 'consecrate': {

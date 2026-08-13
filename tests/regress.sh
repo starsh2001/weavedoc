@@ -6206,13 +6206,14 @@ acct_upgrade_stub_uptodate() {
   expect_pass
   expect_has "already schema v3"
 }
-block_upgrade_stub_v2_refuses_without_migrator() {
-  # Between migrators, refusing IS the contract: a migrator that guesses is the corruption the
-  # plan exists to prevent. The v2→v3 migrator replaces this stub in slice 2.
+block_upgrade_v2_without_git_refuses() {
+  # (Until slice 2 this asserted the stub's "slice 2" refusal; the migrator is real now.) The
+  # clean git worktree IS the backup, and $W is not a repository — apply must refuse rather than
+  # migrate an unrecoverable mine. Direction matters: --check still reports (read-only).
   sed -i 's/^version: 3$/version: 2/' "$W/project.md"
   sed -i 's/^version: 3/version: 2/' "$W/.weavedoc/config.yaml"
   vrun upgrade --apply
-  expect_block "slice 2"
+  expect_block "not inside a git repository"
 }
 block_upgrade_stub_bad_flag() {
   # Restored from the retired v1-migrator suite: unknown-argument refusal is a living contract
@@ -6337,6 +6338,178 @@ block_conflict_store_dangling_references() {
   expect_has "CONF-SOURCE-DANGLING"
   expect_has "t099"
   expect_has "m099"
+}
+
+# ---- schema v3 slice 2: the v2→v3 migrator ------------------------------------------------------
+mk_v2mine() { # rebuild $W as a REAL v2 mine under git — the migrator's whole input surface:
+  # an ok winner carrying resolution(decided_by: machine)+superseded, a discarded loser, a
+  # reciprocal conflict pair, a retracted card, ledger rows for a survivor and a casualty, a
+  # changelog id token ABOVE every card (the high-water evidence), and a document citing only
+  # survivors. The clean git worktree is the backup the migrator demands.
+  sed -i 's/^version: 3$/version: 2/' "$W/project.md"
+  sed -i 's/^version: 3/version: 2/' "$W/.weavedoc/config.yaml"
+  sed -i 's/^required_tags: \[\]$/required_tags: [위약]/' "$W/project.md"
+  rm -rf "$W/.weavedoc-state"
+  rm -f "$W/truths"/t*.md
+  printf -- '---\nid: m001\ntitle: 용역 계약서\norigin: file\nrole: 계약서\ntopics: [대금, 위약]\nformat: md\nsource_path: inbox/contract.md\nadded: 2026-07-01\nstatus: converted\nsummary: 대금과 위약금을 정한 최소 계약서.\n---\n\n# 용역 계약서\n\n제3조 대금은 5천만원으로 한다.\n제7조 위약금은 계약금액의 10%%로 한다.\n제8조 위약금은 계약금액의 20%%로 한다.\n' > "$W/materials/m001/converted.md"
+  printf -- '---\nid: t001\nclaim: "위약금은 계약금액의 10%%다"\nsource: m001\nlocation: "제7조"\ntags: [위약]\nstatus: ok\nprovenance: stated\nresolution: {type: pick, winner: t001, decided_by: machine, reason: "v2 기계 선택"}\nsuperseded: [t002]\n---\n\n제7조 위약금은 계약금액의 10%%로 한다.\n' > "$W/truths/t001.md"
+  printf -- '---\nid: t002\nclaim: "위약금은 계약금액의 15%%다"\nsource: m001\ntags: [위약]\nstatus: discarded\nprovenance: stated\nresolution: {type: pick, winner: t001, decided_by: user, decision_kind: supplied}\n---\n\n제7조 위약금은 계약금액의 10%%로 한다.\n' > "$W/truths/t002.md"
+  printf -- '---\nid: t003\nclaim: "위약금은 계약금액의 10%%다 (7조)"\nsource: m001\nlocation: "제7조"\ntags: [위약]\nstatus: conflict\nconflict_with: [t004]\nprovenance: stated\n---\n\n제7조 위약금은 계약금액의 10%%로 한다.\n' > "$W/truths/t003.md"
+  printf -- '---\nid: t004\nclaim: "위약금은 계약금액의 20%%다 (8조)"\nsource: m001\nlocation: "제8조"\ntags: [위약]\nstatus: conflict\nconflict_with: [t003]\nprovenance: stated\n---\n\n제8조 위약금은 계약금액의 20%%로 한다.\n' > "$W/truths/t004.md"
+  printf -- '---\nid: t005\nclaim: "없는 조항"\nsource: m001\ntags: [해지]\nstatus: retracted\nprovenance: stated\n---\n\n제99조 없는 문장.\n' > "$W/truths/t005.md"
+  printf '# Coverage\n\n## m001\n\n- 위약: t001\n- 위약 15%%: t002\n' > "$W/truths/coverage.md"
+  printf '# 변경 로그\n\n- added: t001 (2026-07-30)\n- removed: t073 (v2 이력 토큰 — high-water 근거)\n' > "$W/truths/changelog.md"
+  UD=$(printf 'x' | sha256sum | cut -d' ' -f1)
+  printf 't001\t%s\tverified\t1\tstd\t2026-07-30\nt005\t%s\tverified\t1\tstd\t2026-07-30\n' "$UD" "$UD" > "$W/truths/verify-ledger.tsv"
+  printf -- '---\ndoc_id: d1\ndoc_type: report\ntone: 담백\nstatus: planned\ncontinues: []\ncited_truths: [t001]\nscope_tags: [위약]\n---\n\n# 개요\n' > "$W/documents/d1/plan.md"
+  printf '# 개요\n\n위약금은 계약금액의 10%%다. <!-- t:t001 -->\n' > "$W/documents/d1/draft.md"
+  rm -f "$W/documents/d1/final.md" "$W/documents/d1/review.md"
+  ( cd "$W" && git init -q && git add -A >/dev/null 2>&1 && git -c user.email=x@x -c user.name=x commit -qm base ) \
+    || bad "mk_v2mine: git setup failed — the migrator's backup precondition cannot be built"
+}
+acct_upgrade_v2_to_v3_end_to_end() {
+  # The whole §2.4 pipe on one real v2 mine: classify → delete → move → strip → state files →
+  # version flip → reindex → conservation + EXACT validate (red only by the moved entry).
+  # KNOWN SURVIVING MUTATION (2026-08-13 pass, 10/11 killed): removing the conservation equation
+  # survives — it re-counts the transform's own loop, so no legal input reaches its failure
+  # branch. It stays because it is the tripwire for the day an edit breaks that loop, which is
+  # exactly when nobody is looking (the not-killable-by-any-fixture class, said out loud).
+  mk_v2mine
+  vrun upgrade --check
+  expect_pass
+  expect_has "keep 1 · delete 2 (discarded/retracted) · move 2"
+  expect_has "decided_by: machine resolution (t001)"
+  expect_has "high water: truth 73"
+  vrun upgrade --apply
+  expect_pass
+  expect_has "✓ migrated — kept 1 (1 stripped) · deleted 2 · moved 2 into 1 open entr(ies)"
+  expect_has "allocator next t74/m2/c2"
+  # the machine ledgers travel with the deletion: the casualty's coverage row is scrubbed
+  # (measured on the real mine — 26 deletions left 12 dangling mentions before this existed).
+  expect_has "coverage rows scrubbed (1 dropped"
+  OUT=$(cat "$W/truths/coverage.md"); RC=0
+  expect_has "t001"
+  expect_hasnt "t002"
+  # the winner card SURVIVES its superseded field (deleting it would delete the current fact),
+  # and loses exactly the v2 lines — nothing else in the file moves.
+  OUT=$(cat "$W/truths/t001.md"); RC=0
+  expect_has 'claim: "위약금은 계약금액의 10%다"'
+  expect_hasnt "status:"
+  expect_hasnt "resolution:"
+  expect_hasnt "superseded:"
+  OUT=$(ls "$W/truths"); RC=0
+  expect_hasnt "t002.md"
+  expect_hasnt "t005.md"
+  expect_hasnt "t003.md"
+  # the moved entry is lossless and undecided: both candidates, no target, Korean intact.
+  OUT=$(cat "$W/.weavedoc-state/conflicts.json"); RC=0
+  expect_has '"targets": []'
+  expect_has '위약금은 계약금액의 20%다 (8조)'
+  expect_has 'v2 card t003, moved by migration'
+  # the casualty's ledger row went with it; the survivor's row is untouched.
+  OUT=$(cat "$W/truths/verify-ledger.tsv"); RC=0
+  expect_has "t001"
+  expect_hasnt "t005"
+  OUT=$(grep -h '^version:' "$W/project.md" "$W/.weavedoc/config.yaml" | tr '\n' ' '); RC=0
+  expect_has "version: 3 version: 3"
+  # post-migration validate is red by design — the moved disagreement, and ONLY that.
+  vrun validate
+  expect_block "CONFLICT-OPEN"
+  vrun status --open
+  expect_has "c001 targets (no current card — undecided)"
+}
+block_upgrade_dirty_worktree_refuses() {
+  mk_v2mine
+  printf 'dirt\n' >> "$W/catalog.md"
+  vrun upgrade --apply
+  expect_block "DIRTY"
+  OUT=$(ls "$W/truths"); RC=0
+  expect_has "t002.md"
+}
+block_upgrade_unsupported_card_blocks() {
+  # §2.4 step 0: in v3 a card that exists IS canonical, so migrating an unsupported card would
+  # silently promote broken grounding. Resolve in v2 form, re-run — and nothing is written.
+  mk_v2mine
+  printf -- '---\nid: t006\nclaim: "근거 잃은 주장"\nsource: m001\ntags: [위약]\nstatus: unsupported\nprovenance: stated\n---\n\n제7조 위약금은 계약금액의 10%%로 한다.\n' > "$W/truths/t006.md"
+  ( cd "$W" && git add -A >/dev/null 2>&1 && git -c user.email=x@x -c user.name=x commit -qm u )
+  vrun upgrade --apply
+  expect_block "status: unsupported"
+  OUT=$( cd "$W" && git status --porcelain | grep -v 'mine.lock' | wc -l ); RC=0
+  expect_has "0"
+}
+block_upgrade_attribute_pair_blocks() {
+  # §2.4 step 0: user-authorized 병기 must not be stripped into two bare cards — "both are right"
+  # always names a hidden axis; write it into the claims in v2, then re-run.
+  mk_v2mine
+  sed -i 's/^resolution: {type: pick, winner: t001, decided_by: machine, reason: "v2 기계 선택"}$/resolution: {type: attribute, winner: t001, decided_by: user}/' "$W/truths/t001.md"
+  ( cd "$W" && git add -A >/dev/null 2>&1 && git -c user.email=x@x -c user.name=x commit -qm a )
+  vrun upgrade --apply
+  expect_block "resolution.type: attribute"
+  OUT=$(ls "$W/truths"); RC=0
+  expect_has "t002.md"
+}
+block_upgrade_cited_leaving_card_blocks() {
+  # A document citing a card this migration would delete or move must be repaired FIRST — a
+  # dangling citation is the exact corruption the id discipline exists to prevent.
+  mk_v2mine
+  sed -i 's/^cited_truths: \[t001\]$/cited_truths: [t001, t002]/' "$W/documents/d1/plan.md"
+  ( cd "$W" && git add -A >/dev/null 2>&1 && git -c user.email=x@x -c user.name=x commit -qm c )
+  vrun upgrade --apply
+  expect_block "cite card(s) this migration would delete or move"
+  expect_has "d1/plan.md: t002"
+  OUT=$(ls "$W/truths"); RC=0
+  expect_has "t002.md"
+}
+acct_upgrade_ok_partner_becomes_target() {
+  # §2.4's other branch: a component holding a surviving ok card makes that card the entry's
+  # TARGET. v2's reciprocity rule means legal mines rarely carry this shape (both sides conflict),
+  # but the migrator's totality covers it — it never runs v2 validate and must not guess.
+  mk_v2mine
+  sed -i 's/^status: conflict$/status: ok/' "$W/truths/t003.md"
+  sed -i '/^conflict_with: \[t004\]$/d' "$W/truths/t003.md"
+  printf -- '- 위약 7조: t003\n' >> "$W/truths/coverage.md"
+  ( cd "$W" && git add -A >/dev/null 2>&1 && git -c user.email=x@x -c user.name=x commit -qm p )
+  vrun upgrade --apply
+  local AOUT="$OUT" ARC="$RC"
+  OUT=$(cat "$W/.weavedoc-state/conflicts.json"); RC=0
+  expect_has '"t003"'
+  expect_hasnt '"targets": []'
+  OUT=$(ls "$W/truths"); RC=0
+  expect_has "t003.md"
+  expect_hasnt "t004.md"
+  # judged LAST so a failing apply leaves ITS output on the record, not the file dumps above.
+  OUT="$AOUT"; RC="$ARC"
+  expect_pass
+}
+acct_upgrade_verify_names_the_unexpected() {
+  # The verify layer is the migration's warranty: a migrated mine that validates to anything
+  # OTHER than the predicted CONFLICT-OPEN fails the migration and prints the restore words.
+  # (The fixture's coverage ledger is quietly broken in v2 — the migrator does not re-validate
+  # v2, so the breakage surfaces exactly here, as the unexpected line it is.)
+  mk_v2mine
+  sed -i 's/^- 위약: t001$/- 위약: t999/' "$W/truths/coverage.md"
+  ( cd "$W" && git add -A >/dev/null 2>&1 && git -c user.email=x@x -c user.name=x commit -qm v )
+  vrun upgrade --apply
+  expect_block "does not validate to the EXACT expected state"
+  expect_has "restore with: git restore ."
+}
+acct_upgrade_check_is_readonly() {
+  mk_v2mine
+  vrun upgrade --check
+  expect_pass
+  OUT=$( cd "$W" && git status --porcelain | grep -v 'mine.lock' | wc -l ); RC=0
+  expect_has "0"
+}
+acct_upgrade_orphaned_reqtag_refuses_apply() {
+  # A required tag whose last bearer leaves would fail the exact-validate verify as REQTAG-EMPTY —
+  # predicted in preflight, enforced at apply, repaired in v2 (extract the topic or drop the tag).
+  mk_v2mine
+  sed -i 's/^required_tags: \[위약\]$/required_tags: [해지]/' "$W/project.md"
+  ( cd "$W" && git add -A >/dev/null 2>&1 && git -c user.email=x@x -c user.name=x commit -qm t )
+  vrun upgrade --apply
+  expect_block "required_tags above would be orphaned"
+  OUT=$(ls "$W/truths"); RC=0
+  expect_has "t005.md"
 }
 
 # ---------------------------------------------------------------- driver

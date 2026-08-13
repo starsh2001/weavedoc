@@ -1,50 +1,46 @@
-# UPGRADING — v1 광산을 schema 2로
+# UPGRADING — v2 광산을 schema 3으로
 
-`project.md`의 `version: 1`인 광산(v0.1.x로 만든 프로젝트)이 대상입니다. v1 광산도 현재 런타임이 **그대로 읽습니다**(dual-reader) — `validate`가 공지 한 줄을 찍을 뿐 막지 않습니다. 마이그레이션은 원할 때 하면 됩니다.
+이 런타임은 **v3 전용**입니다. `version: 2`인 광산은 모든 일반 명령이 한 가지 답 — "먼저 이주하세요" — 만 주고 아무것도 판정하지 않습니다(v2 카드는 v3 필수 키를 전부 만족해서, 게이트가 없으면 v2 광산이 v3 규칙 아래 깨끗하게 **오통과**합니다).
 
-## 절차 — 검사와 적용은 분리되어 있습니다
+## 백업 → 변환 → 검증
+
+백업은 **깨끗한 git 워크트리**입니다. 이주기는 그것을 확인만 하고(read-only `git status`), 복원을 대신 실행하지 않습니다 — 되돌리는 말은 언제나 같습니다:
 
 ```bash
-node .weavedoc/bin/weavedoc.mjs upgrade --check     # 항목 목록 (read-only; 기본값)
-node .weavedoc/bin/weavedoc.mjs upgrade --dry-run   # 전체 계획, 0 write
-node .weavedoc/bin/weavedoc.mjs upgrade --apply     # staged 적용 + 사후 full validation + 실패 시 자동 rollback
+git restore . && rm -rf .weavedoc-state
 ```
 
-`--check`/`--dry-run`은 마이그레이션이 필요하면 exit 1(스크립트용 신호), 이미 최신이면 "nothing to do"에 exit 0. `--apply`는 두 번 실행하면 두 번째는 0 change입니다(멱등). version 레코드 행렬은 닫혀 있습니다(v0.3.3): 각 레코드는 `1` 또는 현재 schema(`2`)만 허용 — 그 외 값(미래 버전, 오타)은 거부합니다. v0.3.1이 남긴 출처 없는 m-id 행이 있어도 재개된 apply가 올바른 출처 행을 정상적으로 만듭니다(레인별 coverage).
+```bash
+node .weavedoc/bin/weavedoc.mjs upgrade --check     # 분류·차단 항목·high-water 보고 (read-only; --dry-run 동일)
+node .weavedoc/bin/weavedoc.mjs upgrade --apply     # 변환 + 보존식·exact-validate 검증 (clean git 필수)
+```
 
-## 무엇이 바뀌나
+## 무엇이 일어나나
 
-| 항목 | v0.1 | schema 2 |
-|---|---|---|
-| id 철자 | `m5` / `t5` 허용 | `m005`/`t005`로 canonicalize — 폴더·파일명, `id:`, strict 참조 필드(source·conflict_with·derived_from·corroborated_by·winner·cited_truths), catalog, coverage까지 |
-| `## Verified units` | verdict 없는 성공 행 | `passes N/N` 증거가 있는 행만 ` · verified`를 얻음 — **성공 증거가 없는 행은 기계가 절대 인증하지 않고 이름만 찍습니다** |
-| verify.md 절 | Human queue·Adjudications 부재 가능 | 빈 절 보강 |
-| review 이력 | gate 밖 `[kind]` 괄호 기록 | 괄호 제거(record form) — **열린 violation이 아니었는지 확인하라고 계획에 표시됩니다** |
-| config `repeat` | scalar (`repeat: 1`) | scale map (skip 0 · light/standard는 기존 값 · full은 +1) |
-| 검증 이력 | markdown 행뿐 | `verify-ledger.tsv`에 `legacy-unbound` 행으로 실체화 — **digest는 소급 날인하지 않습니다**(§11 결정): 이력은 보존되고, digest-bound는 재검증(attest)으로만 얻습니다. **두 레인, 두 출처**(v0.3.2): truth 행은 `## Verified units`에서, material 행은 자료 자신의 `status: verified`에서 — Verified units의 m-id 언급은 추출 검증의 범위 표시일 뿐 변환 판정이 아닙니다(WD-COR-001). 각 행은 출처 토큰(`v1-truths-ledger` / `v1-material-frontmatter`)을 standard 열에 기록합니다 |
-| review frontmatter 없음 | v0.1 review는 fm 블록이 없을 수 있음 | `review_legacy` marker를 담은 fm 블록을 새로 prepend — 이런 광산도 마이그레이션됩니다 |
-| 버전 스탬프 | `version: 1` ×2 | `project.md`·`config.yaml` 모두 `version: 2` |
+v2 status 축은 전부 소진됩니다 — 카드마다 처분이 정확히 하나씩:
 
-## v0.3.1로 이미 마이그레이션한 광산
+| v2 상태 | 처분 |
+|---|---|
+| `ok` (남는 전부) | 카드 유지, `status`·`conflict_with`·`resolution`·`superseded` **줄만** 제거(그 외 바이트 불변) |
+| `discarded` / `retracted` | 카드 삭제(과거는 git), 그 카드의 verify 장부 행도 함께 제거 |
+| `conflict` | `.weavedoc-state/conflicts.json`의 **무손실 후보**로 이동 — 살아남는 `ok` 짝이 있으면 그 카드가 entry의 target, 전원 conflict면 `targets: []`(아직 아무도 안 정한 상태). **이주는 충돌을 해결하지 않습니다** — 보관 장소만 옮기므로, 이주 직후 validate가 그 entry로 빨간 것이 정상이고, 사람이 판정해 entry를 삭제할 때까지 유지됩니다 |
 
-v0.3.1의 migration은 m-id 행을 잘못된 레인(truths ledger의 언급)에서 만들었습니다. schema 2 광산은 upgrade를 다시 탈 수 없으므로 **런타임이 fail-safe로 교정합니다**: 출처 토큰이 없는 m-id `legacy-unbound` 행은 material 검증 증거로 인정되지 않고(scope가 무시 사실을 표시), 해당 자료는 자신의 frontmatter로 돌아갑니다 — `status: verified`면 그대로 legacy, 아니면 다시 부채(owed)입니다.
+`superseded`는 카드 종류가 아니라 **승자 카드의 필드**입니다 — 지우면 현재 사실이 사라지므로 절대 삭제 축이 아닙니다. `decided_by: machine`인 v2 resolution은 **보고만** 됩니다: 기계가 골랐던 값이 현행 카드로 남는데, 재론할지는 이주 후 사용자의 몫입니다.
 
-- **영향 판별**: `awk -F'\t' '$1 ~ /^m/ && $3 == "legacy-unbound" && $5 == "-"' truths/verify-ledger.tsv` — 나오는 행이 영향 대상입니다. `weavedoc scope`도 같은 목록을 `pre-0.3.2 m-id ledger row(s) ignored` 줄로 보여줍니다.
-- **교정**: 해당 자료를 verify 스킬로 재검증하면 `attest`가 새 행을 append하고 last-row-wins로 자연히 이깁니다. 별도의 행 삭제·수정은 필요 없습니다(장부는 append-only).
-- t-id의 출처 없는(`-`) 행은 그대로 유효합니다 — truths 레인은 처음부터 옳은 레인이었습니다.
+새로 생기는 것: `.weavedoc-state/{conflicts.json, id-sequences.json}` (allocator의 next는 삭제 **전** 전수 스캔의 high-water 위 — 문서 인용·장부·로그의 id 토큰까지 셉니다), 그리고 `project.md`·`config.yaml` 모두 `version: 3`.
 
-## index/tree 라벨 (v0.3.4)
+## 첫 쓰기 전에 멈추는 것들 (v2에서 정리하고 재실행 — 결정 저장 장치는 없습니다)
 
-`index.md`/`tree.md`가 `pull`과 같은 소비자 라벨(as_of · DERIVED · ADOPTED · PLAN-STAGE · RETRACTED SOURCE)을 ` ··` 구분자 뒤에 싣습니다. 기존 광산은 **`reindex` 1회**로 라벨이 나타납니다 — 그 전까지는 `reindex --check`가 DIFFERS를 보고할 뿐 validate는 막지 않습니다.
+- **`status: unsupported` 카드** — v3에서는 "존재=정본"이라 근거 깨진 카드가 조용히 승격됩니다. 재-grounding하거나 삭제하세요.
+- **`resolution.type: attribute` 쌍(승인된 병기)** — 기록만 벗기면 "놓친 모순"과 구별 불가한 카드 두 장이 남습니다. "둘 다 맞다"는 언제나 숨은 축(시간·관점·정의·범위, 최후는 출처 귀속)이 있습니다 — 그 축을 claim에 새겨 분리한 뒤 재실행.
+- **삭제/이동될 카드를 인용하는 문서** — 인용을 먼저 고치세요. 매달린 인용은 id 규율이 막으려는 바로 그 부패입니다.
+- (경고) **마지막 담지 카드가 떠나는 required_tag** — 이주 후 REQTAG-EMPTY가 예고되므로 apply가 거부합니다.
 
-## 건드리지 않는 것
+## 검증 — 이주의 보증
 
-- **산문과 consecrated 출력**(draft/final 본문) — 바이트 불변. 옛 철자 참조는 관대한 해소가 계속 읽습니다.
-- **changelog** — 기록은 역사라 다시 쓰지 않습니다.
-- **digest** — 과거 검증에 현재 바이트의 digest를 찍는 일은 없습니다.
+- 보존식: v2 카드 수 = 남은 카드 + 삭제 + 이동, 누락·중복 0.
+- 이주 직후 validate는 **예측된 CONFLICT-OPEN 한 줄만** 내야 합니다 — 그 외 무엇이든 나오면 이주는 실패로 보고되고 복원 문구를 출력합니다.
 
-## 안전장치
+## v1 광산은?
 
-- 적용 전 rename 충돌 전수 검사(하나라도 걸리면 0 byte 기록).
-- 모든 원본은 `.upgrade-backup-<날짜>.<pid>/`에 스냅샷 + MANIFEST — 복원 지점이 필요 없어지면 지우면 됩니다.
-- 적용 끝에 **full validation이 돌고, 실패하면 전부 자동 원복**됩니다(바이트 동일 — 회귀 케이스가 트리 해시로 증명). 실패 원인은 대개 마이그레이션 이전부터 있던 문제입니다 — 고치고 재실행하세요.
+이 런타임에는 v1 리더가 없습니다. 고정 브리지 런타임 **v0.5.21 (commit `0257167`)** 의 `weavedoc upgrade`로 v1→v2를 먼저 밟은 뒤, 이 런타임으로 v2→v3를 밟습니다. (v1→v2에서 무엇이 바뀌는지는 그 브리지 체크아웃의 UPGRADING.md가 정본입니다.)
