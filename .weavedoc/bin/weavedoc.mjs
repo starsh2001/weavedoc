@@ -149,7 +149,7 @@ function cmdVersion (json) {
   }
   out(body)
   if (fp) outln(`fingerprint: ${fp.slice(0, 12)}  (bin+schema — compare this, not just the date)`)
-  outln(`schema: ${schemaVer()} (this runtime reads ≤${schemaVer()}; a v1 mine migrates via 'upgrade')`)
+  outln(`schema: ${schemaVer()} (v3-only; a v2 mine migrates via 'upgrade', a v1 mine via the v0.5.21 bridge first)`)
   return 0
 }
 
@@ -276,10 +276,11 @@ switch (cmd) {
   }
   case 'consecrate': {
     if (rest.length !== 1) usage2('weavedoc consecrate <doc-id>')
-    const { openMine } = await import('./lib/mine.mjs')
+    const { openMine, versionGate } = await import('./lib/mine.mjs')
     const { cmdConsecrate, realOps } = await import('./lib/cmd-consecrate.mjs')
     const { cmdValidate } = await import('./lib/cmd-validate.mjs')
     const mine = openMine(SCRIPT_DIR)
+    const g = versionGate(mine, errln); if (g) { rc = g; break }
     // validate runs IN PROCESS and prints straight through, as the bash version does. The doc id
     // rides as an ARGUMENT so this document's in-flight artifacts are exempt — never a variable,
     // which the environment could inject.
@@ -289,11 +290,12 @@ switch (cmd) {
   }
   case 'retag': {
     if (rest.length < 2 || rest.length > 3) usage2('weavedoc retag <old> <new> [--dry]')
-    const { openMine } = await import('./lib/mine.mjs')
+    const { openMine, versionGate } = await import('./lib/mine.mjs')
     const { cmdRetag } = await import('./lib/cmd-retag.mjs')
     const { cmdReindex } = await import('./lib/cmd-reindex.mjs')
     const { cmdValidate } = await import('./lib/cmd-validate.mjs')
     const mine = openMine(SCRIPT_DIR)
+    const g = versionGate(mine, errln); if (g) { rc = g; break }
     // reindex and validate run IN PROCESS, exactly as the bash version calls its own functions —
     // that is what lets the rename answer to a full validation and roll back as one transaction.
     // Their output is swallowed (reindex) or captured (validate), never printed straight through.
@@ -316,37 +318,47 @@ switch (cmd) {
     let sa = rest
     if (sa[0] === '--json') { sjson = true; sa = sa.slice(1) }
     if (sa.length !== 0) usage2('weavedoc scope [--json]')
-    const { openMine } = await import('./lib/mine.mjs')
+    const { openMine, versionGate } = await import('./lib/mine.mjs')
     const { cmdScope } = await import('./lib/cmd-scope.mjs')
-    rc = cmdScope(openMine(SCRIPT_DIR), outln, sjson); break
+    const mine = openMine(SCRIPT_DIR)
+    const g = versionGate(mine, errln); if (g) { rc = g; break }
+    rc = cmdScope(mine, outln, sjson); break
   }
   case 'attest': {
     // No arity check HERE on purpose: the bash dispatch forwards attest's whole argv and lets the
     // command judge it, so the usage line goes to stdout with exit 2 rather than to stderr.
-    const { openMine } = await import('./lib/mine.mjs')
+    const { openMine, versionGate } = await import('./lib/mine.mjs')
     const { cmdAttest } = await import('./lib/cmd-attest.mjs')
-    rc = cmdAttest(openMine(SCRIPT_DIR), outln, rest); break
+    const mine = openMine(SCRIPT_DIR)
+    const g = versionGate(mine, errln); if (g) { rc = g; break }
+    rc = cmdAttest(mine, outln, rest); break
   }
   case 'reindex': {
     // Like attest, the bash dispatch forwards reindex's whole argv — but reindex's own usage line
     // goes to STDERR, not stdout. Two write commands, two spellings; both are contract.
-    const { openMine } = await import('./lib/mine.mjs')
+    const { openMine, versionGate } = await import('./lib/mine.mjs')
     const { cmdReindex } = await import('./lib/cmd-reindex.mjs')
-    rc = cmdReindex(openMine(SCRIPT_DIR), outln, errln, rest); break
+    const mine = openMine(SCRIPT_DIR)
+    const g = versionGate(mine, errln); if (g) { rc = g; break }
+    rc = cmdReindex(mine, outln, errln, rest); break
   }
   case 'seal-review': {
     // The dispatch owns the arity here (bash does too), so a third argument is a stderr usage and
     // exit 2, while the command's own refusals go to stdout.
     if (rest.length < 1 || rest.length > 2) usage2('weavedoc seal-review <doc-id> [draft|final]')
-    const { openMine } = await import('./lib/mine.mjs')
+    const { openMine, versionGate } = await import('./lib/mine.mjs')
     const { cmdSealReview } = await import('./lib/cmd-seal-review.mjs')
-    rc = cmdSealReview(openMine(SCRIPT_DIR), outln, rest[0], rest[1]); break
+    const mine = openMine(SCRIPT_DIR)
+    const g = versionGate(mine, errln); if (g) { rc = g; break }
+    rc = cmdSealReview(mine, outln, rest[0], rest[1]); break
   }
   case 'pull': {
     if (rest.length !== 1) usage2('weavedoc pull <term>')
-    const { openMine } = await import('./lib/mine.mjs')
+    const { openMine, versionGate } = await import('./lib/mine.mjs')
     const { cmdPull } = await import('./lib/cmd-pull.mjs')
-    rc = cmdPull(openMine(SCRIPT_DIR), outln, rest[0]); break
+    const mine = openMine(SCRIPT_DIR)
+    const g = versionGate(mine, errln); if (g) { rc = g; break }
+    rc = cmdPull(mine, outln, rest[0]); break
   }
   case 'status': {
     // The --json shape validate/scope use, for the same reason: the flag is either first or a typo.
@@ -354,28 +366,35 @@ switch (cmd) {
     let sa = rest
     if (sa[0] === '--open') { sopen = true; sa = sa.slice(1) }
     if (sa.length !== 0) usage2('weavedoc status [--open]')
-    const { openMine } = await import('./lib/mine.mjs')
+    const { openMine, versionGate } = await import('./lib/mine.mjs')
     const { cmdStatus, cmdStatusOpen } = await import('./lib/cmd-status.mjs')
     const mine = openMine(SCRIPT_DIR)
+    const g = versionGate(mine, errln); if (g) { rc = g; break }
     rc = sopen ? cmdStatusOpen(mine, outln) : cmdStatus(mine, outln); break
   }
   case 'gaps': {
     if (rest.length !== 0) usage2('weavedoc gaps')
-    const { openMine } = await import('./lib/mine.mjs')
+    const { openMine, versionGate } = await import('./lib/mine.mjs')
     const { cmdGaps } = await import('./lib/cmd-gaps.mjs')
-    rc = cmdGaps(openMine(SCRIPT_DIR), outln, errln); break
+    const mine = openMine(SCRIPT_DIR)
+    const g = versionGate(mine, errln); if (g) { rc = g; break }
+    rc = cmdGaps(mine, outln, errln); break
   }
   case 'census': {
     if (rest.length !== 0) usage2('weavedoc census')
-    const { openMine } = await import('./lib/mine.mjs')
+    const { openMine, versionGate } = await import('./lib/mine.mjs')
     const { cmdCensus } = await import('./lib/cmd-census.mjs')
-    rc = cmdCensus(openMine(SCRIPT_DIR), outln); break
+    const mine = openMine(SCRIPT_DIR)
+    const g = versionGate(mine, errln); if (g) { rc = g; break }
+    rc = cmdCensus(mine, outln); break
   }
   case 'impact': {
     if (rest.length !== 1) usage2('weavedoc impact <material-id>')
-    const { openMine } = await import('./lib/mine.mjs')
+    const { openMine, versionGate } = await import('./lib/mine.mjs')
     const { cmdImpact } = await import('./lib/cmd-impact.mjs')
-    rc = cmdImpact(openMine(SCRIPT_DIR), outln, rest[0]); break
+    const mine = openMine(SCRIPT_DIR)
+    const g = versionGate(mine, errln); if (g) { rc = g; break }
+    rc = cmdImpact(mine, outln, rest[0]); break
   }
   case 'version': {
     let json = false

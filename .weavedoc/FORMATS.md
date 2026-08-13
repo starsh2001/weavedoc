@@ -63,13 +63,20 @@ A table indexing all materials, columns: `id`, `title`, `role`, `origin`, `statu
 Each truth is an atomic, citable fact extracted from a material. One file per truth, flat in `truths/`. The `map` skill creates these; the AI re-derives inter-truth relationships (supports, contradicts, supersedes) on the fly by reading relevant truths — no persistent edge store.
 
 Frontmatter:
-- `id` — `t<NNN>`, stable, auto-incremented. Equals the filename (without `.md`). **Zero-padded to at least three digits** (`t001`, `t042`, `t1000`) — one number, one spelling. Two spellings of one number (`t5.md` and `t005.md`) collapse into a single entry in the reciprocity, winner and retracted tables, so a check reads one file while reporting the other; `validate` rejects a non-canonical filename. References *to* an id stay lenient — `conflict_with: [t5]` resolves to `t005.md` — precisely because the filename rule leaves only one file it can mean.
+- `id` — `t<NNN>`, stable, auto-incremented. Equals the filename (without `.md`). **Zero-padded to at least three digits** (`t001`, `t042`, `t1000`) — one number, one spelling. Two spellings of one number (`t5.md` and `t005.md`) collapse into a single entry in the reference tables (`derived_from`, `corroborated_by`, conflicts.json targets), so a check reads one file while reporting the other; `validate` rejects a non-canonical filename. References *to* an id stay lenient — `derived_from: [t5]` resolves to `t005.md` — precisely because the filename rule leaves only one file it can mean.
 - `claim` — one-sentence statement of the fact (project language).
 - `source` — material id this truth was extracted from (e.g. `m001`).
 - `location` — where in the source (e.g. `§4, 1문단`). Project language.
 - `tags` — list of topic tags (project language). N:N — a truth can have multiple tags. Tags are the primary lookup mechanism: AI greps by tag to find related truths.
-- `status` — enum: `ok` | `conflict` | `unsupported` | `discarded` | `retracted`. **The validity axis — "can this value be used right now":** `ok` = usable (it may carry a `resolution` as *history*: it won a conflict, or both sides were attribute-authorized). `conflict` = unusable — contradicts another truth, unresolved (blocking; set by `map` conflict detection or `review` A0 re-hunt). `unsupported` = unusable — grounding gone (source removed/retracted). `discarded` = unusable — **lost a conflict resolution and is no longer a truth of this mine**; the file stays on disk as audit trail (same shape as a retracted material: present for audit, ontologically out), and its `resolution` records the decision and the successor. Conflict *history* lives in `resolution`, never in `status`.
-  - `retracted` = **this was never a valid extraction** — the quote is in no material at all, or a machine note was promoted into a claim. Distinct from `discarded`, which lost a fair fight: a retracted truth had no standing to begin with, so it carries **no `resolution`** (there was no conflict) and the withdrawal reason goes in `changelog.md` as a `removed:` line, which **`validate` requires** — otherwise this would be the one unusable status with no obligation attached and no quote seal, i.e. a cheaper way to make an inconvenient truth vanish than resolving it. For the same reason `validate` blocks retracting one side of an open `conflict` while the other side still points at it: that would strand the survivor as permanently unusable with no decision on record. **Not for a misdesignated source** — if the quote is verbatim and the fact real but `source` names the wrong material, repoint the field (`map`); retracting it would tell consumers through `READ.md` that the fact isn't in the mine, which is false. **The file stays** — deleting it outright is what a real run did to `t241`, and `census` then asked "t083 t211 t241 — confirm which" on every run forever, with no way to answer. Quote-existence is not re-asserted on a tombstone (that check is what condemned it). Excluded from `live` and reported separately by `census`, so re-extracting the fact correctly never produces a duplicate finding no one can close.
+- **No state fields (schema v3).** A card that exists IS canonical — there is no `status`, no
+  `conflict_with`, no `resolution`, no `superseded`, and `validate` rejects each as
+  `TRUTH-V2-FIELD` (state growing back onto cards is discarded machinery returning). The value
+  changed? Edit the card **in place** (same id) — canonical-current exists because corrections
+  and reversals are frequent and one fact must not smear history across its neighbours. An
+  undecided disagreement lives in `.weavedoc-state/conflicts.json` until the user rules (see
+  that section) and never wears a card. The past lives in Git. A card whose grounding broke is
+  not stamped — it is re-grounded (map) or deleted, and `validate` names the break
+  (`TRUTH-SOURCE-DANGLING`, the quote seal) either way.
 - `provenance` — optional enum (default `stated`): **who authored the value.**
   - `stated` — the fact is in the material as the user/source stated it.
   - `adopted` — the value originated as a **machine proposal the user adopted**, or was **machine-fetched from an `origin: research` material and accepted**; the adoption exchange must be visible in the source material. (A real run recorded a machine-proposed 158cm in the exact same shape as user-supplied values — this field is what keeps "기계는 조용히 고르지 않는다" true at the *record* level, not just in chat.) **A truth whose source is `origin: research` may not be `stated`** — nobody stated a value the machine went and got, and since `stated` is the default, silence would land there and undo at the truth level exactly what `origin: research` stops at the material level. `validate` enforces it.
@@ -79,32 +86,11 @@ Frontmatter:
 - `assumptions` — list of premises the derivation rests on that appear in **no material** (e.g. `[세는나이 고1=17]`). Every unstated anchor goes here — an empty list means the derivation uses stated facts only.
 - `as_of` — the phase/date at which a **time-varying** claim (나이·학년·소속·상태) is true (e.g. `First Light (Phase 1)`). In a phase-structured project a time-varying claim without `as_of` is an extraction error — the "데뷔 시점 18/18/16/19" incident was two phases collapsed under one label, impossible to write with `as_of` present.
 - `corroborated_by` — optional list of material ids that independently confirm this truth (recorded by `map`'s duplicate check instead of creating a duplicate truth; chat-only corroboration is lost when the session ends). **Citing the agreement**: there is no separate marker for corroboration — the citable handle is the truth id itself. A document that wants to say "two sources agree" cites the truth (`<!-- t:<id> -->`) and names the corroborating materials in its visible citation (e.g. `(출처: 계약서 초안 · 킥오프 회의록)`); the truth's `corroborated_by` is the record that backs that sentence, and the gate accepts it because the claim is the cited truth's claim. Writing "m003도 동의한다" as a *separate uncited assertion* is what the gate correctly rejects as unsupported.
-- `resolution` — the decision record of a settled conflict, present on **every party**: the loser (`status: discarded`, winner elsewhere), the winner (`status: ok`, winner: its own id), and both sides of an authorized attribution (`status: ok`, `type: attribute`). Object with:
-  - `type` — enum: `supersedes` | `authority` | `pick` | `value` | `attribute`. `supersedes`/`authority` = machine-resolved (`authority` is `decided_by: user` on the one conflict that *established* the ranking). `pick`/`value`/`attribute` = user-resolved.
-  - `winner` — id of the winning truth (for `supersedes`/`authority`/`pick`), or id of a new material (for `value`). **May be a list** when different fields were superseded by different sources.
-  - `decided_by` — enum: `machine` | `user`.
-  - `decision_kind` — optional enum, refines `decided_by: user`: `supplied` (the user provided the value) | `ratified` (the user accepted a machine-originated proposal). `ratified` resolutions join the priority re-verify set. **Standing precedence (lazy `authority`) is `ratified`** (ruled 2026-08-01): there the machine originates the *mechanism* (it offers the role ranking) and the user originates the *ranking*, while the winning value itself is neither supplied nor proposed by anyone — so `supplied` is false, and the choice is not decoration: `ratified` puts the resolution in the priority re-verify set, which is right, because a rule the user set once now decides conflicts they never see.
-  - `scope` — optional list naming **exactly which fields** were displaced (partial supersede of a record truth, e.g. `[키, 나이]`). The index shows the `[discarded]` marker; the scope detail lives in the truth file, telling readers which fields of the record remain valid. Prefer avoiding the need entirely: extract attribute tables **row by row** so one wrong cell never buries five valid ones.
-  - `reason` — free text explanation (project language), **always double-quoted** (decided 2026-08-04, D3): inside a flow mapping an unquoted comma is an entry separator, so a strict YAML parser truncates the value at the first comma and scatters the rest as ghost keys — on a real mine a correction note fell below the cut line and a YAML consumer saw only the stale sentence it corrected. `map` writes the quotes; `validate` warns (`RES-REASON-UNQUOTED`, non-blocking for now — block promotion is a schema-3 candidate, plan §11) when an unquoted `reason` holds a comma that does not open a new `key:`. Avoid double quotes inside the text (use 『』 or rephrase).
-- `superseded` — on a **winner**: the list of truth ids it has beaten (`[t003, t005]`). `resolution` is a single object holding one decision, so a truth that wins twice had nowhere to record the second — the mine would say one truth lost and nobody won, and the only workaround was burying the id in free-text `reason`. Maintained by hand alongside the loser's `resolution`; `validate` checks that every id listed here resolves.
-- `conflict_with` — present only when `status` is `conflict`. List of truth ids this truth conflicts with.
-
-Complete `resolution` examples (copy the shape, don't re-derive it):
-
-```yaml
-# user picked between two sources
-resolution: {type: pick, winner: t184, decided_by: user, decision_kind: supplied, reason: "실제 발매 순서는 스크린샷(m005) 기준"}
-# a correction material superseded specific fields of a record truth
-resolution: {type: value, winner: [m011, m013], decided_by: user, decision_kind: supplied, scope: [키, 나이], reason: "키 165→171(t197)·나이→페이즈별 병기(t204). 본명·포지션·컬러·이니셜은 유효"}
-```
-
-Body: verbatim quote from the source material pinning the exact claim — **copy-pasted, never paraphrased** (`validate` substring-checks it against the source). For **full-text artifact truths** (가사 전문, 계약 조항, 코드 스니펫 — content whose exact wording is itself the fact), the body is the complete artifact text and the claim states what it is.
-
 ## truths/tree.md (generated)
-A tag-grouped view of all truths for dashboard consumption. Format: one `## <tag>` heading per tag, listing truth ids + claims + status underneath — each entry carries the same **consumer labels** as `pull` after a ` ··` separator (see index.md below). **Regenerated only by `weavedoc reindex`** — never hand-edited (hand edits in a real run consumed ~45% of the tool calls and corrupted an entry). Run `reindex` whenever truths change.
+A tag-grouped view of all truths for dashboard consumption. Format: one `## <tag>` heading per tag, listing truth ids + claims underneath — each entry carries the same **consumer labels** as `pull` after a ` ··` separator (see index.md below). **Regenerated only by `weavedoc reindex`** — never hand-edited (hand edits in a real run consumed ~45% of the tool calls and corrupted an entry). Run `reindex` whenever truths change.
 
 ## truths/index.md (generated)
-A flat one-line-per-truth index for quick AI scanning. Format: `- <id>: <claim> [<source>] — [<tag1>, <tag2>] [<status>] ··<labels>` (status marker only when ≠ `ok`; the ` ··<labels>` tail only when labels apply). The labels are **the same set `pull` prints** — `(as_of: …)`, `[DERIVED — …]`, `[ADOPTED — …]`, `[PLAN-STAGE SOURCE — never evidence of use]`, `[RETRACTED SOURCE]` — produced by one shared function, because a truth whose fact depends on the entry path a consumer took is the defect this closed (field report D1: a plan-stage album spec read as a release fact via tree.md). ` ··` is the label separator: `pull` strips the tail before term-matching, so label prose is output, never search text (and `reindex` rewrites a literal `··` inside a claim as `· ·`). **Regenerated only by `weavedoc reindex`**; `validate` fails when it drifts from the truth files. AI reads this file first to identify relevant truths by tag before opening individual files. Mines indexed by an older bundle simply lack the label tail — one `reindex` adds it.
+A flat one-line-per-truth index for quick AI scanning. Format: `- <id>: <claim> [<source>] — [<tag1>, <tag2>] ··<labels>` (the ` ··<labels>` tail only when labels apply). The labels are **the same set `pull` prints** — `(as_of: …)`, `[DERIVED — …]`, `[ADOPTED — …]`, `[PLAN-STAGE SOURCE — never evidence of use]`, `[RETRACTED SOURCE]` — produced by one shared function, because a truth whose fact depends on the entry path a consumer took is the defect this closed (field report D1: a plan-stage album spec read as a release fact via tree.md). ` ··` is the label separator: `pull` strips the tail before term-matching, so label prose is output, never search text (and `reindex` rewrites a literal `··` inside a claim as `· ·`). **Regenerated only by `weavedoc reindex`**; `validate` fails when it drifts from the truth files. AI reads this file first to identify relevant truths by tag before opening individual files. Mines indexed by an older bundle simply lack the label tail — one `reindex` adds it.
 
 ## truths/coverage.md (extraction coverage manifest)
 Written by `map` alongside extraction — hand-written judgment content, **not** `reindex`-generated. One `## m<id>` section per mapped material (the id may be followed by the title): every fact-bearing element of that material's converted.md, at section/table/paragraph granularity, mapped to the truths extracted from it — or explicitly skipped with a reason. This is **T2's audit surface**: extraction completeness stops being an open "빠짐없이 뽑았나?" and becomes a checkable ledger (the same show-the-mapping rule M1 applies to conversion).
@@ -137,7 +123,7 @@ Appended by `map`, and by `verify` when it edits truths — one block per run. *
 - confirmed: 2026-07-24 (blanket)
 ```
 
-Line kinds (`changelog.line.kinds`): `added:` (id + `[provenance]` + one-line claim), `superseded:` (old id → winner, scope), `edited:` (id + what changed), `removed:` (id + why it was withdrawn — the deletion record; `census` reads these to tell a settled numbering hole from an unexplained one, so a withdrawal recorded here stops being re-flagged forever), `confirmed:` (appended after the human reviews the delta — `blanket` = 일괄 통과, `itemized` = 항목별 확인; **a dated marker only** — `confirmed: (대기)` is a placeholder, and what is still awaiting confirmation is every block after the last *dated* one).
+Line kinds (`changelog.line.kinds`): `added:` (id + `[provenance]` + one-line claim), `superseded:` (a v2-era spelling kept readable in migrated logs — new entries use `edited:`/`removed:`), `edited:` (id + what changed — in-place canonical updates land here), `removed:` (id + why the card was deleted — a human record only: no command reads it back as a judgment input, and numbering holes need no explaining because the allocator never refills them), `confirmed:` (appended after the human reviews the delta — `blanket` = 일괄 통과, `itemized` = 항목별 확인; **a dated marker only** — `confirmed: (대기)` is a placeholder, and what is still awaiting confirmation is every block after the last *dated* one).
 
 The confirmation step renders every block since the last `confirmed:` marker, so the `## YYYY-MM-DD <skill>` header is load-bearing, not decoration: it is what bounds "what changed since you last looked".
 
@@ -176,6 +162,29 @@ Body:
 
   The tags exist because a flat queue hands the triage back to the human. A real run accumulated eleven entries and reported them as one list; the user had to ask *"내가 결정해야하는걸 구체적으로 말해줘"* to get the split — and the split was **1 `user-only` / 3 `recommended` / 7 `machine`**, all of which the machine already knew when it wrote each entry. `validate` enforces the ownership tag on every `[open]` entry (a `ruled` entry is closed and nothing reads its ownership) (untagged legacy entries are reported by `weavedoc status` instead of hard-failing an already-verified mine); `weavedoc status` prints the open queue split so a completeness line can never read "열린 갭 0 · 열린 질문 0" while eleven decisions sit waiting.
 - `## Adjudications` — do-not-raise categories for future rounds. Only user-ruled entries land here.
+
+## .weavedoc-state/ (machine-owned mine state — schema v3)
+
+Two JSON files, at the mine root and OUTSIDE `.weavedoc/` precisely so replacing the runtime
+bundle wholesale can never overwrite mine state; versioned like the rest of the mine, created
+by init (empty forms) and by the v2→v3 migrator. On a v3 mine `validate` fail-closes when
+either is missing (`STATE-MISSING`) or unparseable (`STATE-MALFORMED`) — unreadable state never
+reads as empty state.
+
+- `conflicts.json` — **open disagreements only**; resolution IS deletion of the entry, and no
+  archive/accepted/winner/suppression section may ever grow here. Detection is the AI's
+  judgment (map), the ruling is the human's; the machine keeps the ledger hygienic (closed key
+  vocabulary, exact id spellings `c001`, typed `targets`/`candidates`) and blocks shipping
+  while any entry is open (`CONFLICT-OPEN`, inherited by consecrate). `targets: []` is the
+  legal *undecided* state — nobody ruled yet — and is not "resolved to nothing": the same
+  zero, ruled by the user (all candidates rejected), is an entry DELETED with no card created.
+  A candidate is the lossless envelope of a claim whose card was never created: claim + typed
+  `source` (mNNN) + optional location/quote/tags/note.
+- `id-sequences.json` — the typed monotonic allocator (`conflict|material|truth`). Canonical-
+  current deletes cards, and max+1 scanning re-grants the highest deleted number — after which
+  an old `<!-- t:t042 -->` cites a different fact. Numbers move one way; a deleted id is never
+  reused; numbering holes are the normal trace of deletion and no surface warns about them.
+  Ids are granted by the allocator, never by scanning.
 
 ## documents/&lt;doc-id&gt;/
 - `plan.md` — frontmatter: `doc_id`, `doc_type` (project language), `tone`, `status` (enum: `planned` | `drafting` | `reviewing` | `done` | `stale`), `continues` (list of prior `doc-id`s, for series), `cited_truths` (list of truth ids cited in the draft/final — generated by `write`/`refine`, used for change propagation), `scope_tags` (list of tags this document covers — collected by `plan` from the section notes' `tags` fields; used to detect staleness from NEW truths added to the mine). Body: the outline — one heading per section, each with a note `<!-- purpose / tags: truth tags the section draws on / required|optional -->`. The note's `tags` use the **truth-tag vocabulary** (`truths/*.md` `tags:`), not material role·topics — `scope_tags` is harvested from these notes and staleness compares it against new truths' tags, so a note written in the material vocabulary silently disables the trigger.
@@ -225,7 +234,7 @@ is content rather than syntax.
 
 When the data mine changes, documents drawn from it may become inconsistent. Two propagation triggers:
 
-### Trigger A — truth changed (claim/status edit)
+### Trigger A — truth changed (in-place claim edit)
 
 A truth's `claim` is edited, its `status` changes to `conflict`, or a settled resolution is re-opened (the `ok` winner set back to `conflict`).
 
@@ -298,22 +307,18 @@ Every problem and warning the checker emits carries a **stable code**. The code 
 | `CFG-ENUM` | config value outside its enum |
 | `CFG-PATH-MISSING` | a configured `paths:` entry does not exist |
 | `CFG-PATH-REDIRECT` | a configured path redirects away from the default that also exists |
+| `CONFLICT-OPEN` | `.weavedoc-state/conflicts.json` holds open entries — undecided disagreements block shipping |
 | `CFG-RANGE` | config number outside its allowed range |
 | `CFG-UNKNOWN-KEY` | *(warning)* unknown top-level config key |
 | `COMP-MALFORMED` | completeness required but `gaps.md` is structurally unreadable (missing/duplicate sections, lexical damage, stray records, invalid kind slots or unreadable lines) |
 | `COMP-NO-REGISTER` | completeness `required` but no `gaps.md` — the warranty never ran |
 | `COMP-OPEN-GAPS` | completeness `required` and open gaps sit next to a consecrated output |
 | `CONSEC-INTERRUPTED` | an in-flight consecration artifact (`.consecrate.inflight` / `.final.bak`) exists |
-| `CONFLICT-BOTH-RETRACTED` | both sides of an open conflict were retracted |
-| `CONFLICT-RECIPROCITY` | `conflict_with` is not mutual |
-| `CONFLICT-STALE` | still `conflict` though the counterpart is resolved/gone |
 | `COVERAGE-DANGLING` | coverage manifest mentions an id that no longer exists |
 | `COVERAGE-LEGACY` | `## legacy` exemption section is malformed |
 | `COVERAGE-MALFORMED` | `truths/coverage.md` exists but is unreadable or ends inside an open comment/code fence |
 | `COVERAGE-SECTION` | coverage section missing or misnamed for a material |
 | `DATE-INVALID` | a date field is not a real zero-padded `YYYY-MM-DD` |
-| `DISCARDED-RULE` | `discarded` truth violates its resolution rules |
-| `DISCARDED-SELF-WIN` | `discarded` but its own resolution names it the winner |
 | `FM-DUPLICATE-KEY` | the same frontmatter key appears twice |
 | `FM-MISSING` | a required frontmatter field is absent |
 | `FM-PLACEHOLDER` | a field still holds the untouched template placeholder |
@@ -343,7 +348,6 @@ Every problem and warning the checker emits carries a **stable code**. The code 
 | `MAT-NO-CONVERTED` | material folder without `converted.md` |
 | `MAT-RESEARCH-FIELDS` | `origin: research` without `url` / `retrieved_at` |
 | `MAT-ROLE` | material role is not declared in `project.md` |
-| `OK-BUT-LOST` | `status: ok` while its resolution says it lost |
 | `PLAN-AUDIENCE` | plan `audience` outside its enum |
 | `PLAN-CITED-DANGLING` | `cited_truths` names a truth that does not exist |
 | `PLAN-CITED-NOT-ID` | `cited_truths` entry is not a truth id |
@@ -356,10 +360,7 @@ Every problem and warning the checker emits carries a **stable code**. The code 
 | `PROJ-MISSING` | `project.md` absent (run `weavedoc init`) |
 | `PROV-DERIVED-REFS` | `provenance: derived` without `derived_from` |
 | `PROV-ENUM` | truth `provenance` outside its enum |
-| `RES-REASON-UNQUOTED` | warning: unquoted `resolution.reason` holds a comma a strict YAML parser truncates at |
 | `REQTAG-EMPTY` | a `required_tags` tag has no live truths |
-| `RESOLUTION-ENUM` | resolution `type`/`decision_kind`/`decided_by` outside its enum |
-| `RESOLUTION-NO-DECIDER` | a user-resolved resolution with no `decided_by` |
 | `REVIEW-COMMENT-SWALLOWS` | a comment hides violation-shaped entries from the gate |
 | `REVIEW-DUP-HEADING` | more than one `Fidelity violations` heading — only the first is read |
 | `REVIEW-KIND-OUTSIDE` | a bracketed violation kind sits outside the gate's zone |
@@ -374,23 +375,23 @@ Every problem and warning the checker emits carries a **stable code**. The code 
 | `SCHEMA-UNREADABLE` | `.weavedoc/schema` is missing/unreadable, or a consumed positional/enum contract (including gaps roles/kinds) is malformed — no verdict is issued |
 | `SCHEMA-VERIFY-SECTIONS` | `verify.sections` is not exactly three distinct non-empty positional roles (Verified units, Human queue, Adjudications), so no section may grant evidence |
 | `SEAL-QUOTE-MISSING` | a truth's verbatim body is not found in its source (laundering risk) |
-| `SEAL-RETRACTED` | seal check hit a retracted source |
 | `SEAL-SPLIT-BLOCK` | body lines are each verbatim but not one contiguous block |
+| `STATE-MALFORMED` | a `.weavedoc-state` file does not parse as its contract (the model's finer codes ride in the message) |
+| `STATE-MISSING` | a v3 mine is missing `conflicts.json` or `id-sequences.json` — unreadable state never reads as empty |
 | `TRUTH-BODY-EMPTY` | truth body is empty — there is no verbatim quote to seal |
 | `TRUTH-BODY-FRAGMENT` | truth body is a single too-short fragment |
 | `TRUTH-DIR` | a directory wearing a truth filename |
-| `TRUTH-ENUM` | truth `status` outside its enum |
 | `TRUTH-FM-UNCLOSED` | truth frontmatter is never closed |
 | `TRUTH-ID-MISMATCH` | `id:` disagrees with the filename |
 | `TRUTH-ID-NONCANON` | filename is not the canonical zero-padded id |
 | `TRUTH-NO-FM` | file in `truths/` has no frontmatter — not read as a truth at all |
 | `TRUTH-REF-DANGLING` | a truth reference field names an id that does not exist |
-| `TRUTH-RETRACTED-RULE` | a retracted truth violates its retraction rules |
 | `TRUTH-SOURCE-DANGLING` | `source` names a material that does not exist |
-| `TRUTH-STATUS-LEGACY` | pre-rename legacy `status` value |
+| `TRUTH-V2-FIELD` | a truth card carries a schema-2 state field (`status`/`conflict_with`/`resolution`/`superseded`) |
 | `VER-DISAGREE` | `project.md` and `config.yaml` schema versions disagree |
 | `VER-FUTURE` | the project declares a schema newer than this runtime supports |
 | `VER-NOT-INT` | a schema version field is not an integer |
+| `VER-V1-BRIDGE` | the mine is schema v1 — migrate via the pinned bridge runtime v0.5.21 first |
+| `VER-V2-UPGRADE` | the mine is schema v2 — run the v2→v3 migrator before any other command |
 | `VERIFY-ENUM` | `truths/verify.md` `status` outside its enum |
 | `VERIFY-SECTION` | a required `verify.md` section is missing |
-| `WINNER-RETRACTED` | a resolution winner is retracted |

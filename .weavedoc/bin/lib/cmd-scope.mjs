@@ -9,7 +9,7 @@ import { existsSync, readFileSync } from 'node:fs'
 import { basename } from 'node:path'
 import { splitLines } from './core.mjs'
 import { join, materialIds, truthFiles } from './mine.mjs'
-import { fmv, fmLoad } from './read.mjs'
+import { fmv } from './read.mjs'
 import { ledgerRowsOf, ledgerIndex, matDigest, truthDigest } from './verify.mjs'
 import { readVerifiedUnits, verifiedUnitsContract } from './verified-units.mjs'
 
@@ -115,33 +115,22 @@ export function cmdScope (m, out, json) {
     }
   }
 
-  // ---- truths: live vs tombstone (retracted/discarded leave the population, the same rule
-  // retracted materials follow).
+  // ---- truths: every existing card is in the population (schema v3 — the tombstone class left
+  // with the status axis; a card stops being owed verification by being DELETED, not stamped).
   //
-  // A file that yields NO LINE is not in this population (fixed 2026-08-04, caught by
-  // the corpus scale on `acct_zero_byte_truth` and `block_truth_shaped_directory`, since retired with the bash runtime it compared against). The bash
-  // side classifies with one awk over the glob, and awk contributes nothing for an input it never
-  // reads a record from — a zero-byte file, or a DIRECTORY wearing a truth filename, which gawk
-  // refuses with a stderr warning. Both therefore leave scope's live count untouched there, while a
-  // directory listing sees both and Node was reporting them as live-and-unverified: two extra owed
-  // units that the round has no file to verify.
-  //
-  // This is deliberately NOT the same rule as census, one door over, and the difference is bash's
-  // own: census takes its FILE COUNT from disk precisely so a zero-byte truth cannot vanish from the
-  // denominator, and validate does the same and reports it as "NOT checked". So a degenerate truth
-  // file is COUNTED (it exists) and UNCLASSIFIED (it says nothing) — which is the honest pair, and
-  // reproducing only half of it in either direction is what makes two commands disagree about one
-  // mine.
+  // A file that yields NO LINE is still not in this population (fixed 2026-08-04, caught by
+  // the corpus scale on `acct_zero_byte_truth` and `block_truth_shaped_directory`, since retired
+  // with the bash runtime it compared against): a zero-byte file, or a DIRECTORY wearing a truth
+  // filename, is COUNTED by census/validate (it exists, reported "NOT checked") and UNCLASSIFIED
+  // here (it says nothing this round could verify) — the honest pair, kept.
   const tl = truthFiles(m).map(f => {
     const raw = basename(f, '.md')
     let lines
     try { lines = splitLines(readFileSync(f, 'utf8')) } catch { lines = [] }
     if (lines.length === 0) return null
-    const st = fmLoad(f).get('status') ?? ''
-    return { cls: (st === 'retracted' || st === 'discarded') ? 'X' : 'L', canon: pad('t', parseInt(raw.slice(1), 10)), raw, file: f }
+    return { canon: pad('t', parseInt(raw.slice(1), 10)), raw, file: f }
   }).filter(Boolean)
-  const ondisk = uniqSort(tl.filter(x => x.cls === 'L').map(x => x.canon))
-  const tomb = uniqSort(tl.filter(x => x.cls === 'X').map(x => x.canon))
+  const ondisk = uniqSort(tl.map(x => x.canon))
 
   // ---- sidecar-covered live truths
   const strows = ledger.filter(f => /^t[0-9]/.test(f[0]))
@@ -150,7 +139,7 @@ export function cmdScope (m, out, json) {
   if (strows.length) {
     const incov = new Set(inter(ondisk, scov))
     const cur = new Map()
-    for (const x of tl) if (x.cls === 'L' && incov.has(x.canon)) cur.set(x.canon, truthDigest(x.file))
+    for (const x of tl) if (incov.has(x.canon)) cur.set(x.canon, truthDigest(x.file))
     for (const f of strows) {
       if (!cur.has(f[0])) continue
       if (f[2] === 'legacy-unbound') { tclass.push(['L', f[0]]); continue }
@@ -175,7 +164,7 @@ export function cmdScope (m, out, json) {
   // markdown `## Verified units` mention.
   const tbad = uniqSort([...LBAD].filter(x => /^t[0-9]/.test(x)))
   if (tbad.length) vids = minus(vids, tbad)
-  const diskany = uniqSort([...ondisk, ...tomb])
+  const diskany = ondisk
   let tlegacy = minus(inter(vids, ondisk), scov)
   // sidecar rows written by migration carry the legacy verdict themselves — union both sources
   tlegacy = uniqSort([...tlegacy, ...tclass.filter(x => x[0] === 'L').map(x => x[1])])
@@ -187,13 +176,13 @@ export function cmdScope (m, out, json) {
     out(`{"output_schema_version":1,"command":"scope","bundle":"${readOr(join(m.root, '.weavedoc', 'VERSION')).replace(/\n+$/, '')}","schema_version":${m.schemaVer()},` +
       `"ledger_state":"${ledgerDead ? (lidx.state === 'unreadable' ? 'unreadable' : 'headless-rows') : lidx.state}",` +
       `"materials":{"converted":${nMconv},"verified_bound":${nMbound},"legacy_unbound":${nMlegacy},"stale":${nMstale},"failed":${nMfail},"unverified":${nMunver},"used_but_unverified":${nMused},"originless_rows_ignored":${jarr(mOriginless)},"owed":${jarr([...munver, ...mstale, ...mfail])}},` +
-      `"truths":{"live":${ondisk.length},"verified_bound":${nTbound},"legacy_unbound":${tlegacy.length},"stale":${nTstale},"failed":${nTfail},"unverified":${tunver.length},"tombstones":${tomb.length},"owed":${jarr([...tunver, ...tstale, ...tfail])}},` +
+      `"truths":{"live":${ondisk.length},"verified_bound":${nTbound},"legacy_unbound":${tlegacy.length},"stale":${nTstale},"failed":${nTfail},"unverified":${tunver.length},"owed":${jarr([...tunver, ...tstale, ...tfail])}},` +
       `"ghost_ledger_ids":${jarr(tghost)}}`)
     return 0
   }
 
   out('scope — what a verify round still owes (computed from disk + the ledgers, not judged)')
-  if (nMconv === 0 && ondisk.length === 0 && tomb.length === 0) {
+  if (nMconv === 0 && ondisk.length === 0) {
     // A dead ledger is stated even on an empty mine (v0.5.2, external review): this early return
     // used to swallow the unreadable/headless line, so a mine with no units but a broken sidecar
     // read as "nothing to verify" with no hint the sidecar needed repair.
@@ -220,13 +209,12 @@ export function cmdScope (m, out, json) {
     // command's own SHOWN-never-absorbed discipline (v0.5.1 cold review).
     if (mghost.length) out(`    ledger names ${mghost.length} id(s) with no material on disk — they cover nothing: ${compressIds(uniqSort(mghost))}`)
   }
-  if (ondisk.length > 0 || tomb.length > 0) {
+  if (ondisk.length > 0) {
     out(`  truths     ${ondisk.length} live · ${nTbound} verified (digest-bound) · ${tlegacy.length} legacy-unbound · ${nTstale} stale · ${nTfail} failed · ${tunver.length} unverified   (source: truths/${m.ledgerFile()} + ## Verified units)`)
     if (tunver.length > 0) out(`    → ${compressIds(tunver)}`)
     if (tstale.length) out(`    → stale: ${compressIds(tstale)}`)
     if (tfail.length) out(`    → failed: ${compressIds(tfail)}`)
     if (tlegacy.length > 0) out(`    → legacy-unbound: ${compressIds(tlegacy)}`)
-    if (tomb.length > 0) out(`    (${tomb.length} tombstone truth(s) — retracted/discarded — out of scope)`)
     if (!existsSync(join(m.truths, 'verify.md')) && !existsSync(lf)) {
       out('    (no verification ledger — nothing has been cold-verified, so every truth is owed)')
     } else if (tghost.length) {

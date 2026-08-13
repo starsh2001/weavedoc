@@ -104,18 +104,10 @@ export function validateTruths (m, ctx, truthPaths, matIds) {
   // These describe the MINE, and the checks needing them must still run when the truths are gone —
   // "files 0, index still naming them" is exactly the state they exist to catch.
   const reqkey = new Set(sch('truth.fm.required').split('|').filter(Boolean))
-  const okstatus = new Set(sch('truth.fm.enum.status').split('|').filter(Boolean))
   const okprov = new Set(sch('truth.fm.enum.provenance').split('|').filter(Boolean))
-  const oktype = new Set(sch('truth.fm.resolution.type').split('|').filter(Boolean))
-  const okkind = new Set(sch('truth.fm.resolution.decision_kind').split('|').filter(Boolean))
-  const okby = new Set(sch('truth.fm.resolution.decided_by').split('|').filter(Boolean))
   const ph = sch('fm.placeholder')
   const phRe = ph === '' ? null : new RegExp(ph)
-  const tstenum = sch('truth.fm.enum.status').split('|').join(' ')
   const tprenum = sch('truth.fm.enum.provenance').split('|').join(' ')
-  const rtypes = sch('truth.fm.resolution.type').split('|').join(' ')
-  const rkinds = sch('truth.fm.resolution.decision_kind').split('|').join(' ')
-  const rby = sch('truth.fm.resolution.decided_by').split('|').join(' ')
 
   const mat = new Set(matIds)
   const existsn = new Set(matIds)
@@ -124,20 +116,18 @@ export function validateTruths (m, ctx, truthPaths, matIds) {
     const n = normM(a)
     if (n !== 'm') { existsn.add(n); matn.set(n, a) }
   }
-  const ret = ctx.retracted        // materials with status: retracted
+  const ret = ctx.retracted        // materials with status: retracted (the MATERIAL axis survives v3)
   const research = ctx.research    // materials with origin: research
-  const removedlog = ctx.removedlog
   const reqtags = ctx.reqtags      // one required tag per line, already list-parsed
 
   // ---- state the walk fills -----------------------------------------------------------------
   const body = new Map(); const mfmok = new Set()
   const kcount = new Map(); const kval = new Map()
-  const allfile = new Map(); const allstat = new Map()
-  const statusof = new Map(); const retractedT = new Set(); const norm2raw = new Map()
-  const cwof = new Map(); const winnerof = new Map(); const reflist = new Map()
+  const allfile = new Map()
+  const reflist = new Map()
   const nbody = new Map(); const ntok = new Map(); const bfirst = new Map(); const bblk = new Map()
-  const sealsrc = new Map(); const sealfile = new Map(); const sealstat = new Map()
-  const sealbroken = new Set(); const stillthere = new Set(); const unsealed = new Set()
+  const sealsrc = new Map(); const sealfile = new Map()
+  const sealbroken = new Set(); const unsealed = new Set()
   const seentag = new Set()
   let ntruthfile = 0
 
@@ -174,9 +164,8 @@ export function validateTruths (m, ctx, truthPaths, matIds) {
     const tid = base.replace(/\.md$/, '')
     const relf = `${ctx.truthsRel}/${base}`
 
-    let tidfield = ''; let tsrc = ''; let ttags = ''; let ttagsB = ''; let tstatus = ''
-    let tconflict = ''; let tresolution = ''; let tprov = ''
-    let tsuperseded = ''; let tderivedfrom = ''; let tcorrob = ''
+    let tidfield = ''; let tsrc = ''; let ttags = ''; let ttagsB = ''; let tprov = ''
+    let tderivedfrom = ''; let tcorrob = ''
     let hassource = false; let hasderivedfrom = false
     let closed = false
 
@@ -215,13 +204,11 @@ export function validateTruths (m, ctx, truthPaths, matIds) {
         tsrc = tval(line); hassource = true
         // A source spelled leniently (`m5` for folder `m005`) resolves to the folder it names.
         if (tsrc !== '' && !mat.has(tsrc)) { const sn = normM(tsrc); if (matn.has(sn)) tsrc = matn.get(sn) }
-      } else if (keyRe('tags').test(line)) { ttags = tval(line); ttagsB = ttags } else if (keyRe('status').test(line)) {
-        tstatus = tval(line)
-      } else if (keyRe('conflict_with').test(line)) { tconflict = tval(line) } else if (keyRe('resolution').test(line)) {
-        tresolution = tval(line)
-      } else if (keyRe('provenance').test(line)) { tprov = tval(line) } else if (keyRe('derived_from').test(line)) {
+      } else if (keyRe('tags').test(line)) { ttags = tval(line); ttagsB = ttags } else if (keyRe('provenance').test(line)) {
+        tprov = tval(line)
+      } else if (keyRe('derived_from').test(line)) {
         hasderivedfrom = true; tderivedfrom = tval(line)
-      } else if (keyRe('superseded').test(line)) { tsuperseded = tval(line) } else if (keyRe('corroborated_by').test(line)) {
+      } else if (keyRe('corroborated_by').test(line)) {
         tcorrob = tval(line)
       }
     }
@@ -230,8 +217,8 @@ export function validateTruths (m, ctx, truthPaths, matIds) {
     // what TRUTH-FM-UNCLOSED exists to name, one check over.
     if (closed) {
       tfDone({
-        tid, relf, tidfield, tsrc, ttags, tstatus, tconflict, tresolution, tprov,
-        tsuperseded, tderivedfrom, tcorrob, hassource, hasderivedfrom, ttagsB
+        tid, relf, tidfield, tsrc, ttags, tprov,
+        tderivedfrom, tcorrob, hassource, hasderivedfrom, ttagsB
       })
     }
 
@@ -256,22 +243,24 @@ export function validateTruths (m, ctx, truthPaths, matIds) {
       // `tsrc in mfmok` — the source material actually PARSED. An unclosed converted.md yields an
       // empty body, which would flag every truth from it as a broken seal when the material was just
       // unread; those fall to NOT checked instead.
+      // No tombstone exemption in v3: a card that exists is canonical, so every card's quote is
+      // sealed. The v2 `retracted` carve-out left with the status axis.
       if (tsrc !== '' && body.has(tsrc) && mfmok.has(tsrc)) {
-        sealsrc.set(tid, tsrc); sealfile.set(tid, relf); sealstat.set(tid, tstatus)
+        sealsrc.set(tid, tsrc); sealfile.set(tid, relf)
         if (!body.get(tsrc).includes(lineB)) {
           sealbroken.add(tid)
-          if (tstatus !== 'retracted' && !unsealed.has(tid)) {
+          if (!unsealed.has(tid)) {
             unsealed.add(tid)
             prob('SEAL-QUOTE-MISSING', M`${relf}  quote not found in ${mroot}/${tsrc}/converted.md (laundering risk)`)
           }
-        } else stillthere.add(tid)
+        }
       }
     }
   }
 
   function tfDone (t) {
     const { tid, relf } = t
-    allfile.set(tid, relf); allstat.set(tid, t.tstatus)
+    allfile.set(tid, relf)
     if (t.tidfield !== tid) prob('TRUTH-ID-MISMATCH', M`${relf}  id ${q(t.tidfield)} != filename ${q(tid)}`)
     // Driven by truth.fm.required (the key census this pass collects), not hardcoded. Present AND
     // non-empty: checking only that the KEY exists is how a bare `source:` passed.
@@ -281,70 +270,17 @@ export function validateTruths (m, ctx, truthPaths, matIds) {
       else if (kval.get(ck) === '') prob('FM-MISSING', M`${relf}  frontmatter ${q(rk)} is empty — a key with no value is not a value, and for ${q('source')} it silently switches the quote seal off`)
       else if (phRe !== null && phRe.test(kval.get(ck))) prob('FM-MISSING', M`${relf}  frontmatter ${q(rk)} still holds the template placeholder ${kval.get(ck)} — that is an instruction, not a value. Replace it with the real value; if the value genuinely belongs in braces, put any character outside them`)
     }
+    // A v2 state field on a v3 card is structural, not decorative: in v3 a card that exists IS
+    // canonical, so a `status:`/`conflict_with:`/`resolution:`/`superseded:` line is state the
+    // format no longer holds on the card — open disagreements live in conflicts.json, the past
+    // lives in Git. The optional-key list is descriptive (header rule), so this is checked HERE.
+    for (const dead of ['status', 'conflict_with', 'resolution', 'superseded'].sort(bytewise)) {
+      if (kcount.has(`${relf}${SUBSEP}${dead}`)) {
+        prob('TRUTH-V2-FIELD', M`${relf}  frontmatter ${q(dead)} is a schema-2 field — a v3 card that exists is canonical, so card-borne state is gone (open disagreements: .weavedoc-state/conflicts.json; the past: Git). Remove the line; if this whole mine is still v2, run ${q('weavedoc upgrade')} instead of editing cards by hand`)
+      }
+    }
     if (t.hassource && t.tsrc !== '' && !mat.has(t.tsrc)) prob('TRUTH-SOURCE-DANGLING', M`${relf}  source ${q(t.tsrc)} → no material folder`)
-    const v = t.tstatus
-    if (v === 'resolved') prob('TRUTH-STATUS-LEGACY', M`${relf}  status ${q('resolved')} is the pre-rename legacy value → winner-self/attribute: ${q('ok')}, loser: ${q('discarded')}`)
-    else if (!okstatus.has(v)) prob('TRUTH-ENUM', M`${relf}  status ${q(v)} invalid → use ${tstenum} (truth.fm.enum.status)`)
-    // The resolution enums. Hand-editing frontmatter is allowed, so a hand-written decision record
-    // must be validated too. A space BEFORE the colon is legal YAML and the keys inside this flow
-    // object must allow it, or `{type : pick, …}` blinds all four readers at once.
-    if (t.tresolution !== '') {
-      const rv = t.tresolution
-      const grab = k => {
-        const mm = new RegExp(`${k}${W}*:${W}*[^,}]+`).exec(rv)
-        if (!mm) return null
-        return mm[0].replace(new RegExp(`^${k}${W}*:${W}*`), '').replace(new RegExp(`${W}+$`), '')
-      }
-      const rt2 = grab('type')
-      if (rt2 !== null && !oktype.has(rt2)) prob('RESOLUTION-ENUM', M`${relf}  resolution type ${q(rt2)} invalid → use ${rtypes} (truth.fm.resolution.type)`)
-      const rk2 = grab('decision_kind')
-      if (rk2 !== null && !okkind.has(rk2)) prob('RESOLUTION-ENUM', M`${relf}  resolution decision_kind ${q(rk2)} invalid → use ${rkinds} (truth.fm.resolution.decision_kind)`)
-      const rb2 = grab('decided_by')
-      if (rb2 !== null) {
-        if (!okby.has(rb2)) prob('RESOLUTION-ENUM', M`${relf}  resolution decided_by ${q(rb2)} invalid → use ${rby} (truth.fm.resolution.decided_by)`)
-      } else {
-        prob('RESOLUTION-NO-DECIDER', M`${relf}  resolution has no ${q('decided_by')} → the provenance of a DECISION is the second membrane; without it the mine cannot say whether a human ruled or the machine picked`)
-      }
-    }
-    if (v === 'retracted' && t.tresolution !== '') prob('TRUTH-RETRACTED-RULE', M`${relf}  status ${q('retracted')} must not carry a resolution — it lost no conflict; record the withdrawal in truths/changelog.md as ${q('removed:')}`)
-    if (v === 'retracted') {
-      retractedT.add(tid)
-      const tidz = tid.replace(/^t0*/, 't')
-      if (tidz !== 't') retractedT.add(tidz)
-      // Without this, `retracted` would be the one unusable status with no mechanical obligation — a
-      // cheap way to disappear an inconvenient truth. The `removed:` line keeps it answerable.
-      if (!removedlog.has(normT(tid))) prob('TRUTH-RETRACTED-RULE', M`${relf}  status ${q('retracted')} but truths/changelog.md has no ${q(`removed: ${tid}`)} line → a withdrawal with no recorded reason is indistinguishable from a quiet deletion`)
-    }
-    // Normalise zero-padding and remember the status, or `conflict_with: [t5]` never matches
-    // retracted `t005` and a resolved truth is told to re-open a conflict it does not have.
-    statusof.set(tid, v)
-    const tidn3 = normT(tid)
-    existsn.add(tidn3); existsn.add(tid)
-    norm2raw.set(tidn3, tid)
-    if (t.tconflict !== '') {
-      for (const item of t.tconflict.split(/[[\], ]+/)) {
-        if (item === '') continue
-        cwof.set(tid, (cwof.get(tid) ?? '') + ' ' + normT(item))
-      }
-    }
-    if (v === 'conflict' && t.tconflict === '') prob('CONFLICT-RECIPROCITY', M`${relf}  status is ${q('conflict')} but no conflict_with field`)
-    if (v === 'discarded' && t.tresolution === '') prob('DISCARDED-RULE', M`${relf}  status is ${q('discarded')} but no resolution field (a discard must record its decision)`)
-    // status = validity axis, resolution = history. Guard the two mismatches.
-    let w2 = ''
-    if (t.tresolution !== '') {
-      let ty = ''
-      const wm = new RegExp(`winner${W}*:${W}*(\\[[^\\]]*\\]|[^,}]+)`).exec(t.tresolution)
-      if (wm) w2 = wm[0]
-      const tm = new RegExp(`type${W}*:${W}*[a-z]+`).exec(t.tresolution)
-      if (tm) ty = tm[0].replace(new RegExp(`type${W}*:${W}*`), '')
-      // Match the padded id AND the unpadded one, or `winner: [t5]` in t005.md reads as "somebody
-      // else won" and validate tells the user to discard the WINNER — which takes their chosen value
-      // out of the mine.
-      const selfwin = w2 !== '' && (new RegExp(`(^|[^0-9A-Za-z])${tid}([^0-9]|$)`).test(w2) ||
-                                    new RegExp(`(^|[^0-9A-Za-z])${tidn3}([^0-9]|$)`).test(w2))
-      if (v === 'discarded' && selfwin) prob('DISCARDED-SELF-WIN', M`${relf}  discarded but resolution.winner is itself → it WON its conflict; set status ${q('ok')}`)
-      if (v === 'ok' && w2 !== '' && !selfwin && ty !== 'attribute') prob('OK-BUT-LOST', M`${relf}  ok but its resolution says it lost (winner elsewhere) → set status ${q('discarded')}`)
-    }
+    existsn.add(normT(tid)); existsn.add(tid)
     if (t.tprov !== '' && !okprov.has(t.tprov)) prob('PROV-ENUM', M`${relf}  provenance ${q(t.tprov)} invalid → use ${tprenum} (truth.fm.enum.provenance)`)
     if (t.tprov === 'derived' && !t.hasderivedfrom) prob('PROV-DERIVED-REFS', M`${relf}  provenance is ${q('derived')} but no derived_from field (derivations must show their chain)`)
     // `origin: research` stops laundering at the material; without this it resumes one level down.
@@ -352,32 +288,14 @@ export function validateTruths (m, ctx, truthPaths, matIds) {
     if (t.hassource && research.has(t.tsrc) && (t.tprov === '' || t.tprov === 'stated')) {
       prob('TRUTH-SOURCE-DANGLING', M`${relf}  source ${q(t.tsrc)} is ${q('origin: research')} (machine-fetched) but provenance is ${q('stated')} → nobody stated it; use ${q('adopted')} (user accepted the fetched value) or ${q('derived')} (computed from it)`)
     }
-    if (t.hassource && ret.has(t.tsrc) && (v === 'ok' || v === 'conflict')) {
-      prob('TRUTH-SOURCE-DANGLING', M`${relf}  source ${q(t.tsrc)} is retracted but status is ${q(v)} → set unsupported (map retraction propagation)`)
+    // A canonical card grounded on withdrawn evidence. The v2 rule flipped the card to
+    // `unsupported`; v3 has no status axis, so the repair is the card itself: re-ground or remove.
+    if (t.hassource && ret.has(t.tsrc)) {
+      prob('TRUTH-SOURCE-DANGLING', M`${relf}  source ${q(t.tsrc)} is a retracted material — a canonical card grounded on withdrawn evidence; re-ground it on a live material (map) or remove the card`)
     }
-    if (t.tresolution !== '' && w2 !== '') {
-      let wv = w2
-      let mm
-      while ((mm = /m[0-9]+/.exec(wv)) !== null) {
-        wv = wv.slice(mm.index + mm[0].length)
-        if (ret.has(mm[0])) prob('WINNER-RETRACTED', M`${relf}  resolution winner references retracted ${mm[0]} → basis gone; re-open the conflict (map)`)
-      }
-      // A loser pointing at a retracted winner sends every consumer following the successor straight
-      // to a tombstone — the second escape route (resolve, then retract the winner).
-      let w3 = w2
-      while ((mm = /t[0-9]+/.exec(w3)) !== null) {
-        w3 = w3.slice(mm.index + mm[0].length)
-        const wmn = normT(mm[0])
-        if (wmn !== tidn3) winnerof.set(wmn, (winnerof.get(wmn) ?? '') + ' ' + tid)
-      }
-    }
-    // Dangling-reference check for every id-bearing list field. resolution.winner rides along as the
-    // fifth: `pull` sends every reader of a discarded truth to the winner, so a typo there pointed
-    // the protocol at a nonexistent truth silently. Only the winner CLAUSE is scanned — `reason:` is
-    // free prose that may name ids it only talks about.
+    // Dangling-reference check for every id-bearing list field the v3 card still carries.
     const fields = [
-      [t.tconflict, 'conflict_with'], [t.tsuperseded, 'superseded'], [t.tderivedfrom, 'derived_from'],
-      [t.tcorrob, 'corroborated_by'], [w2, 'resolution.winner']
+      [t.tderivedfrom, 'derived_from'], [t.tcorrob, 'corroborated_by']
     ]
     for (const [fv, fn] of fields) {
       if (fv === '') continue
@@ -389,17 +307,14 @@ export function validateTruths (m, ctx, truthPaths, matIds) {
         reflist.set(`${tid}${SOH}${fn}${SOH}${rid}`, refNorm(rid))
       }
     }
-    // Only LIVE truths cover a required tag: a tombstone never had standing, and the value of a
-    // discarded loser lives on in its winner. Otherwise retracting the last real extraction of a
-    // mandatory topic would keep the mine green about it.
-    if (v !== 'retracted' && v !== 'discarded') {
-      // The BYTE spelling: required_tags is matched byte for byte on the bash side (every reader
-      // there is LC_ALL=C), and folding two different tags onto one U+FFFD would answer "this
-      // required topic is covered" about a tag the mine does not hold.
-      for (const tg of t.ttagsB.replace(/[[\]"]/g, '').split(',')) {
-        const s = tg.replace(new RegExp(`^${W}+`), '').replace(new RegExp(`${W}+$`), '')
-        if (s !== '') seentag.add(s)
-      }
+    // Every v3 card is live, so every card's tags cover. The v2 tombstone carve-out left with the
+    // status axis — deletion, not status, is how a card stops covering a topic now.
+    // The BYTE spelling: required_tags is matched byte for byte on the bash side (every reader
+    // there is LC_ALL=C), and folding two different tags onto one U+FFFD would answer "this
+    // required topic is covered" about a tag the mine does not hold.
+    for (const tg of t.ttagsB.replace(/[[\]"]/g, '').split(',')) {
+      const s = tg.replace(new RegExp(`^${W}+`), '').replace(new RegExp(`${W}+$`), '')
+      if (s !== '') seentag.add(s)
     }
   }
 
@@ -416,59 +331,17 @@ export function validateTruths (m, ctx, truthPaths, matIds) {
     const [f, k] = kx.split(SUBSEP)
     prob('FM-DUPLICATE-KEY', M`${f}  frontmatter key ${q(k)} appears ${kcount.get(kx)} times → fm reads the FIRST, validate and reindex read the LAST, and census counts BOTH, so three commands report three different values for the same field. Keep one`)
   }
-  // The tombstone withdrawal reason, judged after the WHOLE body is read (deciding on the first
-  // matching line made the verdict depend on line order). One absent line supports "never had
-  // standing"; the file fails only when EVERY line is still verbatim there.
-  for (const t of sortedKeys(sealstat)) {
-    if (sealstat.get(t) === 'retracted' && stillthere.has(t) && !sealbroken.has(t)) {
-      prob('SEAL-RETRACTED', M`${sealfile.get(t)}  status ${q('retracted')} but its quote IS still verbatim in ${mroot}/${sealsrc.get(t)}/converted.md → the withdrawal reason (never had standing) is unsupported. If the fact is real and only ${q('source')} was wrong, repoint it (map); if it lost a conflict, use ${q('discarded')} with a resolution`)
-    }
-  }
   for (const k of sortedKeys(reflist)) {
     const kp = k.split(SOH)
     if (!existsn.has(reflist.get(k))) {
-      prob('TRUTH-REF-DANGLING', M`truths/${kp[0]}.md  ${kp[1]} references ${q(kp[2])} — no such truth or material. A dangling id here is silent: the checks that depend on it (retracted counterpart, reciprocity, derivation chain) simply never fire`)
-    }
-  }
-  for (const w4 of sortedKeys(winnerof)) {
-    if (retractedT.has(w4) || (norm2raw.has(w4) && retractedT.has(norm2raw.get(w4)))) {
-      prob('WINNER-RETRACTED', M`truths/${w4}.md  is retracted but is named the WINNER by${winnerof.get(w4)} → those losers point their successor at a tombstone, and a consumer following the protocol is told the fact is not in the mine. Re-open the conflict or make the surviving value a live truth`)
-    }
-  }
-  // Compare NORMALISED against NORMALISED, report the RAW file id — a mixed comparison fired the
-  // once-per-pair guard both ways below 100 and named a nonexistent file. Built first in its own
-  // pass, so reciprocity reads a complete table rather than a half-built one.
-  const cwofn = new Map(); const rawof = new Map()
-  for (const x of sortedKeys(cwof)) { const xz = normT(x); cwofn.set(xz, cwof.get(x)); rawof.set(xz, x) }
-  for (const x of sortedKeys(cwof)) {
-    const xn = normT(x)
-    for (const cw of cwof.get(x).split(' ')) {
-      if (cw === '') continue
-      const disp = norm2raw.has(cw) ? norm2raw.get(cw) : cw
-      // RECIPROCITY of an open conflict: one-sided `conflict_with` leaves `pull` handing the silent
-      // side out as usable, since READ.md rule 2 cannot apply. Skipped when the other side is a
-      // tombstone (the retracted-counterpart check above owns that).
-      if (statusof.get(x) === 'conflict' && !retractedT.has(cw) && existsn.has(cw)) {
-        if (!cwofn.has(cw) || !` ${cwofn.get(cw)} `.includes(` ${xn} `)) {
-          prob('CONFLICT-RECIPROCITY', M`truths/${x}.md  names ${disp} in conflict_with but ${disp} does not name ${x} back → a one-sided conflict cannot be applied by READ.md rule 2, so pull reports the silent side as usable. Fix BOTH files in one edit: set conflict_with on each naming the other, AND set both status ${q('conflict')} — doing only the first produces the next error one step later`)
-        } else if (rawof.has(cw) && statusof.get(rawof.get(cw)) !== 'conflict' && (statusof.get(rawof.get(cw)) ?? '') !== '') {
-          prob('CONFLICT-RECIPROCITY', M`truths/${disp}.md  is in an open conflict with ${x} but its own status is ${q(statusof.get(rawof.get(cw)))} → both parties to an unresolved conflict must be ${q('conflict')}, or the conflict must be resolved on both`)
-        }
-      }
-      if (retractedT.has(cw) && !retractedT.has(x) && statusof.get(x) === 'conflict') {
-        prob('CONFLICT-STALE', M`truths/${x}.md  is still ${q('conflict')} against ${disp}, which was retracted → the other side was withdrawn without resolving the conflict; re-open or resolve ${x}`)
-      } else if (retractedT.has(cw) && retractedT.has(x) && bytewise(xn, cw) < 0) {
-        // Retracting BOTH sides was the loophole: an open conflict vanished for two changelog lines
-        // with no user ruling. The machine never disposes of a conflict on its own.
-        prob('CONFLICT-BOTH-RETRACTED', M`truths/${x}.md and ${disp} were BOTH retracted while in open conflict → a conflict may not be disposed of by withdrawing both sides; the machine never resolves a conflict on its own. Record the user ruling (resolution / adjudication) or re-open one side`)
-      }
+      prob('TRUTH-REF-DANGLING', M`truths/${kp[0]}.md  ${kp[1]} references ${q(kp[2])} — no such truth or material. A dangling id here is silent: the checks that depend on it (the derivation chain, corroboration) simply never fire`)
     }
   }
   // Accounting, not a check: reporting sealed-vs-present makes the "silent zero" leaks (empty
   // source, no checkable body line, unclosed frontmatter — all a tick) visible. A body with no
-  // non-blank line is unchecked, not clean. Tombstones are exempt (a retracted truth may be a stub).
-  for (const bt of sortedKeys(allstat)) {
-    if (allstat.get(bt) !== 'retracted' && (nbody.get(bt) ?? 0) === 0) {
+  // non-blank line is unchecked, not clean. No tombstone exemption in v3 — every card is canonical.
+  for (const bt of sortedKeys(allfile)) {
+    if ((nbody.get(bt) ?? 0) === 0) {
       prob('TRUTH-BODY-EMPTY', M`${allfile.get(bt)}  body is empty — the verbatim quote is what the seal checks, so a truth with no body line is unchecked rather than checked-and-clean`)
     }
   }
@@ -476,7 +349,7 @@ export function validateTruths (m, ctx, truthPaths, matIds) {
   // one passage it never had. Only for truths whose every line already passed the per-line seal.
   const bodyws = new Map()
   for (const sp of sortedKeys(sealsrc)) {
-    if (allstat.get(sp) === 'retracted' || sealbroken.has(sp) || (nbody.get(sp) ?? 0) < 2) continue
+    if (sealbroken.has(sp) || (nbody.get(sp) ?? 0) < 2) continue
     const blk = wsnorm(bblk.get(sp) ?? '')
     if (blk === '') continue
     const src = sealsrc.get(sp)
@@ -488,19 +361,17 @@ export function validateTruths (m, ctx, truthPaths, matIds) {
   // One token is not a quote: a substring that short is in almost any material, so the seal passes
   // on nothing while the count reads "sealed". KNOWN LIMIT: a two-token fragment still gets through
   // — the floor is the lowest that means anything, not a full guard.
-  for (const fr of sortedKeys(allstat)) {
-    if (allstat.get(fr) !== 'retracted' && (nbody.get(fr) ?? 0) > 0 && (ntok.get(fr) ?? 0) < 2) {
+  for (const fr of sortedKeys(allfile)) {
+    if ((nbody.get(fr) ?? 0) > 0 && (ntok.get(fr) ?? 0) < 2) {
       prob('TRUTH-BODY-FRAGMENT', M`${allfile.get(fr)}  body is a single fragment (${q(bfirst.get(fr))}) — the seal is a substring test, and a fragment that short is in almost any material, so finding it verbatim proves nothing about the claim. Quote the whole line (or table row) the fact sits in`)
     }
   }
   // `sealed` must mean the seal PASSED, not that it ran (sealsrc is set before the substring test
   // decides), or a quote confirmed ABSENT counts as sealed — and the confirmation screen reads this
-  // number as "N/N verbatim confirmed". Four outcomes: passed · FAILED · tombstone · never checked.
-  let nsealed = 0; let nsealfail = 0; let ntomb = 0
-  for (const tb of allstat.keys()) if (allstat.get(tb) === 'retracted') ntomb++
+  // number as "N/N verbatim confirmed". Three outcomes now: passed · FAILED · never checked.
+  let nsealed = 0; let nsealfail = 0
   for (const st of sealsrc.keys()) {
-    if (allstat.get(st) === 'retracted') continue
     if (sealbroken.has(st)) nsealfail++; else nsealed++
   }
-  return { ntruthfile, nsealed, nsealfail, ntomb }
+  return { ntruthfile, nsealed, nsealfail }
 }

@@ -94,18 +94,17 @@ export function cmdAttest (m, out, argv, ops = realOps) {
   for (const id of ids) {
     const cid = canonId(id)
     if (cid === null) { out(`attest: '${id}' is not a material/truth id — nothing written`); return 2 }
-    let st
     if (cid.startsWith('m')) {
       const f = join(m.materials, cid, 'converted.md')
       if (!isFile(f)) { out(`attest: no converted.md for '${id}' (${cid}) — nothing written`); return 2 }
-      st = fm(f, 'status')
+      // The MATERIAL lifecycle survives v3, and a retracted material stays outside the population.
+      if (fm(f, 'status') === 'retracted') {
+        out(`attest: ${cid} is retracted — a withdrawn material is outside the verification population; nothing written`); return 2
+      }
     } else {
       const tf = tfileFor(m, cid)
       if (tf === null) { out(`attest: no truth file for '${id}' (${cid}) — nothing written`); return 2 }
-      st = fm(tf, 'status')
-    }
-    if (st === 'retracted' || st === 'discarded') {
-      out(`attest: ${cid} is ${st} — a tombstone is outside the verification population; nothing written`); return 2
+      // No truth-side refusal in v3: a card that exists is canonical and owes verification.
     }
     const dg = unitDigest(m, cid)
     if (dg === null) { out(`attest: cannot digest '${id}' (${cid}) — nothing written`); return 2 }

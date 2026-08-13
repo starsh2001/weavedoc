@@ -21,6 +21,8 @@ import { gapRegisterContract, parseGapText } from './gaps-register.mjs'
 import { verifiedUnitsContract } from './verified-units.mjs'
 import { fmvB as fmv, loadSchema, loadConfig } from './read.mjs'
 import { validateTruths } from './validate-truths.mjs'
+import { CONFLICTS_FILE, parseConflicts } from './conflict-store.mjs'
+import { ID_SEQUENCES_FILE, parseIdSequences } from './id-sequences.mjs'
 
 // BYTES, not text. Every value this command quotes back in a diagnostic comes through here, and a
 // UTF-8 decode folds an invalid byte to U+FFFD — printing something the runtime being replaced never
@@ -49,8 +51,7 @@ humanqueue.enum.state material.fm.enum.origin material.fm.enum.stage material.fm
 material.fm.required material.fm.required_when.research plan.fm.enum.status plan.fm.required
 plan.fm.enum.audience
 project.fm.required questions.enum.status review.enum.kind review.enum.reviewed_kind review.sections schema.version truth.fm.enum.provenance
-truth.fm.enum.status truth.fm.required truth.fm.resolution.decided_by
-truth.fm.resolution.decision_kind truth.fm.resolution.type verify.fm.enum.status verify.fm.required
+truth.fm.required verify.fm.enum.status verify.fm.required
 verify.ledger.file verify.ledger.origin.material verify.ledger.origin.truths verify.ledger.verdicts verify.sections verify.units.verified
 gaps.sections gaps.enum.kind`
 
@@ -318,11 +319,52 @@ export function cmdValidate (m, out, json = false, consecOk = '') {
     return hqCache.get(file)
   }
 
-  // The v1 flag is computed FIRST, and that ordering is load-bearing: the document loop's seal
-  // enforcement branches on it, and it used to be set in the config section that runs AFTER the
-  // documents — so a genuine v1 mine was blocked as tampered for the length of one ordering bug
-  // (v0.3.1, self-caught). Either record saying `1` makes the mine v1.
-  const schemaV1 = fmv(m.project, 'version') === '1' || (cfgB.flat.get('version') ?? '') === '1'
+  // --- the version gate, FIRST and decisive (schema v3, slice 1) --------------------------------
+  // This runtime is v3-only. A non-v3 mine is refused with ONLY the version problem and nothing
+  // else, because judging v2 bytes with v3 rules is the false-green in miniature: v2 cards satisfy
+  // every v3 required key, the v2 state machinery is invisible to v3 checks, and a v2 mine would
+  // validate CLEAN minus this gate. Fail-closed means "no verdict", not "the other checks passed".
+  {
+    const pv = fmv(m.project, 'version')
+    const cv = cfgB.flat.get('version') ?? ''
+    // Spelled as one literal code per site (never a code-through-variable wrapper) so the uncoded
+    // ratchet and the diagnostic-table scan keep seeing every code this gate can emit.
+    const refuse = () => { out(`✗ validate: ${problems} problem(s)`); return 1 }
+    if (pv === '' || /[^0-9]/.test(pv)) { prob('VER-NOT-INT', M`project.md version '${pv}' is not an integer — the schema version field is the negotiation handle, and without it no verdict about the rest is safe`); return refuse() }
+    if (cv === '' || /[^0-9]/.test(cv)) { prob('VER-NOT-INT', M`config version '${cv}' is not an integer`); return refuse() }
+    if (pv !== cv) { prob('VER-DISAGREE', M`project.md version (${pv}) and config.yaml version (${cv}) disagree — two records of one fact must agree; upgrade stamps both`); return refuse() }
+    const sv = Number(sch('schema.version') || '3')
+    if (Number(pv) > sv) { prob('VER-FUTURE', M`project.md declares schema version ${pv}, newer than this runtime supports (≤${sv}) — upgrade the runtime bundle, never guess at a future format`); return refuse() }
+    if (pv === '1') { prob('VER-V1-BRIDGE', M`this mine is schema v1 and this runtime carries no v1 reader — migrate with the pinned bridge runtime v0.5.21 (commit 0257167): run its 'weavedoc upgrade' to reach v2, then this runtime's 'weavedoc upgrade' to reach v3`); return refuse() }
+    if (pv === '2') { prob('VER-V2-UPGRADE', M`this mine is schema v2 and this runtime is v3-only — run 'node .weavedoc/bin/weavedoc.mjs upgrade' (the v2→v3 migrator) before any other command; nothing here has judged the v2 contents`); return refuse() }
+  }
+
+  // --- the v3 state files: presence and hygiene ---------------------------------------------
+  // Two machine-owned files are part of a v3 mine the way truths/ is: absent or malformed is a
+  // structural problem, never "empty state" — a conflicts store that cannot be read must not read
+  // as "no conflicts" (that silence would unblock shipping over the exact thing the file blocks).
+  {
+    const readState = (relPath, parse, missingWhat) => {
+      const p = join(m.root, relPath)
+      let text = null
+      try { text = readFileSync(p, 'utf8') } catch { text = null }
+      if (text === null) { prob('STATE-MISSING', M`${relPath} is missing or unreadable — a v3 mine carries it from init/upgrade; ${missingWhat}`); return null }
+      const r = parse(text)
+      if (!r.ok) {
+        // ONE literal code for the surface (the ratchet and the diagnostic table see codes, not
+        // variables); the model's own finer codes ride in the message where the repair needs them.
+        prob('STATE-MALFORMED', M`${relPath} does not parse as its contract: ${r.diagnostics.map(d => `${d.code} — ${d.detail}`).join(' · ')}`)
+        return null
+      }
+      return r
+    }
+    const conf = readState(CONFLICTS_FILE, parseConflicts, 'without it open disagreements have nowhere to block shipping from')
+    readState(ID_SEQUENCES_FILE, parseIdSequences, 'without it a deleted id can be granted again and an old citation names a different fact')
+    if (conf !== null && conf.open.length > 0) {
+      const ids = conf.open.map(e => e.id).join(' ')
+      prob('CONFLICT-OPEN', M`${CONFLICTS_FILE} holds ${conf.open.length} open conflict(s) (${ids}) — an undecided disagreement blocks shipping; resolve each (the human decides, the AI applies, resolution deletes the entry)`)
+    }
+  }
 
   // A configured path that is not there, or mine content sitting outside it, is the same leak as an
   // unreadable schema: the loops run zero times and the tick looks earned. FORMATS explicitly allows
@@ -489,21 +531,13 @@ export function cmdValidate (m, out, json = false, consecOk = '') {
     }
     return reqtags
   })()
-  // All ids on the line, zero-padding normalised — the same rule census uses. Taking only the first
-  // id made a truth listed second on a shared `removed:` line fail validate for having no record.
-  const removedlog = new Set()
-  for (const l of splitLines(readOr(join(m.truths, 'changelog.md')))) {
-    if (!/^[ \t\v\f\r]*-[ \t\v\f\r]*removed:/.test(l)) continue
-    for (const t of l.match(/(^|[^0-9A-Za-z])t[0-9]+([^0-9A-Za-z]|$)/g) ?? []) {
-      const id = /t[0-9]+/.exec(t)[0]
-      removedlog.add(id.replace(/^t0*/, 't') === 't' ? id : id.replace(/^t0*/, 't'))
-    }
-  }
+  // v3 reads no changelog: the mine log is a human record, never a judgment input (plan §1.4 kept).
+  // The v2 `removed:` cross-check left with the retracted status it existed to answer for.
   const truthPaths = globbed.filter(n => isFileAt(join(m.truths, n))).map(n => join(m.truths, n))
-  let counts = { ntruthfile: 0, nsealed: 0, nsealfail: 0, ntomb: 0 }
+  let counts = { ntruthfile: 0, nsealed: 0, nsealfail: 0 }
   if (isDirAt(m.truths) && globbed.length > 0) {
     counts = validateTruths(m, {
-      prob, sch, retracted, research, removedlog, reqtags, reqtagsB,
+      prob, sch, retracted, research, reqtags, reqtagsB,
       // Lifted into the byte domain here, once: they are path fragments (decoded) that get
       // interpolated into byte-domain messages inside the pass.
       mroot: U(m.materials.startsWith(`${m.root}/`) ? m.materials.slice(m.root.length + 1) : m.materials),
@@ -520,7 +554,7 @@ export function cmdValidate (m, out, json = false, consecOk = '') {
       if (lines.length === 0) continue      // no record on the bash side, so no state at all
       const tc = canonId(tb)
       if (tc !== null && tb !== tc) {
-        prob('TRUTH-ID-NONCANON', M`${U(m.truths)}/${tb}.md  filename is not the canonical id spelling — rename it to '${tc}.md' and set 'id: ${tc}' (ids are zero-padded to at least three digits). Two spellings of one number resolve to the same id, so the reciprocity, winner and retracted tables would collapse both files into one entry`)
+        prob('TRUTH-ID-NONCANON', M`${U(m.truths)}/${tb}.md  filename is not the canonical id spelling — rename it to '${tc}.md' and set 'id: ${tc}' (ids are zero-padded to at least three digits). Two spellings of one number resolve to the same id, so the reference tables (derived_from, corroborated_by, conflicts.json targets) would collapse both files into one entry`)
       }
       const opened = isFence(lines[0])
       let closed = false
@@ -534,34 +568,8 @@ export function cmdValidate (m, out, json = false, consecOk = '') {
         prob('TRUTH-NO-FM', M`${U(m.truths)}/${tb}.md  no frontmatter (line 1 must be '---') — this file is not read as a truth at all, so every check on it silently passes and no index entry can ever be generated for it`)
       }
     }
-    // D3 (decided 2026-08-04): an unquoted resolution.reason holding a comma that opens no new key is
-    // exactly where a strict YAML parser truncates the value and scatters the rest as ghost keys —
-    // weavedoc's own readers never noticed, so the break surfaced only in external consumers. WARN,
-    // never block: deployed mines must stay green while map quotes new writes.
-    for (const tf of truthPaths) {
-      const tb = tf.slice(tf.lastIndexOf('/') + 1).replace(/\.md$/, '')
-      const lines = splitLines(readOr(tf))
-      if (lines.length === 0) continue
-      let infm = isFence(lines[0])
-      for (let i = 1; i < lines.length && infm; i++) {
-        const line = lines[i]
-        if (isFence(line)) { infm = false; break }
-        if (!/^resolution[ \t\v\f\r]*:/.test(line)) continue
-        if (!/reason[ \t\v\f\r]*:/.test(line)) continue
-        let r = line.replace(/^.*reason[ \t\v\f\r]*:[ \t\v\f\r]*/, '')
-        if (r.startsWith('"')) continue
-        r = r.replace(/[ \t\v\f\r]*\}[ \t\v\f\r]*$/, '')
-        const seg = r.split(',')
-        if (seg.length <= 1) continue
-        for (let j = 1; j < seg.length; j++) {
-          if (!/^[ \t\v\f\r]*[A-Za-z_][A-Za-z0-9_]*[ \t\v\f\r]*:/.test(seg[j])) {
-            warn('RES-REASON-UNQUOTED', M`truths/${tb}.md  resolution.reason is unquoted and holds a comma that opens no new key — a strict YAML parser truncates the value there; write reason: "…" (map quotes it since v0.3.4)`)
-            break
-          }
-        }
-        break
-      }
-    }
+    // (The v2 RES-REASON-UNQUOTED warning left with the resolution field itself — a v3 card that
+    // carries `resolution:` at all is TRUTH-V2-FIELD, judged in the truths pass.)
   }
 
   // --- the verification sidecar is fail-closed: every row fully parsed, verdict from the closed
@@ -854,33 +862,32 @@ export function cmdValidate (m, out, json = false, consecOk = '') {
           }
         }
         if (rcx === '') {
-          if (!schemaV1) prob('GATE-UNSEALED', M`${U(d)} review carries reviewed_digest but no review_context_digest — a partial seal on a schema-2 mine reads as tampering, not history; re-run seal-review after a clean round`)
+          prob('GATE-UNSEALED', M`${U(d)} review carries reviewed_digest but no review_context_digest — a partial seal reads as tampering, not history (a genuine v1 record migrates as review_legacy instead); re-run seal-review after a clean round`)
         } else if (consecrated !== '' && contextDigest(m, d) !== rcx) {
           prob('GATE-CONTEXT-CHANGED', M`${U(d)} review context changed after the seal (a cited truth, its source material, config or schema moved) — the clean review no longer describes this mine; re-review`)
         }
         if (rk === '') {
-          if (!schemaV1) prob('GATE-UNSEALED', M`${U(d)} review carries reviewed_digest but no reviewed_kind — the seal is a tuple (kind + digest + context, all or none) and a missing member reads as tampering on a schema-2 mine; re-run seal-review after a clean round`)
+          prob('GATE-UNSEALED', M`${U(d)} review carries reviewed_digest but no reviewed_kind — the seal is a tuple (kind + digest + context, all or none) and a missing member reads as tampering; re-run seal-review after a clean round`)
         } else if (!inList(rk, sch('review.enum.reviewed_kind'))) {
-          if (!schemaV1) prob('GATE-UNSEALED', M`${U(d)} review reviewed_kind '${rk}' is not draft|final — a seal validate cannot interpret certifies nothing; re-run seal-review after a clean round`)
+          prob('GATE-UNSEALED', M`${U(d)} review reviewed_kind '${rk}' is not draft|final — a seal validate cannot interpret certifies nothing; re-run seal-review after a clean round`)
         }
         if (mkr !== '') prob('GATE-SEAL-MARKER', M`${U(d)} review carries BOTH a seal and the migration marker review_legacy — the marker means 'v1 history, digest-less by definition' and a sealed review is neither; seal-review removes the marker when a real round seals, so coexistence is a hand-added marker parked to demote this review to legacy once the seal is stripped. Remove review_legacy (the seal is the binding record)`)
       } else if (rk !== '' || rcx !== '') {
-        // Seal fields WITHOUT the digest: the other half of the partial-tuple hole. On v1 the
-        // dual-reader tolerance holds (counted legacy); on v2 stray members block — and the marker
-        // does not rescue them, or a partial seal plus a marker would demote to legacy.
-        if (schemaV1) { if (consecrated !== '') nRlegacy++ } else {
-          prob('GATE-UNSEALED', M`${U(d)} review carries seal field(s) without reviewed_digest — a partial seal on a schema-2 mine reads as tampering, not history; re-run seal-review after a clean round (the seal is a tuple: kind + digest + context, all or none)`)
-        }
+        // Seal fields WITHOUT the digest: the other half of the partial-tuple hole. Stray members
+        // block — and the marker does not rescue them, or a partial seal plus a marker would
+        // demote to legacy. (The v1 dual-reader tolerance left with the version gate: a v1 mine
+        // never reaches this pass now.)
+        prob('GATE-UNSEALED', M`${U(d)} review carries seal field(s) without reviewed_digest — a partial seal reads as tampering, not history; re-run seal-review after a clean round (the seal is a tuple: kind + digest + context, all or none)`)
       } else if (consecrated === '') {
         // No seal fields, no final: an unsealed draft-stage review is the normal mid-flow state.
-      } else if (schemaV1 || mkr !== '') {
-        // Two legitimate digest-less states: a v1 mine (dual-reader), and a v2 mine whose review
-        // carries the migration's audit marker. Tamper strips seals but leaves no marker.
+      } else if (mkr !== '') {
+        // The one legitimate digest-less state left: a review carrying the migration's audit marker
+        // (v1 history that rode v1→v2→v3). Tamper strips seals but leaves no marker.
         nRlegacy++
       } else {
-        // THE review-seal bypass (v0.3.1): on a v2 mine an unsealed review next to a final is not
-        // legacy — v1 is the only legacy there is, and this mine declares version: 2.
-        prob('GATE-UNSEALED', M`${U(d)} ${consecrated} stands next to an UNSEALED review on a schema-2 mine — run seal-review after the clean round; deleting the seal fields must never reopen the gate (a genuine v1 mine reads as legacy-unbound instead)`)
+        // THE review-seal bypass (v0.3.1): an unsealed review next to a final is not legacy —
+        // review_legacy is the only legacy there is, and this review carries no marker.
+        prob('GATE-UNSEALED', M`${U(d)} ${consecrated} stands next to an UNSEALED review — run seal-review after the clean round; deleting the seal fields must never reopen the gate (genuine v1 history reads as legacy-unbound via review_legacy instead)`)
       }
     }
   }
@@ -1041,15 +1048,9 @@ export function cmdValidate (m, out, json = false, consecOk = '') {
     if (v !== '' && !inList(v, sch(sk))) prob('CFG-ENUM', M`config ${label} '${v}' invalid`)
   }
 
-  // --- schema version negotiation (WD-MIG-002) + full config contract (WD-CFG-001) ---
-  const sv = sch('schema.version') || '2'
-  const pv = fmv(m.project, 'version'); const cv = cfl('version')
-  if (pv === '' || /[^0-9]/.test(pv)) prob('VER-NOT-INT', M`project.md version '${pv}' is not an integer — the schema version field is the negotiation handle`)
-  else if (Number(pv) > Number(sv)) prob('VER-FUTURE', M`project.md declares schema version ${pv}, newer than this runtime supports (≤${sv}) — upgrade the runtime bundle, never guess at a future format`)
-  if (cv === '' || /[^0-9]/.test(cv)) prob('VER-NOT-INT', M`config version '${cv}' is not an integer`)
-  if (pv !== '' && cv !== '' && pv !== cv) {
-    prob('VER-DISAGREE', M`project.md version (${pv}) and config.yaml version (${cv}) disagree — two records of one fact must agree; upgrade stamps both`)
-  }
+  // --- full config contract (WD-CFG-001) ---
+  // (Version negotiation moved to the TOP of this command — the v3 gate is decisive and judges
+  // nothing else about a non-v3 mine, so it cannot live down here after every pass already ran.)
   for (const sect of ['verify', 'review']) {
     let v = cse(`${sect}.strength`)
     if (v !== '' && !inList(v, sch('config.strength.range'))) prob('CFG-RANGE', M`config ${sect}.strength '${v}' invalid → one of ${sch('config.strength.range')}`)
@@ -1078,13 +1079,12 @@ export function cmdValidate (m, out, json = false, consecOk = '') {
   // reads no record from, so a zero-byte truth would vanish from the denominator instead of showing
   // up as unchecked. Same expression census uses, so the two commands cannot disagree.
   const nTruth = globbed.length
-  // "NOT checked" fires on never-checked only, not on anything short of the file count — a
-  // legitimate tombstone stub must not raise it on a clean mine.
-  let nUnchk = nTruth - counts.ntomb - counts.nsealed - counts.nsealfail
+  // "NOT checked" fires on never-checked only, not on anything short of the file count. (The v2
+  // tombstone bucket left with the status axis — every v3 card is canonical and owes a seal.)
+  let nUnchk = nTruth - counts.nsealed - counts.nsealfail
   if (nUnchk < 0) nUnchk = 0
   let sealpart = `${counts.nsealed} sealed`
   if (counts.nsealfail > 0) sealpart += ` · ${counts.nsealfail} seal FAILED`
-  if (counts.ntomb > 0) sealpart += ` · ${counts.ntomb} tombstone`
   if (nUnchk > 0) sealpart += ` ← ${nUnchk} NOT checked`
   const gatenote = nGated < nConsec ? ` ← ${nConsec - nGated} NOT gate-checked` : ''
   if (json) {
@@ -1093,8 +1093,8 @@ export function cmdValidate (m, out, json = false, consecOk = '') {
     const bundle = readOr(`${m.root}/.weavedoc/VERSION`).replace(/\n+$/, '')
     const arr = rs => `[${rs.map(([c, msg]) => `{"code":"${jsonEsc(c)}","message":"${jsonEsc(msg)}"}`).join(',')}]`
     out(Buffer.from(`{"output_schema_version":1,"command":"validate","bundle":"${jsonEsc(bundle)}","schema_version":${m.schemaVer()},"result":"${problems > 0 ? 'fail' : 'pass'}","problems":${problems},` +
-        `"examined":{"materials":${nMat},"truths":${nTruth},"sealed":${counts.nsealed},"seal_failed":${counts.nsealfail},"tombstones":${counts.ntomb},"not_checked":${nUnchk},"documents":${nDoc},"consecrated":${nConsec},"gate_checked":${nGated},"review_seals_bound":${nRseal},"review_seals_legacy":${nRlegacy}},` +
-        `"schema_v1_mine":${schemaV1 ? 'true' : 'false'},"diagnostics":${arr(diags)},"warnings":${arr(warns)}}`, 'latin1'))
+        `"examined":{"materials":${nMat},"truths":${nTruth},"sealed":${counts.nsealed},"seal_failed":${counts.nsealfail},"not_checked":${nUnchk},"documents":${nDoc},"consecrated":${nConsec},"gate_checked":${nGated},"review_seals_bound":${nRseal},"review_seals_legacy":${nRlegacy}},` +
+        `"diagnostics":${arr(diags)},"warnings":${arr(warns)}}`, 'latin1'))
     return problems > 0 ? 1 : 0
   }
   out(`  examined: materials ${nMat} · truths ${nTruth} (${sealpart}) · documents ${nDoc} (${nConsec} consecrated, ${nGated} gate-checked${gatenote})`)
@@ -1102,10 +1102,6 @@ export function cmdValidate (m, out, json = false, consecOk = '') {
   // review next to a final is real history that binds no bytes — visible, never silently equal to a
   // sealed one.
   if (nConsec > 0) out(`  review seals: ${nRseal} digest-bound · ${nRlegacy} legacy-unbound`)
-  // The invocation NAMED here is the Node one, from stage 6 on. Shell-neutral on purpose: `node
-  // <path> …` reads the same in bash and in PowerShell, and the plan forbids a `.ps1` wrapper.
-  // Changed in the same commit as the bash side, because this is output contract.
-  if (schemaV1) out(`  schema: v1 mine — readable (dual-reader), current format is v${m.schemaVer()}; run 'node .weavedoc/bin/weavedoc.mjs upgrade --check' to see the migration`)
   if (problems === 0) { out('✓ validate: all checks passed'); return 0 }
   out(`✗ validate: ${problems} problem(s)`)
   return 1

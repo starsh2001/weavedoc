@@ -50,7 +50,7 @@ function recVal (line) {
 const FENCE = { test: isFence }   // the ONE fence spelling — core.mjs
 const FIELDS = [
   ['id', /^id[ \t]*:/], ['claim', /^claim[ \t]*:/], ['source', /^source[ \t]*:/],
-  ['status', /^status[ \t]*:/], ['tags', /^tags[ \t]*:/], ['as_of', /^as_of[ \t]*:/],
+  ['tags', /^tags[ \t]*:/], ['as_of', /^as_of[ \t]*:/],
   ['provenance', /^provenance[ \t]*:/], ['assumptions', /^assumptions[ \t]*:/]
 ]
 
@@ -61,7 +61,7 @@ function records (truthsDir, files) {
   for (const f of files) {
     const lines = splitLines(readText(join(truthsDir, f)))
     if (!FENCE.test(lines[0] ?? '')) continue
-    const r = { id: '', claim: '', source: '', status: '', tags: '', as_of: '', provenance: '', assumptions: '' }
+    const r = { id: '', claim: '', source: '', tags: '', as_of: '', provenance: '', assumptions: '' }
     let closed = false
     for (let i = 1; i < lines.length; i++) {
       if (FENCE.test(lines[i])) { closed = true; break }
@@ -125,9 +125,10 @@ export function cmdReindex (m, out, errln, argv) {
     // copied out of the truth file and must pass through untouched — a Korean `as_of` (eclypse has
     // them: "유나 캐스팅 시점") is free text, not a date, and re-encoding it produced mojibake.
     const lab = truthLabels(r.as_of, r.provenance, r.assumptions, ms, mss, U)
+    // No status suffix in v3: a card in the index is canonical by existence, so `[discarded]` and
+    // its siblings have nothing to mark. The label tail (as_of/provenance/material axis) survives.
     let line = `- ${r.id}: ${claim} [${r.source}]${DASH}[${tags}]`
     let sfx = ''
-    if (r.status !== '' && r.status !== 'ok') { line += ` [${r.status}]`; sfx = ` [${r.status}]` }
     if (lab !== '') { line += ` ${SEP}${lab}`; sfx += ` ${SEP}${lab}` }
     idx.push(line)
     for (let t of tags.split(',')) {

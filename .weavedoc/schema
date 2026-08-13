@@ -19,13 +19,13 @@ material.fm.enum.origin: file|user-answer|prior-doc|conversation|research
 material.fm.enum.status: collected|converted|verified|used|retracted
 material.fm.enum.stage: plan|applied
 material.fm.required_when.research: url|retrieved_at
-truth.fm.required: id|claim|source|tags|status
-truth.fm.optional: location|conflict_with|resolution|superseded|provenance|derived_from|assumptions|as_of|corroborated_by
-truth.fm.enum.status: ok|conflict|unsupported|discarded|retracted
+# Schema v3 (2026-08-13, approved plan §2.1): a truth card that exists IS canonical. The v2 fields
+# status/conflict_with/resolution/superseded are gone — state lives outside the card (open
+# disagreements in .weavedoc-state/conflicts.json, everything else in Git), and a card carrying a
+# v2 field is a structural error the frontmatter census reports, not a quietly-ignored extra.
+truth.fm.required: id|claim|source|tags
+truth.fm.optional: location|provenance|derived_from|assumptions|as_of|corroborated_by
 truth.fm.enum.provenance: stated|adopted|derived
-truth.fm.resolution.type: supersedes|authority|pick|value|attribute
-truth.fm.resolution.decision_kind: supplied|ratified
-truth.fm.resolution.decided_by: machine|user
 questions.enum.status: open|proposed|answered
 verify.fm.required: status|round|verified_at
 verify.fm.optional: consecutive_passes
@@ -95,9 +95,11 @@ verify.ledger.origin.material: v1-material-frontmatter
 verify.ledger.origin.truths: v1-truths-ledger
 # Artifact schema version this runtime reads and writes (WD-MIG-002). A project declares its own
 # in project.md AND config.yaml `version:` — two records of one fact, checked for agreement. A
-# project NEWER than this is fail-closed (guessing at a future format is how corruption ships);
-# a v1 project stays readable (dual-reader) and validate points it at `weavedoc upgrade --check`.
-schema.version: 2
+# project NEWER than this is fail-closed (guessing at a future format is how corruption ships).
+# OLDER is fail-closed too — this runtime is v3-only (approved plan: no dual-version consumers,
+# the one known mine migrates once): a v2 mine is refused toward `weavedoc upgrade` (the v2→v3
+# migrator), a v1 mine toward the pinned bridge runtime v0.5.21 (commit 0257167) for v1→v2 first.
+schema.version: 3
 # Config contract (WD-CFG-001) — every knob has a type/range; verify/review are section-aware
 # (a flat first-match reader can never see review.strength behind verify.strength). Unknown
 # top-level keys are a NAMED WARNING, never a failure: extension vs typo is not machine-decidable.

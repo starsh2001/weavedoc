@@ -10,6 +10,7 @@ import { fm, join, docIds, materialIds, truthFiles, basename } from './mine.mjs'
 import { parseReview } from './review-model.mjs'
 import { gapRegisterContract, parseGapText } from './gaps-register.mjs'
 import { hqFiles, readHumanQueues } from './hq-ledger.mjs'
+import { CONFLICTS_FILE, parseConflicts } from './conflict-store.mjs'
 import { readQuestions } from './questions-ledger.mjs'
 
 const isDir = p => { try { return statSync(p).isDirectory() } catch { return false } }
@@ -182,22 +183,28 @@ export function cmdStatusOpen (m, out) {
   const warns = []
   // conflicts — every truth whose status is `conflict`, both sides of each pair by construction
   // (map stamps both files), each with the SOURCE material behind it: the skills' rule is that a
-  // conflict names both sides and where each comes from. truthFiles is bytewise-sorted, so the
-  // order is stable. A truth file that cannot be read is named rather than silently skipped —
-  // truthFiles answers "what is named like a truth", and a directory named t002.md is in it.
+  // Open conflicts come from the v3 store, not from cards (schema v3): an undecided disagreement
+  // never wears a truth file. Read-only here — validate owns the blocking, this lane owns the
+  // surface ("Surface, don't point": each entry names its targets, its candidate claims and their
+  // sources, so the user learns what is undecided without opening the file). A store that cannot
+  // be parsed is a WARNING here and a hard problem in validate — this listing must not absorb a
+  // malformed store into "no conflicts".
   const conflicts = []
-  for (const f of truthFiles(m)) {
-    if (readOrNull(f) === null) {
-      warns.push(`warning: ${rel(f)} cannot be read — if it holds a conflict, it is missing from this listing`)
-      continue
+  {
+    const cPath = join(m.root, CONFLICTS_FILE)
+    // UTF-8, not the file-mirroring latin1 the ledger lanes use: this store is the machine's OWN
+    // canonical JSON (written utf8 by its writer), so its strings are decoded text and leave via
+    // T() below — reading it latin1 and templating it out was measured mojibake (the two-encoder
+    // class this repo has now hit four times, patch-discipline #5).
+    let ctext = null
+    try { ctext = readFileSync(cPath, 'utf8') } catch { ctext = null }
+    if (ctext === null) {
+      warns.push(`warning: ${CONFLICTS_FILE} is missing or unreadable — open conflicts are UNKNOWN, not zero; run 'weavedoc validate'`)
+    } else {
+      const cr = parseConflicts(ctext)
+      if (!cr.ok) warns.push(`warning: ${CONFLICTS_FILE} is malformed (${cr.diagnostics.map(d => d.code).join(', ')}) — open conflicts are UNKNOWN, not zero; run 'weavedoc validate'`)
+      else for (const e of cr.open) conflicts.push(e)
     }
-    if (fmvB(f, 'status') !== 'conflict') continue
-    conflicts.push({
-      id: basename(f).replace(/\.md$/, ''),
-      claim: fmvB(f, 'claim'),
-      cw: fmvB(f, 'conflict_with'),
-      src: fmvB(f, 'source')
-    })
   }
 
   // open questions — `open` and `proposed` are waiting (proposed = candidates on the table, nothing
@@ -354,12 +361,13 @@ export function cmdStatusOpen (m, out) {
   }
   if (conflicts.length > 0) {
     out(`conflicts (${conflicts.length}):`)
-    // An empty conflict_with is a mine validate rejects — named here rather than a dangling arrow.
+    // One line per entry: targets (or the undecided marker — targets=[] is §2.2 ①, nobody decided
+    // yet), then each candidate claim with its source. The store is UTF-8 JSON, so this lane is
+    // plain text end to end — no byte/text split to manage.
     for (const c of conflicts) {
-      out(Buffer.concat([
-        T('  '), B(c.id), T(' ('), c.src === '' ? T('source unrecorded') : B(c.src),
-        T(') ⇄ '), c.cw === '' ? T('(unrecorded)') : B(c.cw), T(' — '), B(c.claim)
-      ]))
+      const tgt = c.targets.length > 0 ? c.targets.join(' ') : '(no current card — undecided)'
+      const cands = c.candidates.map(cd => `"${cd.claim}" [${cd.source}]`).join(' · ')
+      out(T(`  ${c.id} targets ${tgt} ⇄ ${cands}${c.note !== undefined ? ` — ${c.note}` : ''}`))
     }
   }
   if (questions.length > 0 || qUnknown.length > 0) {

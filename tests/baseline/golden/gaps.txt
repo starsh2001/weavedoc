@@ -1,4 +1,4 @@
-census: truth files 1 · index entries 1 · live 1 (ok 1 · conflict 0 · unsupported 0) · discarded 0 · coverage records 1/1 material(s)
+census: truth files 1 · index entries 1 · coverage records 1/1 material(s)
 declared-marker scan (converted.md + truths/t*.md only):
 unchecked-checkbox scan (converted.md + truths/t*.md only):
 — 0 marker line(s) + 0 unchecked checkbox(es) — RAW scan, not an open count: gaps.md records 0 already accepted. Non-blocking; run the weavedoc-gaps skill to reconcile these against gaps.md and to cover reference/enumeration/symmetry + fill-or-accept.

@@ -1,5 +1,5 @@
 ---
-version: 2
+version: 3
 language: {ko|en}
 roles: []          # material roles — gather assigns silently as materials arrive; you can edit anytime
 tone:              # optional; each document's plan sets its own tone — fill only for a standing project tone

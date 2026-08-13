@@ -37,7 +37,7 @@ One per step of the flow, plus two on-demand lanes (verify · gaps) that guard t
 | `weavedoc-verify` | 1–3 gate | Cold verification of the two upstream hops — `material` (원본↔converted.md) · `truths` (converted.md↔truths) — by empty-context subagents (§3's engine); baseline pinned for the round; the human confirms the run **delta** (§5), never "정확합니까?". | material `status: verified`, `truths/verify.md` |
 | `weavedoc-gaps` | coverage | Mine completeness register — declared markers, dangling references, count mismatches, peer asymmetry; every gap consciously **filled or accepted** (never a hard block). | `gaps.md` |
 | `weavedoc-plan` | 4 | Propose a structure + tone + section→material map; ask about structural gaps. | `documents/<doc-id>/plan.md` |
-| `weavedoc-write` | 5 | Draft section by section, every claim grounded and cited; check truth statuses before citing; queue necessary missing facts and ask. | `draft.md` |
+| `weavedoc-write` | 5 | Draft section by section, every claim grounded and cited; check the open-conflict lane (`status --open`) before leaning on contested topics; queue necessary missing facts and ask. | `draft.md` |
 | `weavedoc-review` | 6 | The **fidelity gate** (mandatory) + a cold **advisory** panel (§3). | `review.md` |
 | `weavedoc-refine` | 7 | Resolve every fidelity violation + advisory findings per the gate; loop to a clean gate; only then `final.md`. | `final.md` |
 
@@ -51,7 +51,7 @@ Step 6 runs in two distinct passes — keep them separate, because one is the pr
 
 Runs first, always (even at `review.scale: skip`, which skips only the advisory panel). Its findings are **facts, not opinions**: never triaged down, never adjudicated away; any open one blocks `final.md`. In priority order:
 
-- **A0 · Conflict detection — the #1 job.** The top priority of the whole review, with the most effort. Do **not** merely trust existing truth statuses — *actively re-hunt*: grep truths by tag, cross-check every structured fact against same-tag truths, exhaustively (depth per `config.conflicts.detection`). A violation is a claim citing a truth with `status: conflict`, a silent pick with no recorded resolution, an unauthorized attribution, or a truth-vs-truth contradiction the map missed.
+- **A0 · Conflict detection — the #1 job.** The top priority of the whole review, with the most effort. Do **not** merely trust the open-conflict store — *actively re-hunt*: grep truths by tag, cross-check every structured fact against same-tag truths, exhaustively (depth per `config.conflicts.detection`). A violation is a claim citing a truth targeted by an open conflicts.json entry, a silent pick between an entry's candidates, or a truth-vs-truth contradiction the map missed (which becomes a new entry, never a card stamp).
 - **A1 · Grounding.** A claim that traces to no material, or whose citation is invalid.
 - **A2 · Completeness.** *Only if* `config.fidelity.completeness: required` — a required element/section absent.
 
@@ -69,17 +69,28 @@ Cold, empty-context persona subagents run in parallel, each told "find flaws; as
 
 ## 4. Conflict handling (source-vs-source)
 
-Handled across map (detect + resolve), write (guard at citation), review (re-hunt, block), refine (resolve only through the record).
+Handled across map (detect + record), the human (rule), map again (apply), and validate (block
+shipping) — the slice-1 division of labour: meaning is judged by the AI, decisions are the
+human's, and the machine keeps the ledger and pulls the tripwire.
 
-1. **Detect** (`map`): extract truths from materials and tag them. For each tag cluster, compare truths — AI reads related truths by grepping tags and judges conflicts on the fly. Each conflict → set `status: conflict` + `conflict_with` on both truth files.
-2. **Resolve** (`map`): mechanically if a rule applies —
-   - the conflicting truths' source materials have a `supersedes` relation — both carry `dated` (the source's own date, not `added`) and one is newer → newer wins. Missing `dated` on either side means the rule does not apply, and the machine asks instead of guessing;
-   - `project.md` `authority` ranks the roles → higher wins;
-   - otherwise **stop and ask** the user: A / B / real value / keep both. Record the choice in **both** truths' `resolution` fields — the loser → `status: discarded` (out of the mine, kept as audit trail), the winner **stays `ok`** carrying the resolution as history; "keep both" (attribute) → both stay `ok` — only if the user chooses it (or `conflicts.attribution: allow`). Never auto-pick, never auto-attribute.
-3. **Guard** (`write`): before citing, check the truth's `status` — cite `ok` only (an attribute-resolved truth is written both-sides); a `discarded` truth points to its successor via `resolution.winner`; never cite `conflict`.
-4. **Re-check** (`map`, on a later run): re-run detection over the grown source by re-reading tag clusters; **re-open** a settled resolution a new material now contradicts (the `ok` winner goes back to `conflict`).
+1. **Detect** (`map` — the AI's judgment): extract truths and tag them; for each tag cluster,
+   compare truths and judge disagreement on the fly. Tags are the neighbourhood that keeps the
+   AI from reading everything; the "same fact?" call is made inside that neighbourhood.
+2. **Record** (the machine's ledger): a detected disagreement becomes an entry in
+   `.weavedoc-state/conflicts.json` — targets (the standing cards, `[]` when nothing is
+   settled), candidates (each claim with its source, losslessly), created. No card changes.
+   The machine never picks, ranks, or recommends a winner — no authority order, no date order,
+   no recency. While any entry is open, `validate` is nonzero and `consecrate` refuses.
+3. **Rule** (the human): keep the current value · adopt a candidate · same fact (merge the
+   evidence) · split by the hidden axis (time, viewpoint, definition, scope — "both are
+   right" always names one; source attribution is the split of last resort) · reject all.
+4. **Apply** (`map`, on the ruling): edit the canonical card in place (same id — adopt), add
+   `corroborated_by` (same fact), write split cards (new ids from the allocator), or delete
+   nothing-stands cards; then DELETE the entry — resolution is deletion, and no archive grows.
+   Re-detection later compares fresh: nothing is suppressed by having been rejected before.
 
-Each truth file carries its own `status` + `resolution`, stable across the series. See [.weavedoc/FORMATS.md](.weavedoc/FORMATS.md).
+Cards carry no conflict state (schema v3): a card that exists is canonical, and the entry —
+not the card — is what blocks. See [.weavedoc/FORMATS.md](.weavedoc/FORMATS.md).
 
 ---
 

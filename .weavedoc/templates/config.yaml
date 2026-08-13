@@ -1,6 +1,6 @@
 # WeaveDoc project config. Created by `weavedoc init`.
 # See .weavedoc/FORMATS.md for the parser contract.
-version: 2
+version: 3
 language: ko              # prose language for this project; set once at init
 paths:
   inbox: inbox

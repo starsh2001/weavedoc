@@ -15,9 +15,9 @@ import { pipes } from './core.mjs'
 // The runtime's own supported range — deliberately NOT `schema.version` from the mine's schema.
 // Conflating "what this runtime can read" with "what this mine declares" is how a mine's own file
 // gets to certify itself; the plan names them as two values and this is where they stay apart.
-export const ARTIFACT_FLOOR = 2
+export const ARTIFACT_FLOOR = 3
 export const ARTIFACT_MAX = 3
-export const SUPPORTED_ARTIFACT_VERSIONS = [2, 3]
+export const SUPPORTED_ARTIFACT_VERSIONS = [3]
 
 // The one v1 runtime a below-floor mine is sent to. Pinned as a commit, not a moving branch: a
 // bridge whose bytes drift is not a bridge.
@@ -26,14 +26,17 @@ export const V1_BRIDGE = { tag: 'v0.5.21', commit: '0257167' }
 // EXPLICIT TABLES, never `version === ARTIFACT_FLOOR`. Deriving "is this v2" from the floor means
 // the day the floor rises to 3, v3 mines quietly start being read by the v2 adapter — the format
 // equivalent of a positional shift. A version that is not in the table is not readable, full stop.
-// `null` means "the single shipped .weavedoc/schema": there is exactly one copy of the v2 contract.
-export const CONTRACT_FILE = { 2: null, 3: 'v3' }
+// The v2 row left with the v2 reader (schema v3, slice 1): `.weavedoc/schema` declares version 3
+// now, and no artifact version reads it as a ROLE contract — the positional keys it still holds
+// are the LIVE production vocabulary, owned by the production builders until the consumer flip
+// the approved plan discarded. One version, one file, still a table and never a comparison.
+export const CONTRACT_FILE = { 3: 'v3' }
 // Exported so a property can pin the TABLE itself. At today's floor of 2 the table and the old
 // `version === ARTIFACT_FLOOR` test are behaviourally identical, so no fixture can tell them apart
 // — the failure it guards against is the day the floor rises, which is exactly when nobody is
 // looking. What a test CAN hold is that the mapping exists and covers every supported version, so
 // simplifying it back into a comparison against the floor goes red.
-export const ADAPTER = { 2: 'v2', 3: 'v3' }
+export const ADAPTER = { 3: 'v3' }
 
 const isInt = s => typeof s === 'string' && s !== '' && /^[0-9]+$/.test(s)
 
@@ -56,14 +59,13 @@ export function resolveArtifactVersion (projectVersion, configVersion) {
   const v = Number(p)
   if (v < ARTIFACT_FLOOR) {
     // Below the floor is NOT the same event as above the ceiling, and merging them would tell a v1
-    // user to upgrade the runtime when what they need is to migrate the mine with an older one.
-    return {
-      ok: false,
-      code: 'VERSION-BELOW-FLOOR',
-      reason: 'below-floor',
-      detail: `this mine declares artifact version ${v}; this runtime reads ${ARTIFACT_FLOOR}..${ARTIFACT_MAX}. Migrate it to 2 first with the pinned bridge runtime ${V1_BRIDGE.tag} (${V1_BRIDGE.commit}), then return`,
-      version: null
-    }
+    // user to upgrade the runtime when what they need is to migrate the mine. The two hops below
+    // the floor are themselves different events: a v2 mine takes THIS runtime's v2→v3 migrator,
+    // a v1 mine takes the pinned bridge runtime to v2 first.
+    const detail = v === 2
+      ? `this mine declares artifact version 2; this runtime reads only ${ARTIFACT_MAX}. Run this runtime's 'weavedoc upgrade' (the v2→v3 migrator) first`
+      : `this mine declares artifact version ${v}; this runtime reads only ${ARTIFACT_MAX}. Migrate it to 2 first with the pinned bridge runtime ${V1_BRIDGE.tag} (${V1_BRIDGE.commit}), then run 'weavedoc upgrade' here`
+    return { ok: false, code: 'VERSION-BELOW-FLOOR', reason: 'below-floor', detail, version: null }
   }
   if (v > ARTIFACT_MAX) {
     return fail('future', `this mine declares artifact version ${v}, newer than this runtime supports (<=${ARTIFACT_MAX}) — upgrade the runtime bundle rather than guessing at a future format`)
@@ -157,86 +159,6 @@ function requireDistinct (roles, groups, artifact, errors) {
 }
 
 // v2 keeps its vocabulary where it always was. The three shapes are genuinely different and the
-// adapter must not pretend otherwise: gaps and verify sections are POSITIONAL lists, review's
-// sections are a membership set whose gate is the fixed English name every consumer matches, and
-// the queue/question words are fixed vocabulary validated against the enum that declares them.
-const V2_FIXED = {
-  humanQueue: { waiting: 'open', closed: 'ruled', user: 'user-only', recommended: 'recommended', machine: 'machine' },
-  questions: { waiting: 'open', proposed: 'proposed', closed: 'answered' },
-  review: { violations: 'Fidelity violations', findings: 'Findings', adjudications: 'Adjudications', human_queue: 'Human queue' }
-}
-
-function memberOf (list, token) {
-  return list.includes(token)
-}
-
-function v2Model (get, encode) {
-  const errors = { humanQueue: [], questions: [], verify: [], review: [], gaps: [] }
-  const fx = key => encode(key)
-
-  // Human queue / questions: fixed words, but only if the schema that declares the vocabulary
-  // actually contains them. A mine whose enum dropped `ruled` has no closed state, and answering
-  // "closed is ruled" from a constant would be this module inventing the very thing it removes.
-  const hqStates = pipes(get('humanqueue.enum.state')).filter(Boolean)
-  const hqOwn = pipes(get('humanqueue.enum.ownership')).filter(Boolean)
-  const hq = { state: {}, ownership: {} }
-  for (const [role, token] of [['waiting', 'waiting'], ['closed', 'closed']]) {
-    const t = fx(V2_FIXED.humanQueue[token])
-    if (!memberOf(hqStates, t)) errors.humanQueue.push(`humanQueue: state role '${role}' expects the fixed v2 token '${V2_FIXED.humanQueue[token]}', absent from humanqueue.enum.state`)
-    else hq.state[role] = t
-  }
-  for (const role of ['user', 'recommended', 'machine']) {
-    const t = fx(V2_FIXED.humanQueue[role])
-    if (!memberOf(hqOwn, t)) errors.humanQueue.push(`humanQueue: ownership role '${role}' expects the fixed v2 token '${V2_FIXED.humanQueue[role]}', absent from humanqueue.enum.ownership`)
-    else hq.ownership[role] = t
-  }
-
-  const qStates = pipes(get('questions.enum.status')).filter(Boolean)
-  const q = { state: {} }
-  for (const role of ['waiting', 'proposed', 'closed']) {
-    const t = fx(V2_FIXED.questions[role])
-    if (!memberOf(qStates, t)) errors.questions.push(`questions: state role '${role}' expects the fixed v2 token '${V2_FIXED.questions[role]}', absent from questions.enum.status`)
-    else q.state[role] = t
-  }
-
-  // verify.sections is POSITIONAL and already end-to-end positional in production
-  // (verified-units.mjs). Same rule, same failure mode, one implementation.
-  const verifySections = pipes(get('verify.sections'))
-  const verdict = get('verify.units.verified')
-  const v = { section: {}, verdict: {} }
-  if (verifySections.length !== 3 || verifySections.some(n => n === '') || new Set(verifySections).size !== 3) {
-    errors.verify.push('verify: verify.sections must contain exactly three distinct non-empty positional roles (units, human queue, adjudications)')
-  } else {
-    v.section = { units: verifySections[0], human_queue: verifySections[1], adjudications: verifySections[2] }
-  }
-  if (typeof verdict !== 'string' || verdict === '' || verdict.includes('|')) {
-    errors.verify.push('verify: verify.units.verified must be one non-empty scalar marker')
-  } else v.verdict = { covered: verdict }
-
-  // review.sections is a membership SET in v2 and its gate is the fixed English name every
-  // consumer matches. Reading it positionally here would answer differently from production for a
-  // mine that lists the four in another order — a difference this adapter exists to not have.
-  const reviewSections = pipes(get('review.sections')).filter(Boolean)
-  const r = { section: {} }
-  for (const role of ['violations', 'findings', 'adjudications', 'human_queue']) {
-    const t = fx(V2_FIXED.review[role])
-    if (!memberOf(reviewSections, t)) errors.review.push(`review: section role '${role}' expects the fixed v2 name '${V2_FIXED.review[role]}', absent from review.sections`)
-    else r.section[role] = t
-  }
-
-  const gapsSections = pipes(get('gaps.sections'))
-  const gapsKinds = pipes(get('gaps.enum.kind'))
-  const g = { section: {}, kinds: new Set() }
-  if (gapsSections.length !== 2 || gapsSections.some(n => n === '') || new Set(gapsSections).size !== 2) {
-    errors.gaps.push('gaps: gaps.sections must contain exactly two distinct non-empty positional names (open, then accepted)')
-  } else g.section = { open: gapsSections[0], accepted: gapsSections[1] }
-  if (gapsKinds.length === 0 || gapsKinds.some(n => n === '') || new Set(gapsKinds).size !== gapsKinds.length) {
-    errors.gaps.push('gaps: gaps.enum.kind must contain one or more distinct non-empty kind names')
-  } else g.kinds = new Set(gapsKinds)
-
-  return { humanQueue: hq, questions: q, verify: v, review: r, gaps: g, errors }
-}
-
 function v3Model (get) {
   const errors = { humanQueue: [], questions: [], verify: [], review: [], gaps: [] }
 
@@ -298,13 +220,6 @@ export function loadArtifactContracts (version, schemaMap, { domain } = {}) {
     throw new Error(`unsupported artifact version ${version} — this runtime reads ${SUPPORTED_ARTIFACT_VERSIONS.join(', ')}`)
   }
   const get = key => schemaMap?.get?.(key)
-  // In the byte domain a fixed ASCII v2 token is its own encoding; keeping the hook explicit means
-  // a non-ASCII fixed token added later cannot be compared across domains by accident.
-  // NOT KILLABLE BY ANY FIXTURE, and said out loud so the next mutation pass does not hunt for one:
-  // every fixed v2 token is ASCII, so `s => s` is behaviourally identical today. The hook guards the
-  // two-encoder class that has bitten this repo repeatedly (v0.5.6, v0.5.10) and only starts paying
-  // the day a fixed token is not ASCII — which is also the day nobody would think to add it.
-  const encode = s => (domain === 'latin1' ? Buffer.from(s, 'utf8').toString('latin1') : s)
   // THE FILE MUST BE THE VERSION IT WAS ASKED FOR. Without this, handing the v3 contract to the v2
   // adapter answered `valid: true` — a dispatcher that resolved the wrong path would have produced
   // a fully-formed contract for a file nobody asked for, and every downstream role would be right
@@ -321,13 +236,10 @@ export function loadArtifactContracts (version, schemaMap, { domain } = {}) {
     return out
   }
   out.versionMismatch = false
-  const model = ADAPTER[version] === 'v2' ? v2Model(get, encode) : v3Model(get)
-  // Extra roles are a v3 event: v3 owns the `*.state.*`/`*.section.*` namespaces, while in a v2
-  // schema such a key names nothing and is an unknown key like any other, which this format has
-  // always treated as a named warning rather than a failure.
-  if (ADAPTER[version] === 'v3') {
-    for (const name of artifacts) rejectExtraRoles(schemaMap, name, model.errors[name])
-  }
+  const model = v3Model(get)
+  // v3 owns the `*.state.*`/`*.section.*` namespaces: a key under them that names no role is the
+  // event this file exists to end, so it fails closed rather than riding as an unknown key.
+  for (const name of artifacts) rejectExtraRoles(schemaMap, name, model.errors[name])
   for (const name of artifacts) {
     const errs = model.errors[name]
     const ok = errs.length === 0

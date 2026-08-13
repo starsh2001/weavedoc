@@ -3,12 +3,14 @@
 // simply printed.
 import { readFileSync, existsSync } from 'node:fs'
 import { basename } from 'node:path'
-import { canonId, fmVal, isFence, splitLines } from './core.mjs'
+import { canonId, splitLines } from './core.mjs'
 import { readCoverage } from './coverage-model.mjs'
 import { fm, join, materialIds, truthFiles } from './mine.mjs'
 
 const readOr = p => { try { return readFileSync(p, 'utf8') } catch { return '' } }
 
+// (fmStatusLines, the per-status tally and the numbering-hole ledger left with schema v3: every
+// existing card is canonical, and holes are the allocator's normal trace, not census's question.)
 // `- t<digits>:` entry lines in index.md, as lines and as a distinct set. Counting LINES while
 // comparing sorted SETS once printed "index entries 2" for one duplicated line with no ✗ to explain
 // the disagreement, so both numbers are kept and compared.
@@ -19,26 +21,6 @@ function indexEntries (indexPath) {
     if (m) ids.push(m[1])
   }
   return { lines: ids.length, set: [...new Set(ids)].sort() }
-}
-
-// EVERY `status:` line inside a file's frontmatter, in order — the census tally's substrate.
-// Spelled as the bash awk spells it, and deliberately NOT as fmLoad does:
-//   FNR==1 { infm=($0 ~ /^---[[:space:]]*$/); next }
-//   infm && /^---[[:space:]]*$/ { infm=0; nextfile }
-//   infm && /^status[[:space:]]*:/ { st[fmval($0)]++ }
-// Two differences from fmLoad that both matter. Line 1 is consumed by the FNR==1 rule, so the
-// opening fence can never itself match; and the key gate is `^status[[:space:]]*:` alone — there is
-// no [A-Za-z_] identifier test, so `status :` counts and a bare `status:` counts as the empty value.
-function fmStatusLines (file) {
-  const out = []
-  const lines = splitLines(readOr(file))
-  if (lines.length === 0) return out
-  if (!isFence(lines[0])) return out
-  for (let i = 1; i < lines.length; i++) {
-    if (isFence(lines[i])) break
-    if (/^status[ \t]*:/.test(lines[i])) out.push(fmVal(lines[i]))
-  }
-  return out
 }
 
 // countlines: drops a bullet whose bracket still opens a placeholder, nothing more.
@@ -66,46 +48,11 @@ export function cmdCensus (m, out) {
   const nFiles = files.length
   const idx = indexEntries(idxPath)
 
-  // Status tally, read through the SHARED frontmatter value rule — this was once a third private
-  // copy of it, and a private copy is only ever one edit away from disagreeing with the other two.
-  //
-  // EVERY `status:` line in the frontmatter, not the first (fixed 2026-08-04, caught by
-  // the corpus scale on `block_dup_key`, since retired with the bash runtime it compared against). fmLoad answers "what does this field say", which is
-  // first-spelling-wins, and that is the WRONG question here: census exists to make a duplicated key
-  // ARITHMETICALLY visible. The whole point of the tally is the reconciliation line below — tallies
-  // must sum to the file count — and a file with two `status:` lines is meant to tally twice so the
-  // sum exceeds the file count and says so. Reading only the first made a duplicate key silently
-  // consistent, which is the one thing this counter is bought to prevent. It is also the contract
-  // validate's FM-DUPLICATE-KEY message states out loud: fm reads the FIRST, validate and reindex
-  // read the LAST, census counts BOTH — three commands, three answers, which is why it must be named.
-  let nOk = 0; let nRes = 0; let nConf = 0; let nUnsup = 0; let nRetr = 0
-  for (const f of files) {
-    for (const st of fmStatusLines(f)) {
-      if (st === 'ok') nOk++
-      else if (st === 'discarded' || st === 'resolved') nRes++
-      else if (st === 'conflict') nConf++
-      else if (st === 'unsupported') nUnsup++
-      else if (st === 'retracted') nRetr++
-    }
-  }
-  const nLive = nOk + nConf + nUnsup
-
-  // Holes BELOW the smallest surviving id too: ids allocate from t001 up, so a lowest file of t011
-  // means t001-t010 are gone — yet only gaps BETWEEN surviving ids used to be reported.
-  const nums = files.map(f => parseInt(/^t0*([0-9]+)\.md$/.exec(basename(f))[1], 10)).sort((a, b) => a - b)
-  const holes = []
-  let prev = 0
-  for (const n of nums) { for (let i = prev + 1; i < n; i++) holes.push(i); prev = n }
-
-  // A hole the changelog explains (a `removed:` line) is settled — a permanent nag teaches readers
-  // to skip the line the mine's honesty rests on. Zero-padding is normalised on both sides.
-  const removed = new Set()
-  for (const l of splitLines(readOr(join(m.truths, 'changelog.md')))) {
-    if (!/^[ \t]*-[ \t]*removed:/.test(l)) continue
-    for (const t of l.match(/t[0-9]+/g) ?? []) removed.add(String(parseInt(t.slice(1), 10)))
-  }
-  const explained = holes.filter(h => removed.has(String(h))).map(h => `t${String(h).padStart(3, '0')}`)
-  const unexplained = holes.filter(h => !removed.has(String(h))).map(h => `t${String(h).padStart(3, '0')}`)
+  // No status tally and no numbering-hole accounting in v3. Every card that exists is canonical,
+  // so "live" IS the file count; and a numbering hole is the NORMAL trace of canonical-current
+  // (deletion removes the card, the allocator never re-grants the number) — explaining holes from
+  // the changelog was the mine log acting as a judgment input, which §1.4 forbids. The allocator
+  // file is the record that no hole is ever refilled; validate owns that tripwire.
 
   // ---- coverage ----
   // ONE POPULATION on both sides of the ratio: numerator and denominator both skip retracted
@@ -163,8 +110,7 @@ export function cmdCensus (m, out) {
   // warranty — the label says `records` so the ratio is not read as one.
   let covline = `coverage records ${nCov}/${nDenom} material(s)`
   if (nLegacy > 0) covline = `coverage records ${nCov}/${nDenom} of ${nMats} material(s) (${nLegacy} legacy-exempt)`
-  const retline = nRetr > 0 ? ` · retracted ${nRetr}` : ''
-  out(`census: truth files ${nFiles} · index entries ${idx.set.length} · live ${nLive} (ok ${nOk} · conflict ${nConf} · unsupported ${nUnsup}) · discarded ${nRes}${retline} · ${covline}`)
+  out(`census: truth files ${nFiles} · index entries ${idx.set.length} · ${covline}`)
   if (coverage !== null && !coverage.readable) {
     out('  ⚠ truths/coverage.md exists but cannot be read — coverage records are unknown, not zero; validate blocks this path')
   }
@@ -174,8 +120,6 @@ export function cmdCensus (m, out) {
   if (coverage !== null && coverage.document.fenceOpen) {
     out('  ⚠ truths/coverage.md ends inside an unterminated code fence — mappings behind it are invisible; validate blocks this file')
   }
-  if (unexplained.length) out(`  numbering holes (ids never assigned or files lost — confirm which): ${unexplained.join(' ')}`)
-  if (explained.length) out(`  numbering holes, explained by changelog 'removed:': ${explained.join(' ')}`)
   if (nCov > nDenom) out(`  ✗ coverage numerator exceeds denominator (${nCov}/${nDenom}) — a '## legacy' entry names a material that also has its own '## m<id>' section, so it is subtracted from the denominator while still counted in the numerator; drop the legacy exemption (it is covered, not exempt)`)
   // Complain only when bullets were present and NONE parsed — nLegparsed, not nLegacy, which is
   // also 0 when every bullet parsed and then named a retracted material.
@@ -194,10 +138,5 @@ export function cmdCensus (m, out) {
     if (fileOnly.length) out(`  ✗ truth files with no index entry: ${fileOnly.join(' ')} — run 'weavedoc reindex'; if it comes back, the file is one validate rejects (e.g. no frontmatter) and reindex cannot see it — run 'weavedoc validate' for the cause`)
   }
 
-  // The status tallies must sum to the file count — a duplicate `status:` line tallies one file
-  // twice. validate names the key; this makes the arithmetic refuse.
-  if (nLive + nRes + nRetr !== nFiles) {
-    out(`  ✗ status tallies sum to ${nLive + nRes + nRetr} but there are ${nFiles} truth file(s) — a file carries a status outside the enum (the commonest cause: none of these buckets counts it), a duplicate 'status:' line, or none at all; run 'weavedoc validate'`)
-  }
   return 0
 }

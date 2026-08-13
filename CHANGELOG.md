@@ -4,6 +4,20 @@
 
 ---
 
+## 2026-08-08.19
+
+**Unreleased — the flip: this runtime is v3-only, and a card that exists is canonical.** Slice 1's main bundle (B1), under the approved plan's three-line division of labour: meaning is judged by the AI, decisions are the human's, the machine keeps the ledger and pulls the tripwire.
+
+**The version gate is decisive, everywhere.** Eleven ordinary commands refuse a non-v3 mine with ONE answer — which migration path (`VER-V2-UPGRADE` → this runtime's coming migrator; `VER-V1-BRIDGE` → the pinned v0.5.21 bridge, commit 0257167) — and no verdict about anything else. That severity is load-bearing: a v2 card satisfies every v3 required key while its whole state machinery stays invisible to v3 checks, so a v2 mine minus this gate would validate CLEAN. The v1 dual-reader (seal leniency, the JSON `schema_v1_mine` field, the dual-reader notice) retired with the gate, and the v1→v2 migrator with it — `upgrade` is a refusing stub until slice 2 lands the v2→v3 migrator, with the slice-2 design summarized in its header where the next session will look.
+
+**Truth cards lost their four state fields.** `status`/`conflict_with`/`resolution`/`superseded` are gone from the schema, and because the optional-key list is descriptive, `TRUTH-V2-FIELD` rejects them explicitly — state growing back onto cards is discarded machinery returning. Every card seals (no tombstone exemptions), every card's tags cover, and the consumers dropped their status branches whole: pull's five-way rendering, census's tally and its changelog-explained numbering holes (the mine log is never a judgment input), scope's tombstone class, reindex/impact's status suffixes, attest's truth-side refusal.
+
+**The two state files are wired, read-only.** `validate` fail-closes on a missing (`STATE-MISSING`) or unparseable (`STATE-MALFORMED`, the model's finer codes riding in the message) state file — unreadable state never reads as empty — and blocks shipping while any conflict entry is open (`CONFLICT-OPEN`). `status --open`'s conflicts lane reads the store instead of card fields: targets, each candidate claim with its source, and a malformed store surfaces as "UNKNOWN, not zero". Which caught this bundle's own defect in the first run: the lane read the store latin1 and templated it out as mojibake — the fourth hit of the two-encoder class, fixed by reading the machine's own UTF-8 JSON as UTF-8 and emitting through the text-domain helper.
+
+**The suite was re-based, not patched.** The pristine fixture is a v3 mine from birth wearing `review_legacy` — the one legitimate digest-less review next to a final, exactly what a migrated mine looks like — so 250+ mutation cases run free while the gate stays honest; `mk_v2` became `mk_sealed` (strip the marker, seal for real). Sixty dead-contract cases were deleted (enumerated in the commit message), the living-contract/dead-fixture cases were re-fixtured, ten new cases pin the flip's contracts (the gate both ways, the stub's three answers, both state-file failures, `CONFLICT-OPEN` round-trip including the two different zeros, `TRUTH-V2-FIELD`), and the dormant artifact-role loader narrowed to v3-only (232→212 properties) — its v2 adapter would otherwise have been a second v2 reader in a runtime that just removed its first.
+
+**The describers moved with the rule** (the .15–.17 lesson, applied before a reviewer had to): FORMATS' truth section now states the card contract and a new `.weavedoc-state/` section owns the two files' contracts; the diagnostic table dropped 14 dead codes and gained 6; READ.md's rule 2 became "a card that exists is canonical"; WORKFLOW §4 is the four-step detect(AI)→record(machine)→rule(human)→apply(AI) loop; README's validate/pull rows match the runtime that ships.
+
 ## 2026-08-08.18
 
 **Unreleased — slice 1 of schema v3 opens: the two state-file models, unwired.** The v3 plan was approved 2026-08-13; this is bundle A of slice 1, in the same shape every Phase-1 model landed in (raw-source, quote-marker): the model plus its properties file, nothing importing it yet.
