@@ -211,7 +211,10 @@ jobs:
           $valrc = $LASTEXITCODE
           Pop-Location
           if ($valrc -eq 0) { throw "validate exited 0 in an empty non-mine directory" }
-          if (-not ($val -match 'CFG-PATH-MISSING')) { throw "validate's refusal did not name CFG-PATH-MISSING — the checks did not run" }
+          # The v3 version gate answers FIRST in a non-mine directory (no readable version field →
+          # VER-NOT-INT, decisively, before any path check) — a named diagnostic either way is what
+          # proves the checks ran under pwsh, and this is the one an empty directory earns now.
+          if (-not ($val -match 'VER-NOT-INT')) { throw "validate's refusal did not name VER-NOT-INT — the checks did not run" }
           exit 0
 
   manifest:
