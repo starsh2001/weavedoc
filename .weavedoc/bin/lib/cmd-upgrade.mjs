@@ -39,6 +39,7 @@ import { execFileSync } from 'node:child_process'
 import { join, materialIds, truthFiles } from './mine.mjs'
 import { fmLoad } from './read.mjs'
 import { isFence } from './core.mjs'
+import { U } from './write.mjs'
 import { CONFLICTS_FILE, addConflict, emptyConflicts, serializeConflicts } from './conflict-store.mjs'
 import { ID_SEQUENCES_FILE, allocate, serializeIdSequences } from './id-sequences.mjs'
 
@@ -310,11 +311,21 @@ export function cmdUpgrade (m, out, args, reindex, validateCollect) {
     })
     writeFileSync(ledgerPath, keptRows.join('\n'), 'latin1')
   }
-  // coverage.md: remove the deleted ids from mapping lines; a bullet whose EVERY truth id was
-  // deleted is dropped whole (its extraction left the mine — an id-less mapping row would read as
-  // a malformed entry, not as history). Lines without a deleted id stay byte-identical.
-  let covDropped = 0; let covTrimmed = 0
+  // coverage.md: remove the deleted ids from mapping lines. A bullet whose EVERY truth id was
+  // deleted is REWRITTEN as a skipped entry — never dropped. This ledger's whole job is the
+  // accounting "every fact-bearing element is extracted or explicitly skipped", so deleting the
+  // bullet erases the record that the element existed at all: the next map reads that source
+  // element as unprocessed and re-extracts the very value this mine superseded. Measured on the
+  // real mine (2026-08-13): m021's 생일 표 and 데뷔일 bullets vanished, and the old dates they
+  // carried would have come back to contradict the live cards. The reason may NOT name the deleted
+  // ids — validate rejects a coverage mention of an id the mine no longer holds (COVERAGE-DANGLING),
+  // so naming them would trade one dangling reference for another. Lines without a deleted id stay
+  // byte-identical. Every appended literal goes through U(): this writer is latin1 (the byte domain
+  // a mine's non-UTF-8 bytes survive in), and a raw source literal would lose its high byte there.
+  let covSkipped = 0; let covTrimmed = 0
   const covPath = join(m.truths, 'coverage.md')
+  const ARROW = U('→')
+  const SKIP_NOTE = U(' → skipped: the card(s) mapped here were deleted in the v2→v3 migration — this element is unextracted; check it against the current cards before extracting it again')
   if (existsSync(covPath)) {
     const deletedNorm = new Set([...deletedIds].map(normT))
     const lines = readFileSync(covPath).toString('latin1').split('\n')
@@ -323,16 +334,20 @@ export function cmdUpgrade (m, out, args, reindex, validateCollect) {
       const ids = line.match(/t[0-9]+/g) ?? []
       const hit = ids.some(t => deletedNorm.has(normT(t)))
       if (!hit) { outLines.push(line); continue }
-      const survivors = ids.filter(t => !deletedNorm.has(normT(t)))
-      if (survivors.length === 0) { covDropped++; continue }
       let next = line
       for (const t of ids) {
         if (deletedNorm.has(normT(t))) {
           next = next.replace(new RegExp(`${t}[ \\t]*,[ \\t]*`), '').replace(new RegExp(`[ \\t]*,[ \\t]*${t}(?![0-9])`), '').replace(new RegExp(`${t}(?![0-9])`), '')
         }
       }
-      covTrimmed++
-      outLines.push(next)
+      const survivors = ids.filter(t => !deletedNorm.has(normT(t)))
+      if (survivors.length > 0) { covTrimmed++; outLines.push(next); continue }
+      // Nothing maps here any more: keep the element, drop the now-empty mapping tail (the `: `
+      // or `→` the ids hung off), and say why it is unextracted.
+      next = next.replace(/[ \t:,]+$/, '')
+      if (next.endsWith(ARROW)) next = next.slice(0, -ARROW.length).replace(/[ \t:,]+$/, '')
+      covSkipped++
+      outLines.push(next + SKIP_NOTE)
     }
     writeFileSync(covPath, outLines.join('\n'), 'latin1')
   }
@@ -413,9 +428,14 @@ export function cmdUpgrade (m, out, args, reindex, validateCollect) {
   // 6. regenerated views, one best-effort log line (a human record — its failure changes nothing).
   reindex()
   try {
+    // U() on every literal: this append rides the latin1 writer (the byte domain that carries a
+    // mine's non-UTF-8 bytes through untouched), and a raw `→`/`—` there keeps only its low byte —
+    // 0x92 and 0x14, the second a C0 CONTROL character. Shipped exactly that way in v0.6.0 and
+    // found in the real mine; write.mjs has carried this warning next to U() since the bundle .7
+    // incident put four 0x14 bytes into schemas/v3 from the identical cause.
     const line = deleted.length > 0
-      ? `- removed: ${deleted.map(c => c.id).join(' ')} (v2→v3 migration — discarded/retracted cards deleted; ${conflicts.length} conflict card(s) moved to conflicts.json) (${today})\n`
-      : `- edited: v2→v3 migration — ${kept.length} card(s) kept, ${conflicts.length} moved to conflicts.json (${today})\n`
+      ? U(`- removed: ${deleted.map(c => c.id).join(' ')} (v2→v3 migration — discarded/retracted cards deleted; ${conflicts.length} conflict card(s) moved to conflicts.json) (${today})\n`)
+      : U(`- edited: v2→v3 migration — ${kept.length} card(s) kept, ${conflicts.length} moved to conflicts.json (${today})\n`)
     const cl = join(m.truths, 'changelog.md')
     writeFileSync(cl, readFileSync(cl).toString('latin1') + line, 'latin1')
   } catch { out('  (mine-log line could not be appended — a human record only; nothing else is affected)') }
@@ -439,7 +459,7 @@ export function cmdUpgrade (m, out, args, reindex, validateCollect) {
     out('  restore with: git restore . && rm -rf .weavedoc-state')
     return 1
   }
-  const covNote = (covDropped + covTrimmed) > 0 ? ` · coverage rows scrubbed (${covDropped} dropped, ${covTrimmed} trimmed)` : ''
+  const covNote = (covSkipped + covTrimmed) > 0 ? ` · coverage rows scrubbed (${covSkipped} marked skipped, ${covTrimmed} trimmed)` : ''
   out(`upgrade: ✓ migrated — kept ${kept.length} (${stripped} stripped) · deleted ${deleted.length} · moved ${conflicts.length} into ${store.open.length} open entr(ies) · allocator next t${seq.truth}/m${seq.material}/c${seq.conflict}${covNote}`)
   if (expectOpen) out(`  validate is red by design (${store.open.length} open conflict(s)) until the human rules — resolution is deletion of the entry`)
   out("  the past is in git; this migration's inverse is 'git restore . && rm -rf .weavedoc-state'")

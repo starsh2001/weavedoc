@@ -4,6 +4,16 @@
 
 ---
 
+## 2026-08-08.25
+
+**Unreleased — two defects the real migration surfaced, both in v0.6.0's migrator.** Found by running the truths-axis cold verify on the just-migrated eclypse mine (T1–T5 + defender, 47 units): the two blocking findings that survived triage were both created by the migration itself, so they are fixed here rather than papered over in the mine.
+
+**A coverage bullet is now rewritten as a skipped entry, never dropped.** The scrub rule was "a bullet whose every truth id left is dropped, a multi-id bullet is trimmed" — and dropping erases *the record that the element existed at all*, in the one ledger whose entire job is the accounting "every fact-bearing element is extracted or explicitly skipped". Measured on the real mine: seven bullets vanished across m011·m013·m021, and the two m021 elements they covered (the birthday table, the debut-date section) went from *explicitly mapped* to *never mentioned* — so the next map would read them as unprocessed and re-extract the exact dates this mine had just superseded (초아 3/20 vs the live 3/21). The bullet now keeps its element description, loses the now-empty mapping tail, and gains a reason. The reason may **not** name the deleted ids: `validate` rejects a coverage mention of an id the mine no longer holds, so naming them would trade one dangling reference for another — which is the same class as the other finding.
+
+**The mine log's appended line goes through `U()`.** The migrator writes it with the latin1 writer — the byte domain that carries a mine's non-UTF-8 bytes through untouched — and a raw source literal there keeps only its low byte: `→` landed as `0x92`, `—` as `0x14`, **a C0 control character**, in a real mine, shipped in v0.6.0. `write.mjs` has carried the `U()` helper *and this exact warning in its comment* since the bundle `.7` incident put four `0x14` bytes into `schemas/v3` from the identical cause; the migrator simply did not route through it. A concept grep over every file-writing path settled the rest: `reindex` and `retag` already convert at the boundary, `attest` writes UTF-8 with no encoding argument, and the migrator was the only owner that skipped it.
+
+**The check that was missing is now a case, not a CI path.** CI's control-character scan covers repository files; nothing watched what the runtime **writes into a mine**. `acct_upgrade_ledger_lines_are_utf8` runs `ctlscan` over the migrated mine's `changelog.md` and `coverage.md` and asserts the arrow survives as UTF-8; `acct_upgrade_coverage_element_survives_as_skip` pins the element label, the skip reason, the absence of the deleted id, and a validate whose only red is the predicted `CONFLICT-OPEN`. Both were red before the fix, and both mutations (removing `U()`, restoring the drop) kill. 555/555.
+
 ## 2026-08-08.24
 
 **v0.6.0 — schema v3: a card that exists is canonical.** The release of the v3 minimal core (bundles `.18`–`.23`, published together per the plan's completion condition: schema · migrator · docs · tests in one tag). Runtime bytes are identical to `.23` — fingerprint `63f4c1a6ae4f` — and this bundle moves only the label, the v0.5.20 precedent.
