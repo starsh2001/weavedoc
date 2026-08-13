@@ -4,6 +4,18 @@
 
 ---
 
+## 2026-08-08.24
+
+**v0.6.0 — schema v3: a card that exists is canonical.** The release of the v3 minimal core (bundles `.18`–`.23`, published together per the plan's completion condition: schema · migrator · docs · tests in one tag). Runtime bytes are identical to `.23` — fingerprint `63f4c1a6ae4f` — and this bundle moves only the label, the v0.5.20 precedent.
+
+**Breaking: every existing mine must migrate.** A v2 mine gets one answer from all eleven ordinary commands (`VER-V2-UPGRADE`) until `weavedoc upgrade --apply` runs; a v1 mine routes through the pinned bridge runtime v0.5.21 (commit `0257167`) first. The migrator's backup is a clean git worktree — checked, never operated — and its verify is a conservation equation plus an EXACT validate expectation. See [UPGRADING.md](UPGRADING.md); the rehearsal on a real 274-card mine is in `.21`.
+
+**What changed, in one line each.** Truth cards lost their four state fields (`status`/`conflict_with`/`resolution`/`superseded`, now rejected as `TRUTH-V2-FIELD`) — the value changed? edit the card in place, same id, and the past lives in Git. An undecided disagreement lives in `.weavedoc-state/conflicts.json` (open entries only; resolution IS deletion, no archive, no winner field, no suppression list) and blocks shipping while open. Ids come from a monotonic allocator (`.weavedoc-state/id-sequences.json`) that never re-grants a deleted number, so a numbering hole is normal and an old citation can never come to mean a different fact. Both state files live OUTSIDE `.weavedoc/`, so replacing the runtime bundle wholesale cannot overwrite mine state. Two commands write them (`conflict add|list|remove`, `alloc`), two tripwires guard them (`IDSEQ-BEHIND`, `CONF-*-DANGLING`), and validate fail-closes on a store it cannot read — unreadable state never reads as "no conflicts".
+
+**The division of labour is the point, not the mechanism count.** Meaning is judged by the AI, decisions are the human's, and the machine keeps the ledger and pulls the byte tripwires: there is no path in this release by which a machine picks or recommends a winner — no authority rank, no date order, no recency. That is why the previous plan's locus registry, six-axis transition table, derived calculator, confirmation-map rework and migration debt manifest are all absent: each was the machine judging the shape of language, and language is infinite. The tag discipline in `map` (read the existing tag list · reuse · ask when ambiguous · re-check on edit) replaces them, and `doccheck` checks the sentences are still there.
+
+**Evidence.** 553 regression cases green on Ubuntu, Windows and macOS (all three required); doccheck green; the bundle manifest covers 61 behavior-deciding files. The rehearsal mine migrated 274 cards → 248 kept · 26 deleted · 0 moved, with the human ledgers byte-identical, and its first run FAILED its own verify on 12 dangling coverage mentions — the exact-expectation doing its job, mechanized and pinned as a case.
+
 ## 2026-08-08.23
 
 **Unreleased — slice 3: the describers move with the rule, all of them.** The flip (.19) synced the primary describers — FORMATS' truth section, READ rule 2, WORKFLOW §4, README's validate/pull rows — and this bundle closes the rest of the population: the skills a cold session actually executes, and every secondary sentence the concept grep still caught teaching v2.
