@@ -4,6 +4,14 @@
 
 ---
 
+## 2026-08-08.26
+
+**v0.6.1 — the migrator's two defects, fixed at the source.** Publishes bundle `.25`. Runtime bytes are identical to it — fingerprint `2ca58ddb40b6` — and this bundle moves only the label, the same shape `.24` had for v0.6.0.
+
+**Why there is a patch release at all.** v0.6.0 migrated a real 274-card mine, and the truths-axis cold verify run immediately afterwards found two blocking defects that the migration itself had created. Both are in the migrator, both are the kind that a synthetic fixture would not have surfaced (one needed a coverage ledger with superseded values behind it; the other needed a mine whose log a human would read), and both are now fixed with red-first cases and killed mutations. A v2 mine migrating on v0.6.1 keeps its coverage accounting intact and gets a mine log with no mangled bytes; a mine already migrated on v0.6.0 needs the same two repairs by hand — the `.25` section names exactly what they are.
+
+**No schema change, no command change, no migration required.** `upgrade` behaves identically except for the two writes above.
+
 ## 2026-08-08.25
 
 **Unreleased — two defects the real migration surfaced, both in v0.6.0's migrator.** Found by running the truths-axis cold verify on the just-migrated eclypse mine (T1–T5 + defender, 47 units): the two blocking findings that survived triage were both created by the migration itself, so they are fixed here rather than papered over in the mine.
