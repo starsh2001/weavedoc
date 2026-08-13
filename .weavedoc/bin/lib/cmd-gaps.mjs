@@ -7,26 +7,25 @@
 import { readFileSync, existsSync } from 'node:fs'
 import { basename } from 'node:path'
 import { splitLines } from './core.mjs'
-import { nocomment, defence } from './sections.mjs'
 import { loadSchema } from './read.mjs'
 import { join, materialIds, truthFiles } from './mine.mjs'
 import { cmdCensus } from './cmd-census.mjs'
-import { scanRegister } from './gaps-register.mjs'
+import { gapRegisterContract, parseGapText } from './gaps-register.mjs'
 
 const readOr = p => { try { return readFileSync(p, 'utf8') } catch { return '' } }
 // gaps.md is read in the BYTE domain, and only gaps.md: the marker scan below prints lines out of
-// converted.md/truths and stays decoded, while the accepted tally feeds `scanRegister`, whose
-// `strip()` is a class of BYTES. Two domains in one command is fine as long as each reader and the
+// converted.md/truths and stays decoded, while the accepted tally feeds the shared gap model, whose
+// slot grammar is a class of BYTES. Two domains in one command is fine as long as each reader and the
 // text it judges agree — which is why the section name and kind enum come from a latin1 schema map
 // here, the same pairing status --open needed (v0.5.6).
-const readBytes = p => { try { return readFileSync(p).toString('latin1') } catch { return '' } }
+const readBytes = p => { try { return readFileSync(p).toString('latin1') } catch { return null } }
 
 const DEFAULT_MARKERS = '미정|미완성|미확정|미상|TBD|TODO|추후 보강|추후 작업|추후 결정|정해지지 않|미해결'
 
 // The local entry counter that used to live here is GONE (v0.5.8), not fixed in place: it kept
 // converging on validate's rules one review at a time — column-zero entries in v0.5.4, the fence
 // pass in review #11 — and stayed behind on the placeholder rule, which is the shape that made
-// this file's tally a third answer. `scanRegister` is called instead.
+// this file's tally a third answer. `parseGapText` is called instead.
 
 // `grep -n` — every matching line with its 1-based number.
 function grepN (file, re) {
@@ -73,42 +72,67 @@ export function cmdGaps (m, out, err) {
   // Name the accepted register beside the raw count: this scan does NOT read gaps.md, so an accepted
   // gap reprints every run, and a number that never drops stops being read.
   let nacc = 0
+  let naccMalformed = 0
+  let acceptedUnknown = false
   const gapsPath = join(m.root, 'gaps.md')
   if (existsSync(gapsPath)) {
     // The accepted section's NAME comes from the schema (gaps.sections, second member) and the
-    // reader is sectionAll — the same any-level tolerance validate's counter has. Before review #6
+    // reader is the shared scanner's heading/section model — the same tolerance validate uses. Before review #6
     // this spelled 'Accepted' by hand and read h1/h2 only, so a '### Accepted' register validate
     // had just counted printed here as "records 0 already accepted" — two readers, one file.
-    // The SAME defence pass validate's readers use (review #11): fenced content is text, not
-    // register — without this, an example register inside a code fence counted here.
+    // The SAME lexical pass validate uses: fenced content is text, not register structure —
+    // without this, an example register inside a code fence counted here.
     //
     // AND THE SAME SCANNER (v0.5.8). This was the last reader still running the placeholder PREFIX
     // rule validate abandoned in v0.5.4 review #9 — the retired rule whose other consumer reported
     // a blocking gap as "nothing is waiting" (v0.5.5). Here it under-counted instead: an accepted
     // decision whose kind slot kept its template but whose body is written out tallied as nothing.
-    // `scanRegister` is the one judgment now; the schema is read in the TEXT'S OWN DOMAIN with it,
+    // `parseGapText` is the one judgment now; the schema is read in the TEXT'S OWN DOMAIN with it,
     // because reading a non-ASCII section name from the utf8 map against latin1 text is exactly how
     // v0.5.6 re-introduced the defect it was repairing.
     const schB = loadSchema(m.schemaPath, 'latin1')
-    const secAcc = (schB.get('gaps.sections') || 'Open|Accepted').split('|')[1] || 'Accepted'
-    const kindSet = new Set((schB.get('gaps.enum.kind') || 'declared|reference|enumeration|symmetry').split('|').filter(Boolean))
+    const gapContract = gapRegisterContract(schB)
+    const secAcc = gapContract.acceptedName
     // The flag beside the text is not decoration: a fence nobody closed makes everything after it
     // invisible to this tally, and a number that silently shrank reads exactly like a small one.
     // v0.5.4 recorded this as a known issue and v0.5.8 edited this very line without applying it
     // (its twin reader has warned since v0.5.6) — "what a reader cannot see is NAMED" holds here
     // too, and non-blocking is a reason to print it, not a reason to stay quiet.
-    const df = defence(nocomment(readBytes(gapsPath)))
-    if (df.open) out("gaps.md ends inside an unterminated code fence — entries behind it are invisible to the accepted tally below; close the fence (validate blocks on this under 'completeness: required')")
-    const reg = scanRegister(df.text, secAcc, kindSet)
-    // The scanner stops at a line the register grammar cannot read, so entries after it are missing
-    // from the count — named, not silent (v0.5.10; status --open has said this since v0.5.7, and
-    // v0.5.8 wired the shared scanner here and dropped its badline on the floor).
-    // The section name is latin1-domain (it is matched against byte text) — emitted as its own
-    // BYTES, not re-encoded through a UTF-8 template: interpolating it printed mojibake for a
-    // localized `gaps.sections`, the two-encoders trap again (cold review, v0.5.10).
-    if (reg.badline !== '') out(Buffer.concat([Buffer.from("gaps.md '# ", 'utf8'), Buffer.from(secAcc, 'latin1'), Buffer.from("' holds a line the register grammar cannot read, so nothing after it is tallied (validate names it under 'completeness: required')", 'utf8')]))
-    nacc = reg.n
+    const raw = readBytes(gapsPath)
+    if (raw === null) {
+      acceptedUnknown = true
+      out('gaps.md exists but cannot be read — its accepted tally is unknown, not zero')
+    } else {
+      const model = parseGapText(raw, gapContract)
+      if (model.document.commentOpen) out("gaps.md ends inside an unterminated '<!--' — entries behind it are invisible to the accepted tally below; close the comment")
+      if (model.document.fenceOpen) out("gaps.md ends inside an unterminated code fence — entries behind it are invisible to the accepted tally below; close the fence (validate blocks on this under 'completeness: required')")
+      for (const diagnostic of model.structureDiagnostics) {
+        if (diagnostic.code === 'invalid-contract') {
+          acceptedUnknown = true
+          out(Buffer.concat([Buffer.from('schema gaps register contract is invalid — ', 'utf8'), Buffer.from(diagnostic.reason, 'latin1'), Buffer.from('; the accepted tally is disabled', 'utf8')]))
+        } else if (diagnostic.code === 'section-count') {
+          out(Buffer.concat([Buffer.from("gaps.md must have exactly one '# ", 'utf8'), Buffer.from(diagnostic.name, 'latin1'), Buffer.from(`' register section; found ${diagnostic.count} — the tally below is incomplete`, 'utf8')]))
+        } else if (diagnostic.code === 'stray-entry') {
+          out(Buffer.concat([Buffer.from('gaps.md has a register-looking entry outside its Open/Accepted sections, so the tally below owns no decision for it: ', 'utf8'), Buffer.from(diagnostic.entry.raw, 'latin1')]))
+        }
+      }
+      const reg = model.accepted
+      // The scanner stops at a line the register grammar cannot read, so entries after it are missing
+      // from the count — named, not silent (v0.5.10; status --open has said this since v0.5.7, and
+      // v0.5.8 wired the shared scanner here and dropped its badline on the floor).
+      // The section name is latin1-domain (it is matched against byte text) — emitted as its own
+      // BYTES, not re-encoded through a UTF-8 template: interpolating it printed mojibake for a
+      // localized `gaps.sections`, the two-encoders trap again (cold review, v0.5.10).
+      if (reg.badLine !== null) out(Buffer.concat([Buffer.from("gaps.md '# ", 'utf8'), Buffer.from(secAcc ?? '<invalid accepted role>', 'latin1'), Buffer.from("' holds a line the register grammar cannot read, so nothing after it is tallied (validate names it under 'completeness: required')", 'utf8')]))
+      nacc = reg.entries.length
+      naccMalformed = reg.entries.filter(entry => entry.syntax === 'malformed').length
+      if (naccMalformed > 0) out(`gaps.md accepted register has ${naccMalformed} malformed entr${naccMalformed === 1 ? 'y' : 'ies'} — retained in the record tally, but not a valid routed acceptance`)
+    }
   }
-  out(`— ${n} marker line(s) + ${c} unchecked checkbox(es) — RAW scan, not an open count: gaps.md records ${nacc} already accepted. Non-blocking; run the weavedoc-gaps skill to reconcile these against gaps.md and to cover reference/enumeration/symmetry + fill-or-accept.`)
+  const acceptedDetail = naccMalformed > 0 ? ` (${nacc - naccMalformed} valid, ${naccMalformed} malformed)` : ''
+  const acceptedReport = acceptedUnknown
+    ? 'gaps.md accepted tally is unknown or disabled because its input contract cannot be read safely'
+    : `gaps.md records ${nacc} already accepted${acceptedDetail}`
+  out(`— ${n} marker line(s) + ${c} unchecked checkbox(es) — RAW scan, not an open count: ${acceptedReport}. Non-blocking; run the weavedoc-gaps skill to reconcile these against gaps.md and to cover reference/enumeration/symmetry + fill-or-accept.`)
   return 0
 }

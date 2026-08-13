@@ -72,7 +72,12 @@ export function canonId (s) {
   if (p !== 't' && p !== 'm') return null
   const n = s.slice(1)
   if (n === '' || /[^0-9]/.test(n)) return null
-  return p + String(parseInt(n, 10)).padStart(3, '0')
+  // STRING canonicalisation, never parseInt. Above 2^53 parseInt rounds — `m9007199254740993`
+  // canonicalised to `m9007199254740992`, a DIFFERENT material, and a quote sealed against the
+  // wrong file's bytes (measured). Past ~1e21 it produced `m1e+21`. Stripping leading zeros as text
+  // is exact at any length, and ids are text everywhere else in this runtime anyway.
+  const stripped = n.replace(/^0+(?=[0-9])/, '')
+  return p + stripped.padStart(3, '0')
 }
 
 // ---- dates --------------------------------------------------------------------------------
@@ -104,6 +109,13 @@ export function listField (s) {
 // same as "split and drop empties" (the differential caught this): with a NON-whitespace IFS every
 // delimiter delimits, so interior and leading empty fields SURVIVE — `a||b` is three fields, `|a|`
 // is two. Only a single trailing delimiter adds nothing, and an empty string is zero fields.
+// The quote seal's whitespace rule, in ONE place. `validate-truths` and the v3 quote marker both
+// decide "is this the same text", and until now each carried its own copy of this line — two
+// spellings of one question, which is the class this runtime keeps deleting. `[[:space:]]` in the C
+// locale, collapsed to a single space, ends trimmed: a re-wrapped quote is the same quote and a
+// skipped line is not.
+export const wsnorm = s => s.replace(/[ \t\n\v\f\r]+/g, ' ').replace(/^ /, '').replace(/ $/, '')
+
 export function pipes (s) {
   if (typeof s !== 'string' || s === '') return []
   const parts = s.split('|')

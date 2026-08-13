@@ -28,7 +28,8 @@ Ask **exactly** these questions, in order. Don't improvise, skip, or silently de
 **Q2. Fidelity & conflicts** — explain briefly, then ask:
 - **Completeness** — *"누락이 그 자체로 위반인 프로젝트인가요? (계약서, SOW → required / 일반 보고서 → off)"* (추천: off)
 - **Conflict detection** — *"자료 간 충돌을 얼마나 적극적으로 찾을까요? (standard / deep)"* (추천: deep)
-- **Conflict attribution** — *"충돌 발견 시 병기(양쪽 다 기록)를 건별로 물을까요, 프로젝트 전체에 허용할까요? (ask / allow)"* (추천: ask)
+
+(There is no attribution question: every conflict ruling is the user's, per-entry — 병기 is the 분리·병합 ruling, whose record is the split cards themselves. A migrated v2 config may still carry `conflicts.attribution`; it is legal and unread.)
 
 **Q3. Verify & review intensity** — explain the scale briefly, then ask:
 - **Verify strength** — *"자료→진실 변환 검증 강도: 1(critical만) / 2(+should-fix) / 3(+nice-to-have)"* (추천: 2)
@@ -38,6 +39,7 @@ Ask **exactly** these questions, in order. Don't improvise, skip, or silently de
 Write the answers to `.weavedoc/config.yaml`. On a **reconfigure**, update config, then re-ensure the **three** idempotent guards from §3 — the **configured folders and their `.gitkeep` markers**, the **search shield (`.ignore`)** and the **CLAUDE.md pointer block** — and **stop here**. (This said *two* through v0.5.20 while the folder bullet below already claimed to run on reconfigure — the two lines contradicted each other, and a reconfigure that renames a path leaves a NEW empty directory that Git cannot carry, so the marker guard belongs in this list. External review, v0.5.21.) (Both bullets are marked *runs on reconfigure too*; a reconfigured mine that skips the shield leaves its raw layer searchable until the next gather.)
 
 ### 3. Create the mine infrastructure (first-time only)
+- **State files (schema v3).** Create `.weavedoc-state/` with the two machine-owned files a v3 mine carries from birth, both in their valid empty form: `conflicts.json` as `{"version": 1, "open": []}` and `id-sequences.json` as `{"version": 1, "next": {"conflict": 1, "material": 1, "truth": 1}}` (2-space indent, trailing newline — the canonical spelling the runtime writes). `validate` fail-closes on a v3 mine missing either (`STATE-MISSING`): a conflicts store that cannot be read must never read as "no conflicts". The directory lives at the mine root, OUTSIDE `.weavedoc/`, precisely so replacing the runtime bundle wholesale can never overwrite mine state; it is versioned like the rest of the mine (never gitignored). *Runs on **reconfigure** too* — but only ever CREATES missing files, never overwrites existing state.
 - **Folders.** Create `inbox/`, `materials/`, `truths/`, `documents/` per the config paths — **each with a `.gitkeep` inside**. *Runs on **reconfigure** too* (a renamed path leaves a new directory that Git also cannot carry). Git stores files, never directories, so a configured directory that is still empty simply does not survive a clone — and `validate` then blocks with `CFG-PATH-MISSING`, correctly, because a check that walks a directory which isn't there runs zero times and that is indistinguishable from passing. Measured on a fresh clone of a real mine: `documents/` gone, rc 1. The marker is the fix rather than teaching `validate` to accept a missing directory: the fail-closed reading is the one worth keeping, and it is the empty directory that is unrepresentable, not the check that is wrong.
 - **project.md.** Create from `.weavedoc/templates/project.md` with minimal defaults:
   - `roles` — leave empty `[]`; the first `gather` proposes roles from the actual materials.

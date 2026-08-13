@@ -8,13 +8,12 @@
 import { existsSync, readFileSync } from 'node:fs'
 import { basename } from 'node:path'
 import { splitLines } from './core.mjs'
-import { nocomment, sectionAll } from './sections.mjs'
 import { join, materialIds, truthFiles } from './mine.mjs'
-import { fmv, fmLoad } from './read.mjs'
+import { fmv } from './read.mjs'
 import { ledgerRowsOf, ledgerIndex, matDigest, truthDigest } from './verify.mjs'
+import { readVerifiedUnits, verifiedUnitsContract } from './verified-units.mjs'
 
 const readOr = p => { try { return readFileSync(p, 'utf8') } catch { return '' } }
-const lowerAscii = s => s.replace(/[A-Z]/g, c => c.toLowerCase())
 const pad = (p, n) => `${p}${String(n).padStart(3, '0')}`
 
 // Sorted canonical ids -> one line, consecutive runs collapsed to a-b.
@@ -37,43 +36,9 @@ export function compressIds (ids) {
 export function scanVerifiedUnits (m) {
   const f = join(m.truths, 'verify.md')
   if (!existsSync(f)) return { V: [], U: [] }
-  const mark = lowerAscii(m.sch.get('verify.units.verified') || 'verified')
-  const V = []; const U = []
-  // Normalised first so every bracket below stays pure ASCII. `·` becomes a space — it only ever
-  // separates ids (`t194·t195`).
-  const body = sectionAll(nocomment(readOr(f)), 'Verified units')
-    .replace(/[–—]/g, '-').replace(/·/g, ' ')
-  for (const line of splitLines(body)) {
-    if (!/^[ \t]*[|-]/.test(line)) continue          // prose, not a ledger entry
-    if (/^[ \t]*\|[ \t|:-]*$/.test(line)) continue   // table separator row
-    if (!/[mt][0-9]/.test(line)) continue            // names no unit (header row, note)
-    // THE VERDICT DECIDES, not the presence of ids: entries name units while reporting them failed
-    // or unrun, so harvesting ids blind would certify what the ledger refused. A substring test
-    // fails too (`unverified` contains `verified`), so the entry must END with the marker once
-    // trailing decoration is stripped.
-    const v = line.replace(/[ \t|*.-]+$/, '')
-    if (!new RegExp(`(^|[^a-z_])${mark}$`).test(lowerAscii(v))) { U.push(line); continue }
-    // Ranges validated BEFORE anything from this line is emitted: a reversed span expands to zero
-    // (silent), an absurd one to millions (one typo minting coverage) — either way the LINE covers
-    // nothing and is named with the other cover-nothing entries.
-    const spans = [...line.matchAll(/[mt][0-9]+-[mt][0-9]+/g)].map(x => x[0])
-    let bad = false
-    for (const r of spans) {
-      const i = r.indexOf('-'); const a = r.slice(0, i); const b = r.slice(i + 1)
-      if (a[0] !== b[0]) continue
-      const an = parseInt(a.slice(1), 10); const bn = parseInt(b.slice(1), 10)
-      if (bn < an || bn - an > 9999) { bad = true; break }
-    }
-    if (bad) { U.push(line); continue }
-    for (const r of spans) {
-      const i = r.indexOf('-'); const a = r.slice(0, i); const b = r.slice(i + 1)
-      if (a[0] !== b[0]) continue
-      for (let k = parseInt(a.slice(1), 10); k <= parseInt(b.slice(1), 10); k++) V.push(pad(a[0], k))
-    }
-    // Range endpoints print twice; the dedup downstream makes that free.
-    for (const tok of line.match(/[mt][0-9]+/g) ?? []) V.push(pad(tok[0], parseInt(tok.slice(1), 10)))
-  }
-  return { V, U }
+  const model = readVerifiedUnits(f, verifiedUnitsContract(m.sch))
+  if (!model.readable) return { V: [], U: [] }
+  return { V: model.coveredIds, U: model.uncoveredRows.map(row => row.raw) }
 }
 
 const uniqSort = a => [...new Set(a)].sort()
@@ -150,33 +115,22 @@ export function cmdScope (m, out, json) {
     }
   }
 
-  // ---- truths: live vs tombstone (retracted/discarded leave the population, the same rule
-  // retracted materials follow).
+  // ---- truths: every existing card is in the population (schema v3 — the tombstone class left
+  // with the status axis; a card stops being owed verification by being DELETED, not stamped).
   //
-  // A file that yields NO LINE is not in this population (fixed 2026-08-04, caught by
-  // the corpus scale on `acct_zero_byte_truth` and `block_truth_shaped_directory`, since retired with the bash runtime it compared against). The bash
-  // side classifies with one awk over the glob, and awk contributes nothing for an input it never
-  // reads a record from — a zero-byte file, or a DIRECTORY wearing a truth filename, which gawk
-  // refuses with a stderr warning. Both therefore leave scope's live count untouched there, while a
-  // directory listing sees both and Node was reporting them as live-and-unverified: two extra owed
-  // units that the round has no file to verify.
-  //
-  // This is deliberately NOT the same rule as census, one door over, and the difference is bash's
-  // own: census takes its FILE COUNT from disk precisely so a zero-byte truth cannot vanish from the
-  // denominator, and validate does the same and reports it as "NOT checked". So a degenerate truth
-  // file is COUNTED (it exists) and UNCLASSIFIED (it says nothing) — which is the honest pair, and
-  // reproducing only half of it in either direction is what makes two commands disagree about one
-  // mine.
+  // A file that yields NO LINE is still not in this population (fixed 2026-08-04, caught by
+  // the corpus scale on `acct_zero_byte_truth` and `block_truth_shaped_directory`, since retired
+  // with the bash runtime it compared against): a zero-byte file, or a DIRECTORY wearing a truth
+  // filename, is COUNTED by census/validate (it exists, reported "NOT checked") and UNCLASSIFIED
+  // here (it says nothing this round could verify) — the honest pair, kept.
   const tl = truthFiles(m).map(f => {
     const raw = basename(f, '.md')
     let lines
     try { lines = splitLines(readFileSync(f, 'utf8')) } catch { lines = [] }
     if (lines.length === 0) return null
-    const st = fmLoad(f).get('status') ?? ''
-    return { cls: (st === 'retracted' || st === 'discarded') ? 'X' : 'L', canon: pad('t', parseInt(raw.slice(1), 10)), raw, file: f }
+    return { canon: pad('t', parseInt(raw.slice(1), 10)), raw, file: f }
   }).filter(Boolean)
-  const ondisk = uniqSort(tl.filter(x => x.cls === 'L').map(x => x.canon))
-  const tomb = uniqSort(tl.filter(x => x.cls === 'X').map(x => x.canon))
+  const ondisk = uniqSort(tl.map(x => x.canon))
 
   // ---- sidecar-covered live truths
   const strows = ledger.filter(f => /^t[0-9]/.test(f[0]))
@@ -185,7 +139,7 @@ export function cmdScope (m, out, json) {
   if (strows.length) {
     const incov = new Set(inter(ondisk, scov))
     const cur = new Map()
-    for (const x of tl) if (x.cls === 'L' && incov.has(x.canon)) cur.set(x.canon, truthDigest(x.file))
+    for (const x of tl) if (incov.has(x.canon)) cur.set(x.canon, truthDigest(x.file))
     for (const f of strows) {
       if (!cur.has(f[0])) continue
       if (f[2] === 'legacy-unbound') { tclass.push(['L', f[0]]); continue }
@@ -210,7 +164,7 @@ export function cmdScope (m, out, json) {
   // markdown `## Verified units` mention.
   const tbad = uniqSort([...LBAD].filter(x => /^t[0-9]/.test(x)))
   if (tbad.length) vids = minus(vids, tbad)
-  const diskany = uniqSort([...ondisk, ...tomb])
+  const diskany = ondisk
   let tlegacy = minus(inter(vids, ondisk), scov)
   // sidecar rows written by migration carry the legacy verdict themselves — union both sources
   tlegacy = uniqSort([...tlegacy, ...tclass.filter(x => x[0] === 'L').map(x => x[1])])
@@ -222,13 +176,13 @@ export function cmdScope (m, out, json) {
     out(`{"output_schema_version":1,"command":"scope","bundle":"${readOr(join(m.root, '.weavedoc', 'VERSION')).replace(/\n+$/, '')}","schema_version":${m.schemaVer()},` +
       `"ledger_state":"${ledgerDead ? (lidx.state === 'unreadable' ? 'unreadable' : 'headless-rows') : lidx.state}",` +
       `"materials":{"converted":${nMconv},"verified_bound":${nMbound},"legacy_unbound":${nMlegacy},"stale":${nMstale},"failed":${nMfail},"unverified":${nMunver},"used_but_unverified":${nMused},"originless_rows_ignored":${jarr(mOriginless)},"owed":${jarr([...munver, ...mstale, ...mfail])}},` +
-      `"truths":{"live":${ondisk.length},"verified_bound":${nTbound},"legacy_unbound":${tlegacy.length},"stale":${nTstale},"failed":${nTfail},"unverified":${tunver.length},"tombstones":${tomb.length},"owed":${jarr([...tunver, ...tstale, ...tfail])}},` +
+      `"truths":{"live":${ondisk.length},"verified_bound":${nTbound},"legacy_unbound":${tlegacy.length},"stale":${nTstale},"failed":${nTfail},"unverified":${tunver.length},"owed":${jarr([...tunver, ...tstale, ...tfail])}},` +
       `"ghost_ledger_ids":${jarr(tghost)}}`)
     return 0
   }
 
   out('scope — what a verify round still owes (computed from disk + the ledgers, not judged)')
-  if (nMconv === 0 && ondisk.length === 0 && tomb.length === 0) {
+  if (nMconv === 0 && ondisk.length === 0) {
     // A dead ledger is stated even on an empty mine (v0.5.2, external review): this early return
     // used to swallow the unreadable/headless line, so a mine with no units but a broken sidecar
     // read as "nothing to verify" with no hint the sidecar needed repair.
@@ -255,13 +209,12 @@ export function cmdScope (m, out, json) {
     // command's own SHOWN-never-absorbed discipline (v0.5.1 cold review).
     if (mghost.length) out(`    ledger names ${mghost.length} id(s) with no material on disk — they cover nothing: ${compressIds(uniqSort(mghost))}`)
   }
-  if (ondisk.length > 0 || tomb.length > 0) {
+  if (ondisk.length > 0) {
     out(`  truths     ${ondisk.length} live · ${nTbound} verified (digest-bound) · ${tlegacy.length} legacy-unbound · ${nTstale} stale · ${nTfail} failed · ${tunver.length} unverified   (source: truths/${m.ledgerFile()} + ## Verified units)`)
     if (tunver.length > 0) out(`    → ${compressIds(tunver)}`)
     if (tstale.length) out(`    → stale: ${compressIds(tstale)}`)
     if (tfail.length) out(`    → failed: ${compressIds(tfail)}`)
     if (tlegacy.length > 0) out(`    → legacy-unbound: ${compressIds(tlegacy)}`)
-    if (tomb.length > 0) out(`    (${tomb.length} tombstone truth(s) — retracted/discarded — out of scope)`)
     if (!existsSync(join(m.truths, 'verify.md')) && !existsSync(lf)) {
       out('    (no verification ledger — nothing has been cold-verified, so every truth is owed)')
     } else if (tghost.length) {
@@ -273,7 +226,7 @@ export function cmdScope (m, out, json) {
   // SHOWN, never absorbed — the same discipline `status` applies to untagged queue entries.
   if (scan.U.length) {
     out(`  ledger: ${scan.U.length} entry(s) name units but end in no "${m.sch.get('verify.units.verified') || 'verified'}" verdict — they cover nothing; add the verdict or leave the units owed:`)
-    for (const l of scan.U) out(l.replace(/^[ \t]*/, '    '))
+    for (const l of scan.U) out(Buffer.from(l.replace(/^[ \t]*/, '    '), 'latin1'))
   }
   // NO trailing space (fixed 2026-08-04, caught by the corpus scale, since retired with the bash runtime it compared against). The bash line rendered
   // `printf '%s' "$ledger_bad" | tr '\n' ' '` — a command substitution has already eaten the final

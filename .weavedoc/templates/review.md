@@ -6,8 +6,9 @@ consecutive_passes: 0
 <!--
   Review output for documents/<doc-id>/draft.md. Frontmatter carries the advisory loop's state:
   `round` (last round number) and `consecutive_passes` (clean advisory rounds IN A ROW so far —
-  +1 on a clean round, back to 0 on any blocking one). `refine` loops until it reaches
-  config.review.repeat, so a cold session reads these instead of restarting the loop.
+  +1 on a clean round; back to 0 on any blocking finding AND on a bar-crossing ticket-downgrade
+  by the defender, whose test is the next fresh panel — that round is not clean). `refine` loops
+  until it reaches config.review.repeat, so a cold session reads these instead of restarting the loop.
   Both optional (absent = 0). Four sections, every heading at level 1 (`#`):
   1. Fidelity violations — the MANDATORY gate (weavedoc's warranty). Not editable, not triaged-down,
      not adjudicated away. Any open entry blocks final.md/final/ and consecration. Empty = gate passes.

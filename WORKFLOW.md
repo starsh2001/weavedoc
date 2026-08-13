@@ -32,12 +32,12 @@ One per step of the flow, plus two on-demand lanes (verify · gaps) that guard t
 | Skill | Step | What it does | Out |
 |---|---|---|---|
 | `weavedoc-init` | 0 | First-time setup. Captures the project's character (roles · tone · language) and the per-project knobs (fidelity·conflicts·review) so later steps run autonomously. | `.weavedoc/config.yaml`, `project.md`, workspace folders |
-| `weavedoc-gather` | 1–2 | Intake `inbox/` — or a **declared conversation** — move in (inbox is a queue; outside sources are copied) / distill, convert to readable markdown (a **mirror** — nothing added), classify (role + topics + stage). Also owns **material retraction** (mark `status: retracted`, never delete; map propagates). | `materials/<id>/`, `catalog.md` |
+| `weavedoc-gather` | 1–2 | Intake `inbox/` — or a **declared conversation** — move in (inbox is a queue; outside sources are copied) / distill, convert to readable markdown (a **mirror** — nothing added), classify (role + topics + stage). Also owns **material retraction** (mark `status: retracted`, never delete; map re-grounds or removes the truths it grounded). | `materials/<id>/`, `catalog.md` |
 | `weavedoc-map` | 3 | Extract truths from materials, tag and classify them — and, above all, **hunt where they contradict each other** (§4). Every value carries its author (§5). Also the entry point for **correcting** an existing truth (by re-grounding, never retyping). | `truths/*.md`, `truths/coverage.md`, `truths/changelog.md`, indexes via `reindex` |
 | `weavedoc-verify` | 1–3 gate | Cold verification of the two upstream hops — `material` (원본↔converted.md) · `truths` (converted.md↔truths) — by empty-context subagents (§3's engine); baseline pinned for the round; the human confirms the run **delta** (§5), never "정확합니까?". | material `status: verified`, `truths/verify.md` |
 | `weavedoc-gaps` | coverage | Mine completeness register — declared markers, dangling references, count mismatches, peer asymmetry; every gap consciously **filled or accepted** (never a hard block). | `gaps.md` |
 | `weavedoc-plan` | 4 | Propose a structure + tone + section→material map; ask about structural gaps. | `documents/<doc-id>/plan.md` |
-| `weavedoc-write` | 5 | Draft section by section, every claim grounded and cited; check truth statuses before citing; queue necessary missing facts and ask. | `draft.md` |
+| `weavedoc-write` | 5 | Draft section by section, every claim grounded and cited; check the open-conflict lane (`status --open`) before leaning on contested topics; queue necessary missing facts and ask. | `draft.md` |
 | `weavedoc-review` | 6 | The **fidelity gate** (mandatory) + a cold **advisory** panel (§3). | `review.md` |
 | `weavedoc-refine` | 7 | Resolve every fidelity violation + advisory findings per the gate; loop to a clean gate; only then `final.md`. | `final.md` |
 
@@ -51,7 +51,7 @@ Step 6 runs in two distinct passes — keep them separate, because one is the pr
 
 Runs first, always (even at `review.scale: skip`, which skips only the advisory panel). Its findings are **facts, not opinions**: never triaged down, never adjudicated away; any open one blocks `final.md`. In priority order:
 
-- **A0 · Conflict detection — the #1 job.** The top priority of the whole review, with the most effort. Do **not** merely trust existing truth statuses — *actively re-hunt*: grep truths by tag, cross-check every structured fact against same-tag truths, exhaustively (depth per `config.conflicts.detection`). A violation is a claim citing a truth with `status: conflict`, a silent pick with no recorded resolution, an unauthorized attribution, or a truth-vs-truth contradiction the map missed.
+- **A0 · Conflict detection — the #1 job.** The top priority of the whole review, with the most effort. Do **not** merely trust the open-conflict store — *actively re-hunt*: grep truths by tag, cross-check every structured fact against same-tag truths, exhaustively (depth per `config.conflicts.detection`). A violation is a claim citing a truth targeted by an open conflicts.json entry, a silent pick between an entry's candidates, or a truth-vs-truth contradiction the map missed (which becomes a new entry, never a card stamp).
 - **A1 · Grounding.** A claim that traces to no material, or whose citation is invalid.
 - **A2 · Completeness.** *Only if* `config.fidelity.completeness: required` — a required element/section absent.
 
@@ -59,7 +59,7 @@ Findings are written to `review.md` `# Fidelity violations` as `- [<kind>] <wher
 
 ### B. The advisory panel — optional, editable
 
-Cold, empty-context persona subagents run in parallel, each told "find flaws; assume there's a problem": **logic · gap-finder · reader-proxy · editor · breaker**. Counts/effort scale by `config.review.scale`. An over-strictness triage (KEEP / DOWNGRADE / DROP) drops nitpicks — **applied to advisory findings only, never to fidelity violations**. Written to `review.md` `# Findings` with severity `critical | should-fix | nice-to-have`; `adjudications` record dropped/accepted advisory calls so a later cold round doesn't re-litigate them.
+Cold, empty-context persona subagents run in parallel, each told "find flaws; assume there's a problem": **logic · gap-finder · reader-proxy · editor · breaker**. Counts/effort scale by `config.review.scale`. An over-strictness triage by a separate cold *defender* subagent (mandatory at `standard` and `full`; KEEP / DOWNGRADE / DROP) drops nitpicks — **applied to advisory findings only, never to fidelity violations**. Written to `review.md` `# Findings` with severity `critical | should-fix | nice-to-have`; `adjudications` record dropped/accepted advisory calls so a later cold round doesn't re-litigate them.
 
 ### The deterministic floor
 
@@ -69,17 +69,28 @@ Cold, empty-context persona subagents run in parallel, each told "find flaws; as
 
 ## 4. Conflict handling (source-vs-source)
 
-Handled across map (detect + resolve), write (guard at citation), review (re-hunt, block), refine (resolve only through the record).
+Handled across map (detect + record), the human (rule), map again (apply), and validate (block
+shipping) — the slice-1 division of labour: meaning is judged by the AI, decisions are the
+human's, and the machine keeps the ledger and pulls the tripwire.
 
-1. **Detect** (`map`): extract truths from materials and tag them. For each tag cluster, compare truths — AI reads related truths by grepping tags and judges conflicts on the fly. Each conflict → set `status: conflict` + `conflict_with` on both truth files.
-2. **Resolve** (`map`): mechanically if a rule applies —
-   - the conflicting truths' source materials have a `supersedes` relation — both carry `dated` (the source's own date, not `added`) and one is newer → newer wins. Missing `dated` on either side means the rule does not apply, and the machine asks instead of guessing;
-   - `project.md` `authority` ranks the roles → higher wins;
-   - otherwise **stop and ask** the user: A / B / real value / keep both. Record the choice in **both** truths' `resolution` fields — the loser → `status: discarded` (out of the mine, kept as audit trail), the winner **stays `ok`** carrying the resolution as history; "keep both" (attribute) → both stay `ok` — only if the user chooses it (or `conflicts.attribution: allow`). Never auto-pick, never auto-attribute.
-3. **Guard** (`write`): before citing, check the truth's `status` — cite `ok` only (an attribute-resolved truth is written both-sides); a `discarded` truth points to its successor via `resolution.winner`; never cite `conflict`.
-4. **Re-check** (`map`, on a later run): re-run detection over the grown source by re-reading tag clusters; **re-open** a settled resolution a new material now contradicts (the `ok` winner goes back to `conflict`).
+1. **Detect** (`map` — the AI's judgment): extract truths and tag them; for each tag cluster,
+   compare truths and judge disagreement on the fly. Tags are the neighbourhood that keeps the
+   AI from reading everything; the "same fact?" call is made inside that neighbourhood.
+2. **Record** (the machine's ledger): a detected disagreement becomes an entry in
+   `.weavedoc-state/conflicts.json` — targets (the standing cards, `[]` when nothing is
+   settled), candidates (each claim with its source, losslessly), created. No card changes.
+   The machine never picks, ranks, or recommends a winner — no authority order, no date order,
+   no recency. While any entry is open, `validate` is nonzero and `consecrate` refuses.
+3. **Rule** (the human): keep the current value · adopt a candidate · same fact (merge the
+   evidence) · split by the hidden axis (time, viewpoint, definition, scope — "both are
+   right" always names one; source attribution is the split of last resort) · reject all.
+4. **Apply** (`map`, on the ruling): edit the canonical card in place (same id — adopt), add
+   `corroborated_by` (same fact), write split cards (new ids from the allocator), or delete
+   nothing-stands cards; then DELETE the entry — resolution is deletion, and no archive grows.
+   Re-detection later compares fresh: nothing is suppressed by having been rejected before.
 
-Each truth file carries its own `status` + `resolution`, stable across the series. See [.weavedoc/FORMATS.md](.weavedoc/FORMATS.md).
+Cards carry no conflict state (schema v3): a card that exists is canonical, and the entry —
+not the card — is what blocks. See [.weavedoc/FORMATS.md](.weavedoc/FORMATS.md).
 
 ---
 
@@ -88,11 +99,11 @@ Each truth file carries its own `status` + `resolution`, stable across the serie
 The fidelity gate keeps the record faithful to the sources. This layer guards the **other door** — machine output entering the human's record — where a testbed run showed every major failure walks in: proposed values recorded like user statements, silently-chosen conventions riding into computed "facts", interpretations hardened into negative propositions.
 
 - **Provenance on every truth** — `stated` (the source says it) / `adopted` (machine proposed, user adopted — the adoption exchange preserved in the source material) / `derived` (machine computed — must carry `derived_from` + `assumptions` for every premise no material states, and time-varying claims an `as_of` phase/date anchor). "The machine never silently picks" must hold **in the files**, not just in chat.
-- **A run log** — `truths/changelog.md`: map · verify each append their run's delta (added / superseded / edited / removed, each with its provenance tag).
+- **A run log** — `truths/changelog.md`: map · verify each append their run's delta (added / edited / removed, each with its provenance tag; `superseded:` is a v2-era spelling kept readable in migrated logs).
 - **The confirmation surface is the delta, never the mine.** verify's human step must not ask "추출된 진실이 정확합니까?" over the whole truth set — unanswerable, and it hands the machine's job back. It renders the changelog since the last confirmation: **the full list** of added/superseded/changed truths — including faithfully-sourced ones, because recording can distort even direct user statements and only the user can see their words were reflected right — with the **machine-judgment set highlighted** (adopted/derived values, hardened hedges, machine-made negative propositions, and each reviewer finding the machine wanted to dismiss on semantic grounds, which waits in a Human queue for the user's ruling). Mechanical guarantees are stated ("축자 인용 존재는 validate가 N/N 확인") so the human reviews meaning, not typos; a blanket pass is recorded as a blanket, never as per-item approvals.
 - **The closing report carries the open items themselves.** Whatever a run leaves waiting on the human — conflicts, questions, Human-queue entries, fidelity violations, gaps — is stated in the closing message: what it is · the issue in one line · what's needed, the file path as reference after the substance, never instead of it. "questions.md를 확인하세요" alone is the same no-reviewable-surface failure moved to the handoff (ruled 2026-08-06; every skill carries the rule as "Surface, don't point"). `weavedoc status --open` prints the full list mechanically — the closing report renders that output, never a from-memory recount.
 - **Verification never moves its own baseline** — source files are pinned (size/mtime) for the round; new information enters as a correction material, machine annotations only as marked `> [note]` / `> [machine-note]` lines in converted.md.
-- **Adjacent record guards, same door.** `resolution.decision_kind` (`supplied` | `ratified`) keeps a machine-originated value the user waved through traceable as machine-originated — `ratified` items join the priority re-verify set. Material `stage` (`plan` | `applied`) stops plan/proposal content masquerading as usage history. `questions.md` runs `open → proposed → answered`, and `answered` requires a quotable user utterance recorded with the entry — silence is never confirmation.
+- **Adjacent record guards, same door.** `provenance: adopted` keeps a machine-originated value the user waved through traceable as machine-originated — adopted/derived truths form the priority re-verify set. Material `stage` (`plan` | `applied`) stops plan/proposal content masquerading as usage history. `questions.md` runs `open → proposed → answered`, and `answered` requires a quotable user utterance recorded with the entry — silence is never confirmation.
 
 ---
 
@@ -104,28 +115,30 @@ A dependency-free checker — the mechanical floor under the AI gate. Requiremen
   - required frontmatter · enums · `id` matches filename · role ∈ project roles;
   - catalog ↔ materials (orphans both ways);
   - every truth `source` resolves to an existing material;
-  - **every truth with `status: conflict` has a matching `conflict_with` entry**;
+  - **no v2 state field on any card** (`TRUTH-V2-FIELD`: `status`/`conflict_with`/`resolution`/`superseded` — state growing back onto cards is discarded machinery returning);
+  - **the state files parse or everything stops** (`STATE-MISSING`/`STATE-MALFORMED` — an unreadable conflicts store never reads as "no conflicts");
+  - **any open conflicts.json entry blocks shipping** (`CONFLICT-OPEN`), and dangling entry references are named (`CONF-TARGET-DANGLING`/`CONF-SOURCE-DANGLING`);
+  - **the allocator is never behind the mine** (`IDSEQ-BEHIND` — a next counter at or below an observed id is a collision waiting);
   - **every `required_tags` tag has at least one truth**;
   - **no `final.md` with a non-empty `# Fidelity violations`** (the membrane, mechanically);
   - **`provenance` enum valid; `derived` truths carry `derived_from`** (a derivation must show its chain);
   - **each truth's body appears verbatim in its source** (the anti-laundering seal — a paraphrase fails);
   - **`index.md` ↔ truth files in sync** (ids both ways — hand-edit drift fails validate);
-  - **a `retracted` material grounds nothing** — its truths must be `unsupported`/`discarded`, and no `resolution.winner` may reference it (basis gone → re-open);
+  - **a `retracted` material grounds nothing** (`TRUTH-SOURCE-DANGLING` — a canonical card on withdrawn evidence is re-grounded by map or removed);
   - **`truths/coverage.md` cross-checks** — sections resolve to materials, mentioned ids exist, every truth from a sectioned material appears in its section;
   - **`origin: research` materials carry `url` + `retrieved_at`**, and their truths are never `provenance: stated` (nobody *stated* a fetched value — the laundering `origin: research` blocks at the material level would otherwise resume one level down);
   - **`corrects` references resolve** and nothing corrects itself;
-  - **a `retracted` truth has a `removed:` line in the changelog**, and one side of an open conflict is never retracted alone (otherwise the survivor stays permanently unusable with no decision on record);
   - **`truths/verify.md` frontmatter/enums valid**;
   - **every `[open]` Human queue entry carries an ownership tag**;
   - config enums valid.
 - **`reindex [--check]`** — regenerates `truths/index.md` + `tree.md` from truth frontmatter, the **only** writer of those files (hand-editing them consumed ~45% of a real map run's tool calls and corrupted an entry). `--check` diffs without writing.
-- **`census`** — the mine's authoritative statistics: truth files vs index entries, id numbering holes, live/status tallies, coverage-manifest count. Skills report **these** numbers, never eye-counts (a real run misreported the mine by 3 and missed a hole). `retracted` truths are tallied separately (they are not `live`). Two numbers were made *answerable* rather than merely honest: a hole the changelog explains as `removed:` is reported as settled instead of re-asking forever, and the coverage denominator subtracts user-ruled `## legacy` exemptions so the ratio can actually reach N/N (a real mine sat at 16/26 with no path to closing it, and a metric that can't be closed stops being read).
+- **`census`** — the mine's authoritative statistics: truth files vs index entries, coverage-manifest count. Skills report **these** numbers, never eye-counts (a real run misreported the mine by 3). No status tally and no numbering-hole accounting (schema v3): every card that exists is canonical, so "live" IS the file count, and a numbering hole is the allocator's normal trace — deletion removes the card and the number is never re-granted, so there is nothing to interrogate. The coverage denominator subtracts user-ruled `## legacy` exemptions so the ratio can actually reach N/N (a real mine sat at 16/26 with no path to closing it, and a metric that can't be closed stops being read).
 - **`retag <old> <new> [--dry]`** — renames/merges a tag across every guaranteed-format site (truths `tags`, project `required_tags`, plan `scope_tags`), then reindexes. Free-text mentions (gaps.md, questions.md, verify.md) are listed for review, never rewritten blind.
-- **`pull <term>`** — the read-side counterpart of census: a protocol-correct lookup for consumers **outside** the pipeline (creative sessions, other tools, ad-hoc questions). Searches claims+tags (body-text fallback) and applies `.weavedoc/READ.md` mechanically — superseded → winner pointer, conflict/unsupported → flagged unusable, `as_of`/derived/plan-stage labels attached. `init` plants an idempotent CLAUDE.md pointer block so any session in the repo hits the protocol before reading the mine raw.
+- **`pull <term>`** — the read-side counterpart of census: a protocol-correct lookup for consumers **outside** the pipeline (creative sessions, other tools, ad-hoc questions). Searches claims+tags (body-text fallback) and applies `.weavedoc/READ.md` mechanically — every listed card is canonical (schema v3), with `as_of`/derived/adopted/plan-stage/retracted-source labels attached. `init` plants an idempotent CLAUDE.md pointer block so any session in the repo hits the protocol before reading the mine raw.
 - **`gaps`** — census + the mechanical declared-marker scan (markers + unchecked checkboxes) that floors the `weavedoc-gaps` skill.
 - **`scope`** — what a verify round still owes, **split by evidence class** (the contract since the digest sidecar landed; this line described the pre-sidecar two-way split until v0.5.7): **verified (digest-bound)** — a `truths/verify-ledger.tsv` row whose sha256 matches the unit's current bytes · **legacy-unbound** — a digest-less v1 record (a material's own `status: verified`, or a markdown `## Verified units` row) that is preserved history but binds no bytes · **stale** — digest mismatch, the unit changed after verification · **failed** · **unverified**. A round owes `unverified + stale + failed`; legacy-unbound is re-verified by risk priority, not wholesale. `weavedoc-verify` reads its round scope from this instead of deciding it, **and re-covering a listed unit needs a reason written into `verify.md` first** — asked which truths a round owed, a real run answered "all of them" and put five cold reviewers across 264 truths, three rounds deep, when the answer was 40. In the markdown `## Verified units` section the layout is free (table or bullets); what an entry must do is **end with the verdict word `verified`**, and an entry ending in anything else (`**미통과**`, `R3 미실행`, a legacy note) covers nothing and is named rather than silently ignored.
 - **`impact <material-id>`** — which truths were extracted from this material, which documents cite them (the blast radius when a source is superseded or re-opened).
-- **`status`** — each document's stage + next step, **plus the open Human-queue split** (`user-only` / `recommended` / `machine`), so a completeness line can never read "열린 갭 0 · 열린 질문 0" while decisions sit waiting on the user. **`status --open`** lists the waiting items *themselves* — every open conflict · question · Human-queue entry · fidelity violation · gap, one line each — the mechanical source the skills' closing reports render ("Surface, don't point"). It owns no judgment: gaps come from the **same `scanRegister` call validate counts with**, violations from the gate's `fidBody`/`isNoise`, the Human queue from the single classifier the counters share (files are still re-read for diagnostics — what is single is the judgment). v0.5.5 shipped it with a copy of the looser tally rule instead and reported a blocking gap as "nothing is waiting" — hence the rule, and the suite's count-equality guard. **`lang` / `locale`** — project language, and OS-language detection for init.
+- **`status`** — each document's stage + next step, **plus the open Human-queue split** (`user-only` / `recommended` / `machine`), so a completeness line can never read "열린 갭 0 · 열린 질문 0" while decisions sit waiting on the user. **`status --open`** lists the waiting items *themselves* — every open conflict · question · Human-queue entry · fidelity violation · gap, one line each — the mechanical source the skills' closing reports render ("Surface, don't point"). It owns no parser: gaps, review, Human queue and questions are selected from the same shared scanner and typed ledger models their validation/counting consumers use. v0.5.5 shipped it with a copy of the looser tally rule instead and reported a blocking gap as "nothing is waiting" — hence the rule, and the suite's count-equality guard. **`lang` / `locale`** — project language, and OS-language detection for init.
 
 It's a bonus enforcement floor (CI-friendly); the core loop runs on the skills + the gate without it, but `refine` runs `validate` before writing `final.md`, so consecration can't slip a graph-level violation.
 

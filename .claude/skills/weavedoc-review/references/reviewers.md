@@ -34,9 +34,13 @@ One finding per line:
 - [critical|should-fix|nice-to-have] <where: §section / M#·T# / file:location> — <what is wrong + what consequence it would have>
 ```
 
-- `critical` — the document/truth would **state something factually wrong** or **miss a fact that changes the document's meaning**. If you can't name the wrong claim and its consequence, it is not critical.
-- `should-fix` — fidelity is maintained, but **ambiguity or imprecision** would make two writers produce materially different documents from the same truths.
-- `nice-to-have` — wording, clarity, minor precision loss that doesn't change meaning.
+Each grade has an **entry ticket** — what the finding must present to claim it:
+
+- `critical` — the document/truth would **state something factually wrong** or **miss a fact that changes the document's meaning**. **Ticket: the wrong (or missing) statement + its consequence, both named.** Can't name them → not critical.
+- `should-fix` — fidelity is maintained, but the reader would be **misled or diverge**: an omission, distortion, or ambiguity. **Ticket: the exact spot + the concrete misreading or divergence it produces.** Can't show it → nice-to-have.
+- `nice-to-have` — wording, clarity, minor precision loss that doesn't change meaning. **Ticket: the better version or the reader benefit, in one line.** Can't state even that → non-finding.
+
+**A finding missing its ticket files one grade lower** (missing the nice-to-have ticket = dropped). This is a *formal* test the defender may finalize on its own — unlike a downgrade for **semantic** reasons, which still goes to the Human queue (see triage below). Grades are argued by ticket, never by adjective. The gate's kinds (contradiction/unsupported/missing-required) have no grades and no tickets — they are facts, outside this ladder. A ticket-downgraded finding is **not** condensed into do-not-raise — it stays open at its new grade, and the next round's fresh cold panel may re-raise it *with* the ticket. A finding that keeps failing to produce its ticket across fresh cold rounds has found its true grade. That sentence presumes a next round exists, so one guard makes it true: a ticket-downgrade that **crosses the blocking bar** (the finding would block at its claimed grade and does not at its new one) leaves the round **not clean**, so the loop cannot converge on it and the next fresh cold panel always runs. Nothing is routed to the human and the grade is not re-argued — the fresh panel either re-raises the finding with its ticket, or a grade that survived two independent cold reads stands.
 
 A finding with no named consequence ("this seems unclear", "what about edge X?") is a **non-finding** — drop it. If a lens finds nothing, it returns `none` with a one-line note on what it checked.
 
@@ -119,9 +123,9 @@ Write findings in {config.language}.
 
 Merge findings from all reviewers; dedupe by (where + what). On a severity clash, take the higher. On a **kind** clash (two lenses judged the same defect e.g. `contradiction` vs `unsupported`), keep the kind whose diagnosis carries **more evidence** — `contradiction` (names the conflicting truth) over `unsupported` (names only absence) over `missing-required` — and note the displaced kind in the entry's prose; `refine` routes the repair by kind, so the merged entry must say which repair path won and that the other reading existed.
 
-## Over-strictness triage (`full`; optional `standard`)
+## Over-strictness triage (`standard`·`full`: mandatory; `light`: producer rule only)
 
-One more cold reviewer (the *defender*) rules each finding KEEP / DOWNGRADE / DROP. **The defender is a separate cold subagent — the orchestrating session must never self-triage**, and the defender is mandatory (whatever the level) whenever the orchestrating session also produced the conversions under review: the producer defending its own work is how a twice-raised finding got dismissed twice in a real run — and it was the one the user later corrected.
+One more cold reviewer (the *defender*) rules each finding KEEP / DOWNGRADE / DROP. **The defender is a separate cold subagent — the orchestrating session must never self-triage.** At `standard` and `full` the defender always runs: a graded list is not final until each grade survived a cold re-judgment. At `light` it runs only under the **producer rule**, which holds at every level: whenever the orchestrating session also produced the conversions under review, the defender is mandatory — the producer defending its own work is how a twice-raised finding got dismissed twice in a real run, and it was the one the user later corrected.
 
 - **Drop:** anything out of scope (per the SCOPE rule above); anything failing the "name the consequence" test; anything in the do-not-raise categories; duplicates.
 - **Keep:** only findings with a named consequence at the stated severity.
@@ -161,11 +165,11 @@ Write the round's verdict to the state file:
    Method — this is the PASS condition, so do it and show it: pick **the topics a writer would actually pull** (each `required_tag`, plus every entity named in a project-language tag), run `pull` on each, and for each one write *what a consumer would now believe*. A round of T5 with the pulls and the belief statements shown is a PASS even when it finds nothing; without them it is PARTIAL. There is no "compare against the truth" here — the finding is always **a gap between what the mine holds and what a protocol-following reader ends up with**:
    - a **guard that doesn't surface** — an "아직 정해지지 않았다" truth whose tags exclude the entities it guards, so `pull <entity>` returns two fixed values with the undecided span between them invisible and the reader interpolates (a real run: `pull 초아` gave 16세 and 17세 with no sign that the gap was undecided);
    - a **claim narrower than its own body** — `pull` lists claims, so a fact reachable only by opening the file is a fact most consumers never see;
-   - a **superlative or ordering with no live basis** — the truths it rests on are `discarded`, but the sorted statement is still `ok`;
-   - an **`as_of` window a consumer can't resolve** — a phase label no live truth defines, so the reader cannot tell when the value holds;
-   - a **`discarded` truth whose winner pointer lands nowhere useful** — the successor exists but its claim doesn't carry the displaced value, so following the protocol still leaves the reader without it.
+   - a **superlative or ordering whose basis left the mine** — the cards it rested on were edited in place or deleted, but the sorted statement's own card still asserts the ordering;
+   - an **`as_of` window a consumer can't resolve** — a phase label no truth defines, so the reader cannot tell when the value holds;
+   - a **contested card a reader would cite as settled** — the card is canonical (it is) and `pull` lists it plainly, but it is a target of an open conflicts.json entry; only the open lane (`status --open`) shows the dispute, and a reader who skipped READ.md rule 2's glance walks off with one side of an unruled disagreement.
 
-   Explicitly NOT T5's business (they need material access, and other lenses own them): whether a `> [machine-note]` points into superseded prose (M3/mirror), whether a claim matches its quote (T1), whether extraction was complete (T2). Naming one is fine; raising it as a T5 finding is not. A consumer who would state something false = FAIL; one who would merely be under-informed = should-fix.
+   Explicitly NOT T5's business (they need material access, and other lenses own them): whether a `> [machine-note]` points into displaced prose (M3/mirror), whether a claim matches its quote (T1), whether extraction was complete (T2). Naming one is fine; raising it as a T5 finding is not. A consumer who would state something false = FAIL; one who would merely be under-informed = should-fix.
 
 ### Pass rule
 A check is **PASS only when a reviewer showed it** — pasted the mapping, quoted the comparison, traced the element. **"Looks fine" / "found nothing" is NOT a PASS** — that's exactly how a rubber-stamp waves an under-checked conversion through. An unshown check is **PARTIAL**, never PASS.

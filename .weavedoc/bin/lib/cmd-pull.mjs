@@ -31,7 +31,7 @@ function pullVal (line) {
 }
 
 function extract (file) {
-  const r = { id: basename(file, '.md'), st: '', cl: '', src: '', asof: '', prov: '', cw: '', res: '', asm: '', bd1: '' }
+  const r = { id: basename(file, '.md'), cl: '', src: '', asof: '', prov: '', asm: '', bd1: '' }
   let tbl = 0
   const lines = splitLines(readOr(file))
   let infm = lines.length > 0 && isFence(lines[0])
@@ -46,13 +46,10 @@ function extract (file) {
       if (/^\|/.test(r.bd1) && /^[ \t]*\|/.test(l)) tbl++
       continue
     }
-    if (/^status[ \t]*:/.test(l)) r.st = pullVal(l)
-    else if (/^claim[ \t]*:/.test(l)) r.cl = pullVal(l)
+    if (/^claim[ \t]*:/.test(l)) r.cl = pullVal(l)
     else if (/^source[ \t]*:/.test(l)) r.src = pullVal(l)
     else if (/^as_of[ \t]*:/.test(l)) r.asof = pullVal(l)
     else if (/^provenance[ \t]*:/.test(l)) r.prov = pullVal(l)
-    else if (/^conflict_with[ \t]*:/.test(l)) r.cw = pullVal(l)
-    else if (/^resolution[ \t]*:/.test(l)) r.res = pullVal(l)
     else if (/^assumptions[ \t]*:/.test(l)) r.asm = pullVal(l)
   }
   // A table-bodied truth previewed as its header row alone (field report D2): a reviewer decided
@@ -91,59 +88,25 @@ export function cmdPull (m, out, term) {
   if (tfiles.length > 60) out(`(${tfiles.length} matches — narrow the term if this is noise)`)
 
   const mstat = new Map(); const mstage = new Map()
-  let nLive = 0; let nRes = 0; let nConf = 0; let nUnsup = 0; let nRetr = 0
+  let nLive = 0
 
+  // Every v3 card is canonical — the v2 status branches (discarded successors, conflict warnings,
+  // unsupported, tombstones) left with the fields they read. What still varies per row is the
+  // LABEL set: as_of/provenance/assumptions and the source material's own lifecycle, which is the
+  // material axis and survives. An open disagreement no longer wears a card: it lives in
+  // .weavedoc-state/conflicts.json, blocks shipping via validate, and is surfaced by status --open.
   for (const f of tfiles) {
     const r = extract(f)
     if (r.src && !mstat.has(r.src)) {
       const mf = join(m.materials, r.src, 'converted.md')
       if (existsSync(mf)) { mstat.set(r.src, fmv(mf, 'status')); mstage.set(r.src, fmv(mf, 'stage')) } else { mstat.set(r.src, ''); mstage.set(r.src, '') }
     }
-    let lab = truthLabels(r.asof, r.prov, r.asm, mstage.get(r.src) ?? '', mstat.get(r.src) ?? '')
-
-    if (r.st === 'discarded' || r.st === 'resolved') {
-      // "resolved" is a pre-rename legacy value and winner-self is legacy too; both still render
-      // usable so a mid-migration mine reads correctly.
-      const wm = /winner[ \t]*:[ \t]*(\[[^\]]*\]|[^,}]+)/.exec(r.res)
-      const w = wm ? wm[1] : ''
-      // The key spelling must allow a space before the colon here too (`scope : [금액]`), or a reader
-      // following READ.md is told a PARTIAL supersede was total — the opposite fact.
-      const sm = /scope[ \t]*:[ \t]*(\[[^\]]*\])/.exec(r.res)
-      const sc = sm ? sm[1] : ''
-      if (w && new RegExp(`(^|[^0-9A-Za-z])${r.id}([^0-9]|$)`).test(w)) {
-        out(`${r.id}  [WON ITS CONFLICT — usable; legacy stamp, set status: ok] ${r.cl} [${r.src}]${lab}`)
-        if (r.bd1) out(`      ↳ sealed: ${r.bd1}`)
-        nLive++
-      } else if (sc) {
-        // PARTIAL discard (field report D4): READ.md rule 2 sends the reader to the SURVIVING half
-        // of this very row, which therefore needs its source and labels exactly like a live row.
-        out(`${r.id}  [DISCARDED → ${w || '?'} · scope ${sc}] ${r.cl} [${r.src}]${lab}`)
-        nRes++
-      } else {
-        // FULL discard: the protocol says follow the successor — nothing here is for use, so the
-        // row stays terse and label-free on purpose.
-        out(`${r.id}  [DISCARDED → ${w || '?'}] ${r.cl}`)
-        nRes++
-      }
-    } else if (r.st === 'conflict') {
-      out(`${r.id}  [!! CONFLICT vs ${r.cw || '?'} — unresolved, use NEITHER side] ${r.cl} [${r.src}]${lab}`)
-      nConf++
-    } else if (r.st === 'unsupported') {
-      out(`${r.id}  [!! UNSUPPORTED — grounding gone, do not use] ${r.cl}${lab}`)
-      nUnsup++
-    } else if (r.st === 'retracted') {
-      out(`${r.id}  [!! RETRACTED — was never a valid extraction; tombstone only, no successor] ${r.cl}${lab}`)
-      nRetr++
-    } else {
-      if (r.res && /type[ \t]*:[ \t]*attribute/.test(r.res)) lab += ' [ATTRIBUTED — cite both sides, per resolution]'
-      out(`${r.id}  ${r.cl} [${r.src}]${lab}`)
-      // Only on the usable rows: everywhere else the protocol is telling the reader NOT to use the
-      // value, and the quote would be noise under an instruction to look elsewhere.
-      if (r.bd1) out(`      ↳ sealed: ${r.bd1}`)
-      nLive++
-    }
+    const lab = truthLabels(r.asof, r.prov, r.asm, mstage.get(r.src) ?? '', mstat.get(r.src) ?? '')
+    out(`${r.id}  ${r.cl} [${r.src}]${lab}`)
+    if (r.bd1) out(`      ↳ sealed: ${r.bd1}`)
+    nLive++
   }
-  out(`— usable ${nLive} · discarded ${nRes} (successor in resolution) · conflict ${nConf} · unsupported ${nUnsup} · retracted ${nRetr} (no successor)`)
+  out(`— ${nLive} truth(s)`)
   out('  bodies: truths/<id>.md · protocol: .weavedoc/READ.md')
   return 0
 }

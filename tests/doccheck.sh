@@ -68,6 +68,44 @@ for k in $paths; do
   grep -q "\`$k/\`" "$init" || say "validate treats '$k' as a configured path but weavedoc-init never names \`$k/\`"
 done
 
+# 6. The bar-crossing reset rule is one contract with five owners. The rule ("a ticket-downgrade
+# that crosses the blocking bar leaves the round not clean", bundle 2026-08-08.16) lives in the
+# engine and the two SKILLs that OPERATE the convergence count — and in the two documents that
+# DESCRIBE that count (FORMATS' verify.md field contract, the shipped review.md template comment),
+# which is exactly where .17 found it missing after .16 synced only the operating owners. A cold
+# session resumes a loop from whichever document it opens first, so one describer still saying
+# "resets only on a failing round" un-teaches the rule (the two-documents-two-answers class, twice
+# in two days across .15–.17; the census that closed .17 was manual and one-shot — this makes it
+# standing). Same honesty as check 5: a TEXT check — it proves the sentence is present in all five
+# places, never that a reader follows it. The token is the rule's own vocabulary; renaming the
+# concept legitimately moves this list too. No extraction step, so no separate vacuity guard: a
+# missing file fails grep the same as a missing sentence.
+for f in \
+  ".claude/skills/weavedoc-review/references/reviewers.md" \
+  ".claude/skills/weavedoc-review/SKILL.md" \
+  ".claude/skills/weavedoc-verify/SKILL.md" \
+  ".weavedoc/FORMATS.md" \
+  ".weavedoc/templates/review.md"; do
+  grep -qE 'bar-cross|crosses the blocking bar' "$REPO/$f" \
+    || say "the bar-crossing reset rule is missing from $f — five owners share this contract (engine, both counting SKILLs, FORMATS field contract, review template); one silent absence re-opens the two-documents-two-answers split (.15-.17)"
+done
+
+# 7. The tag discipline is map's to carry — four sentences, text-checked (acceptance test 19 of
+# the v3 plan). Same honesty as checks 5 and 6: a TEXT check proves the sentence a follower would
+# read is present, never that it is followed — skills cannot be executed, so the sentence's
+# presence IS the whole mechanical purchase available. The tokens are the rules' own vocabulary
+# (§3: read tree.md's list first · reuse similar tags · ask when ambiguous · re-check on edit);
+# rewording the discipline legitimately moves this list too. No extraction step, so no separate
+# vacuity guard: a missing file fails grep the same as a missing sentence.
+map="$REPO/.claude/skills/weavedoc-map/SKILL.md"
+for s in \
+  "read the existing tag list first" \
+  "Reuse similar tags" \
+  "tag choice is ambiguous, ask the user" \
+  "re-check that its tags still fit"; do
+  grep -qF "$s" "$map" || say "map's tag discipline lost a rule: '$s' — the tag vocabulary is the machine's whole search net (§3), and this text check is acceptance test 19's teeth"
+done
+
 # 3. The VERSION label and CHANGELOG's newest entry are one fact.
 v=$(cat "$REPO/.weavedoc/VERSION" 2>/dev/null)
 top=$(grep -m1 '^## ' "$REPO/CHANGELOG.md" | sed 's/^## *//')

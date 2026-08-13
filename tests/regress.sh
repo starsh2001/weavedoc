@@ -65,7 +65,7 @@ WD_ENTRY=${WDRUN[${#WDRUN[@]}-1]}
 # not reproduce. make-manifest.sh reads the INDEX (`git ls-files` + `git cat-file blob :<path>`),
 # which a working-tree rename does not touch, and a STAGED rename moves the key through the index
 # hash anyway. Keeping it only widened the surface on which a stray untracked file fires the seal.
-key_paths() { ( cd "$1" && find tests .weavedoc/templates .weavedoc/bin -type f -print0 | sort -z | tr '\0' '\n' ); }
+key_paths() { ( cd "$1" && find tests .weavedoc/templates .weavedoc/bin .weavedoc/schemas -type f -print0 2>/dev/null | sort -z | tr '\0' '\n' ); }
 
 # WORKERS INHERIT THE KEY — they do not recompute it (v0.5.12). The block below spawns ~25
 # processes (git, find, sort, xargs, sha256sum ×6, node/uname/bash/awk/sed --version …), which is
@@ -101,6 +101,12 @@ compute_key() { { git -C "$REPO" rev-parse HEAD 2>/dev/null
            # before measuring it (WD_BIN takes any project-relative path, and one outside bin/ went
            # unkeyed). Corrected with the line, v0.5.17.
            { sha256sum "$REPO/.weavedoc/schema"
+           # THE VERSIONED CONTRACTS TOO (bundle 2026-08-08.4). `schema` is one file and from v3 the
+           # bundle ships more beside it; keying only the old path meant a dirty `schemas/v3` edit
+           # was invisible to `--resume`, which replayed the previous PASS while a fresh key failed
+           # — measured, and the same class v0.5.14/.15 closed for `bin/`. A whole tree, never named
+           # files, for the same reason: a contract added later must not be able to ship unkeyed.
+           find "$REPO/.weavedoc/schemas" -type f -print0 2>/dev/null | sort -z | xargs -0 -r sha256sum
            find "$REPO/.weavedoc/bin" -type f -print0 | sort -z | xargs -0 sha256sum
            # EVERYTHING a case consumes is configuration (v0.5.2 keyed the faultinject drivers;
            # review #6 named the rest of the class): doccheck.sh and ctlscan.mjs are RUN by cases,
@@ -235,6 +241,7 @@ review4() {
     printf -- '---\n'
     printf 'round: 1\n'
     printf 'consecutive_passes: 0\n'
+    printf 'review_legacy: 2026-07-30\n'
     printf -- '---\n\n'
     printf '%s\n\n' "$head"
     [ -n "$body" ] && printf '%s\n\n' "$body"
@@ -244,22 +251,26 @@ review4() {
   } > "$root/documents/d1/review.md"
   # NOT auto-sealed: a sealed review enforces its digests on ANY mine, so sealing here would
   # stale the context under every case that touches a truth or the config (a real 29-case pileup
-  # taught this). The pristine stays a v1 mine with a legacy review; seal-needing cases run
-  # seal-review (or mk_v2) themselves, AFTER their mutations.
+  # taught this). The pristine carries review_legacy instead (schema v3): the marker is the ONE
+  # legitimate digest-less state next to a final — migrated v1 history — so 250+ cases mutate
+  # freely while the gate stays honest. Seal-needing cases run mk_sealed AFTER their mutations,
+  # which strips the marker and seals for real (a sealed review and the marker cannot coexist).
 }
 strip_seal() { # $1=review.md — remove the seal fields (the tamper the v2 gate must catch)
   sed -i '/^reviewed_kind:/d; /^reviewed_digest:/d; /^review_context_digest:/d' "$1"
 }
-mk_v2() { # promote the workspace to a schema-2 mine with a sealed review — the state where the
-  # v0.3.1 seal enforcement applies. The pristine fixture stays v1 (dual-reader) so that the 250+
-  # cases which edit truths/materials are not all staled by a seal they never asked for.
-  sed -i 's/^version: 1$/version: 2/' "$W/project.md"
-  sed -i 's/^version: 1/version: 2/' "$W/.weavedoc/config.yaml"
+mk_sealed() { # give the workspace a REAL review seal — the state where seal enforcement applies.
+  # (Before schema v3 this promoted the v1 pristine to v2; the version axis is gone — the
+  # pristine is v3 from birth and what varies is only whether d1's review is sealed or rides
+  # the review_legacy marker.) seal-review must not run under the marker — a sealed review and
+  # v1-history are contradictory states — so the marker goes first, exactly the order a real
+  # migrated mine follows.
+  sed -i '/^review_legacy:/d' "$W/documents/d1/review.md"
   # The suite is not `set -e`: a silent seal-review failure here would hand every v2 case an
   # UNSEALED mine, and the strip_seal block cases would then pass for the wrong reason (never
   # sealed is observably identical to stripped). A helper failure is a case failure, loudly.
   ( cd "$W" && "${WDRUN[@]}" seal-review d1 draft >/dev/null 2>&1 ) \
-    || bad "mk_v2: seal-review failed — the case would assert against an unsealed mine"
+    || bad "mk_sealed: seal-review failed — the case would assert against an unsealed mine"
 }
 REV() { review4 "$W" "$@"; }
 mkscale() { # deterministic 8-material · 60-truth mine — the scale where spawn regressions show.
@@ -290,12 +301,13 @@ mkscale() { # deterministic 8-material · 60-truth mine — the scale where spaw
     printf -v tid 't%03d' "$ti"
     mi=$(( (ti - 1) % M + 1 )); printf -v mid 'm%03d' "$mi"
     line=$(( (ti - 1) / M + 1 ))
-    printf -- '---\nid: %s\nclaim: "자료%d의 조항 %d이 유효하다"\nsource: %s\nlocation: "제%d조"\ntags: [스케일, 조항%d]\nstatus: ok\nprovenance: stated\n---\n\n제%d조 자료%d의 조항 %d은 유효하다.\n' \
+    printf -- '---\nid: %s\nclaim: "자료%d의 조항 %d이 유효하다"\nsource: %s\nlocation: "제%d조"\ntags: [스케일, 조항%d]\nprovenance: stated\n---\n\n제%d조 자료%d의 조항 %d은 유효하다.\n' \
       "$tid" "$mi" "$line" "$mid" "$line" "$line" "$line" "$mi" "$line" > "$W/truths/$tid.md"
     printf -- '- added: %s (2026-07-30)\n' "$tid" >> "$W/truths/changelog.md"
   done
   printf -- '---\nstatus: passed\nround: 1\nverified_at: 2026-07-30\n---\n\n## Verified units\n\n## Adjudications\n\n## Human queue\n' > "$W/truths/verify.md"
   ( cd "$W" && "${WDRUN[@]}" reindex >/dev/null 2>&1 ) || bad "mkscale: reindex failed"
+  mint
 }
 pass_locale_emoji_claim() {
   # gawk 5.0's multibyte machinery misread emoji-bearing claim lines under UTF-8 locales: five
@@ -304,24 +316,15 @@ pass_locale_emoji_claim() {
   # a session-locale change). Content-parsing awks are byte-pinned (LC_ALL=C) now; the same
   # mine must validate identically under both locales. A missing ko_KR locale degrades to C
   # behaviour, so the case cannot false-fail where the locale is not generated.
-  printf -- '---\nid: t002\nclaim: "품질 심사 — 🔴 즉시 수정, 🟡 확인 필요, 🟢 통과"\nsource: m001\ntags: [위약]\nstatus: ok\nprovenance: stated\n---\n\n제7조 위약금은 계약금액의 10%%로 한다.\n' > "$W/truths/t002.md"
+  printf -- '---\nid: t002\nclaim: "품질 심사 — 🔴 즉시 수정, 🟡 확인 필요, 🟢 통과"\nsource: m001\ntags: [위약]\nprovenance: stated\n---\n\n제7조 위약금은 계약금액의 10%%로 한다.\n' > "$W/truths/t002.md"
   printf -- '\n- 심사: t002\n' >> "$W/truths/coverage.md"
   printf -- '- added: t002 (2026-07-30)\n' >> "$W/truths/changelog.md"
   ( cd "$W" && "${WDRUN[@]}" reindex >/dev/null 2>&1 )
+  mint
   OUT=$( ( cd "$W" && LC_ALL= LANG=ko_KR.UTF-8 $TO "${WDRUN[@]}" validate ) 2>&1 ); RC=$?
   expect_pass
   OUT=$( ( cd "$W" && LC_ALL=C $TO "${WDRUN[@]}" validate ) 2>&1 ); RC=$?
   expect_pass
-}
-acct_scope_quoted_status_is_tombstone() {
-  # scope's truth classifier carried its OWN status parser, and that one never peeled the quotes.
-  # A perfectly legal `status: "retracted"` therefore read as a LIVE truth in scope while validate
-  # — which uses the shared frontmatter value rule — read the same bytes as a tombstone. Two
-  # parsers on one field is the drift class itself; scope uses the shared rule now.
-  printf -- '---\nid: t002\nclaim: "철회된 주장"\nsource: m001\ntags: [위약]\nstatus: "retracted"\nprovenance: stated\n---\n\n제7조 위약금은 계약금액의 10%%로 한다.\n' > "$W/truths/t002.md"
-  vrun scope
-  expect_has "truths     1 live"
-  expect_has "1 tombstone truth(s)"
 }
 pass_locale_scope_census_match() {
   # The locale pin, extended to the two commands the sweep missed (2026-08-04). scope classified
@@ -331,7 +334,7 @@ pass_locale_scope_census_match() {
   # of the sentence — depending on which locale the shell happened to inherit. The `standard`
   # column is free-form text a Korean console can easily fill with CP949 bytes. Byte semantics,
   # one verdict. A missing ko_KR locale degrades to C, so this cannot false-fail where it is absent.
-  printf -- '---\nid: t002\nclaim: "품질 심사 — 🔴 즉시 수정, 🟡 확인 필요, 🟢 통과"\nsource: m001\ntags: [위약]\nstatus: ok\nprovenance: stated\n---\n\n제7조 위약금은 계약금액의 10%%로 한다.\n' > "$W/truths/t002.md"
+  printf -- '---\nid: t002\nclaim: "품질 심사 — 🔴 즉시 수정, 🟡 확인 필요, 🟢 통과"\nsource: m001\ntags: [위약]\nprovenance: stated\n---\n\n제7조 위약금은 계약금액의 10%%로 한다.\n' > "$W/truths/t002.md"
   printf -- '\n- 심사: t002\n' >> "$W/truths/coverage.md"
   printf -- '- added: t002 (2026-07-30)\n' >> "$W/truths/changelog.md"
   ( cd "$W" && "${WDRUN[@]}" reindex >/dev/null 2>&1 )
@@ -351,28 +354,11 @@ $sk_"; RC=0
   done
   ok
 }
-acct_res_reason_comma_warns() {
-  # D3 (field report, decided 2026-08-04): an unquoted reason holding a comma that opens no new
-  # key is exactly where a strict YAML parser truncates the value (Echo t245's correction
-  # note fell below the cut). Warn-first, never blocking — deployed mines must not go red.
-  sed -i '/^provenance: stated$/a resolution: {type: attribute, decided_by: user, decision_kind: supplied, reason: 양쪽 병기, 정정 부기 포함}' "$W/truths/t001.md"
-  vrun validate
-  expect_pass
-  expect_has "[RES-REASON-UNQUOTED]"
-}
-acct_res_reason_quoted_silent() {
-  # The compliant shape: quoted reason with commas inside — no warning (guard against
-  # over-warning the format we are steering everyone toward).
-  sed -i '/^provenance: stated$/a resolution: {type: attribute, decided_by: user, decision_kind: supplied, reason: "양쪽 병기, 정정 부기 포함"}' "$W/truths/t001.md"
-  vrun validate
-  expect_pass
-  expect_hasnt "[RES-REASON-UNQUOTED]"
-}
 acct_pull_table_preview_counts() {
   # D2 (field report): a table-bodied truth previewed as its header row alone — a reviewer
   # decided "the mine has no runtime lengths" while every length sat in the table body. The
   # preview now says it is a table and how big.
-  printf -- '---\nid: t002\nclaim: "수록곡 길이 표"\nsource: m001\ntags: [위약]\nstatus: ok\nprovenance: stated\n---\n\n| # | 곡 | 길이 |\n|---|---|---|\n| 1 | 서곡 | 3:10 |\n| 2 | 종곡 | 4:02 |\n' > "$W/truths/t002.md"
+  printf -- '---\nid: t002\nclaim: "수록곡 길이 표"\nsource: m001\ntags: [위약]\nprovenance: stated\n---\n\n| # | 곡 | 길이 |\n|---|---|---|\n| 1 | 서곡 | 3:10 |\n| 2 | 종곡 | 4:02 |\n' > "$W/truths/t002.md"
   printf '\n- 표: t002\n' >> "$W/truths/coverage.md"
   printf -- '- added: t002 (2026-07-30)\n' >> "$W/truths/changelog.md"
   vrun reindex
@@ -384,9 +370,10 @@ mkplanstage() { # m002 (stage: plan) + t002 derived from it, with as_of — the 
   mkdir -p "$W/materials/m002"
   printf -- '---\nid: m002\ntitle: 기획서\norigin: file\nrole: 계약서\ntopics: [기획]\nformat: md\nsource_path: inbox/plan.md\nadded: 2026-07-01\nstatus: converted\nstage: plan\nsummary: 계획 단계 자료.\n---\n\n# 기획서\n\n6곡 앨범을 계획한다.\n' > "$W/materials/m002/converted.md"
   printf '| m002 | 기획서 | 계약서 | converted |\n' >> "$W/catalog.md"
-  printf -- '---\nid: t002\nclaim: "앨범은 6곡으로 계획되었다"\nsource: m002\ntags: [음악]\nstatus: ok\nprovenance: derived\nderived_from: [m002]\nassumptions: [발매 전 변경 가능]\nas_of: 2026-07-01\n---\n\n6곡 앨범을 계획한다.\n' > "$W/truths/t002.md"
+  printf -- '---\nid: t002\nclaim: "앨범은 6곡으로 계획되었다"\nsource: m002\ntags: [음악]\nprovenance: derived\nderived_from: [m002]\nassumptions: [발매 전 변경 가능]\nas_of: 2026-07-01\n---\n\n6곡 앨범을 계획한다.\n' > "$W/truths/t002.md"
   printf '\n## m002\n\n- 계획: t002\n' >> "$W/truths/coverage.md"
   printf -- '- added: t002 (2026-07-30)\n' >> "$W/truths/changelog.md"
+  mint
 }
 acct_tree_carries_labels() {
   # D1 (field report): pull attached PLAN-STAGE/as_of/DERIVED while index.md/tree.md carried
@@ -413,30 +400,6 @@ acct_pull_index_labels_agree() {
   vrun pull evidence
   expect_has "no matches"
 }
-acct_pull_partial_discard_labels() {
-  # D4 (field report): the discarded branch dropped $lab and [$src] — on a PARTIAL discard
-  # (resolution.scope) the surviving half is exactly the content that needs its labels, and it
-  # printed unlabeled (Echo t040, an open Human-queue item since 2026-08-01).
-  mkplanstage
-  sed -i 's/^status: ok$/status: discarded/' "$W/truths/t002.md"
-  sed -i '/^as_of:/a resolution: {type: value, winner: t001, scope: [곡수], decided_by: user, decision_kind: supplied, reason: "곡수만 정정"}' "$W/truths/t002.md"
-  vrun reindex
-  vrun pull 앨범
-  expect_has "scope [곡수]"
-  expect_has "PLAN-STAGE"
-  expect_has "[m002]"
-}
-acct_pull_full_discard_unchanged() {
-  # Full discard (no scope): the protocol says follow the successor — the row stays terse and
-  # label-free, exactly as before (the guard against relabeling what should stay quiet).
-  mkplanstage
-  sed -i 's/^status: ok$/status: discarded/' "$W/truths/t002.md"
-  sed -i '/^as_of:/a resolution: {type: value, winner: t001, decided_by: user, decision_kind: supplied, reason: "전체 대체"}' "$W/truths/t002.md"
-  vrun reindex
-  vrun pull 앨범
-  expect_has "DISCARDED → t001"
-  expect_hasnt "PLAN-STAGE"
-}
 acct_scale_snapshot() {
   # Field-report P1 contract, mechanized: the fold must produce the SAME verdicts at scale.
   # Pinned on exact examined/scope tallies — a refactor that drops or double-counts a check
@@ -449,7 +412,7 @@ acct_scale_snapshot() {
   expect_has "truths     60 live · 0 verified (digest-bound) · 0 legacy-unbound · 0 stale · 0 failed · 60 unverified"
   vrun pull 조항3
   expect_pass
-  expect_has "usable"
+  expect_has "truth(s)"
 }
 
 mkpristine() {
@@ -461,7 +424,7 @@ mkpristine() {
 
   cat > "$PRISTINE/project.md" <<'EOF'
 ---
-version: 1
+version: 3
 language: ko
 roles: [계약서]
 tone: 담백
@@ -470,10 +433,12 @@ required_tags: []
 
 최소 픽스처 프로젝트.
 EOF
-  # The pristine mine is a v1 mine ON PURPOSE (project + config both version: 1): 250+ cases
-  # mutate truths/materials freely, and a v2 fixture would stale a seal on every one of them.
-  # Cases that need v2 seal enforcement promote explicitly via mk_v2.
-  sed -i 's/^version: 2/version: 1/' "$PRISTINE/.weavedoc/config.yaml"
+  # The pristine mine is v3 from birth (the template config already says version: 3), and its
+  # two machine-owned state files exist in the canonical form init promises — the allocator's
+  # next counters sit ABOVE t001/m001, or the very first grant would collide.
+  mkdir -p "$PRISTINE/.weavedoc-state"
+  printf '{\n  "version": 1,\n  "open": []\n}\n' > "$PRISTINE/.weavedoc-state/conflicts.json"
+  printf '{\n  "version": 1,\n  "next": {\n    "conflict": 1,\n    "material": 2,\n    "truth": 2\n  }\n}\n' > "$PRISTINE/.weavedoc-state/id-sequences.json"
 
   cat > "$PRISTINE/catalog.md" <<'EOF'
 # 자료 목록
@@ -511,7 +476,6 @@ claim: "위약금은 계약금액의 10%다"
 source: m001
 location: "제7조"
 tags: [위약]
-status: ok
 provenance: stated
 ---
 
@@ -660,7 +624,7 @@ block_gate_planted_sibling_tier() {
   # Textually identical to the legitimate layout in pass_gate_siblings_l2, so no level rule can
   # separate them — this is the case the file-wide entry census exists for.
   {
-    printf -- '---\nround: 1\n---\n\n'
+    printf -- '---\nround: 1\nreview_legacy: 2026-07-30\n---\n\n'
     printf '# Fidelity violations\n\n'
     printf '## Findings\n\n- [contradiction] 3장 — 초안은 위약금 30%%라 쓰지만 t001은 10%%다\n\n'
     printf '## Adjudications\n\n## Human queue\n'
@@ -701,6 +665,11 @@ block_gate_arrow_swallows_entries() {
 
 정정 흐름: 초안 --> 검토 --> 재작성
 EOF
+  vrun status --open
+  expect_has "comment that swallows"
+  expect_hasnt "nothing is waiting on you"
+  vrun consecrate d1
+  expect_block "comment structure that hides"
   vrun validate; expect_block "closing '-->' is followed by"
 }
 pass_gate_prose_arrow_no_comment() {
@@ -760,12 +729,82 @@ pass_gate_archived_entry_arrow_eol() {
 EOF
   vrun validate; expect_pass
 }
+block_gate_single_line_archive_before_comment() {
+  # THE SUFFIX IS SOURCE TEXT, NOT PROSE (external review, bundle 2026-08-08.2). Every swallow case
+  # above writes the MULTI-LINE shape, so the single-line form that 2026-08-08.1 declared as a
+  # behaviour change shipped with no case at all — and the suffix a writer is most likely to reach
+  # for, an adjacent comment, is exactly the one the old "live prose" wording implied was fine.
+  # All three surfaces are asserted because all three carried that wording.
+  REV ''
+  printf -- '\n<!-- 라운드 1 보관 - [contradiction] 3장 — 해소됨 --><!-- 감사 -->\n' >> "$W/documents/d1/review.md"
+  vrun validate; expect_block "closing '-->' is followed by"
+  vrun status --open
+  expect_has "comment that swallows"
+  expect_has "more source text after the '-->'"
+  vrun consecrate d1
+  expect_block "followed by more source text on the same line"
+}
+pass_gate_single_line_archive_arrow_eol() {
+  # THE MIRROR, without which the case above passes against a reader that blocks every single-line
+  # comment: the same archive whose closer ENDS its line stays legal, and trailing horizontal
+  # blanks are trimmed rather than counted as a suffix. Blank-vs-suffix is the whole boundary.
+  # MUTATION NOTE: the blank rule is carried by a PAIR of trims (leading and trailing) and either
+  # one alone collapses an all-blank suffix to '', so removing just one is survivable by design.
+  # The mutations this case actually kills are dropping `suffix !== ''` or dropping both trims.
+  REV ''
+  printf -- '\n<!-- 라운드 1 보관 - [contradiction] 3장 — 해소됨 -->   \n' >> "$W/documents/d1/review.md"
+  vrun validate; expect_pass
+  vrun status --open
+  expect_hasnt "comment that swallows"
+  vrun consecrate d1
+  expect_hasnt "more source text on the same line"
+}
+block_review_unterminated_fence() {
+  # 2026-08-08.1 added this check and shipped it with NO case. It also narrowed
+  # HQ-UNTERMINATED-FENCE to truths/verify.md (`hqf === vmd`), handing review.md to this diagnostic
+  # instead — a handoff nothing counted. Both halves are pinned: the new code fires, and the queue
+  # code no longer answers for this file.
+  REV ''
+  printf -- '\n```md\n- [open] [user-only] BEHIND-AN-OPEN-FENCE\n' >> "$W/documents/d1/review.md"
+  vrun validate
+  expect_block "REVIEW-UNTERMINATED-FENCE"
+  expect_hasnt "HQ-UNTERMINATED-FENCE"
+  vrun status --open
+  expect_has "unterminated code fence"
+}
+block_review_unterminated_frontmatter() {
+  # Frontmatter is an explicit capability of review.md, and an unclosed block parses the WHOLE file
+  # as metadata — the gate heading is then not a heading at all. Shipped in 2026-08-08.1 with no
+  # case; verify.md's twin (block_hq_unterminated_frontmatter) has had one since that bundle.
+  REV ''
+  # line 5 is the closing fence now (review_legacy rides inside the frontmatter)
+  sed -i '5d' "$W/documents/d1/review.md"
+  vrun validate
+  expect_block "REVIEW-UNTERMINATED-FRONTMATTER"
+  vrun status --open
+  expect_has "unterminated frontmatter"
+}
+block_hq_unterminated_comment() {
+  # The truths side of the same silence. review.md had REVIEW-UNTERMINATED-COMMENT already;
+  # truths/verify.md had nothing, so its Human queue could vanish behind a forgotten opener while
+  # validate stayed green. 2026-08-08.1 closed it and did not execute it.
+  printf -- '\n<!-- 보관 시작\n- [open] [user-only] BEHIND-AN-OPEN-COMMENT\n' >> "$W/truths/verify.md"
+  vrun validate
+  expect_block "HQ-UNTERMINATED-COMMENT"
+  vrun status --open
+  expect_has "unterminated '<!--'"
+}
 block_gate_stray_arrow() {
   # `-->` in ordinary prose LATER in the file rebalances the count, so the file does not end inside
   # a comment — and everything between the two markers, violations included, is blanked out.
   REV '<!-- 보관
 - [contradiction] 3장 — t001과 모순'
   printf '\n초안 2장 --> 3장 순서로 읽는다.\n' >> "$W/documents/d1/review.md"
+  vrun status --open
+  expect_has "declared review section hidden"
+  expect_hasnt "nothing is waiting on you"
+  vrun consecrate d1
+  expect_block "comment structure that hides"
   vrun validate; expect_block "gone once comments are stripped"
 }
 block_gate_heading_in_comment() {
@@ -785,7 +824,7 @@ pass_gate_archived_heading() {
   # heading and all, makes the raw grep count two headings and blocks forever — and the message says
   # to merge them, which revives a closed violation and blocks again. There is no way out.
   {
-    printf -- '---\nround: 2\n---\n\n'
+    printf -- '---\nround: 2\nreview_legacy: 2026-07-30\n---\n\n'
     printf '# Fidelity violations\n\n'
     printf '<!-- 라운드 1 이력 (해소됨)\n# Fidelity violations\n\n'
     printf -- '- [contradiction] 3장 — 초안 30%%가 t001과 모순 (해소)\n-->\n\n'
@@ -802,6 +841,13 @@ block_gate_final_dir() {
 block_gate_no_review() {
   rm -f "$W/documents/d1/review.md"
   vrun validate; expect_block "no review.md"
+}
+block_review_directory_is_unknown_not_absent() {
+  rm -f "$W/documents/d1/review.md"
+  mkdir "$W/documents/d1/review.md"
+  vrun validate
+  expect_block "[REVIEW-UNREADABLE]"
+  expect_hasnt "[GATE-NO-REVIEW]"
 }
 block_gate_dup_heading() {
   REV '- [contradiction] 3장 — t001과 모순'
@@ -822,6 +868,56 @@ block_gate_kind_space() {
 block_gate_kind_dual() {
   REV '- [<contradiction / unsupported>] 2장 — 어느 쪽인지 정하지 않았다'
   vrun validate; expect_block "not an exact violation kind"
+}
+block_gate_unknown_kind_deep_heading() {
+  # A heading is not an escape hatch for an unknown, non-placeholder gate slot.
+  REV '## [typo] OPEN'
+  vrun validate; expect_block "[REVIEW-KIND-UNKNOWN]"
+}
+block_gate_unknown_kind_boundary_heading() {
+  # This same-level heading ends the zone for following lines, but it was encountered while the
+  # gate was live and must be classified before the boundary takes effect.
+  REV '# [typo] OPEN'
+  vrun validate; expect_block "[REVIEW-KIND-UNKNOWN]"
+}
+block_gate_template_boundary_cannot_close_clean() {
+  # A pure placeholder is template noise only inside the gate. At the gate's heading tier it also
+  # closes the Markdown section, so accepting it as noise would launder the real record after it.
+  REV '# [<kind>] <where> — <what>'
+  sed -i '/^# Findings$/i - [typo] REAL-VIOLATION-AFTER-TEMPLATE-BOUNDARY' "$W/documents/d1/review.md"
+  vrun status --open
+  expect_has "fidelity violations (1):"
+  expect_has "[<kind>]"
+  expect_hasnt "nothing is waiting on you"
+  vrun validate; expect_block "consecrated through an open gate"
+  vrun consecrate d1
+  expect_block "open gate"
+  expect_has "[<kind>]"
+}
+block_gate_boundary_heading_kind_not_laundered() {
+  # A boundary line was encountered while the gate was live, so a known kind on that line remains
+  # a gate blocker even though the heading owns subsequent lines as outside-zone history.
+  REV '# Section [contradiction] OPEN'
+  vrun status --open
+  expect_has "[contradiction] OPEN"
+  vrun validate; expect_block "consecrated through an open gate"
+}
+block_gate_unknown_kind_after_arrow() {
+  REV '--> [typo] OPEN'
+  vrun validate; expect_block "[REVIEW-KIND-UNKNOWN]"
+}
+acct_openlist_unknown_gate_shape_surfaces() {
+  REV '## [typo] OPEN'
+  vrun status --open
+  expect_has "fidelity violations (1):"
+  expect_has "[typo] OPEN"
+  expect_hasnt "nothing is waiting on you"
+}
+block_consecrate_unknown_gate_shape() {
+  REV '## [typo] OPEN'
+  vrun consecrate d1
+  expect_block "open gate"
+  expect_has "[typo] OPEN"
 }
 block_gate_kind_outside() {
   # a near-miss parked OUTSIDE the section: the zone rule catches it (bracketed kind, any shape,
@@ -1034,6 +1130,12 @@ block_adjudication_bracketed_kind() {
   vrun validate; expect_block "outside the 'Fidelity violations' section"
   expect_has "without brackets"
 }
+block_gate_kind_in_frontmatter() {
+  # Frontmatter is not a Markdown heading context, but it is still outside the fidelity gate. A
+  # bracketed violation kind cannot be parked in metadata to escape the review-wide zone rule.
+  sed -i '1a note: [contradiction] PARKED' "$W/documents/d1/review.md"
+  vrun validate; expect_block "outside the 'Fidelity violations' section"
+}
 pass_adjudication_kind_unbracketed() {
   # the legal record spelling: kind as a bare word
   REV ''
@@ -1090,7 +1192,7 @@ nodeshape_single_judges() {
   # a cold reviewer three rounds later.
   local bad="" fn n
   local -a SRC; mapfile -t SRC < <(node_sources)
-  for fn in isNoise hasFm fidMark fidBody nocomment canonId isPlaceholder isFence \
+  for fn in isNoise hasFm scanMarkdown parseReview parseCoverage parseHumanQueues parseQuestions parseGapText parseVerifiedUnits parseTaggedBullet walkLedgerSections canonId isPlaceholder isFence \
             truthDigest matDigest unitDigest ledgerRows artifactDigest contextDigest \
             docDraftPath docFinalPath splitLines fmVal fmKey; do
     # Any binding form, at any indentation: `export const`, a bare `function`, a `let`, or a
@@ -1111,6 +1213,12 @@ nodeshape_single_judges() {
   # most likely thing a porter reaches for — sailed past a grep that only looked for the bracket.
   n=$(grep -hv "^[[:space:]]*//" "${SRC[@]}" | grep -cE '/\^---(\[|\\s|\\t| )' || true)
   [ "${n:-0}" -le 1 ] || bad="$bad inline-fence-judges=${n};"
+  # validate/status use review.md for both fidelity and Human queue policy. A private readReview
+  # call there creates a second source generation inside one command; both adapters must receive
+  # the command-local document already cached by the HQ pass. Consecrate reads review only once and
+  # may keep its dedicated readReview convenience wrapper.
+  n=$(grep -hcE '\breadReview\b' "$REPO/.weavedoc/bin/lib/cmd-validate.mjs" "$REPO/.weavedoc/bin/lib/cmd-status.mjs" 2>/dev/null | awk '{s+=$1} END{print s+0}')
+  [ "${n:-0}" -eq 0 ] || bad="$bad duplicate-review-snapshots=${n};"
   # A diagnostic must go through prob/warn. `out(\`  [CODE] …\`)` prints exactly what prob prints and
   # is invisible to BOTH the code-table arm and the ratchet — a whole diagnostic outside the contract.
   n=$(grep -hv "^[[:space:]]*//" "${SRC[@]}" | grep -cE 'out\(`[[:space:]]+\[[A-Z][A-Z0-9-]+\]' || true)
@@ -1151,11 +1259,89 @@ meta_single_judges() {
   # be seen from outside.
   nodeshape_single_judges
 }
+meta_markdown_state_model_properties() {
+  # One cheap Node process grades the whole Cartesian model. The exact total is a vacuity guard:
+  # deleting an axis or a loop is a failure even when every remaining assertion stays green.
+  OUT=$(node "$REPO/tests/markdown-model-properties.mjs" 2>&1); RC=$?
+  expect_pass
+  expect_has "groups=15 cases=1844 cartesian=complete"
+}
+meta_quote_marker_properties() {
+  # The v3 quote marker grammar, scanner and direct raw-source resolver (Phase 1). Written red-first
+  # against a module that did not exist yet, which is what the plan asks for. Nothing in the runtime
+  # consumes it and it is NOT connected to the v2 gate, so this case is the only thing executing it
+  # — hence the pinned total.
+  OUT=$(node "$REPO/tests/quote-marker-properties.mjs" 2>&1); RC=$?
+  expect_pass
+  expect_has "groups=18 cases=168"
+}
+meta_raw_source_properties() {
+  # The shared raw-source model (schema v3, Phase 1). Same vacuity guard as its siblings: the exact
+  # total is pinned, and nothing in the runtime consumes this model yet, so this case is the only
+  # thing executing it. The `nonregular=` field is NOT part of the assertion — it records whether
+  # this host could create a symlink, so a run where the directory fallback stood in says so out
+  # loud instead of quietly covering one branch less.
+  OUT=$(node "$REPO/tests/raw-source-properties.mjs" 2>&1); RC=$?
+  expect_pass
+  expect_has "groups=8 cases=86"
+  expect_has "nonregular="
+  expect_has "rootalias="
+  expect_has "hardlink="
+}
+meta_id_sequences_properties() {
+  # The typed monotonic allocator (schema v3, slice 1, bundle A). Written red-first against a module
+  # that did not exist yet. Nothing in the runtime consumes it until bundle B2 wires the tripwires,
+  # so this case is the only thing executing it — hence the pinned totals.
+  OUT=$(node "$REPO/tests/id-sequences-properties.mjs" 2>&1); RC=$?
+  expect_pass
+  expect_has "groups=9 cases=141"
+}
+meta_conflict_store_properties() {
+  # The temporary conflict store (schema v3, slice 1, bundle A). Same standing as its sibling above:
+  # red-first, unwired until B2, exact totals as the vacuity guard.
+  OUT=$(node "$REPO/tests/conflict-store-properties.mjs" 2>&1); RC=$?
+  expect_pass
+  expect_has "groups=9 cases=138"
+}
+meta_bundled_contracts_have_no_control_chars() {
+  # CI had this for runtime modules only, so four 0x14 bytes rode into `.weavedoc/schemas/v3` and
+  # shipped green (2026-08-08.6): a comment rewrite wrote U+2014 through a latin1 writer, which
+  # keeps the low byte. They were in comments, so the parser never noticed — but these files ARE
+  # the format. The check belongs in the local sweep as well as in CI: a bundled contract edited
+  # here should go red HERE, not one push later.
+  local f bad="" n
+  for f in "$REPO/.weavedoc/schema" "$REPO/.weavedoc/schemas"/*; do
+    [ -f "$f" ] || continue
+    n=$(node "$REPO/tests/ctlscan.mjs" "$f" | tail -1 | sed 's/[^0-9]//g')
+    [ "${n:-1}" = 0 ] || bad="$bad ${f#$REPO/}($n)"
+  done
+  # VACUITY GUARD: a glob that matched nothing would make this pass while checking zero files.
+  [ -f "$REPO/.weavedoc/schemas/v3" ] || { bad "no bundled versioned contract to scan — the check would be vacuous"; return; }
+  OUT="control-chars:${bad:- none}"; RC=0
+  if [ -n "$bad" ]; then bad "bundled contract holds literal control characters:$bad"; else ok; fi
+}
+meta_artifact_contract_properties() {
+  # The versioned role contract (schema v3, Phase 1). Same vacuity guard as above: the exact total
+  # is asserted, so deleting an axis is a failure even when every remaining assertion is green.
+  # Nothing in the runtime consumes this model yet — switching production consumers is Phase 2 —
+  # so this case is the ONLY thing executing it, which is precisely why the count is pinned.
+  OUT=$(node "$REPO/tests/artifact-contract-properties.mjs" 2>&1); RC=$?
+  expect_pass
+  expect_has "groups=9 cases=212"
+}
 pass_hq_kind_mention() {
   # a Human-queue entry whose prose mentions a kind — first slot is [open], not a kind (kind-bearing filter)
   REV ''
   printf -- '\n- [open] [user-only] contradiction 처리 방침 — 병기 허용 여부\n' >> "$W/documents/d1/review.md"
   vrun validate; expect_pass
+}
+block_review_comment_cannot_manufacture_gate_heading() {
+  # Deleting an inline comment joined two source spans and manufactured this heading in the old
+  # review reader. The shared scanner keeps columns/provenance, so a final cannot ship through a
+  # gate heading that never existed in the source.
+  sed -i 's/^# Fidelity violations$/<!--x--># Fidelity violations/' "$W/documents/d1/review.md"
+  vrun validate
+  expect_block "GATE-NO-HEADING"
 }
 
 # heading shapes the reader cannot match -> that silence is itself a failure
@@ -1213,10 +1399,12 @@ block_source_no_space_after_colon() {
   vrun validate; expect_block "quote not found"
 }
 pass_key_spacing_variants() {
-  # the same spellings on a HONEST truth: readers accept them, the seal runs and passes
-  sed -i 's/^source: m001$/source : m001/; s/^status: ok$/status:ok/; s/^tags: \[위약\]$/tags :[위약]/' "$W/truths/t001.md"
+  # the same spellings on a HONEST truth: readers accept them, the seal runs and passes.
+  # (The third axis was `status:ok` until schema v3 removed the field; `provenance:stated`
+  # keeps the no-space-after-colon spelling exercised on a truth key that still exists.)
+  sed -i 's/^source: m001$/source : m001/; s/^provenance: stated$/provenance:stated/; s/^tags: \[위약\]$/tags :[위약]/' "$W/truths/t001.md"
   vrun validate; expect_pass
-  vrun census; expect_has "live 1"
+  vrun census; expect_has "truth files 1"
 }
 
 pass_source_unpadded() {
@@ -1244,6 +1432,43 @@ pass_coverage_unpadded_mention() {
   # t001.md — not read as "no such truth file", and not leave t001 reported missing
   sed -i 's/^- 위약금 조항: t001$/- 위약금 조항: t1/' "$W/truths/coverage.md"
   vrun validate; expect_pass
+}
+pass_coverage_fenced_example_is_inert() {
+  # validate and census consume one coverage model. A fenced tutorial may spell a real material
+  # heading and dangling truth id, but it is evidence text: it neither creates a section nor a
+  # dangling reference, and it cannot inflate the census numerator.
+  addm2 m002
+  cat >> "$W/truths/coverage.md" <<'EOF'
+
+```md
+## m002
+- example: t999
+```
+EOF
+  vrun validate; expect_pass
+  vrun census; expect_has "coverage records 1/2"
+}
+block_coverage_unterminated_comment() {
+  printf '\n<!--\n## m999\n- hidden: t999\n' >> "$W/truths/coverage.md"
+  vrun validate; expect_block "COVERAGE-MALFORMED"
+  expect_has "unterminated '<!--'"
+}
+block_coverage_unterminated_fence() {
+  printf '\n```md\n## m999\n- hidden: t999\n' >> "$W/truths/coverage.md"
+  vrun validate; expect_block "COVERAGE-MALFORMED"
+  expect_has "unterminated code fence"
+}
+block_coverage_unreadable_object() {
+  # Present-but-unreadable is unknown evidence, not the same state as an absent optional register.
+  rm -f "$W/truths/coverage.md"
+  mkdir "$W/truths/coverage.md"
+  vrun validate; expect_block "COVERAGE-MALFORMED"
+  expect_has "exists but cannot be read"
+}
+acct_census_coverage_unterminated_fence_warns() {
+  printf '\n```md\n## m999\n- hidden: t999\n' >> "$W/truths/coverage.md"
+  vrun census; expect_has "unterminated code fence"
+  expect_has "validate blocks this file"
 }
 block_empty_source() {
   sed -i 's/^source: m001$/source:/' "$W/truths/t001.md"
@@ -1417,10 +1642,20 @@ acct_census_bare_coverage_heading() {
   printf -- '- 일정 항목: (추출 대상 아님 — 보조 자료)\n' >> "$W/truths/coverage.md"
   vrun census; expect_has "coverage records 2/2"
 }
+acct_census_unreadable_coverage_warns() {
+  # A present-but-unreadable register is unknown, not an empty register. A directory wearing the
+  # file's name produces that state deterministically on every supported OS.
+  rm -f "$W/truths/coverage.md"
+  mkdir "$W/truths/coverage.md"
+  vrun census
+  expect_has "coverage records are unknown, not zero"
+  expect_has "validate blocks this path"
+}
 addm2() { # $1=id — a second material, in catalog, sourced from m001's shape
   mkdir -p "$W/materials/$1"
   sed "s/^id: m001/id: $1/" "$W/materials/m001/converted.md" > "$W/materials/$1/converted.md"
   printf '| %s | 추가자료 | 계약서 |\n' "$1" >> "$W/catalog.md"
+  mint
 }
 acct_census_legacy_lenient_spelling() {
   # R5-S4: `- m3` for folder m003 is a REFERENCE, so it must canonicalise before mstatus looks it
@@ -1478,16 +1713,11 @@ acct_zero_byte_truth() {
   vrun census; expect_has "truth files 2"
 }
 block_fabricated_body() {
-  printf -- '---\nid: t002\nclaim: "지체상금은 일 0.1%%다"\nsource: m001\ntags: [위약]\nstatus: ok\n---\n\n제9조 지체상금은 일 0.1%%로 한다.\n그 상한은 계약금액의 10%%다.\n' > "$W/truths/t002.md"
+  printf -- '---\nid: t002\nclaim: "지체상금은 일 0.1%%다"\nsource: m001\ntags: [위약]\n---\n\n제9조 지체상금은 일 0.1%%로 한다.\n그 상한은 계약금액의 10%%다.\n' > "$W/truths/t002.md"
   vrun validate; expect_block "quote not found"
 }
-block_conflict_oneside() {
-  sed -i 's/^status: ok$/status: conflict\nconflict_with: [t002]/' "$W/truths/t001.md"
-  printf -- '---\nid: t002\nclaim: "위약금은 계약금액의 10%%다(사본)"\nsource: m001\ntags: [위약]\nstatus: ok\n---\n\n제7조 위약금은 계약금액의 10%%로 한다.\n' > "$W/truths/t002.md"
-  vrun validate; expect_block "does not name"
-}
 block_dup_key() {
-  sed -i 's/^provenance: stated$/provenance: stated\nstatus: conflict/' "$W/truths/t001.md"
+  sed -i 's/^provenance: stated$/provenance: stated\nprovenance: adopted/' "$W/truths/t001.md"
   vrun validate; expect_block "appears 2 times"
 }
 # canonical id spelling: ruled 2026-07-31 — one number, one spelling. Two spellings collapse into
@@ -1524,6 +1754,7 @@ pass_id_four_digit() {
   sed -i 's/^cited_truths: \[t001\]$/cited_truths: [t1000]/' "$W/documents/d1/plan.md"
   printf -- '- added: t1000 (2026-07-30)\n' >> "$W/truths/changelog.md"
   ( cd "$W" && "${WDRUN[@]}" reindex >/dev/null 2>&1 )
+  mint
   vrun validate; expect_pass
 }
 pass_id_generated_files_ignored() {
@@ -1548,30 +1779,6 @@ block_date_placeholder() {
   sed -i 's|^origin: file$|origin: research\nurl: https://example.com/x\nretrieved_at: (미정)|' "$W/materials/m001/converted.md"
   vrun validate; expect_block "is not a date"
 }
-block_resolution_type() {
-  sed -i 's/^status: ok$/status: discarded\nresolution: {type: merge, winner: [t002], decided_by: user, decision_kind: supplied}/' "$W/truths/t001.md"
-  vrun validate; expect_block "resolution type"
-}
-block_resolution_kind() {
-  sed -i 's/^status: ok$/status: discarded\nresolution: {type: pick, winner: [t002], decided_by: user, decision_kind: guessed}/' "$W/truths/t001.md"
-  vrun validate; expect_block "decision_kind"
-}
-block_resolution_by() {
-  sed -i 's/^status: ok$/status: discarded\nresolution: {type: pick, winner: [t002], decided_by: nobody, decision_kind: supplied}/' "$W/truths/t001.md"
-  # R4-N: pin the ENUM message, not just the word. `"decided_by"` alone also matches the
-  # "resolution has no 'decided_by'" branch, so this case used to stay green while the reader
-  # was blind to the key entirely — the exact regression C3 was.
-  vrun validate; expect_block "resolution decided_by"
-}
-block_resolution_space_before_colon() {
-  # R4-C3: space before the colon is legal YAML. With only `decided_by:` canonical, an
-  # out-of-enum type, an out-of-enum decision_kind and a winner naming a truth that does not
-  # exist ALL passed with a clean ✓ — three checks off at once, silently.
-  sed -i 's/^status: ok$/status: discarded\nresolution: {type : pick-invalid, winner : [t404], decided_by: user, decision_kind : guessed}/' "$W/truths/t001.md"
-  vrun validate; expect_block "t404"
-  expect_has "resolution type"
-  expect_has "resolution decision_kind"
-}
 pass_retag_leaves_unclosed_list_alone() {
   # R5-S2: with no closing ], the tail sub strips nothing and appending it produced
   # `tags: [벌칙]tags: [위약` — the only writer corrupting a file while reporting success.
@@ -1582,39 +1789,26 @@ pass_retag_leaves_unclosed_list_alone() {
   expect_has "1"
   vrun validate; expect_block "never closes on this line"
 }
-pass_pull_scope_space_before_colon() {
-  # R5-S3: the eighth site of the key-spelling rule. `scope : [금액]` used to vanish, so pull
-  # reported a PARTIAL supersede as a total one.
-  printf -- '---\nid: t002\nclaim: "대금은 5천만원이다"\nsource: m001\ntags: [대금]\nstatus: ok\n---\n\n제3조 대금은 5천만원으로 한다.\n' > "$W/truths/t002.md"
-  sed -i 's/^status: ok$/status: discarded\nresolution: {type: pick, winner: [t002], scope : [금액], decided_by: user, decision_kind: supplied}/' "$W/truths/t001.md"
-  addt2
-  vrun pull 위약; expect_has "금액"
-}
-pass_resolution_space_before_colon_valid() {
-  # the other direction: the same spacing with valid values must not invent a complaint —
-  # in particular not the false "resolution has no 'decided_by'" about a resolution that has one
-  printf -- '---\nid: t002\nclaim: "대금은 5천만원이다"\nsource: m001\ntags: [대금]\nstatus: ok\n---\n\n제3조 대금은 5천만원으로 한다.\n' > "$W/truths/t002.md"
-  sed -i 's/^status: ok$/status: discarded\nresolution: {type : pick, winner : [t002], decided_by : user, decision_kind : supplied}/' "$W/truths/t001.md"
-  addt2
-  vrun validate; expect_pass
-  expect_hasnt "no 'decided_by'"
-}
-block_resolution_no_decided_by() {
-  sed -i 's/^status: ok$/status: discarded\nresolution: {type: pick, winner: [t002], decision_kind: supplied}/' "$W/truths/t001.md"
-  vrun validate; expect_block "no 'decided_by'"
-}
-block_resolution_winner_dangling() {
-  sed -i 's/^status: ok$/status: discarded\nresolution: {type: pick, winner: [t404], decided_by: user, decision_kind: supplied}/' "$W/truths/t001.md"
-  vrun validate; expect_block "t404"
+mint() { # recompute .weavedoc-state/id-sequences.json from the fixture's hand-minted ids.
+  # Tests mint by hand — that is what makes them fixtures; real writers go through `alloc`.
+  # IDSEQ-BEHIND exists to catch exactly the hand-mint-without-bumping shape, so a fixture
+  # that hand-mints must also carry a consistent allocator — computed from the tree, never a
+  # per-case constant that drifts the day someone adds a t003.
+  local tmax mmax cmax
+  tmax=$(ls "$W/truths" 2>/dev/null | sed -n 's/^t0*\([0-9]\{1,\}\)\.md$/\1/p' | sort -n | tail -1); tmax=${tmax:-0}
+  mmax=$(ls "$W/materials" 2>/dev/null | sed -n 's/^m0*\([0-9]\{1,\}\)$/\1/p' | sort -n | tail -1); mmax=${mmax:-0}
+  cmax=$(sed -n 's/.*"id": "c0*\([0-9]\{1,\}\)".*/\1/p' "$W/.weavedoc-state/conflicts.json" 2>/dev/null | sort -n | tail -1); cmax=${cmax:-0}
+  printf '{\n  "version": 1,\n  "next": {\n    "conflict": %d,\n    "material": %d,\n    "truth": %d\n  }\n}\n' "$((cmax+1))" "$((mmax+1))" "$((tmax+1))" > "$W/.weavedoc-state/id-sequences.json"
 }
 addt2() { # register t002 in the ledgers so the only thing left to complain about is the seal
   printf -- '- 대금 조항: t002\n' >> "$W/truths/coverage.md"
   printf -- '- added: t002 (2026-07-30)\n' >> "$W/truths/changelog.md"
   ( cd "$W" && "${WDRUN[@]}" reindex >/dev/null 2>&1 )
+  mint
 }
 block_short_body_seal() {
   # A body too small to be evidence of anything: index() finds it inside almost any material.
-  printf -- '---\nid: t002\nclaim: "대금은 5천만원이다"\nsource: m001\ntags: [대금]\nstatus: ok\n---\n\n5천만원\n' > "$W/truths/t002.md"
+  printf -- '---\nid: t002\nclaim: "대금은 5천만원이다"\nsource: m001\ntags: [대금]\n---\n\n5천만원\n' > "$W/truths/t002.md"
   addt2
   vrun validate; expect_block "fragment"
 }
@@ -1622,15 +1816,16 @@ block_spliced_quote() {
   # Each line is verbatim; the two skip 제5조, which sits between them in the source. Markdown
   # renders soft-wrapped lines as one paragraph, so the result is a sentence the source never had —
   # and the realistic accident is a quote that drops the qualifying middle line.
-  printf -- '---\nid: t002\nclaim: "대금 5천만원의 위약금은 10%%다"\nsource: m001\ntags: [대금]\nstatus: ok\n---\n\n제3조 대금은 5천만원으로 한다.\n제7조 위약금은 계약금액의 10%%로 한다.\n' > "$W/truths/t002.md"
+  printf -- '---\nid: t002\nclaim: "대금 5천만원의 위약금은 10%%다"\nsource: m001\ntags: [대금]\n---\n\n제3조 대금은 5천만원으로 한다.\n제7조 위약금은 계약금액의 10%%로 한다.\n' > "$W/truths/t002.md"
   addt2
   vrun validate; expect_block "NOT adjacent"
 }
 pass_multiline_verbatim() {
   # A genuine multi-line verbatim quote — adjacent lines copied as a block. Must stay clean, or the
   # spliced-quote check has bought a false failure on the shape FORMATS explicitly encourages.
-  printf -- '---\nid: t002\nclaim: "대금과 납품 기한"\nsource: m001\ntags: [대금]\nstatus: ok\n---\n\n제3조 대금은 5천만원으로 한다.\n제5조 납품 기한은 2026년 12월 31일로 한다.\n' > "$W/truths/t002.md"
+  printf -- '---\nid: t002\nclaim: "대금과 납품 기한"\nsource: m001\ntags: [대금]\n---\n\n제3조 대금은 5천만원으로 한다.\n제5조 납품 기한은 2026년 12월 31일로 한다.\n' > "$W/truths/t002.md"
   addt2
+  mint
   vrun validate; expect_pass
 }
 pass_claim_shown_beside_seal() {
@@ -1668,9 +1863,10 @@ pass_gate_empty_sub() {
 }
 pass_gate_siblings_l2() {
   # Other sections at ##, violations at # and EMPTY: the section must not run to EOF and swallow
-  # the advisory findings.
+  # the advisory findings. (review_legacy rides in the frontmatter — a hand-written review next to
+  # a consecrated final needs the marker to stand, same as every fixture review since schema v3.)
   {
-    printf -- '---\nround: 1\n---\n\n'
+    printf -- '---\nround: 1\nreview_legacy: 2026-07-30\n---\n\n'
     printf '# Fidelity violations\n\n'
     printf '## Findings\n\n- [critical] 2장 — 근거 표시가 약하다\n\n'
     printf '## Adjudications\n\n## Human queue\n'
@@ -1689,7 +1885,9 @@ pass_gate_none_prose() {
   vrun validate; expect_pass
 }
 pass_yaml_trailing_comment() {
-  sed -i 's/^status: ok$/status: ok  # 확인함/' "$W/truths/t001.md"
+  # (exercised on provenance since schema v3 removed status — the rule under test is the
+  # comment stripping, not the key)
+  sed -i 's/^provenance: stated$/provenance: stated  # 확인함/' "$W/truths/t001.md"
   vrun validate; expect_pass
 }
 pass_hash_in_quoted_claim() {
@@ -1697,17 +1895,6 @@ pass_hash_in_quoted_claim() {
   ( cd "$W" && "${WDRUN[@]}" reindex >/dev/null 2>&1 )
   vrun validate; expect_pass
   OUT=$(cat "$W/truths/index.md"); expect_has '3월 회의 #3 결과'
-}
-block_required_tag_tombstone() {
-  # R4-S6: a retracted tombstone satisfied required_tags — retracting the last real extraction
-  # of a mandatory topic kept the mine green about it. Legal stub: status retracted, body
-  # removed, withdrawal recorded in changelog.
-  sed -i 's/^required_tags: \[\]$/required_tags: [위약]/' "$W/project.md"
-  awk '/^---[[:space:]]*$/{n++} {print} n==2{exit}' "$W/truths/t001.md" > "$W/truths/t001.new"
-  mv "$W/truths/t001.new" "$W/truths/t001.md"
-  sed -i 's/^status: ok$/status: retracted/' "$W/truths/t001.md"
-  printf -- '- removed: t001 (2026-07-31) — 근거 인용이 원문에 없음\n' >> "$W/truths/changelog.md"
-  vrun validate; expect_block "has no live truths"
 }
 pass_required_tag_live_covers() {
   # the other direction: a live truth carrying the tag still satisfies it
@@ -1719,17 +1906,6 @@ pass_two_word_required_tags() {
   sed -i 's/^tags: \[위약\]$/tags: [계약 범위, 위약]/' "$W/truths/t001.md"
   vrun validate; expect_pass
 }
-pass_winner_short_id() {
-  mv "$W/truths/t001.md" "$W/truths/t005.md"
-  sed -i 's/^id: t001$/id: t005/; s/^status: ok$/status: ok\nconflict_with: [t006]\nresolution: {type: pick, winner: [t5], decided_by: user, decision_kind: supplied}/' "$W/truths/t005.md"
-  printf -- '---\nid: t006\nclaim: "위약금은 20%%다"\nsource: m001\ntags: [위약]\nstatus: discarded\nconflict_with: [t005]\nresolution: {type: pick, winner: [t5], decided_by: user, decision_kind: supplied}\n---\n\n제7조 위약금은 계약금액의 10%%로 한다.\n' > "$W/truths/t006.md"
-  sed -i 's/^- 위약금 조항: t001$/- 위약금 조항: t005, t006/' "$W/truths/coverage.md"
-  sed -i 's/^cited_truths: \[t001\]$/cited_truths: [t005]/' "$W/documents/d1/plan.md"
-  printf -- '- added: t005 (2026-07-30)\n- added: t006 (2026-07-30)\n' >> "$W/truths/changelog.md"
-  ( cd "$W" && "${WDRUN[@]}" reindex >/dev/null 2>&1 )
-  vrun validate; expect_pass
-  vrun pull 위약; expect_has "usable 1"
-}
 pass_cited_short_id() {
   mv "$W/truths/t001.md" "$W/truths/t005.md"
   sed -i 's/^id: t001$/id: t005/' "$W/truths/t005.md"
@@ -1737,16 +1913,8 @@ pass_cited_short_id() {
   sed -i 's/^cited_truths: \[t001\]$/cited_truths: [t5]/' "$W/documents/d1/plan.md"
   printf -- '- added: t005 (2026-07-30)\n' >> "$W/truths/changelog.md"
   ( cd "$W" && "${WDRUN[@]}" reindex >/dev/null 2>&1 )
+  mint
   vrun validate; expect_pass
-}
-pass_tombstone() {
-  printf -- '---\nid: t002\nclaim: "지체상금 조항이 있다"\nsource: m001\ntags: [위약]\nstatus: retracted\n---\n' > "$W/truths/t002.md"
-  printf -- '- removed: t002 (2026-07-30) — 원문에 없는 조항이었다\n' >> "$W/truths/changelog.md"
-  printf -- '- 지체상금: t002 (철회)\n' >> "$W/truths/coverage.md"
-  ( cd "$W" && "${WDRUN[@]}" reindex >/dev/null 2>&1 )
-  vrun validate; expect_pass
-  expect_has "1 tombstone"
-  expect_hasnt "NOT checked"
 }
 pass_locales() {
   local l out1="" outN
@@ -1792,7 +1960,7 @@ acct_scope_counts_unverified() {
   # a NEW truth is the only thing unverified. Doubles as the bullet-shape test — the shipped
   # template writes bullets, the production mine writes a table, and a parser knowing only one
   # reads the other mine as "nothing verified", the full-mine round this command prevents.
-  printf -- '---\nid: t002\nclaim: "대금은 5천만원이다"\nsource: m001\ntags: [대금]\nstatus: ok\n---\n\n제3조 대금은 5천만원으로 한다.\n' > "$W/truths/t002.md"
+  printf -- '---\nid: t002\nclaim: "대금은 5천만원이다"\nsource: m001\ntags: [대금]\n---\n\n제3조 대금은 5천만원으로 한다.\n' > "$W/truths/t002.md"
   vrun scope
   expect_has "1 legacy-unbound"
   expect_has "1 unverified"
@@ -1805,6 +1973,13 @@ acct_scope_unmarked_entry_covers_nothing() {
   vrun scope
   expect_has 'end in no "verified" verdict'
   expect_has "0 verified"
+}
+acct_scope_uncovered_row_preserves_source_bytes() {
+  # Verified-units is parsed in the byte domain. A raw uncovered row must be emitted as those same
+  # bytes, not handed to a string writer that UTF-8-encodes the latin1 projection into mojibake.
+  sed -i '/^## Verified units$/a - t001 · 검증 실패 · no-verdict' "$W/truths/verify.md"
+  vrun scope
+  expect_has "검증 실패"
 }
 acct_scope_unverified_is_not_verified() {
   # The substring trap: `unverified` contains `verified`. Matching anywhere in the line would read
@@ -1843,6 +2018,35 @@ acct_scope_legacy_unbound() {
   # legacy-unbound and excluded from the digest-bound count (WD-COR-003).
   vrun scope
   expect_has "truths     1 live · 0 verified (digest-bound) · 1 legacy-unbound"
+}
+acct_scope_fenced_verified_heading_covers_nothing() {
+  # A heading-looking line inside a code fence is payload, not the verification register. The
+  # shared Markdown model must not let it mint legacy coverage merely because it has the right
+  # spelling. There is deliberately no live Verified-units heading in this fixture.
+  printf -- '---\nstatus: passed\nround: 1\nverified_at: 2026-07-30\n---\n\n```md\n## Verified units\n- m001 · t001 — R1 2026-07-30 · verified\n```\n\n## Adjudications\n\n## Human queue\n' > "$W/truths/verify.md"
+  vrun scope
+  expect_has "truths     1 live · 0 verified (digest-bound) · 0 legacy-unbound"
+  expect_has "1 unverified"
+}
+acct_scope_known_verify_sibling_is_boundary() {
+  # A schema-known sibling is a real section boundary even when it is deeper than Verified units.
+  # Otherwise Human-queue text is harvested as verification evidence and silently pays truth debt.
+  printf -- '# Verified units\n\n## Human queue\n- [open] [user-only] Is t001 verified\n\n## Adjudications\n' > "$W/truths/verify.md"
+  vrun scope
+  expect_has "truths     1 live"
+  expect_has "0 legacy-unbound"
+  expect_has "1 unverified"
+}
+block_schema_verify_sections_are_positional() {
+  # Empty positional roles never shift Human queue into the evidence lane. Scope fails safe, the
+  # validator names the schema contract, and migration refuses before its first write.
+  sed -i 's/^verify.sections:.*/verify.sections: |Human queue|Adjudications/' "$W/.weavedoc/schema"
+  printf -- '# Human queue\n- [open] [user-only] Is t001 verified\n# Adjudications\n' > "$W/truths/verify.md"
+  vrun scope
+  expect_has "0 legacy-unbound"
+  expect_has "1 unverified"
+  vrun validate; expect_block "[SCHEMA-VERIFY-SECTIONS]"
+  # (the upgrade leg retired with the v1→v2 migrator; the version axis is the gate's now)
 }
 acct_scope_bound_verified() {
   # attest pins current bytes; the unit counts digest-bound verified and nothing is owed on it.
@@ -1887,16 +2091,6 @@ acct_scope_failed_recorded() {
   vrun scope
   expect_has "1 failed"
 }
-acct_scope_retracted_truth_excluded() {
-  # Tombstones (retracted/discarded) leave the population — the same rule retracted materials
-  # already follow: not owed, or the ratio reports a debt nobody can ever pay down.
-  printf -- '---\nid: t002\nclaim: "지체상금 조항이 있다"\nsource: m001\ntags: [위약]\nstatus: retracted\n---\n' > "$W/truths/t002.md"
-  printf -- '- removed: t002 (2026-07-30) — 원문에 없었다\n' >> "$W/truths/changelog.md"
-  ( cd "$W" && "${WDRUN[@]}" reindex >/dev/null 2>&1 )
-  vrun scope
-  expect_has "truths     1 live"
-  expect_has "1 tombstone"
-}
 pass_attest_validate_clean() {
   # The sidecar is additive: no v1 glob or census sees it, and validate stays clean next to it.
   vrun attest verified 2 standard m001 t001
@@ -1921,6 +2115,44 @@ pass_attest_standard_newline_stays_one_line() {
   # tests nothing. (It did. This case was written that way first and passed against the defect.)
   vrun attest verified 2 'a\nb' m001
   OUT=$(grep -c '^- m001 — R2.*· verified$' "$W/truths/verify.md"); RC=0
+  expect_has "1"
+}
+acct_attest_fenced_verified_heading_is_not_a_write_target() {
+  # The append-only sidecar remains the source of truth, but its human mirror may only be spliced
+  # after a LIVE register heading. A fenced lookalike must neither receive the row nor make the
+  # disagreement silent.
+  printf -- '---\nstatus: passed\nround: 1\nverified_at: 2026-07-30\n---\n\n```md\n## Verified units\n```\n\n## Adjudications\n\n## Human queue\n' > "$W/truths/verify.md"
+  vrun attest verified 2 standard t001
+  expect_pass
+  expect_has "human mirror"
+  OUT=$(cat "$W/truths/verify.md"); RC=0
+  expect_hasnt "R2"
+  OUT=$(grep -c $'t001\t' "$W/truths/verify-ledger.tsv"); RC=0
+  expect_has "1"
+}
+acct_attest_comment_spanning_heading_is_not_a_write_target() {
+  # A heading can be live while opening a comment that closes later. Inserting after the physical
+  # heading would place the mirror inside that comment. The sidecar remains authoritative, but the
+  # optional mirror must prove that its exact row became live or report that it skipped the write.
+  printf -- '## Verified units <!--\narchived note\n-->\n\n## Human queue\n' > "$W/truths/verify.md"
+  vrun attest verified 2 standard t001
+  expect_pass
+  expect_has "human mirror"
+  OUT=$(cat "$W/truths/verify.md"); RC=0
+  expect_hasnt "R2"
+  OUT=$(grep -c $'t001\t' "$W/truths/verify-ledger.tsv"); RC=0
+  expect_has "1"
+}
+acct_attest_unreadable_verify_names_skipped_mirror() {
+  # The authoritative sidecar can still accept the verdict, but a present unreadable human view is
+  # not the same as an absent optional mirror. Name the disagreement instead of silently skipping it.
+  rm -f "$W/truths/verify.md"
+  mkdir "$W/truths/verify.md"
+  vrun attest verified 2 standard t001
+  expect_pass
+  expect_has "human mirror"
+  expect_has "could not be read"
+  OUT=$(grep -c $'t001\t' "$W/truths/verify-ledger.tsv"); RC=0
   expect_has "1"
 }
 block_attest_control_byte_in_standard() {
@@ -2351,21 +2583,13 @@ block_gate_fid_c9_lonely() {
 block_schema_future_version() {
   # A schema newer than this runtime supports is fail-closed — guessing at a future format is
   # how silent corruption ships.
-  sed -i 's/^version: 1$/version: 3/' "$W/project.md"
-  sed -i 's/^version: 1/version: 3/' "$W/.weavedoc/config.yaml"
+  sed -i 's/^version: 3$/version: 4/' "$W/project.md"
+  sed -i 's/^version: 3/version: 4/' "$W/.weavedoc/config.yaml"
   vrun validate; expect_block "newer than this runtime"
-}
-acct_schema_v1_notice() {
-  # v1 stays readable (dual-reader) but not silent: the notice names the exact next command.
-  sed -i 's/^version: 2$/version: 1/' "$W/project.md"
-  sed -i 's/^version: 2$/version: 1/' "$W/.weavedoc/config.yaml"
-  vrun validate
-  expect_pass
-  expect_has "upgrade --check"
 }
 block_schema_version_disagreement() {
   # project.md and config.yaml each carry a version; two records of one fact must agree.
-  sed -i 's/^version: 1$/version: 2/' "$W/project.md"
+  sed -i 's/^version: 3$/version: 2/' "$W/project.md"
   vrun validate; expect_block "disagree"
 }
 block_config_review_strength_range() {
@@ -2420,80 +2644,16 @@ mkv1() { # devolve the pristine workspace into an authentic v0.1-shaped mine
   rm -f "$W/truths/verify-ledger.tsv"
   ( cd "$W" && "${WDRUN[@]}" reindex >/dev/null 2>&1 )
 }
-acct_upgrade_uptodate() {
-  # Idempotence starts at the reader: right after an apply, a re-check reports zero work.
-  # (The pristine fixture is a v1 mine on purpose, so "up to date" is the post-apply state.)
+acct_upgrade_deep_verified_heading_does_not_mint_evidence() {
+  # Readers, writers and the required-section gate admit only level 1/2. A v1 `###` lookalike must
+  # not receive a verdict or mint a legacy sidecar row before upgrade adds the missing real section.
+  mkv1
+  sed -i 's/^## Verified units$/### Verified units/' "$W/truths/verify.md"
   vrun upgrade --apply
-  expect_pass
-  vrun upgrade --check
-  expect_pass
-  expect_has "nothing to do"
-}
-acct_upgrade_check_v1() {
-  # --check is the read-only census of the migration: names every item class, exits 1 as the
-  # scriptable "migration needed" signal.
-  mkv1
-  vrun upgrade --check
-  [ "$RC" -eq 1 ] || bad "expected exit 1 (migration needed), got $RC"
-  expect_has "version: 1 → 2"
-  expect_has "m1 → m001"
-  expect_has "t1 → t001"
-  expect_has "verdict"
-  expect_has "repeat"
-  expect_has "--dry-run"
-}
-acct_upgrade_dryrun_readonly() {
-  # dry-run prints the full plan and writes NOTHING — proven by hashing the whole tree.
-  mkv1
-  local pre post
-  pre=$(cd "$W" && find . -type f | LC_ALL=C sort | xargs sha256sum 2>/dev/null | sha256sum | awk '{print $1}')
-  vrun upgrade --dry-run
-  post=$(cd "$W" && find . -type f | LC_ALL=C sort | xargs sha256sum 2>/dev/null | sha256sum | awk '{print $1}')
-  [ "$RC" -eq 1 ] || bad "expected exit 1 (migration needed), got $RC"
-  expect_has "would"
-  if [ "$pre" = "$post" ]; then ok; else bad "dry-run modified the tree"; fi
-}
-block_upgrade_bad_flag() {
-  vrun upgrade --frobnicate
-  expect_block "usage"
-}
-acct_upgrade_apply_golden() {
-  # The §6 completion conditions in one flow: the v0.1 golden mine migrates, validates clean,
-  # reports its history as legacy-unbound, and a second upgrade finds zero work (idempotence).
-  mkv1
-  vrun upgrade --apply
-  expect_pass
-  expect_has "applied"
-  vrun validate
   expect_pass
   vrun scope
-  expect_has "legacy-unbound"
-  vrun upgrade --check
-  expect_has "nothing to do"
-}
-acct_upgrade_rollback() {
-  # Post-apply full validation fails (a broken verbatim seal the scan does not look for) → every
-  # byte is restored; proven by hashing the whole tree before and after.
-  mkv1
-  printf '몰래 추가된 줄.\n' >> "$W/truths/t1.md"
-  local pre post
-  pre=$(cd "$W" && find . -type f | LC_ALL=C sort | xargs sha256sum 2>/dev/null | sha256sum | awk '{print $1}')
-  vrun upgrade --apply
-  [ "$RC" -eq 1 ] || bad "expected exit 1 after rollback, got $RC"
-  expect_has "rolled back"
-  post=$(cd "$W" && find . -type f | LC_ALL=C sort | xargs sha256sum 2>/dev/null | sha256sum | awk '{print $1}')
-  if [ "$pre" = "$post" ]; then ok; else bad "tree differs after rollback"; fi
-}
-block_upgrade_apply_collision() {
-  # A rename target that already exists aborts BEFORE any write (§8 principle 3).
-  mkv1
-  mkdir -p "$W/materials/m001"
-  local pre post
-  pre=$(cd "$W" && find . -type f | LC_ALL=C sort | xargs sha256sum 2>/dev/null | sha256sum | awk '{print $1}')
-  vrun upgrade --apply
-  expect_block "collision"
-  post=$(cd "$W" && find . -type f | LC_ALL=C sort | xargs sha256sum 2>/dev/null | sha256sum | awk '{print $1}')
-  if [ "$pre" = "$post" ]; then ok; else bad "collision precheck wrote something"; fi
+  expect_has "truths     1 live · 0 verified (digest-bound) · 0 legacy-unbound"
+  expect_has "1 unverified"
 }
 
 # ---- WD-CLI-001 + WD-IO-001 (Phase 4 remainder): boundary defects + write transactions ----
@@ -2778,11 +2938,12 @@ e2e_user_answer_chain() {
   mkdir -p "$W/materials/m002"
   printf -- '---\nid: m002\ntitle: 사용자 답변 — 지연 배상\norigin: user-answer\nrole: 계약서\ntopics: [지연]\nformat: md\nsource_path: inbox/answer.md\nadded: 2026-07-02\nstatus: converted\nsummary: 지연 배상 한도에 대한 사용자 답변.\n---\n\n지연 배상 한도는 계약금액의 20%%다.\n' > "$W/materials/m002/converted.md"
   printf '| m002 | 사용자 답변 — 지연 배상 | 계약서 | converted |\n' >> "$W/catalog.md"
-  printf -- '---\nid: t002\nclaim: "지연 배상 한도는 계약금액의 20%%다"\nsource: m002\ntags: [지연]\nstatus: ok\nprovenance: stated\n---\n\n지연 배상 한도는 계약금액의 20%%다.\n' > "$W/truths/t002.md"
+  printf -- '---\nid: t002\nclaim: "지연 배상 한도는 계약금액의 20%%다"\nsource: m002\ntags: [지연]\nprovenance: stated\n---\n\n지연 배상 한도는 계약금액의 20%%다.\n' > "$W/truths/t002.md"
   ( cd "$W" && "${WDRUN[@]}" reindex >/dev/null 2>&1 )
   mkdoc2
   sed -i 's/^cited_truths: \[t001\]$/cited_truths: [t001, t002]/' "$W/documents/d2/plan.md"
   printf -- '\n지연 배상 한도는 계약금액의 20%%다. <!-- t:t002 -->\n' >> "$W/documents/d2/draft.md"
+  mint
   vrun seal-review d2 draft
   vrun consecrate d2;  expect_pass
   vrun validate;       expect_pass
@@ -2802,13 +2963,13 @@ e2e_open_queue_consecrates() {
 block_gate_v2_unsealed() {
   # THE review-seal bypass: on a v2 mine, deleting the three seal fields and editing the final
   # used to read as "legacy" and pass. A v2 mine has no legacy excuse — absence blocks.
-  mk_v2; strip_seal "$W/documents/d1/review.md"
+  mk_sealed; strip_seal "$W/documents/d1/review.md"
   printf '몰래 한 줄.\n' >> "$W/documents/d1/final.md"
   vrun validate; expect_block "[GATE-UNSEALED]"
 }
 block_gate_v2_context_seal_stripped() {
   # Deleting ONLY review_context_digest then moving a source must not slip through either.
-  mk_v2
+  mk_sealed
   sed -i '/^review_context_digest:/d' "$W/documents/d1/review.md"
   printf '\n제12조 신설.\n' >> "$W/materials/m001/converted.md"
   vrun validate; expect_block "[GATE-UNSEALED]"
@@ -2816,14 +2977,14 @@ block_gate_v2_context_seal_stripped() {
 pass_gate_v2_sealed_clean() {
   # The v2 happy path pinned from the pass side: a properly sealed schema-2 mine validates
   # clean and counts its seal digest-bound — the block cases above only prove rejection.
-  mk_v2
+  mk_sealed
   vrun validate; expect_pass
   expect_has "1 digest-bound"
 }
 pass_consecrate_v2_e2e() {
   # The v2 consecration spine: sealed draft → consecrate → one full validation → promoted, no
   # transaction residue, and the sealed validate stays green afterwards.
-  mk_v2
+  mk_sealed
   vrun consecrate d1
   expect_pass
   expect_has "full validation: 1 run"
@@ -2836,7 +2997,7 @@ block_gate_v2_seal_next_to_marker() {
   # A full seal and the migration marker on ONE review: seal-review removes the marker when a
   # real round seals, so coexistence is tamper (a hand-added marker parked as a future demotion
   # path — strip the seal later and the review reads as "legacy"). Blocked while the seal stands.
-  mk_v2
+  mk_sealed
   sed -i '1a review_legacy: 2026-01-01' "$W/documents/d1/review.md"
   vrun validate; expect_block "[GATE-SEAL-MARKER]"
 }
@@ -2854,13 +3015,13 @@ pass_seal_review_strips_marker() {
 }
 block_gate_v2_kind_missing() {
   # The seal is a TUPLE: deleting only reviewed_kind must read as a partial seal, not as a seal.
-  mk_v2
+  mk_sealed
   sed -i '/^reviewed_kind:/d' "$W/documents/d1/review.md"
   vrun validate; expect_block "[GATE-UNSEALED]"
 }
 block_gate_v2_kind_invalid() {
   # reviewed_kind outside draft|final is a seal validate cannot interpret — malformed, not green.
-  mk_v2
+  mk_sealed
   sed -i 's/^reviewed_kind: draft$/reviewed_kind: banana/' "$W/documents/d1/review.md"
   vrun validate; expect_block "[GATE-UNSEALED]"
 }
@@ -3022,19 +3183,6 @@ block_completeness_missing_accepted() {
   printf '# Open\n' > "$W/gaps.md"
   vrun validate; expect_block "[COMP-MALFORMED]"
 }
-acct_upgrade_fmless_review() {
-  # A genuine v0.1 review may carry NO frontmatter block at all. The migration scan promised a
-  # review_legacy marker its apply could not insert (the awk keyed on an opening '---'), so
-  # post-validate hit GATE-UNSEALED and rolled the whole migration back — such a mine was
-  # permanently unmigratable. Apply now prepends a fresh frontmatter block instead.
-  mkv1
-  printf '# Fidelity violations\n\n# Findings\n\n# Adjudications\n\n# Human queue\n' > "$W/documents/d1/review.md"
-  vrun upgrade --apply
-  expect_pass
-  OUT=$(cat "$W/documents/d1/review.md"); RC=0
-  expect_has "review_legacy"
-  vrun validate; expect_pass
-}
 block_consecrate_dual_final() {
   # final.md AND final/ at once: doc_final_path resolves the directory, so the old code moved
   # final/ aside, overwrote final.md with the candidate (no backup), validated a mine where the
@@ -3091,29 +3239,6 @@ acct_upgrade_mid_not_material_evidence() {
   expect_has "1 unverified"
   vrun validate; expect_pass
 }
-acct_upgrade_material_fm_verified_migrates() {
-  # The correct material source: v1 `status: verified` IS conversion history, and it must gain
-  # a ledger row (with its origin recorded) or a later `used` stamp erases the evidence.
-  sed -i 's/^status: converted$/status: verified/' "$W/materials/m001/converted.md"
-  vrun upgrade --apply
-  expect_pass
-  OUT=$(cat "$W/truths/verify-ledger.tsv"); RC=0
-  expect_has "v1-material-frontmatter"
-  vrun scope
-  expect_has "materials  1 converted · 0 verified (digest-bound) · 1 legacy-unbound"
-}
-acct_upgrade_resume_after_031_rows() {
-  # Resuming a migration that a 0.3.1 runtime started: the origin-less m-id row it left behind
-  # sat in the coverage set and blocked the CORRECT material-origin row from ever being minted.
-  # Coverage is per-lane now — an m row covers the material lane only when it is valid material
-  # evidence (origin token or a real verdict).
-  sed -i 's/^status: converted$/status: verified/' "$W/materials/m001/converted.md"
-  printf 'm001\t-\tlegacy-unbound\t-\t-\t2026-08-01\n' > "$W/truths/verify-ledger.tsv"
-  vrun upgrade --apply
-  expect_pass
-  OUT=$(cat "$W/truths/verify-ledger.tsv"); RC=0
-  expect_has "v1-material-frontmatter"
-}
 block_sealreview_dashnote_fm() {
   # `---note` satisfied the loose `^---` precheck while the strict awk never entered the
   # frontmatter — seal-review printed digests and a success line WITHOUT writing a seal.
@@ -3168,18 +3293,10 @@ acct_consecrate_marker_removal_failure_is_named() {
   expect_has "CONSEC-INTERRUPTED"
   [ -e "$W/documents/d1/.consecrate.inflight" ] || bad "the injection did not actually keep the marker — the case would prove nothing"
 }
-block_upgrade_garbage_version() {
-  # `version: banana` skipped the numeric future-check and read as "already at schema 2" with
-  # exit 0. The matrix is closed: a record is 1 or the current schema, anything else refuses.
-  sed -i 's/^version: 1$/version: banana/' "$W/project.md"
-  sed -i 's/^version: 1/version: banana/' "$W/.weavedoc/config.yaml"
-  vrun upgrade --check
-  expect_block "not a version this migration understands"
-}
 block_gate_draft_partial_tuple() {
   # Structural seal invariants hold for ANY review, not only next to a final: a draft-stage
   # review with a partial tuple is the same tamper shape one consecration earlier.
-  mk_v2
+  mk_sealed
   mkdoc2
   ( cd "$W" && "${WDRUN[@]}" seal-review d2 draft >/dev/null 2>&1 )
   sed -i '/^reviewed_kind:/d' "$W/documents/d2/review.md"
@@ -3188,7 +3305,7 @@ block_gate_draft_partial_tuple() {
 block_gate_draft_seal_marker() {
   # Marker-next-to-seal is tamper at draft stage too — waiting for the consecration to notice
   # hands the demotion a whole review round to sit undetected.
-  mk_v2
+  mk_sealed
   mkdoc2
   ( cd "$W" && "${WDRUN[@]}" seal-review d2 draft >/dev/null 2>&1 )
   sed -i '1a review_legacy: 2026-01-01' "$W/documents/d2/review.md"
@@ -3261,45 +3378,6 @@ acct_consecrate_no_residue() {
   [ -e "$W/documents/d1/.final.bak" ] && bad "backup left behind"
   ok
 }
-block_upgrade_incomplete_passes() {
-  # `passes 1/2` is a run that stopped short. It must not gain a verdict, and apply must not
-  # stamp schema 2 over it — unfinished verification stays visible debt, and idempotence holds.
-  mkv1
-  sed -i 's|passes 2/2|passes 1/2|' "$W/truths/verify.md"
-  vrun upgrade --apply
-  expect_block "human ruling"
-  OUT=$(cat "$W/project.md"); RC=0
-  expect_has "version: 1"
-}
-block_upgrade_pairwise_collision() {
-  # t01.md and t1.md both canonicalize to t001 — the second copy would silently overwrite the
-  # first in a sequential apply. Caught before one byte moves.
-  mkv1
-  cp "$W/truths/t1.md" "$W/truths/t01.md"
-  sed -i 's/^id: t1$/id: t01/' "$W/truths/t01.md"
-  vrun upgrade --apply
-  expect_block "both canonicalize"
-}
-block_upgrade_v2_launder() {
-  # THE v0.3.1 laundering path: strip the seals off a schema-2 mine, run upgrade --apply, and the
-  # migration stamped review_legacy over the tamper — validate then read it as history. Upgrade
-  # is a v1→2 migration and must refuse to touch a mine that is already at schema 2.
-  mk_v2
-  strip_seal "$W/documents/d1/review.md"
-  vrun upgrade --apply
-  expect_has "nothing to do"
-  OUT=$(cat "$W/documents/d1/review.md"); RC=0
-  expect_hasnt "review_legacy"
-  vrun validate; expect_block "[GATE-UNSEALED]"
-}
-block_upgrade_future_schema() {
-  # upgrade on a schema NEWER than this runtime is fail-closed, mirroring validate — "already at
-  # schema 2" over a v3 mine was a reader guessing at a format it cannot read.
-  sed -i 's/^version: 1$/version: 3/' "$W/project.md"
-  sed -i 's/^version: 1/version: 3/' "$W/.weavedoc/config.yaml"
-  vrun upgrade --check
-  expect_block "newer than this runtime"
-}
 pass_upgrade_resume_mixed() {
   # A crashed apply stamps project before config (stamps are LAST, in that order) — the rescan
   # of that half-stamped mine must still read as a v1 migration, or a crash is unrecoverable.
@@ -3307,47 +3385,6 @@ pass_upgrade_resume_mixed() {
   vrun upgrade --apply
   expect_pass
   vrun validate; expect_pass
-}
-acct_upgrade_readonly_target_no_partial_state() {
-  # §9's fault condition as the DUAL OUTCOME (fully-before + rc!=0, or fully-after + rc==0). Before
-  # §11 2026-08-05 the node runtime failed this probe in the worst shape: EACCES escaped at the
-  # version stamp, review_legacy already inserted, version still 1, backup abandoned (measured —
-  # the exact mixed state the marker discipline exists to prevent).
-  chmod 444 "$W/project.md" 2>/dev/null
-  vrun upgrade --apply
-  local rc=$RC pv cv
-  chmod 644 "$W/project.md" 2>/dev/null
-  pv=$(grep -m1 '^version:' "$W/project.md"); cv=$(grep -m1 '^version:' "$W/.weavedoc/config.yaml")
-  if [ "$rc" -eq 0 ]; then
-    { [ "$pv" = 'version: 2' ] && [ "$cv" = 'version: 2' ]; } || bad "rc 0 but not fully-after: project='$pv' config='$cv'"
-    [ -n "$(ls -d "$W"/.upgrade-backup-* 2>/dev/null)" ] || bad "success keeps the backup+manifest dir by design, and it is missing"
-  else
-    { [ "$pv" = 'version: 1' ] && [ "$cv" = 'version: 1' ]; } || bad "rc $rc but not fully-before: project='$pv' config='$cv'"
-    grep -q 'review_legacy' "$W/documents/d1/review.md" && bad "rc $rc but review_legacy marker left stamped"
-    [ -z "$(ls -d "$W"/.upgrade-backup-* 2>/dev/null)" ] || bad "failure left the backup dir with rollback claimed complete"
-  fi
-  ok
-}
-acct_upgrade_write_fault_rolls_back() {
-  # Nth-write failure through the operation seam: the fault lands on the version stamp, so every
-  # earlier phase (verify.md verdict words, the materialized ledger, review_legacy markers) has
-  # really happened when the boundary fires. Rollback restores the touched, REMOVES the created
-  # (the materialized ledger is born in this transaction), and is verified before "rolled back".
-  # The verdict word is stripped FIRST so phase 2 genuinely edits verify.md (cold review
-  # 2026-08-05) — otherwise the byte-restore assertion below would be guarding an untouched file.
-  sed -i 's/ · verified$//' "$W/truths/verify.md"
-  grep -q 'passes 2/2$' "$W/truths/verify.md" || { bad "fixture no-op: verify.md row still carries its verdict word"; return; }
-  cp "$W/truths/verify.md" "$W/.verify.before"
-  OUT=$( ( cd "$W" && $TO node "$REPO/tests/upgrade-faultinject.mjs" project.md ) 2>&1 ); RC=$?
-  [ "$RC" -eq 0 ] && bad "upgrade reported success around an injected write failure"
-  expect_has "rolled back"
-  [ "$(grep -m1 '^version:' "$W/project.md")" = 'version: 1' ] || bad "project version not restored"
-  [ "$(grep -m1 '^version:' "$W/.weavedoc/config.yaml")" = 'version: 1' ] || bad "config version not restored"
-  grep -q 'review_legacy' "$W/documents/d1/review.md" && bad "review_legacy marker left stamped"
-  cmp -s "$W/.verify.before" "$W/truths/verify.md" || bad "verify.md not byte-restored"
-  [ ! -f "$W/truths/verify-ledger.tsv" ] || bad "created ledger not removed by rollback"
-  [ -z "$(ls -d "$W"/.upgrade-backup-* 2>/dev/null)" ] || bad "backup dir left after a verified rollback"
-  ok
 }
 acct_attest_partial_append_rolls_back() {
   # v0.5.1 external review P1-3. One append call can land SOME bytes and then fail (ENOSPC, a size
@@ -3389,158 +3426,6 @@ acct_retag_rollback_resync_failure_named() {
   expect_block "index re-sync itself failed"
   [ "$(grep -m1 '^tags:' "$W/truths/t001.md")" = 'tags: [위약]' ] || bad "t001 tags not restored"
   [ -z "$(ls -d "$W"/.retag-bak.* 2>/dev/null)" ] || bad "backup dir left behind"
-}
-acct_upgrade_copy_fault_leaves_no_partial() {
-  # v0.5.1 external review P1-4. Registration is INTENT, and intent must be on the rollback list
-  # before the first byte that acts on it. In the old order — copy, delete old, then register — a
-  # copy that died partway left a half-made new path rollback did not know about: the old came back
-  # from its snapshot and the partial new sat BESIDE it. `crtd` now precedes the copy, so the
-  # half-made path is removed like anything else the transaction created.
-  mv "$W/truths/t001.md" "$W/truths/t01.md"
-  OUT=$( ( cd "$W" && $TO node "$REPO/tests/upgrade-faultinject.mjs" - - t001.md ) 2>&1 ); RC=$?
-  [ "$RC" -eq 0 ] && bad "upgrade reported success around an injected partial copy"
-  expect_has "rolled back"
-  [ -f "$W/truths/t01.md" ] || bad "the old path was not restored"
-  [ ! -e "$W/truths/t001.md" ] || bad "the half-made new path survived the rollback"
-  [ -z "$(ls -d "$W"/.upgrade-backup-* 2>/dev/null)" ] || bad "backup dir left after a verified rollback"
-}
-acct_upgrade_rm_fault_leaves_no_partial() {
-  # The removal twin: the copy landed whole, the OLD path refuses to go. Old order registered the
-  # new path only after this point, so rollback restored old and left new beside it — two files,
-  # one id, and the collision precheck then refused every future run. Both gone-or-both-back now.
-  mv "$W/truths/t001.md" "$W/truths/t01.md"
-  OUT=$( ( cd "$W" && $TO node "$REPO/tests/upgrade-faultinject.mjs" - - - t01.md ) 2>&1 ); RC=$?
-  [ "$RC" -eq 0 ] && bad "upgrade reported success around an injected removal failure"
-  expect_has "rolled back"
-  [ -f "$W/truths/t01.md" ] || bad "the old path is gone"
-  [ ! -e "$W/truths/t001.md" ] || bad "the copied new path survived the rollback"
-}
-acct_upgrade_backup_never_reused() {
-  # v0.5.2 (external review P0-2). The backup path was date+PID and mkdirSync(recursive) accepted an
-  # existing directory — at which point bkup()'s "already snapshotted this run" dedup mistook the
-  # STALE files inside for this run's snapshots, skipped the real ones, and the rollback RESTORED
-  # THE STALE BYTES while printing "byte-identical to before". The driver's --collide-bak plants
-  # exactly that bait at its own PID's path; mkdtempSync cannot return an existing path, so the
-  # bait is now inert. Asserted on the RESTORED BYTES, not the message.
-  cp "$W/project.md" "$W/.project.before"
-  OUT=$( ( cd "$W" && $TO node "$REPO/tests/upgrade-faultinject.mjs" config.yaml --collide-bak ) 2>&1 ); RC=$?
-  [ "$RC" -eq 0 ] && bad "upgrade reported success around an injected write failure"
-  expect_has "rolled back"
-  cmp -s "$W/.project.before" "$W/project.md" || bad "project.md is not the REAL original — the stale planted snapshot was restored"
-  grep -q 'STALE SNAPSHOT' "$W/project.md" && bad "the planted stale bytes are live in the mine"
-  # The bait dir itself must survive untouched — pre-fix it was consumed as this run's backup and
-  # then deleted by the "verified" rollback, taking the only restore point with it.
-  local baitd
-  baitd=$(ls -d "$W"/.upgrade-backup-* 2>/dev/null | head -1)
-  [ -n "$baitd" ] || { bad "the planted bait dir is gone entirely"; return; }
-  grep -q 'STALE SNAPSHOT' "$baitd/project.md" 2>/dev/null || bad "the planted bait dir was consumed: $baitd"
-}
-acct_upgrade_reindex_failure_rolls_back() {
-  # v0.5.2 (external review P1-1). Phase 5's regeneration ran BARE — a failed reindex left the old
-  # views beside the renamed truths and the migration still committed "validate clean", because
-  # validate checks id presence in the index, not label freshness. A nonzero rc now throws into the
-  # boundary and the whole migration rolls back.
-  mv "$W/truths/t001.md" "$W/truths/t01.md"
-  OUT=$( ( cd "$W" && $TO node "$REPO/tests/upgrade-faultinject.mjs" - --reindex-fail ) 2>&1 ); RC=$?
-  [ "$RC" -eq 0 ] && bad "upgrade committed around a failed index regeneration"
-  expect_has "rolled back"
-  [ -f "$W/truths/t01.md" ] || bad "the rename was not rolled back"
-  [ ! -e "$W/truths/t001.md" ] || bad "the renamed file survived the rollback"
-}
-acct_upgrade_refuses_held_ledger_lock() {
-  # Review #6 P0-2: upgrade --apply writes the ledger (it plans FROM it and REWRITES it whole in
-  # step 6) yet spoke no lock protocol — measured sailing straight through a LIVE age-0 lock
-  # (rc 0, ledger written, zero lock mentions), after which a concurrent attest's created-here
-  # rollback unlinked the file with upgrade's freshly minted legacy rows inside, upgrade having
-  # already reported success. Every ledger writer takes the ONE lock (lock.mjs) now: a held lock
-  # refuses the whole migration after the bounded wait, byte-identically.
-  # (An earlier revision of this comment claimed the full attest-beside-upgrade interleave was not
-  # constructible — FALSE, my overgeneralisation from the mkv1 mine's renamed ids: the PRISTINE
-  # fixture is a v1 mine with canonical ids and attest runs on it (rc 0, measured, review #7).
-  # The real interleave is pinned in acct_upgrade_attest_real_cross below.)
-  mkv1
-  mkdir -p "$W/truths/verify-ledger.tsv.lock"
-  local pre post
-  pre=$(cd "$W" && find . -type f | LC_ALL=C sort | xargs sha256sum 2>/dev/null | sha256sum | awk '{print $1}')
-  vrun upgrade --apply
-  expect_block "NEVER be reclaimed automatically"
-  expect_has "Nothing written"
-  post=$(cd "$W" && find . -type f | LC_ALL=C sort | xargs sha256sum 2>/dev/null | sha256sum | awk '{print $1}')
-  [ "$pre" = "$post" ] || bad "the refusal wrote something — the tree differs"
-  [ -d "$W/truths/verify-ledger.tsv.lock" ] || bad "the refusal removed the held lock"
-  # ...and the human path: remove the leftover, the same migration applies clean.
-  rmdir "$W/truths/verify-ledger.tsv.lock"
-  vrun upgrade --apply
-  expect_pass
-  vrun validate
-  expect_pass
-}
-acct_upgrade_concurrent_apply_applies_once() {
-  # Review #7 P1-2: the preflight ran BEFORE the lock with no rescan after acquiring, so two
-  # applies racing both planned from the v1 state and the loser applied its STALE plan onto the
-  # migrated mine — measured: both rc 0 "applied 4 item(s)", TWO backup dirs, the second one
-  # snapshotting v2 files under a MANIFEST claiming a v1 restore point. Deterministic via the
-  # driver's --slow-write seam: A holds the lock mid-apply for 3s while B preflights beside it;
-  # B must RESCAN under the lock (caches cleared, config snapshot rebuilt) and find nothing to do.
-  ( cd "$W" && node "$REPO/tests/upgrade-faultinject.mjs" --slow-write 3000 - ) > "$W/.a.out" 2>&1 &
-  local apid=$!
-  sleep 0.5
-  ( cd "$W" && $TO "${WDRUN[@]}" upgrade --apply ) > "$W/.b.out" 2>&1
-  local brc=$?
-  wait "$apid"; local arc=$?
-  [ "$arc" -eq 0 ] || bad "the slow apply failed (rc $arc)"
-  [ "$brc" -eq 0 ] || bad "the concurrent apply exited $brc instead of finding nothing to do"
-  grep -q 'applied' "$W/.a.out" || bad "the slow apply did not report applying"
-  grep -q 'nothing to do' "$W/.b.out" || bad "the loser did not rescan under the lock"
-  grep -q 'applied' "$W/.b.out" && bad "the loser applied a STALE plan onto the migrated mine"
-  [ "$(ls -d "$W"/.upgrade-backup-* 2>/dev/null | wc -l | tr -d ' ')" = 1 ] || bad "two backup dirs — a stale second apply left a false restore point"
-  vrun validate; expect_pass
-}
-acct_upgrade_attest_real_cross() {
-  # Review #7: the REAL attest-beside-upgrade interleave (the pristine fixture is a v1 mine with
-  # CANONICAL ids, so attest runs on it — the earlier "not constructible" claim was false). A
-  # failing attest HOLDS the lock; upgrade --apply arriving beside it must refuse before writing
-  # anything, leaving the mine v1; once the holder exits, the same apply migrates clean.
-  # Passes on 95eb395 too (the lock landed there — this pins it); red vs 3041881: sailed through.
-  ( cd "$W" && node "$REPO/tests/attest-faultinject.mjs" --sleep-ms 7000 verified 1 bstd m001 ) > "$W/.x.out" 2>&1 &
-  local xpid=$!
-  sleep 0.6
-  vrun upgrade --apply
-  local urc=$RC
-  [ "$urc" -ne 0 ] || bad "upgrade applied THROUGH the attest's held lock"
-  expect_block "is held and was not released"
-  expect_has "Nothing written"
-  grep -q '^version: 1' "$W/project.md" || bad "the refused apply left the mine migrated"
-  wait "$xpid"
-  vrun upgrade --apply
-  expect_pass
-  vrun validate; expect_pass
-}
-block_upgrade_version_flip_mid_wait() {
-  # .3 cold review (real): the under-lock rerun skipped the CLOSED VERSION MATRIX — a mine whose
-  # project.md flipped to 'version: 3' while --apply waited on the lock was STAGED INTO and only
-  # the post-apply validate rolled it back (rc 1, "rolled back", a backup created and consumed) —
-  # data-safe, but "refusing to touch a format this code cannot read" had already touched it.
-  # The matrix reruns under the lock now: rc 2, the refusal sentence, zero writes.
-  ( cd "$REPO" && node --input-type=module -e "
-    import { acquireLedgerLock, releaseLedgerLock } from './.weavedoc/bin/lib/lock.mjs'
-    const lk = process.argv[1]
-    if (acquireLedgerLock(lk, 'x') !== '') process.exit(2)
-    const t = Date.now(); while (Date.now() - t < 3000) { /* hold */ }
-    releaseLedgerLock(lk)
-  " "$W/truths/verify-ledger.tsv.lock" ) &
-  local hpid=$!
-  sleep 0.5
-  ( cd "$W" && $TO "${WDRUN[@]}" upgrade --apply ) > "$W/.v.out" 2>&1 &
-  local upid=$!
-  sleep 1.2
-  sed -i 's/^version: 1$/version: 3/' "$W/project.md"
-  wait "$upid"; local urc=$?
-  wait "$hpid"
-  [ "$urc" -eq 2 ] || bad "expected rc 2 (refused before any write), got $urc"
-  grep -q 'refusing to touch a format this code cannot read' "$W/.v.out" || bad "the future version was not refused"
-  grep -q 'rolled back' "$W/.v.out" && bad "the migration ran and rolled back instead of refusing up front"
-  [ -z "$(ls -d "$W"/.upgrade-backup-* 2>/dev/null)" ] || bad "a backup dir appeared — writes happened"; ok
 }
 acct_resume_key_sees_directory_moves() {
   # Review #10: the key's path half hashed BASENAMES, so moving golden/version.txt into golden/z/
@@ -3584,8 +3469,8 @@ block_gaps_fenced_fake_register() {
   # Review #11 blocker 1: the WHOLE register lived inside a code fence — real Markdown has no
   # register at all — and validate passed it, because only ONE of the four gaps readers knew
   # fences (the heading counter and the register scanner counted the fenced lines, and the
-  # 2-space-indented closing fence even read as the fake entry's continuation). One defence()
-  # pass feeds every reader now. Red vs 942ccdc: rc 0.
+  # 2-space-indented closing fence even read as the fake entry's continuation). One lexical
+  # scanner now feeds every reader. Red vs 942ccdc: rc 0.
   req_completeness
   printf '```text\n# Open\n# Accepted\n- [declared] fake accepted decision — reason\n  ```\n' > "$W/gaps.md"
   vrun validate
@@ -3612,28 +3497,6 @@ block_gaps_backtick_info_not_a_fence() {
   printf '# Open\n\n# Accepted\n\n# Notes\n\n```foo`bar\n- [declared] real stray entry — reason\n```\n' > "$W/gaps.md"
   vrun validate
   expect_block "outside '# Open' and '# Accepted'"
-}
-block_upgrade_same_mode_twice() {
-  # Review #11: "one mode per invocation" said one thing and the code allowed `--apply --apply`.
-  # The rule now matches the sentence — ANY second mode flag is a usage error, same or different.
-  # Red vs 942ccdc: `--apply --apply` ran the migration rc 0.
-  vrun upgrade --apply --apply
-  [ "$RC" -eq 2 ] || bad "expected usage rc 2 for a repeated mode, got $RC"
-  expect_has "one mode per invocation"
-  [ ! -d "$W/.weavedoc/mine.lock" ] || bad "the usage refusal left the mine lock behind"
-  vrun validate; expect_pass
-}
-block_upgrade_one_mode_only() {
-  # Review #10: mode was last-wins — a hidden rule the dispatcher's gate could not share, so
-  # `upgrade --apply --check` ran read-only but was refused by the mine lock. The ambiguous
-  # spelling is a usage error now, and the two parsers cannot disagree about it.
-  vrun upgrade --apply --check
-  [ "$RC" -eq 2 ] || bad "expected usage rc 2, got $RC"
-  expect_has "one mode per invocation"
-  vrun upgrade --check --apply
-  [ "$RC" -eq 2 ] || bad "expected usage rc 2 for the reversed spelling, got $RC"
-  [ ! -d "$W/.weavedoc/mine.lock" ] || bad "the usage refusal left the mine lock behind"
-  vrun validate; expect_pass
 }
 acct_mine_lock_admits_one_writer() {
   # THE SINGLE-WRITER GATE (v0.5.4, review #9). Every mutating command takes .weavedoc/mine.lock
@@ -3701,39 +3564,6 @@ acct_mine_lock_released_on_refusal() {
   [ "$RC" -eq 0 ] && bad "round 0 was accepted"
   [ ! -d "$W/.weavedoc/mine.lock" ] || bad "the mine lock survived a usage refusal"
   vrun validate; expect_pass
-}
-block_upgrade_apply_without_truths_dir() {
-  # The lock's own precondition (v0.5.4 cold review). With the lock first, a mine that has no
-  # truths/ made mkdir fail ENOENT and the command talked about a lock the user never made, rc 1 —
-  # while every other "this mine is unusable" refusal is rc 2. The directory is checked before the
-  # lock (the exception cmd-attest already makes) and named for what it is.
-  # Red vs the pre-fix draft of this same patch: rc 1 and the ENOENT lock sentence.
-  rm -rf "$W/truths"
-  vrun upgrade --apply
-  [ "$RC" -eq 2 ] || bad "expected rc 2 for an unusable mine, got $RC"
-  expect_has "no truths/ directory"
-  expect_hasnt "the ledger lock cannot be created"
-  [ ! -e "$W/truths" ] || bad "the refusal created something where truths/ used to be"
-}
-acct_upgrade_judges_nothing_before_the_lock() {
-  # THE CLASS GUARD for upgrade (v0.5.4, review #8 P1-1), and it needs no instrumentation: on an
-  # ALREADY-MIGRATED mine a pre-lock judgment answers "nothing to do" INSTANTLY, while a
-  # lock-first command must wait out the bound and refuse. The elapsed time is the evidence, so
-  # this case fails the moment any decision moves back outside the lock — not just today's two.
-  # Red vs v0.5.3: rc 0 "nothing to do" in ~0s with the lock held by someone else.
-  vrun upgrade --apply
-  expect_pass
-  mkdir -p "$W/truths/verify-ledger.tsv.lock"
-  printf 'someone-else' > "$W/truths/verify-ledger.tsv.lock/owner"
-  local t0 t1
-  t0=$(date +%s)
-  vrun upgrade --apply
-  t1=$(date +%s)
-  expect_block "is held and was not released"
-  expect_has "Nothing written"
-  expect_hasnt "nothing to do"
-  [ "$(( t1 - t0 ))" -ge 4 ] || bad "returned in $(( t1 - t0 ))s — it judged the mine without holding the lock"
-  rm -rf "$W/truths/verify-ledger.tsv.lock"
 }
 acct_attest_judges_nothing_before_the_lock() {
   # THE CLASS GUARD for attest (v0.5.4, review #8 P1-2), same shape: a BOGUS id is a judgment
@@ -4085,6 +3915,44 @@ block_completeness_sections_degenerate_roster() {
   OUT=$( ( cd "$W" && $TO node .weavedoc/bin/weavedoc.mjs validate ) 2>&1 ); RC=$?
   expect_block "SCHEMA-UNREADABLE"
 }
+block_completeness_sections_leading_empty_role() {
+  # The section roster is positional. Removing its first value must not shift Accepted into Open
+  # in validate, status or the non-blocking tally.
+  req_completeness
+  cp -r "$REPO/.weavedoc/bin" "$W/.weavedoc/bin"
+  cp "$REPO/.weavedoc/schema" "$W/.weavedoc/schema"
+  cp "$REPO/.weavedoc/VERSION" "$W/.weavedoc/VERSION"
+  sed -i 's/^gaps.sections: Open|Accepted$/gaps.sections: |Accepted/' "$W/.weavedoc/schema"
+  grep -q '^gaps.sections: |Accepted$' "$W/.weavedoc/schema" || { bad "fixture no-op: leading-empty roster swap missed"; return; }
+  printf '# Accepted\n\n- [declared] MUST-NOT-BECOME-OPEN\n' > "$W/gaps.md"
+  OUT=$( ( cd "$W" && $TO node .weavedoc/bin/weavedoc.mjs validate ) 2>&1 ); RC=$?
+  expect_block "SCHEMA-UNREADABLE"
+  OUT=$( ( cd "$W" && $TO node .weavedoc/bin/weavedoc.mjs status --open ) 2>&1 ); RC=$?
+  expect_has "gaps register contract is invalid"
+  expect_hasnt "nothing is waiting on you"
+  OUT=$( ( cd "$W" && $TO node .weavedoc/bin/weavedoc.mjs gaps ) 2>&1 ); RC=$?
+  expect_has "accepted tally is disabled"
+  expect_hasnt "records 0 already accepted"
+}
+block_completeness_sections_extra_positional_role() {
+  # Extra roles are not ignored. All three consumers disable the register instead of choosing the
+  # first two values and creating a hidden fourth interpretation of the schema.
+  req_completeness
+  cp -r "$REPO/.weavedoc/bin" "$W/.weavedoc/bin"
+  cp "$REPO/.weavedoc/schema" "$W/.weavedoc/schema"
+  cp "$REPO/.weavedoc/VERSION" "$W/.weavedoc/VERSION"
+  sed -i 's/^gaps.sections: Open|Accepted$/gaps.sections: Open|Accepted|Archive/' "$W/.weavedoc/schema"
+  grep -q '^gaps.sections: Open|Accepted|Archive$' "$W/.weavedoc/schema" || { bad "fixture no-op: extra-role roster swap missed"; return; }
+  printf '# Open\n\n- [declared] MUST-NOT-ROUTE\n# Accepted\n# Archive\n' > "$W/gaps.md"
+  OUT=$( ( cd "$W" && $TO node .weavedoc/bin/weavedoc.mjs validate ) 2>&1 ); RC=$?
+  expect_block "SCHEMA-UNREADABLE"
+  OUT=$( ( cd "$W" && $TO node .weavedoc/bin/weavedoc.mjs status --open ) 2>&1 ); RC=$?
+  expect_has "gaps register contract is invalid"
+  expect_hasnt "nothing is waiting on you"
+  OUT=$( ( cd "$W" && $TO node .weavedoc/bin/weavedoc.mjs gaps ) 2>&1 ); RC=$?
+  expect_has "accepted tally is disabled"
+  expect_hasnt "records 0 already accepted"
+}
 block_completeness_sections_from_schema() {
   # Review #6 P1: gaps.sections joined SCH_KEYS (presence) while the counter spelled
   # 'Open'/'Accepted' by hand — measured: a runtime whose schema said Pending|Waived PASSED a
@@ -4164,14 +4032,6 @@ acct_schema_missing_gaps_keys_named() {
   OUT=$( ( cd "$W" && $TO node .weavedoc/bin/weavedoc.mjs validate ) 2>&1 ); RC=$?
   [ "$RC" -eq 0 ] && bad "validate passed with schema keys deleted"
   expect_has "SCHEMA-UNREADABLE"
-}
-acct_upgrade_rollback_fault_preserves_backup() {
-  # Write fails at the stamp AND the rollback cannot restore verify.md. Keep the backup, name the
-  # file, never claim "byte-identical" — the backup is the only copy of the original left.
-  OUT=$( ( cd "$W" && $TO node "$REPO/tests/upgrade-faultinject.mjs" project.md verify.md ) 2>&1 ); RC=$?
-  [ "$RC" -eq 0 ] && bad "upgrade reported success around an injected write failure"
-  expect_has "rollback is INCOMPLETE"
-  [ -n "$(ls -d "$W"/.upgrade-backup-* 2>/dev/null)" ] || bad "backup dir was deleted though the rollback could not be verified"
 }
 acct_mat_digest_line_endings_stable() {
   # A material's digest must not depend on the platform that computed it. mat_digest passes the file
@@ -4274,17 +4134,6 @@ acct_attest_ledger_directory_refuses_truthfully() {
   vrun attest verified 2 std m001
   expect_block "not a regular file"
 }
-block_upgrade_headless_ledger_refuses() {
-  # v0.5.1 cold review finding 6: scope and validate both declare a headless ledger VOID, but
-  # upgrade's scan was a third consumer quietly computing its plan from rows the other two had
-  # ruled unusable — a wrong preview, over evidence in an undecidable state. Refused in every mode
-  # now, same as unreadable.
-  vrun attest failed 1 std m001
-  sed -i 's/^m001\t\(.*\tfailed\t.*\)$/\tm001\t\1/' "$W/truths/verify-ledger.tsv"
-  grep -q $'^\t' "$W/truths/verify-ledger.tsv" || { bad "fixture no-op: no leading tab landed"; return; }
-  vrun upgrade --check
-  expect_block "the sidecar is void"
-}
 block_consecrate_validator_throw_restores() {
   # v0.5.1 cold review finding 5 made this case exist: the fix (a throwing validator counts as a
   # failed validation) was in, tested by hand, and the CHANGELOG claimed red-first coverage the
@@ -4325,8 +4174,8 @@ block_ledger_unreadable_is_not_absent() {
   expect_has "CANNOT BE READ"
   expect_has "1 unverified"
   expect_hasnt "legacy-unbound: m001"
-  vrun upgrade --check
-  expect_block "cannot be read"
+  # (the `upgrade --check` leg retired with the v1→v2 migrator — the slice-1 stub reads no
+  # ledger; the v2→v3 migrator's own refusal cases arrive with it in slice 2)
 }
 acct_ledger_crlf_reads_as_verified() {
   # ONE READER (§11 2026-08-05). A git checkout with core.autocrlf=true — the Windows default —
@@ -4502,7 +4351,7 @@ acct_json_version() {
   vrun version --json
   expect_pass
   expect_has '"fingerprint"'
-  expect_has '"schema_version":2'
+  expect_has '"schema_version":3'
 }
 meta_diag_code_table() {
   # FORMATS documents every code the runtime can emit, and documents no code it cannot — the table
@@ -4595,7 +4444,7 @@ acct_gaps_accepted_tally_counts_filled_placeholder() {
   # `status --open` report a blocking gap as "nothing is waiting" in v0.5.5. Here it under-counts
   # accepted decisions instead: an entry whose kind slot kept its template but whose body is
   # written out is a real decision (FORMATS: the remainder decides) and was tallied as nothing.
-  # Revert cmd-gaps.mjs's scanRegister call to countLines(…, ENTRY) → this goes red.
+  # Revert cmd-gaps.mjs to a raw entry-pattern count instead of parseGapRegister → this goes red.
   cat > "$W/gaps.md" <<'EOF'
 # Open
 
@@ -4609,6 +4458,26 @@ EOF
   expect_pass
   # 2, not 3: the pure stub stays template noise in every reader.
   expect_has "records 2 already accepted"
+}
+acct_gaps_accepted_malformed_is_named() {
+  # Typed syntax cannot disappear at the final consumer. Keep the historical record tally, but say
+  # explicitly that an unknown kind is not a valid routed acceptance.
+  printf '# Open\n\n# Accepted\n\n- [typo] decision\n' > "$W/gaps.md"
+  vrun gaps
+  expect_pass
+  expect_has "records 1 already accepted (0 valid, 1 malformed)"
+  expect_has "malformed entry"
+}
+acct_gaps_same_section_cannot_hold_both_roles() {
+  # Model-level contract closure: status/gaps consume the register without validate's schema
+  # preflight, so they too must refuse to treat one physical row as both open and accepted.
+  sed -i 's/^gaps\.sections:.*/gaps.sections: Same|Same/' "$W/.weavedoc/schema"
+  printf '# Same\n\n- [symmetry] ONE-ROLE\n' > "$W/gaps.md"
+  vrun status --open
+  expect_has "one section cannot hold both roles"
+  vrun gaps
+  expect_has "accepted tally is disabled"
+  expect_hasnt "records 0 already accepted"
 }
 acct_gaps_unterminated_fence_named() {
   # A fence nobody closed makes everything after it invisible to the tally, and this command said
@@ -4655,6 +4524,13 @@ meta_key_covers_every_live_input() {
   }
   # bin/ top level (not the entrypoint, not under lib/) — the v0.5.15 hole
   printf 'export const x = 1\n' > "$copy/.weavedoc/bin/extra.mjs"; probe_moves bin-toplevel "$copy/.weavedoc/bin/extra.mjs"
+  # the VERSIONED CONTRACTS beside the schema (bundle 2026-08-08.6). `.weavedoc/schema` was keyed by
+  # name and `schemas/` not at all, so a dirty `schemas/v3` edit was invisible to `--resume`, which
+  # replayed the previous PASS while a fresh key failed — the v0.5.14/.15 hole one directory over.
+  # It belongs HERE, in the isolated copy: the first spelling of this probe edited $REPO itself and
+  # restored it, which a SIGKILL in the window leaves dirty, lets a concurrent edit be clobbered by
+  # the restore, and hides from the final seal anyway because A→B→A is no net change.
+  probe_moves schemas-v3 "$copy/.weavedoc/schemas/v3"
   # a nested lib module, and a tests/ helper below the top level — the recursive halves
   mkdir -p "$copy/.weavedoc/bin/lib/sub" && printf 'export const y = 1\n' > "$copy/.weavedoc/bin/lib/sub/m.mjs"
   probe_moves bin-nested "$copy/.weavedoc/bin/lib/sub/m.mjs"
@@ -4724,8 +4600,15 @@ meta_git_env_ignored_by_key_and_manifest() {
   # does not). Two tracked files are enough: what is asserted is that both runs answer alike, not
   # what they answer. The alternate index restages VERSION with schema's blob — a difference the
   # unfixed script reported and the key never saw.
-  mkdir -p "$sc/.weavedoc" "$sc/tests" "$sc/.claude/skills/weavedoc-x"
-  cp "$REPO/.weavedoc/VERSION" "$REPO/.weavedoc/schema" "$REPO/.weavedoc/READ.md"      "$REPO/.weavedoc/FORMATS.md" "$REPO/.weavedoc/.gitattributes" "$sc/.weavedoc"/ 2>/dev/null
+  # THIS LIST IS make-manifest.sh's REQUIRED-PATH GUARD, and the two move together: adding a path
+  # there without adding it here makes the generator refuse this scratch repo, which is what the
+  # vacuity guard below then reports (measured when `.weavedoc/schemas/v3` was added). The guard
+  # catching it loudly is the design; keeping the two lists in step is the maintenance.
+  mkdir -p "$sc/.weavedoc/schemas" "$sc/tests" "$sc/.claude/skills/weavedoc-x"
+  cp "$REPO/.weavedoc/VERSION" "$REPO/.weavedoc/schema" "$REPO/.weavedoc/READ.md" \
+     "$REPO/.weavedoc/FORMATS.md" "$REPO/.weavedoc/PARSER-MODEL.md" \
+     "$REPO/.weavedoc/.gitattributes" "$sc/.weavedoc"/ 2>/dev/null
+  cp "$REPO/.weavedoc/schemas/v3" "$sc/.weavedoc/schemas"/ 2>/dev/null
   mkdir -p "$sc/.weavedoc/bin" && cp "$REPO/.weavedoc/bin/weavedoc.mjs" "$sc/.weavedoc/bin"/ 2>/dev/null
   printf 'skill
 ' > "$sc/.claude/skills/weavedoc-x/SKILL.md"
@@ -4782,9 +4665,13 @@ meta_manifest_generator_fails_closed() {
   # as though it were the file's digest, and the script exited 0. Built by staging the required
   # paths and then deleting one loose object out from under the index.
   local sc2="$W/mmfc2" obj
-  mkdir -p "$sc2/tests" "$sc2/.weavedoc/bin"
+  mkdir -p "$sc2/tests" "$sc2/.weavedoc/bin" "$sc2/.weavedoc/schemas"
   cp "$REPO/tests/make-manifest.sh" "$REPO/tests/git-env.sh" "$sc2/tests"/ 2>/dev/null
-  cp "$REPO/.weavedoc/VERSION" "$REPO/.weavedoc/schema" "$REPO/.weavedoc/READ.md"      "$REPO/.weavedoc/FORMATS.md" "$REPO/.weavedoc/.gitattributes" "$sc2/.weavedoc"/ 2>/dev/null
+  # Same coupling to make-manifest.sh's required-path guard as the case above.
+  cp "$REPO/.weavedoc/VERSION" "$REPO/.weavedoc/schema" "$REPO/.weavedoc/READ.md" \
+     "$REPO/.weavedoc/FORMATS.md" "$REPO/.weavedoc/PARSER-MODEL.md" \
+     "$REPO/.weavedoc/.gitattributes" "$sc2/.weavedoc"/ 2>/dev/null
+  cp "$REPO/.weavedoc/schemas/v3" "$sc2/.weavedoc/schemas"/ 2>/dev/null
   cp "$REPO/.weavedoc/bin/weavedoc.mjs" "$sc2/.weavedoc/bin"/ 2>/dev/null
   ( cd "$sc2" && git init -q . && git add -A >/dev/null 2>&1 ) || { bad "could not build the second scratch repo"; return; }
   out=$( cd "$sc2" && bash tests/make-manifest.sh 2>/dev/null ); rc=$?
@@ -4807,7 +4694,9 @@ meta_manifest_required_path_is_exact() {
   local sc="$W/mmex" out rc
   mkdir -p "$sc/tests" "$sc/.weavedoc/bin"
   cp "$REPO/tests/make-manifest.sh" "$REPO/tests/git-env.sh" "$sc/tests"/ 2>/dev/null
-  cp "$REPO/.weavedoc/VERSION" "$REPO/.weavedoc/schema" "$REPO/.weavedoc/READ.md"      "$REPO/.weavedoc/FORMATS.md" "$REPO/.weavedoc/.gitattributes" "$sc/.weavedoc"/ 2>/dev/null
+  cp "$REPO/.weavedoc/VERSION" "$REPO/.weavedoc/schema" "$REPO/.weavedoc/READ.md" \
+     "$REPO/.weavedoc/FORMATS.md" "$REPO/.weavedoc/PARSER-MODEL.md" \
+     "$REPO/.weavedoc/.gitattributes" "$sc/.weavedoc"/ 2>/dev/null
   cp "$REPO/.weavedoc/bin/weavedoc.mjs" "$sc/.weavedoc/bin/weavedoc.mjs.bak" 2>/dev/null
   ( cd "$sc" && git init -q . && git add -A >/dev/null 2>&1 ) || { bad "could not build a scratch git repo"; return; }
   # The vacuity check reads the INDEX, not the manifest: on refusal the generator prints nothing,
@@ -5028,7 +4917,7 @@ acct_smoke_pull() {
   vrun pull 위약
   expect_pass
   expect_has "t001"
-  expect_has "usable 1"
+  expect_has "— 1 truth(s)"
 }
 acct_smoke_impact() {
   vrun impact m001
@@ -5052,10 +4941,11 @@ pass_retag_leaves_body_alone() {
   # S1 (R3): a truth whose BODY quotes a line shaped like a list field. retag rewrote the quote,
   # the seal then failed on the tool's own edit, and the message blamed the user for laundering.
   sed -i 's/^제3조 대금은 5천만원으로 한다\.$/제3조 대금은 5천만원으로 한다.\ntags: [위약, 대금]/' "$W/materials/m001/converted.md"
-  printf -- '---\nid: t002\nclaim: "자료가 선언한 태그 줄"\nsource: m001\ntags: [대금]\nstatus: ok\n---\n\ntags: [위약, 대금]\n' > "$W/truths/t002.md"
+  printf -- '---\nid: t002\nclaim: "자료가 선언한 태그 줄"\nsource: m001\ntags: [대금]\n---\n\ntags: [위약, 대금]\n' > "$W/truths/t002.md"
   printf -- '- 태그 선언 줄: t002\n' >> "$W/truths/coverage.md"
   printf -- '- added: t002 (2026-07-30)\n' >> "$W/truths/changelog.md"
   ( cd "$W" && "${WDRUN[@]}" reindex >/dev/null 2>&1 )
+  mint
   vrun validate; expect_pass
   ( cd "$W" && "${WDRUN[@]}" retag 위약 벌칙 >/dev/null 2>&1 )
   OUT=$(cat "$W/truths/t002.md")
@@ -5073,7 +4963,7 @@ pass_crlf_retag() {
   # re-attaching CRs, so a CRLF file came back MIXED — one bare LF in the middle — and this case
   # passed because "a CR survived somewhere" is true of a mangled file too. Command success is
   # asserted as well: it was not, and a failing rename would have passed the old spelling.
-  printf -- '---\r\nid: t002\r\nclaim: "대금은 5천만원이다"\r\nsource: m001\r\ntags: [대금]\r\nstatus: ok\r\n---\r\n\r\n제3조 대금은 5천만원으로 한다.\r\n' > "$W/truths/t002.md"
+  printf -- '---\r\nid: t002\r\nclaim: "대금은 5천만원이다"\r\nsource: m001\r\ntags: [대금]\r\n---\r\n\r\n제3조 대금은 5천만원으로 한다.\r\n' > "$W/truths/t002.md"
   # ...and t002 must be a truth the mine ACCEPTS, or retag's post-validate rejects and rolls back —
   # at which point this case measures the ROLLBACK's byte preservation, not the writer's. That is
   # exactly what the pre-v0.5.1 spelling had been doing without saying so: the old fixture failed
@@ -5088,6 +4978,7 @@ pass_crlf_retag() {
   lfcount() { tr -cd '\n' < "$1" | wc -c | tr -d ' '; }
   local crb lfb; crb=$(crcount "$W/truths/t002.md"); lfb=$(lfcount "$W/truths/t002.md")
   [ "$crb" = "$lfb" ] || { bad "fixture is not uniformly CRLF (cr=$crb lf=$lfb) — the case would prove nothing"; return; }
+  mint
   vrun retag 대금 금액
   expect_pass
   local cra lfa; cra=$(crcount "$W/truths/t002.md"); lfa=$(lfcount "$W/truths/t002.md")
@@ -5111,6 +5002,9 @@ pass_shipped_templates() {
   # inbox/ is one of the four configured paths and weavedoc-init creates it, so a mine built from
   # the shipped templates has one — it was missing here only because validate did not look (v0.5.21).
   local p="$W-tmpl"; rm -rf "$p" 2>/dev/null; mkdir -p "$p/inbox" "$p/materials/m001" "$p/truths" "$p/documents/d1"
+  mkdir -p "$p/.weavedoc-state"
+  printf '{\n  "version": 1,\n  "open": []\n}\n' > "$p/.weavedoc-state/conflicts.json"
+  printf '{\n  "version": 1,\n  "next": {\n    "conflict": 1,\n    "material": 2,\n    "truth": 2\n  }\n}\n' > "$p/.weavedoc-state/id-sequences.json"
   cp -r "$REPO/.weavedoc" "$p/.weavedoc"
   cp "$REPO/.weavedoc/templates/config.yaml" "$p/.weavedoc/config.yaml"
   sed -e 's/{ko|en}/ko/' -e 's/^roles: \[\]/roles: [계약서]/' -e 's/^tone:.*$/tone: 담백/' \
@@ -5147,15 +5041,9 @@ pass_shipped_templates() {
 
 acct_clean() { vrun validate; expect_has "truths 1 (1 sealed)"; }
 acct_sealfail() {
-  printf -- '---\nid: t002\nclaim: "지체상금은 일 0.1%%다"\nsource: m001\ntags: [위약]\nstatus: ok\n---\n\n제9조 지체상금은 일 0.1%%로 한다.\n' > "$W/truths/t002.md"
+  printf -- '---\nid: t002\nclaim: "지체상금은 일 0.1%%다"\nsource: m001\ntags: [위약]\n---\n\n제9조 지체상금은 일 0.1%%로 한다.\n' > "$W/truths/t002.md"
   ( cd "$W" && "${WDRUN[@]}" reindex >/dev/null 2>&1 )
   vrun validate; expect_has "1 sealed · 1 seal FAILED"
-}
-acct_tombstone() {
-  printf -- '---\nid: t002\nclaim: "지체상금 조항이 있다"\nsource: m001\ntags: [위약]\nstatus: retracted\n---\n' > "$W/truths/t002.md"
-  printf -- '- removed: t002 (2026-07-30) — 원문에 없었다\n' >> "$W/truths/changelog.md"
-  ( cd "$W" && "${WDRUN[@]}" reindex >/dev/null 2>&1 )
-  vrun validate; expect_has "1 sealed · 1 tombstone"
 }
 acct_notchecked() {
   sed -i 's/^source: m001$/source:/' "$W/truths/t001.md"
@@ -5219,8 +5107,8 @@ acct_diag_order_is_specified() {
   seen=$(printf '%s\n' "$OUT" | grep -F "[FM-MISSING] truths/t002.md" \
          | sed -E "s/.*frontmatter '([a-z_]+)' missing.*/\1/" | tr '\n' ' ')
   seen=${seen% }
-  if [ "$seen" = "claim id source status tags" ]; then ok
-  else bad "truth FM-MISSING order is '$seen', want 'claim id source status tags' (schema order sorted; an unspecified order cannot be ported)"; fi
+  if [ "$seen" = "claim id source tags" ]; then ok
+  else bad "truth FM-MISSING order is '$seen', want 'claim id source tags' (schema order sorted; an unspecified order cannot be ported)"; fi
 }
 acct_retag_paths_are_relative() {
   # The third and last surface that printed an absolute path, found by sweeping EVERY remaining
@@ -5282,17 +5170,6 @@ acct_openlist_untagged_shown() {
   expect_has "human queue (1 open, 1 untagged):"
   expect_has "truths/verify.md (untagged): - 상태 태그가 없는 항목"
 }
-acct_openlist_conflict_pair() {
-  # A conflict names BOTH sides (the skill rule's wording), each with its claim. t002's status is
-  # QUOTED on purpose: scope once carried its own parser that read `status: "retracted"` as live —
-  # the listing must ride fmVal's quote peeling, not a parser of its own.
-  sed -i 's/^status: ok$/status: conflict\nconflict_with: [t002]/' "$W/truths/t001.md"
-  printf -- '---\nid: t002\nclaim: "위약금은 계약금액의 15%%다"\nsource: m001\ntags: [위약]\nstatus: "conflict"\nconflict_with: [t001]\nprovenance: stated\n---\n\n제7조 위약금은 계약금액의 15%%로 한다.\n' > "$W/truths/t002.md"
-  vrun status --open
-  expect_has "conflicts (2):"
-  expect_has "t001 (m001) ⇄ [t002] — 위약금은 계약금액의 10%다"
-  expect_has "t002 (m001) ⇄ [t001] — 위약금은 계약금액의 15%다"
-}
 acct_openlist_questions_states() {
   # open + proposed are both waiting (proposed = candidates on the table, nothing confirmed);
   # answered is closed and stays out of a listing of what is waiting.
@@ -5329,6 +5206,18 @@ EOF
   expect_has "- [enumeration] 앨범 — 6곡 계획 vs 5곡 수록"
   expect_hasnt "의도적 공백"
   expect_hasnt "<where>"
+}
+acct_openlist_gaps_structure_warns_when_off() {
+  # The typed register owns headings and stray records even when completeness enforcement is off.
+  # A likely section-name typo must not end an agent run with "nothing is waiting".
+  printf '# Oepn\n- [declared] ORPHANED-BY-TYPO\n# Accepted\n' > "$W/gaps.md"
+  vrun status --open
+  expect_has "must have exactly one '# Open'"
+  expect_has "outside its Open/Accepted sections"
+  expect_hasnt "nothing is waiting on you"
+  vrun gaps
+  expect_has "must have exactly one '# Open'"
+  expect_has "ORPHANED-BY-TYPO"
 }
 acct_openlist_gaps_filled_placeholder() {
   # P1 (external review, v0.5.5): the listing dropped every bullet whose kind slot opened with a
@@ -5458,11 +5347,21 @@ acct_openlist_hq_continuation_shown() {
 acct_openlist_question_continuation_shown() {
   # …and the third ledger. Same rule, same narrowing (an entry WITH content keeps its sub-bullets
   # as dropped detail — acct_openlist_subbullets_stay_detail pins that side).
-  # Revert the `qlast` appender in the questions loop → this goes red.
+  # Drop questions-ledger's structural detail from itemBodyFacts → this goes red.
   printf -- '# 질문\n\n- [open]\n  지체상금 상한 값이 필요합니다\n' > "$W/questions.md"
   vrun status --open
   expect_has "questions (1):"
   expect_has "- [open] 지체상금 상한 값이 필요합니다"
+}
+acct_openlist_inert_context_suspends_parent_state() {
+  # Closed comments and fences are inert lexical nodes, not structural resets. A placeholder stays
+  # held across them and real source-authentic detail after/interrupted by them materialises it.
+  printf -- '\n- [{state}] [{ownership}]\n  <!-- audit -->REAL-HQ-AFTER-COMMENT\n' >> "$W/truths/verify.md"
+  printf -- '- [{state}]\n  ```md\n  TEMPLATE EXAMPLE\n  ```\n  REAL-QUESTION-AFTER-FENCE\n' > "$W/questions.md"
+  vrun status --open
+  expect_has "REAL-HQ-AFTER-COMMENT"
+  expect_has "REAL-QUESTION-AFTER-FENCE"
+  expect_hasnt "nothing is waiting on you"
 }
 acct_openlist_none_idiom_anchored() {
   # `- (없음)` / `- (none)` is the EMPTY-ledger idiom; the pattern was not anchored, so a real entry
@@ -5484,6 +5383,17 @@ acct_openlist_none_idiom_still_empty() {
   vrun status --open
   expect_has "nothing is waiting on you"
 }
+acct_openlist_none_idiom_continuation_surfaces() {
+  # Explicit empty is a typed sentinel, not `continue`. Real content below it materializes one
+  # malformed record in each ledger and is shown instead of disappearing behind the idiom.
+  printf -- '\n- (none)\n  REAL-HQ-BELOW-EMPTY\n' >> "$W/truths/verify.md"
+  printf -- '- (none)\n  REAL-QUESTION-BELOW-EMPTY\n' > "$W/questions.md"
+  vrun status --open
+  expect_has "REAL-HQ-BELOW-EMPTY"
+  expect_has "REAL-QUESTION-BELOW-EMPTY"
+  expect_has "real content continued under"
+  expect_hasnt "nothing is waiting on you"
+}
 acct_openlist_gaps_none_idiom_is_malformed() {
   # THE REGISTER HAS NO EMPTY-LEDGER IDIOM (ruled 2026-08-07, after an external review measured the
   # consequence). `- (없음)` / `- (none)` is the Human queue's and questions.md's way of writing "no
@@ -5491,7 +5401,7 @@ acct_openlist_gaps_none_idiom_is_malformed() {
   # line here is a bullet with no routable kind. A real mine had one, and `status --open` reported
   # ONE WAITING GAP whose entire text was the word "none". The ruling keeps the invariant and names
   # the line instead of inventing a sentinel for it. Empty means zero bullets.
-  # Drop the per-entry `kinds` from scanRegister (or the label below) → this goes red.
+  # Drop the per-entry typed kind diagnostics from parseGapRegister (or the label below) → red.
   printf -- '# Open
 
 - (없음)
@@ -5589,6 +5499,14 @@ acct_openlist_gaps_badline_warns() {
   expect_has "the register grammar cannot read"
   expect_hasnt "셋째 항목"
 }
+acct_openlist_gaps_accepted_badline_warns() {
+  # Accepted is the same fail-closed register. With completeness off validate is not the immediate
+  # user surface, so status must not print "nothing is waiting" after truncating this half silently.
+  printf '# Open\n\n# Accepted\n\nprose no register owns\n- [declared] hidden after prose\n' > "$W/gaps.md"
+  vrun status --open
+  expect_has "'# Accepted' holds a line the register grammar cannot read"
+  expect_hasnt "nothing is waiting on you"
+}
 acct_openlist_question_pure_stub_silent() {
   # The other side of the question rule, and the line that had ZERO coverage: a bullet that is
   # placeholders THROUGHOUT is an untouched template and must stay silent — while a real question
@@ -5611,7 +5529,7 @@ acct_openlist_question_pure_stub_silent() {
 acct_openlist_q_stub_realized() {
   # questions.md: a pure template stub is HELD, and an indented line with real content REALIZES it
   # — same machine as gaps. Unrealized, it stays template noise (the case below pins that side).
-  # Revert the `qheld` hold in the questions loop → this goes red.
+  # Disable placeholder holding in questions-ledger → this goes red.
   printf -- '# 질문\n\n- [<status>]\n  실제 질문이 필요함\n' > "$W/questions.md"
   vrun status --open
   expect_has "실제 질문이 필요함"
@@ -5766,7 +5684,7 @@ acct_openlist_hq_fenced_example_is_not_an_entry() {
   # comment stripper and nothing else, so the way documentation shows an entry — inside a code
   # fence — was a real waiting decision to `status` and a real entry to the gate. gaps.md has read
   # through `defence` since v0.5.4; the twin ledger never got it.
-  # Revert hqRead to plain nocomment() -> this goes red.
+  # Reintroduce sequential comment deletion before fence scanning -> this goes red.
   printf -- '\n\n```md\n- [open] [user-only] FENCED-EXAMPLE\n```\n' >> "$W/truths/verify.md"
   vrun status; expect_has "human queue: 0"
   vrun status --open; expect_has "nothing is waiting on you"
@@ -5782,12 +5700,60 @@ block_hq_fenced_example_does_not_block() {
   expect_pass
   expect_hasnt "HQ-UNTAGGED"
 }
+acct_openlist_hq_comment_fence_precedence() {
+  # A comment marker inside a fence is literal; a fence marker inside a comment is literal. Both
+  # status and validate consume the one scanner result rather than erasing the constructs in order.
+  cat >> "$W/truths/verify.md" <<'EOF'
+
+```md
+<!-- COMMENT-MARKER-IS-LITERAL
+- [open] [user-only] HIDDEN-IN-FENCE
+```
+<!--
+```md
+- [open] [user-only] HIDDEN-IN-COMMENT
+-->
+- [open] [user-only] REAL-AFTER-CONTEXTS
+EOF
+  vrun validate; expect_pass
+  expect_hasnt "HQ-UNTERMINATED"
+  vrun status --open
+  expect_has "human queue (1):"
+  expect_has "REAL-AFTER-CONTEXTS"
+  expect_hasnt "HIDDEN-IN-FENCE"
+  expect_hasnt "HIDDEN-IN-COMMENT"
+  expect_hasnt "unterminated"
+}
+acct_openlist_hq_comment_mask_preserves_columns() {
+  # Deleting this inline comment manufactures a column-zero fence opener. Column-preserving masks
+  # retain the source position, and provenance prevents a mask itself from supplying grammar space.
+  cat >> "$W/truths/verify.md" <<'EOF'
+
+<!--x-->```md
+- [open] [user-only] REAL-AFTER-INLINE-COMMENT
+EOF
+  vrun validate; expect_pass
+  expect_hasnt "HQ-UNTERMINATED-FENCE"
+  vrun status --open
+  expect_has "human queue (1):"
+  expect_has "REAL-AFTER-INLINE-COMMENT"
+  expect_hasnt "unterminated code fence"
+}
+block_hq_unterminated_frontmatter() {
+  # Frontmatter is an explicit capability of verify/review, not a heuristic enabled for every
+  # ledger. When enabled, an unclosed block cannot hide the queue without a named gate and warning.
+  sed -i '5d' "$W/truths/verify.md"
+  vrun validate
+  expect_block "HQ-UNTERMINATED-FRONTMATTER"
+  vrun status --open
+  expect_has "unterminated frontmatter"
+}
 block_verify_fenced_section_is_not_a_section() {
   # …AND A FENCED HEADING IS NOT A SECTION. Replacing the real `## Human queue` with a fenced copy
   # left the mine with no queue at all and validate green (measured) — the required-section check
   # read the file with the comment stripper only, so the fence satisfied it. It reads through the
-  # same hqRead the walk uses now: one file, one idea of what is in it.
-  # Revert the required-section reader to nocomment() -> this goes red.
+  # same scanned document the walk uses now: one file, one idea of what is in it.
+  # Reintroduce a comment-only required-section reader -> this goes red.
   { printf '```md\n'; cat "$W/truths/verify.md"; } > "$W/v.tmp"
   printf '\n```\n' >> "$W/v.tmp"
   # The real section is now INSIDE the fence, so the file has none the reader can see.
@@ -5816,6 +5782,16 @@ acct_openlist_hq_loose_list_stub_realizes() {
   vrun status --open
   expect_has "human queue (0 open, 1 untagged):"
   expect_has "LOOSE-LIST-DECISION"
+}
+acct_openlist_hq_mixed_lead_continuation_surfaces() {
+  # Literal-prefix structure cannot prove that a TAB continuation belongs under a two-space item.
+  # The typed model records that ambiguity, but the safe display direction is to retain the text:
+  # an agent decision must not disappear merely because its whitespace styles differ.
+  printf -- '\n  - [{state}] [{ownership}]\n\tMIXED-LEAD-DECISION\n' >> "$W/truths/verify.md"
+  vrun status --open
+  expect_has "MIXED-LEAD-DECISION"
+  expect_has "normalize the indentation"
+  expect_hasnt "nothing is waiting on you"
 }
 acct_openlist_hq_blank_then_nested_is_detail() {
   # …and the mirror defect, which BLOCKED instead of dropping: the blank line made the nested
@@ -6051,6 +6027,29 @@ acct_gaps_accepted_badline_named() {
   expect_has "cannot read"
   expect_has "records 1 already accepted"
 }
+block_gaps_accepted_blank_orphan_is_not_continuation() {
+  # Human queues explicitly allow loose-list continuation across a blank line. The completeness
+  # register does not: prose after a blank has no attributable acceptance and must fail closed,
+  # never inherit the preceding decision merely because both ledgers share structural primitives.
+  req_completeness
+  printf '# Open\n\n# Accepted\n\n- [symmetry] DECISION\n\n  ORPHAN-ACCEPTANCE-PROSE\n' > "$W/gaps.md"
+  vrun validate
+  expect_block "ORPHAN-ACCEPTANCE-PROSE"
+}
+block_gaps_directory_is_unknown_not_absent() {
+  rm -f "$W/gaps.md"
+  mkdir "$W/gaps.md"
+  req_completeness
+  vrun validate
+  expect_block "[COMP-MALFORMED]"
+  expect_hasnt "[COMP-NO-REGISTER]"
+  vrun status --open
+  expect_has "gaps.md exists but cannot be read"
+  expect_hasnt "nothing is waiting on you"
+  vrun gaps
+  expect_has "accepted tally is unknown"
+  expect_hasnt "gaps.md records 0 already accepted"
+}
 acct_openlist_question_stateless() {
   # A question bullet with no state tag at all: validate never reads questions.md, so nothing else
   # catches it, and dropping it silently prints "nothing is waiting" over a visibly open question.
@@ -6065,17 +6064,6 @@ acct_openlist_question_filled_placeholder() {
   vrun status --open
   expect_has "지체상금 상한"
   expect_hasnt "nothing is waiting on you"
-}
-acct_openlist_conflict_shows_source() {
-  # The skills' rule says a conflict names BOTH sides AND their sources; the v0.5.5 listing printed
-  # id + claim + conflict_with only, so the reader could not tell which materials disagree.
-  sed -i 's/^status: ok$/status: conflict\nconflict_with: [t002]/' "$W/truths/t001.md"
-  mkdir -p "$W/materials/m002"
-  printf -- '---\nid: m002\ntitle: 개정 계약서\norigin: file\nrole: 계약서\ntopics: [위약]\nformat: md\nsource_path: inbox/c2.md\nadded: 2026-07-02\nstatus: converted\nsummary: 개정본.\n---\n\n제7조 위약금은 계약금액의 15%%로 한다.\n' > "$W/materials/m002/converted.md"
-  printf -- '---\nid: t002\nclaim: "위약금은 계약금액의 15%%다"\nsource: m002\nlocation: "제7조"\ntags: [위약]\nstatus: conflict\nconflict_with: [t001]\nprovenance: stated\n---\n\n제7조 위약금은 계약금액의 15%%로 한다.\n' > "$W/truths/t002.md"
-  vrun status --open
-  expect_has "t001 (m001) ⇄ [t002] — 위약금은 계약금액의 10%다"
-  expect_has "t002 (m002) ⇄ [t001] — 위약금은 계약금액의 15%다"
 }
 block_schema_roster_questions_enum() {
   # `questions.enum.status` decides which question states `status --open` treats as waiting, but it
@@ -6144,6 +6132,25 @@ acct_openlist_question_unknown_state() {
   expect_has "(unrecognized state — the enum is open|proposed|answered): - [Open] 대문자 상태"
   expect_hasnt "nothing is waiting on you"
 }
+acct_openlist_question_blank_continuation_materializes() {
+  # A physical blank does not invent a new parent, but neither does it erase the only structural
+  # parent of a later indented continuation. The placeholder is held until the real line arrives.
+  printf -- '- [{state}]\n\n  REAL-QUESTION-AFTER-BLANK\n' > "$W/questions.md"
+  vrun status --open
+  expect_has "questions (0 waiting, 1 unrecognized):"
+  expect_has "REAL-QUESTION-AFTER-BLANK"
+  expect_hasnt "nothing is waiting on you"
+}
+acct_openlist_question_misindented_entry_is_named() {
+  # Column zero remains the admission rule. An attempted root below it is a typed orphan rather
+  # than a valid waiting question or invisible prose, and status names the actual structural fault.
+  printf -- '  - [open] MISINDENTED-QUESTION\n' > "$W/questions.md"
+  vrun status --open
+  expect_has "questions (0 waiting, 1 unrecognized):"
+  expect_has "misindented entry (must start at column 0)"
+  expect_has "MISINDENTED-QUESTION"
+  expect_hasnt "nothing is waiting on you"
+}
 acct_openlist_unterminated_fence_warns() {
   # gaps.md's readers share ONE fence judgment (defence); a fence nobody closed makes the tail
   # invisible, and a listing that stays silent about that reads as "covered everything". The
@@ -6167,6 +6174,373 @@ acct_openlist_unterminated_comment_warns() {
   vrun status --open
   expect_has "unterminated '<!--'"
   expect_hasnt "숨은 항목"
+}
+
+# ---- schema v3 flip contracts (slice 1, B1): the gate, the upgrade stub, the state files --------
+block_gate_v2_mine_general_commands() {
+  # A v2 mine gets ONE answer from every ordinary command — which migration path — and no verdict
+  # about anything else: judging v2 bytes with v3 rules is the false green in miniature (a v2 card
+  # satisfies every v3 required key while its whole state machinery stays invisible to v3 checks).
+  sed -i 's/^version: 3$/version: 2/' "$W/project.md"
+  sed -i 's/^version: 3/version: 2/' "$W/.weavedoc/config.yaml"
+  vrun pull 위약
+  expect_block "v3-only"
+  vrun census
+  expect_block "v2→v3 migrator"
+  vrun validate
+  expect_block "VER-V2-UPGRADE"
+  expect_hasnt "examined:"
+}
+block_gate_v1_mine_names_the_bridge() {
+  # A v1 user needs the PINNED bridge runtime, not this one's migrator — directions to the wrong
+  # door are worse than a refusal, so the commit hash itself is the contract.
+  sed -i 's/^version: 3$/version: 1/' "$W/project.md"
+  sed -i 's/^version: 3/version: 1/' "$W/.weavedoc/config.yaml"
+  vrun status
+  expect_block "0257167"
+  vrun validate
+  expect_block "VER-V1-BRIDGE"
+}
+acct_upgrade_stub_uptodate() {
+  vrun upgrade --check
+  expect_pass
+  expect_has "already schema v3"
+}
+block_upgrade_v2_without_git_refuses() {
+  # (Until slice 2 this asserted the stub's "slice 2" refusal; the migrator is real now.) The
+  # clean git worktree IS the backup, and $W is not a repository — apply must refuse rather than
+  # migrate an unrecoverable mine. Direction matters: --check still reports (read-only).
+  sed -i 's/^version: 3$/version: 2/' "$W/project.md"
+  sed -i 's/^version: 3/version: 2/' "$W/.weavedoc/config.yaml"
+  vrun upgrade --apply
+  expect_block "not inside a git repository"
+}
+block_upgrade_stub_bad_flag() {
+  # Restored from the retired v1-migrator suite: unknown-argument refusal is a living contract
+  # (deleted together with that suite in this bundle, which was one case too many).
+  vrun upgrade --frobnicate
+  expect_block "unknown argument"
+}
+block_state_missing_is_not_empty() {
+  # A conflicts store that cannot be read must never read as "no conflicts" — that silence would
+  # unblock shipping over the exact thing the file exists to block.
+  rm -f "$W/.weavedoc-state/conflicts.json"
+  vrun validate
+  expect_block "STATE-MISSING"
+}
+block_state_malformed_is_not_empty() {
+  # The umbrella code is the surface; the model's own finer code rides in the message where the
+  # repair needs it (and the diagnostic table stays a table of literals).
+  printf 'not json' > "$W/.weavedoc-state/id-sequences.json"
+  vrun validate
+  expect_block "STATE-MALFORMED"
+  expect_has "IDSEQ-JSON"
+}
+block_conflict_open_blocks_shipping() {
+  # An undecided disagreement blocks shipping; resolution is DELETION of the entry, and the empty
+  # store passes again — no archive section grows anywhere (§2.2: the two zeros differ — an open
+  # targets=[] blocks, a user-ruled empty store passes).
+  printf '{\n  "version": 1,\n  "open": [\n    {\n      "id": "c001",\n      "targets": ["t001"],\n      "candidates": [\n        {\n          "claim": "위약금은 20%%다",\n          "source": "m001"\n        }\n      ],\n      "created": "2026-08-13"\n    }\n  ]\n}\n' > "$W/.weavedoc-state/conflicts.json"
+  vrun validate
+  expect_block "CONFLICT-OPEN"
+  vrun status --open
+  expect_has "conflicts (1):"
+  expect_has "c001"
+  expect_has "위약금은 20%다"
+  printf '{\n  "version": 1,\n  "open": []\n}\n' > "$W/.weavedoc-state/conflicts.json"
+  vrun validate
+  expect_pass
+}
+acct_status_open_malformed_store_is_unknown() {
+  # The lane must not absorb a malformed store into "no conflicts" — UNKNOWN is the honest word,
+  # and validate (not this listing) is where it hard-fails.
+  printf '{"version":1,"open":{}}' > "$W/.weavedoc-state/conflicts.json"
+  vrun status --open
+  expect_has "open conflicts are UNKNOWN, not zero"
+}
+block_truth_v2_field_is_structural() {
+  # The optional-key list is descriptive, so the four dead v2 fields need their own tripwire — a
+  # card wearing `status:` again is discarded machinery growing back, not an ignorable extra.
+  sed -i 's/^provenance: stated$/provenance: stated\nstatus: ok/' "$W/truths/t001.md"
+  vrun validate
+  expect_block "TRUTH-V2-FIELD"
+}
+
+# ---- schema v3 state-file write surfaces (slice 1, B2): alloc + conflict CLI, tripwires ---------
+pass_alloc_grants_monotonic_ids() {
+  # The allocator is the only minting path, and numbers move one way — a deleted card's number
+  # never comes back, because an old citation would then name a different fact.
+  vrun alloc truth
+  expect_pass
+  expect_has "t002"
+  vrun alloc truth
+  expect_has "t003"
+  rm -f "$W/truths/t001.md"
+  vrun alloc truth
+  expect_has "t004"
+  OUT=$(cat "$W/.weavedoc-state/id-sequences.json"); RC=0
+  expect_has '"truth": 5'
+}
+block_alloc_unknown_namespace() {
+  # `locus` was discarded by the 2026-08-12 rescope; a namespace the closed set does not name must
+  # be a refusal, never a lazily-created counter.
+  vrun alloc locus
+  expect_block "usage: weavedoc alloc"
+}
+pass_conflict_add_remove_roundtrip() {
+  # The ledger's whole life: add (id granted here, from the allocator) → blocks shipping and shows
+  # on the lane → remove (resolution IS deletion) → clean again → a NEW disagreement gets a NEW
+  # number, never the old one back.
+  printf '{\n  "targets": ["t001"],\n  "candidates": [\n    {\n      "claim": "위약금은 20%%다",\n      "source": "m001"\n    }\n  ],\n  "created": "2026-08-13"\n}\n' > "$W/entry.json"
+  vrun conflict add entry.json
+  expect_pass
+  expect_has "c001 recorded"
+  vrun validate
+  expect_block "CONFLICT-OPEN"
+  vrun conflict list
+  expect_has "c001 targets t001"
+  expect_has "위약금은 20%다"
+  vrun conflict remove c001
+  expect_pass
+  vrun validate
+  expect_pass
+  vrun conflict add entry.json
+  expect_has "c002 recorded"
+}
+block_conflict_add_rejects_caller_ids() {
+  # A caller that picks its own id is a second minting path — the reuse hole wearing a flag.
+  printf '{\n  "id": "c001",\n  "targets": [],\n  "candidates": [\n    {\n      "claim": "x",\n      "source": "m001"\n    }\n  ],\n  "created": "2026-08-13"\n}\n' > "$W/entry.json"
+  vrun conflict add entry.json
+  expect_block "granted here, from the allocator"
+}
+block_conflict_add_runs_the_store_contract() {
+  # add validates with the same parser validate trusts — an unpadded source is refused at the
+  # door, with the model's code named, and nothing is written.
+  printf '{\n  "targets": [],\n  "candidates": [\n    {\n      "claim": "x",\n      "source": "m1"\n    }\n  ],\n  "created": "2026-08-13"\n}\n' > "$W/entry.json"
+  vrun conflict add entry.json
+  expect_block "CONF-CANDIDATE"
+  OUT=$(cat "$W/.weavedoc-state/conflicts.json"); RC=0
+  expect_has '"open": []'
+}
+block_idseq_behind_observed_ids() {
+  # An allocator left behind by an out-of-band write: the next grant would collide with a card
+  # that already exists, and validate names it before the collision can happen.
+  printf '{\n  "version": 1,\n  "next": {\n    "conflict": 1,\n    "material": 2,\n    "truth": 1\n  }\n}\n' > "$W/.weavedoc-state/id-sequences.json"
+  vrun validate
+  expect_block "IDSEQ-BEHIND"
+}
+block_conflict_store_dangling_references() {
+  # A store entry pointing at a card or material the mine no longer holds is a reference the
+  # resolve flow would trip over — both directions named, per entry.
+  printf '{\n  "version": 1,\n  "open": [\n    {\n      "id": "c001",\n      "targets": ["t099"],\n      "candidates": [\n        {\n          "claim": "x",\n          "source": "m099"\n        }\n      ],\n      "created": "2026-08-13"\n    }\n  ]\n}\n' > "$W/.weavedoc-state/conflicts.json"
+  vrun validate
+  expect_block "CONF-TARGET-DANGLING"
+  expect_has "CONF-SOURCE-DANGLING"
+  expect_has "t099"
+  expect_has "m099"
+}
+
+# ---- schema v3 slice 2: the v2→v3 migrator ------------------------------------------------------
+mk_v2mine() { # rebuild $W as a REAL v2 mine under git — the migrator's whole input surface:
+  # an ok winner carrying resolution(decided_by: machine)+superseded, a discarded loser, a
+  # reciprocal conflict pair, a retracted card, ledger rows for a survivor and a casualty, a
+  # changelog id token ABOVE every card (the high-water evidence), and a document citing only
+  # survivors. The clean git worktree is the backup the migrator demands.
+  sed -i 's/^version: 3$/version: 2/' "$W/project.md"
+  sed -i 's/^version: 3/version: 2/' "$W/.weavedoc/config.yaml"
+  sed -i 's/^required_tags: \[\]$/required_tags: [위약]/' "$W/project.md"
+  rm -rf "$W/.weavedoc-state"
+  rm -f "$W/truths"/t*.md
+  printf -- '---\nid: m001\ntitle: 용역 계약서\norigin: file\nrole: 계약서\ntopics: [대금, 위약]\nformat: md\nsource_path: inbox/contract.md\nadded: 2026-07-01\nstatus: converted\nsummary: 대금과 위약금을 정한 최소 계약서.\n---\n\n# 용역 계약서\n\n제3조 대금은 5천만원으로 한다.\n제7조 위약금은 계약금액의 10%%로 한다.\n제8조 위약금은 계약금액의 20%%로 한다.\n' > "$W/materials/m001/converted.md"
+  printf -- '---\nid: t001\nclaim: "위약금은 계약금액의 10%%다"\nsource: m001\nlocation: "제7조"\ntags: [위약]\nstatus: ok\nprovenance: stated\nresolution: {type: pick, winner: t001, decided_by: machine, reason: "v2 기계 선택"}\nsuperseded: [t002]\n---\n\n제7조 위약금은 계약금액의 10%%로 한다.\n' > "$W/truths/t001.md"
+  printf -- '---\nid: t002\nclaim: "위약금은 계약금액의 15%%다"\nsource: m001\ntags: [위약]\nstatus: discarded\nprovenance: stated\nresolution: {type: pick, winner: t001, decided_by: user, decision_kind: supplied}\n---\n\n제7조 위약금은 계약금액의 10%%로 한다.\n' > "$W/truths/t002.md"
+  printf -- '---\nid: t003\nclaim: "위약금은 계약금액의 10%%다 (7조)"\nsource: m001\nlocation: "제7조"\ntags: [위약]\nstatus: conflict\nconflict_with: [t004]\nprovenance: stated\n---\n\n제7조 위약금은 계약금액의 10%%로 한다.\n' > "$W/truths/t003.md"
+  printf -- '---\nid: t004\nclaim: "위약금은 계약금액의 20%%다 (8조)"\nsource: m001\nlocation: "제8조"\ntags: [위약]\nstatus: conflict\nconflict_with: [t003]\nprovenance: stated\n---\n\n제8조 위약금은 계약금액의 20%%로 한다.\n' > "$W/truths/t004.md"
+  printf -- '---\nid: t005\nclaim: "없는 조항"\nsource: m001\ntags: [해지]\nstatus: retracted\nprovenance: stated\n---\n\n제99조 없는 문장.\n' > "$W/truths/t005.md"
+  printf '# Coverage\n\n## m001\n\n- 위약: t001\n- 위약 15%%: t002\n' > "$W/truths/coverage.md"
+  printf '# 변경 로그\n\n- added: t001 (2026-07-30)\n- removed: t073 (v2 이력 토큰 — high-water 근거)\n' > "$W/truths/changelog.md"
+  UD=$(printf 'x' | sha256sum | cut -d' ' -f1)
+  printf 't001\t%s\tverified\t1\tstd\t2026-07-30\nt005\t%s\tverified\t1\tstd\t2026-07-30\n' "$UD" "$UD" > "$W/truths/verify-ledger.tsv"
+  printf -- '---\ndoc_id: d1\ndoc_type: report\ntone: 담백\nstatus: planned\ncontinues: []\ncited_truths: [t001]\nscope_tags: [위약]\n---\n\n# 개요\n' > "$W/documents/d1/plan.md"
+  printf '# 개요\n\n위약금은 계약금액의 10%%다. <!-- t:t001 -->\n' > "$W/documents/d1/draft.md"
+  rm -f "$W/documents/d1/final.md" "$W/documents/d1/review.md"
+  ( cd "$W" && git init -q && git add -A >/dev/null 2>&1 && git -c user.email=x@x -c user.name=x commit -qm base ) \
+    || bad "mk_v2mine: git setup failed — the migrator's backup precondition cannot be built"
+}
+acct_upgrade_v2_to_v3_end_to_end() {
+  # The whole §2.4 pipe on one real v2 mine: classify → delete → move → strip → state files →
+  # version flip → reindex → conservation + EXACT validate (red only by the moved entry).
+  # KNOWN SURVIVING MUTATION (2026-08-13 pass, 10/11 killed): removing the conservation equation
+  # survives — it re-counts the transform's own loop, so no legal input reaches its failure
+  # branch. It stays because it is the tripwire for the day an edit breaks that loop, which is
+  # exactly when nobody is looking (the not-killable-by-any-fixture class, said out loud).
+  mk_v2mine
+  vrun upgrade --check
+  expect_pass
+  expect_has "keep 1 · delete 2 (discarded/retracted) · move 2"
+  expect_has "decided_by: machine resolution (t001)"
+  expect_has "high water: truth 73"
+  vrun upgrade --apply
+  expect_pass
+  expect_has "✓ migrated — kept 1 (1 stripped) · deleted 2 · moved 2 into 1 open entr(ies)"
+  expect_has "allocator next t74/m2/c2"
+  # the machine ledgers travel with the deletion: the casualty's coverage row is scrubbed
+  # (measured on the real mine — 26 deletions left 12 dangling mentions before this existed).
+  expect_has "coverage rows scrubbed (1 dropped"
+  OUT=$(cat "$W/truths/coverage.md"); RC=0
+  expect_has "t001"
+  expect_hasnt "t002"
+  # the winner card SURVIVES its superseded field (deleting it would delete the current fact),
+  # and loses exactly the v2 lines — nothing else in the file moves.
+  OUT=$(cat "$W/truths/t001.md"); RC=0
+  expect_has 'claim: "위약금은 계약금액의 10%다"'
+  expect_hasnt "status:"
+  expect_hasnt "resolution:"
+  expect_hasnt "superseded:"
+  OUT=$(ls "$W/truths"); RC=0
+  expect_hasnt "t002.md"
+  expect_hasnt "t005.md"
+  expect_hasnt "t003.md"
+  # the moved entry is lossless and undecided: both candidates, no target, Korean intact.
+  OUT=$(cat "$W/.weavedoc-state/conflicts.json"); RC=0
+  expect_has '"targets": []'
+  expect_has '위약금은 계약금액의 20%다 (8조)'
+  expect_has 'v2 card t003, moved by migration'
+  # the casualty's ledger row went with it; the survivor's row is untouched.
+  OUT=$(cat "$W/truths/verify-ledger.tsv"); RC=0
+  expect_has "t001"
+  expect_hasnt "t005"
+  OUT=$(grep -h '^version:' "$W/project.md" "$W/.weavedoc/config.yaml" | tr '\n' ' '); RC=0
+  expect_has "version: 3 version: 3"
+  # post-migration validate is red by design — the moved disagreement, and ONLY that.
+  vrun validate
+  expect_block "CONFLICT-OPEN"
+  vrun status --open
+  expect_has "c001 targets (no current card — undecided)"
+}
+block_upgrade_dirty_worktree_refuses() {
+  mk_v2mine
+  printf 'dirt\n' >> "$W/catalog.md"
+  vrun upgrade --apply
+  expect_block "DIRTY"
+  OUT=$(ls "$W/truths"); RC=0
+  expect_has "t002.md"
+}
+block_upgrade_unsupported_card_blocks() {
+  # §2.4 step 0: in v3 a card that exists IS canonical, so migrating an unsupported card would
+  # silently promote broken grounding. Resolve in v2 form, re-run — and nothing is written.
+  mk_v2mine
+  printf -- '---\nid: t006\nclaim: "근거 잃은 주장"\nsource: m001\ntags: [위약]\nstatus: unsupported\nprovenance: stated\n---\n\n제7조 위약금은 계약금액의 10%%로 한다.\n' > "$W/truths/t006.md"
+  ( cd "$W" && git add -A >/dev/null 2>&1 && git -c user.email=x@x -c user.name=x commit -qm u )
+  vrun upgrade --apply
+  expect_block "status: unsupported"
+  OUT=$( cd "$W" && git status --porcelain | grep -v 'mine.lock' | wc -l ); RC=0
+  expect_has "0"
+}
+block_upgrade_attribute_pair_blocks() {
+  # §2.4 step 0: user-authorized 병기 must not be stripped into two bare cards — "both are right"
+  # always names a hidden axis; write it into the claims in v2, then re-run.
+  mk_v2mine
+  sed -i 's/^resolution: {type: pick, winner: t001, decided_by: machine, reason: "v2 기계 선택"}$/resolution: {type: attribute, winner: t001, decided_by: user}/' "$W/truths/t001.md"
+  ( cd "$W" && git add -A >/dev/null 2>&1 && git -c user.email=x@x -c user.name=x commit -qm a )
+  vrun upgrade --apply
+  expect_block "resolution.type: attribute"
+  OUT=$(ls "$W/truths"); RC=0
+  expect_has "t002.md"
+}
+block_upgrade_cited_leaving_card_blocks() {
+  # A document citing a card this migration would delete or move must be repaired FIRST — a
+  # dangling citation is the exact corruption the id discipline exists to prevent.
+  mk_v2mine
+  sed -i 's/^cited_truths: \[t001\]$/cited_truths: [t001, t002]/' "$W/documents/d1/plan.md"
+  ( cd "$W" && git add -A >/dev/null 2>&1 && git -c user.email=x@x -c user.name=x commit -qm c )
+  vrun upgrade --apply
+  expect_block "cite card(s) this migration would delete or move"
+  expect_has "d1/plan.md: t002"
+  OUT=$(ls "$W/truths"); RC=0
+  expect_has "t002.md"
+}
+acct_upgrade_ok_partner_becomes_target() {
+  # §2.4's other branch: a component holding a surviving ok card makes that card the entry's
+  # TARGET. v2's reciprocity rule means legal mines rarely carry this shape (both sides conflict),
+  # but the migrator's totality covers it — it never runs v2 validate and must not guess.
+  mk_v2mine
+  sed -i 's/^status: conflict$/status: ok/' "$W/truths/t003.md"
+  sed -i '/^conflict_with: \[t004\]$/d' "$W/truths/t003.md"
+  printf -- '- 위약 7조: t003\n' >> "$W/truths/coverage.md"
+  ( cd "$W" && git add -A >/dev/null 2>&1 && git -c user.email=x@x -c user.name=x commit -qm p )
+  vrun upgrade --apply
+  local AOUT="$OUT" ARC="$RC"
+  OUT=$(cat "$W/.weavedoc-state/conflicts.json"); RC=0
+  expect_has '"t003"'
+  expect_hasnt '"targets": []'
+  OUT=$(ls "$W/truths"); RC=0
+  expect_has "t003.md"
+  expect_hasnt "t004.md"
+  # judged LAST so a failing apply leaves ITS output on the record, not the file dumps above.
+  OUT="$AOUT"; RC="$ARC"
+  expect_pass
+}
+acct_upgrade_verify_names_the_unexpected() {
+  # The verify layer is the migration's warranty: a migrated mine that validates to anything
+  # OTHER than the predicted CONFLICT-OPEN fails the migration and prints the restore words.
+  # (The fixture's coverage ledger is quietly broken in v2 — the migrator does not re-validate
+  # v2, so the breakage surfaces exactly here, as the unexpected line it is.)
+  mk_v2mine
+  sed -i 's/^- 위약: t001$/- 위약: t999/' "$W/truths/coverage.md"
+  ( cd "$W" && git add -A >/dev/null 2>&1 && git -c user.email=x@x -c user.name=x commit -qm v )
+  vrun upgrade --apply
+  expect_block "does not validate to the EXACT expected state"
+  expect_has "restore with: git restore ."
+}
+acct_upgrade_high_water_includes_chapters() {
+  # An external probe (2026-08-13) put t250 in a MULTI-FILE chapter (documents/d1/draft/01.md) and
+  # the allocator seeded at 2 — the reissue class, live: a later grant would hand t250 out again
+  # and the chapter's old citation would name a different fact. FORMATS declares both document
+  # modes; the scan that reads only the single-file spellings has not counted what its declaration
+  # covers.
+  mk_v2mine
+  rm -f "$W/documents/d1/draft.md"
+  mkdir -p "$W/documents/d1/draft"
+  printf '# 1장\n\n예전 장이 인용한 사실. <!-- t:t250 -->\n' > "$W/documents/d1/draft/01.md"
+  ( cd "$W" && git add -A >/dev/null 2>&1 && git -c user.email=x@x -c user.name=x commit -qm ch )
+  vrun upgrade --apply
+  expect_pass
+  expect_has "high water: truth 250"
+  OUT=$(cat "$W/.weavedoc-state/id-sequences.json"); RC=0
+  expect_has '"truth": 251'
+}
+block_upgrade_cited_leaving_in_chapter_blocks() {
+  # The same probe's second half: a chapter citing a card this migration would delete must stop it
+  # BEFORE the first write — §2.4's rule, which the single-file scan let through silently.
+  mk_v2mine
+  rm -f "$W/documents/d1/draft.md"
+  mkdir -p "$W/documents/d1/draft"
+  printf '# 1장\n\n지워질 사실을 인용한다. <!-- t:t002 -->\n' > "$W/documents/d1/draft/01.md"
+  ( cd "$W" && git add -A >/dev/null 2>&1 && git -c user.email=x@x -c user.name=x commit -qm ch )
+  vrun upgrade --apply
+  expect_block "cite card(s) this migration would delete or move"
+  expect_has "d1/draft/01.md: t002"
+  OUT=$(ls "$W/truths"); RC=0
+  expect_has "t002.md"
+}
+acct_upgrade_check_is_readonly() {
+  mk_v2mine
+  vrun upgrade --check
+  expect_pass
+  OUT=$( cd "$W" && git status --porcelain | grep -v 'mine.lock' | wc -l ); RC=0
+  expect_has "0"
+}
+acct_upgrade_orphaned_reqtag_refuses_apply() {
+  # A required tag whose last bearer leaves would fail the exact-validate verify as REQTAG-EMPTY —
+  # predicted in preflight, enforced at apply, repaired in v2 (extract the topic or drop the tag).
+  mk_v2mine
+  sed -i 's/^required_tags: \[위약\]$/required_tags: [해지]/' "$W/project.md"
+  ( cd "$W" && git add -A >/dev/null 2>&1 && git -c user.email=x@x -c user.name=x commit -qm t )
+  vrun upgrade --apply
+  expect_block "required_tags above would be orphaned"
+  OUT=$(ls "$W/truths"); RC=0
+  expect_has "t005.md"
 }
 
 # ---------------------------------------------------------------- driver

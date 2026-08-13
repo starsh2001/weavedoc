@@ -28,7 +28,7 @@ export function cmdImpact (m, out, id) {
     const fsrc = canonId(raw) || raw
     if (fsrc !== ncanon) continue
     sourced.push(f)
-    out(`  ${fm(f, 'id')}: ${fm(f, 'claim')} [${fm(f, 'status')}]`)
+    out(`  ${fm(f, 'id')}: ${fm(f, 'claim')}`)
   }
 
   // PROJECT-RELATIVE, the same rule every diagnostic follows. These three lists were the last

@@ -1,208 +1,158 @@
-// weavedoc — THE register reader for gaps.md's two sections.
-//
-// WHY IT LIVES HERE. It was scanRegister(), private inside cmd-validate, and v0.5.5 gave the mine a
-// second consumer (`status --open`) that reimplemented "what counts as an entry" from the LOOSER
-// rule `weavedoc gaps` uses for its accepted tally — the PREFIX rule validate abandoned in v0.5.4
-// review #9. The result was one gaps.md with two answers: validate blocked on an open gap that
-// the listing reported as "nothing is waiting" (external review, measured on
-// `- [<kind>] album — six-vs-five`). Extracting it is the repair, and it is a MOVE — the state
-// machine below is the reviewed one, character for character, with one addition: it now returns
-// the entry LINES it counted, because the second consumer needs to print what the first counts.
-//
-// BYTE DOMAIN. Callers pass latin1 text. `strip()`'s bracket class is a class of BYTES (see below),
-// so the same input decoded as UTF-8 would judge stubs differently — the reader and its callers
-// must share one domain, and validate's is bytes.
-import { splitLines, TAG_SEP, TAG_LEAD as LEAD } from './core.mjs'
-import { sectionAll } from './sections.mjs'
+// gaps.md typed register model.  Every physical bullet becomes exactly one template or record;
+// missing/unclosed/blank/placeholder/known/unknown kind slots remain distinct all the way to the
+// consumers.  status, validate and `weavedoc gaps` select from this model instead of interpreting
+// `null`, empty strings and arbitrary tails differently.
+import { pipes } from './core.mjs'
+import { scanMarkdown, sectionNodes } from './markdown-scan.mjs'
+import { parseTaggedBullet, sourceRef } from './ledger-model.mjs'
+import { itemBodyFacts, walkLedgerSections } from './ledger-structure.mjs'
 
-// The bracket class is spelled in BYTES, and it is a class of BYTES rather than of characters —
-// which is what `sed -E 's/[…—:·,.-]+//g'` means under LC_ALL=C, where every byte of a multibyte
-// member joins the class on its own. Written with the characters it matched nothing at all
-// (validate is byte-domain), and a template stub stopped reading as a stub: two pass_completeness_*
-// cases went red the moment the domain changed.
-const strip = s => s.replace(/\{[^{}]*\}/g, '').replace(/<[^<>]*>/g, '').replace(/[[\](){}<>\xe2\x80\x94\xc2\xb7:,.-]+/g, '').replace(/[ \t]+/g, '')
-
-// "Is this bullet an untouched template line?" — the register's rule, exported because questions.md
-// needs the SAME answer and the only other implementation available (review.mjs's isNoise) carries
-// a known limit that inverts in a listing: prose holding a `<…>` token reads as a placeholder
-// there, which is safe for the gate and a silent drop for a report. A bullet is a stub only when
-// its bracket slot is a placeholder AND what follows it is empty once template tokens are removed.
-// "Does this entry's own line carry no content?" — the one condition under which an indented line
-// below it is FOLDED INTO it rather than dropped as detail. Narrow on purpose (v0.5.7): folding
-// every continuation made `- [enumeration] 앨범` + `  - 근거: …` render as one line wearing two
-// entry tokens, and the Human queue deliberately drops an entry's sub-bullets as detail
-// (acct_openlist_subbullets_stay_detail). The defect being repaired is only the other shape — an
-// entry whose content lives ENTIRELY on its continuations, listed as a bare `- [declared]` that
-// tells the reader nothing. `tag` is the ledger's own prefix pattern (kind slot, state slot,
-// state+ownership tags): what remains after it is the entry's content.
-// gaps.md's entry prefix: the bullet plus its `[kind]` slot. Exported spellings for the twin
-// ledgers live with their readers, because each ledger's tag is its own grammar.
-export const ENTRY_TAG = /^- \[[^\]]*\]/
-
-// "Is there anything here once template tokens are removed?" — the question a CONTINUATION must
-// answer before it may realize a held stub. The register has always asked it (`strip(grest) !== ''`
-// at the realization branch); the twin ledgers realized on any non-blank line, so the shipped
-// template's own second line (`  <where> — <what>`) turned a template into a reported waiting item
-// (external review, v0.5.11).
-export const hasContent = text => strip(text) !== ''
-
-// THE LEADING STRIP IS TAG_SEP HERE TOO (v0.5.13). v0.5.11 widened the entry TESTS to the shared
-// class and left these two at `[ \t]`, so a control-indented `- [open] [user-only]` was counted by
-// status and accepted by validate and then listed WITHOUT its body — this function did not see a
-// "tags only" line, so nothing folded. Same class, one layer under the one that was fixed.
-// Imported as core's TAG_LEAD since v0.5.17: cmd-status.mjs needs the same lead to measure a
-// bullet's indentation, and building it there from TAG_SEP would have been a second spelling of a
-// constant that already had to be unified once.
-
-export function emptyRemainder (line, tag) {
-  const s = line.replace(LEAD, '')
-  const m = tag.exec(s)
-  if (m === null) return false
-  return strip(s.slice(m[0].length)) === ''
-}
-
-// The general spelling, because each ledger's tag prefix is its own grammar (v0.5.10): a Human
-// queue entry carries a state slot plus an optional ownership slot, and asking "is the remainder
-// empty?" after only the FIRST bracket would call `- [{state}] [{ownership}]` a real entry whose
-// content is "[{ownership}]". The tag regex names what to skip; the remainder decides after that.
-export function stubLine (line, tag) {
-  const s = line.replace(LEAD, '')
-  if (!s.startsWith('- [') || !s.includes(']')) return false
-  const kw = s.slice(3, s.indexOf(']'))
-  if (!/^[<{]/.test(kw) || strip(kw) !== '') return false
-  const m = tag.exec(s)
-  if (m === null) return false
-  return strip(s.slice(m[0].length)) === ''
-}
-
-export function stubEntry (line) {
-  return stubLine(line, /^- \[[^\]]*\]/)
-}
-
-// STATE-BASED entry scan: a continuation is legal only AFTER a bullet — an indented line with no
-// open entry above is prose the counter cannot see, not a continuation of nothing.
-//
-// ONE SCANNER, BOTH SECTIONS (§11 2026-08-05). It ran over '# Open' only, so '# Accepted' accepted
-// anything — bare prose under it passed while FORMATS says the register grammar is fail-closed and
-// "anything else blocks". A second, looser reader for the twin section is the two-parsers drift
-// class itself, so there is one function and it is called twice.
-// BOUNDARY, deliberate: this enforces the register GRAMMAR (bullets, continuations only under a
-// bullet, no bare prose) — which is what the fail-closed sentence enumerates. It does NOT require
-// an Accepted entry's `scope:`/`recheck:`/`as-of:` fields; that is the entry FORMAT, documented but
-// never machine-enforced, and turning it into a gate could block mines written before the rule
-// without a decision to do so.
-//
-// Returns: n (entries counted) · entries (the lines counted, in file order) · kinds (per entry:
-// null when it names a kind in the vocabulary, otherwise the token that is not one) · badline ·
-// badkind · dblkind · unclosed. The diagnostics are validate's; `entries` and `kinds` are the
-// listing's; `n` is both. `n === entries.length === kinds.length` is the invariant that keeps them
-// one answer — the earlier spelling of this line said the suite asserted it, and no case did
-// (v0.5.18); acct_openlist_gaps_arrays_agree does now, over every shape that has ever split them.
-export function scanRegister (gapsText, section, kindSet) {
-  let n = 0; let badline = ''; let badkind = null; let dblkind = null; let unclosed = ''
-  // PER ENTRY, and the aggregate is derived from it (v0.5.18). `badkind` alone told validate that
-  // SOMETHING in the section had no usable kind; `status --open` had no way to say WHICH line, so
-  // it listed a kind-less bullet as an ordinary open gap. A real mine wrote `- (없음)` there —
-  // the empty-ledger idiom of the OTHER two ledgers, which this fail-closed register does not have
-  // (FORMATS) — and the run reported one waiting gap whose text was the word "none". One judgment,
-  // two readers: null = the entry names a kind in the vocabulary, anything else = it does not.
-  let inb = false; let gnoise = false; let gnoiseKind = ''; let gnoiseLine = ''
-  const entries = []
-  const kinds = []
-  // Which entry a continuation line extends, or -1 — set ONLY for an entry whose own line carries
-  // no content (emptyRemainder). A gap's content can live entirely on its continuations
-  // (`- [declared]` / `  penalty cap의 근거가 필요함`), and the first build appended them only in
-  // the placeholder-REALIZED branch, so such an entry was listed as a bare bullet and the reader
-  // had to open the file after all (external review, v0.5.6). Counting was never wrong; only what
-  // the reader was shown. Folding EVERY continuation was the first fix and it was too wide — see
-  // emptyRemainder.
-  let last = -1
-  for (let gl of splitLines(sectionAll(gapsText, section))) {
-    gl = gl.replace(/\r$/, '')
-    if (!/[^ \t]/.test(gl)) { inb = false; last = -1; continue }
-    const grest = gl.replace(/^[ \t]*/, '')
-    // AN ENTRY OPENS AT COLUMN ZERO (v0.5.4, review #9). The indentation used to be stripped before
-    // the bullet test, so every indented bullet opened an entry: an orphan `  - [declared] …` under
-    // no parent counted as an accepted decision (rc 0), and a legitimate sub-bullet under a real
-    // entry was read as a second entry and blocked for having no kind. Indented bullets are
-    // CONTINUATIONS — they fall to the branch below, which already knows an entry must be open.
-    if (gl.startsWith('- ')) {
-      inb = true
-      gnoise = false
-      // THE BRACKET MUST CLOSE, and that is tested BEFORE anything classifies the bullet (v0.5.4,
-      // review #8 P1-3). `- [{kind}` and `- [<kind>` reached the placeholder branch, where strip()
-      // erased the unclosed opener along with the template word and left '' — so an entry with a
-      // broken kind slot read as noise and validate said nothing (measured rc 0 under required +
-      // a consecrated output). An opener with no ']' is not a kind, not a placeholder and not
-      // prose: it is a malformed entry.
-      let ekind = null
-      if (grest.startsWith('- [') && !grest.includes(']')) {
-        ekind = grest.slice(3)
-        if (unclosed === '') unclosed = gl
-      } else if (grest.startsWith('- [')) {
-        const kw = grest.slice(3, grest.indexOf(']'))
-        const after = grest.slice(grest.indexOf(']') + 1)
-        // THE KIND SLOT IS A PLACEHOLDER ONLY IF THE WHOLE SLOT IS ONE (v0.5.4, review #9). This
-        // was a PREFIX test — `- [` followed by `<` or `{` — so real words sharing the bracket with
-        // a template token (`- [{kind} real-content]`, `- [<kind>real]`) rode through as noise and
-        // drew no diagnostic. The slot is stripped now: what survives is real content, and real
-        // content in the kind slot makes it a kind — judged by the vocabulary like any other.
-        const kwStub = /^[<{]/.test(kw) && strip(kw) === ''
-        if (kwStub) {
-          // The bracket word rides along with the noise flag (review #7 P1-1): a bullet held as
-          // noise can be REALIZED by a continuation below, and realization must carry the
-          // placeholder kind into the vocabulary judgment — before that, the continuation branch
-          // counted the entry and judged nothing.
-          // A placeholder kind over a REAL body is an ENTRY whose kind is not in the vocabulary
-          // (v0.5.4 cold review). A PURE stub stays what it was: noise — not an entry, not an
-          // error — which keeps a freshly-initialised gaps.md green.
-          if (strip(after) === '') { gnoise = true; gnoiseKind = kw; gnoiseLine = gl } else {
-            ekind = kw
-            if (badkind === null) badkind = kw
-          }
-        } else {
-          if (!kindSet.has(kw)) { ekind = kw; if (badkind === null) badkind = kw }
-          // ONE kind per entry (review #6): only the first bracket was judged, so
-          // '- [declared] [reference] …' rode through wearing TWO routable kinds. Blocked only when
-          // the second bracket IS a kind word — a bracketed citation right after the kind
-          // ('- [declared] [계약서 §3] …') is body, not a second kind.
-          const m2 = /^[ \t]*\[([^\]]*)\]/.exec(after)
-          if (dblkind === null && m2 && kindSet.has(m2[1])) dblkind = `[${kw}] [${m2[1]}]`
-        }
-      } else {
-        ekind = ''   // no bracket at all — a missing kind slot, reported by the caller
-        if (badkind === null) badkind = ''
-      }
-      // A held-back stub gets `last = -1`: its continuation REALIZES it below rather than extending
-      // it, and the two must not both fire on one line.
-      if (!gnoise) {
-        n++
-        entries.push(gl)
-        kinds.push(ekind)
-        last = emptyRemainder(gl, ENTRY_TAG) ? entries.length - 1 : -1
-      } else last = -1
-    } else {
-      if (grest === gl || !inb) { badline = gl; break }
-      // A continuation with real content REALIZES the held-back bullet — it becomes an entry, and
-      // its kind slot is the placeholder it was holding, judged by the same vocabulary rule as any
-      // other kind (review #7 P1-1: this line counted the entry and set nothing, so '- [{kind}] …'
-      // over a real continuation was an Accepted decision with template noise for a kind —
-      // validate rc 0, measured). The ENTRY LINE recorded for a realization is the bullet plus the
-      // continuation that realized it: the bullet alone is a placeholder, and a listing that
-      // printed only `- [{kind}]` would show the reader nothing they could act on.
-      if (gnoise && strip(grest) !== '') {
-        n++
-        entries.push(`${gnoiseLine} ${grest}`)
-        kinds.push(kindSet.has(gnoiseKind) ? null : gnoiseKind)
-        last = entries.length - 1
-        gnoise = false
-        if (badkind === null) badkind = gnoiseKind
-      } else if (last >= 0) {
-        // ONE LINE PER ITEM is the listing's whole shape, so an entry's continuations fold into the
-        // line the entry already has rather than becoming lines of their own.
-        entries[last] += ` ${grest}`
-      }
-    }
+const issueCode = slot => {
+  switch (slot.type) {
+    case 'missing': return 'missing-kind'
+    case 'unclosed': return 'unclosed-kind'
+    case 'blank': return 'blank-kind'
+    case 'placeholder': return 'placeholder-kind'
+    case 'unknown': return 'unknown-kind'
+    default: return null
   }
-  return { n, entries, kinds, badline, badkind, dblkind, unclosed }
+}
+const countsAsGap = slot => ['known', 'unknown', 'placeholder'].includes(slot.type)
+
+// The schema fields are positional contracts, not bags with defaults. Dropping an empty first
+// section silently moves Accepted into Open; deduplicating kinds hides a malformed vocabulary.
+// Every gaps consumer receives this same closed result and disables both roles when it is invalid.
+//
+// SPLIT BY core.pipes(), not by `split('|')`. "How a pipe list is read" has exactly one spelling in
+// this runtime (bash word splitting with IFS='|': interior and leading empties survive, ONE trailing
+// delimiter adds nothing), and validate still reads `review.sections` through it. A second spelling
+// here made a trailing `|` — legal everywhere else — invalidate the whole register and disable both
+// role views, which is the two-answers class this release exists to end.
+export function gapRegisterContract (schema) {
+  const get = key => schema?.get?.(key)
+  const rawSections = get('gaps.sections')
+  const rawKinds = get('gaps.enum.kind')
+  const sectionNames = pipes(rawSections)
+  const kindNames = pipes(rawKinds)
+  const distinctSections = new Set(sectionNames)
+  const distinctKinds = new Set(kindNames)
+  const validSections = sectionNames.length === 2 && sectionNames.every(name => name !== '') &&
+    distinctSections.size === sectionNames.length
+  const validKinds = kindNames.length > 0 && kindNames.every(name => name !== '') &&
+    distinctKinds.size === kindNames.length
+  const errors = []
+  if (!validSections) {
+    errors.push(sectionNames.length === 2 && sectionNames[0] === sectionNames[1] && sectionNames[0] !== ''
+      ? 'one section cannot hold both roles; gaps.sections must contain two distinct non-empty positional names'
+      : 'gaps.sections must contain exactly two distinct non-empty positional names (open|accepted)')
+  }
+  if (!validKinds) errors.push('gaps.enum.kind must contain one or more distinct non-empty kind names')
+  return {
+    valid: validSections && validKinds,
+    error: errors.join('; '),
+    sectionNames,
+    kindNames,
+    openName: validSections ? sectionNames[0] : null,
+    acceptedName: validSections ? sectionNames[1] : null,
+    kinds: validKinds ? new Set(kindNames) : new Set()
+  }
+}
+
+function parseGapSections (sections, kindSet) {
+  const entries = []
+  const nodes = []
+  const diagnostics = []
+  const structure = walkLedgerSections(sections, {
+    rootMode: 'column-zero',
+    invalidMode: 'stop',
+    fenceMode: 'stop',
+    blankMode: 'reset'
+  })
+
+  for (const item of structure.items) {
+    const parsed = parseTaggedBullet(item.lineNode, ['kind'], { kind: kindSet })
+    const kind = parsed.slots.kind
+    const facts = itemBodyFacts(item, parsed.remainder, { holdUntilReal: kind.type === 'placeholder' })
+    const template = kind.type === 'placeholder' && facts.body !== 'real'
+    const m2 = /^[ \t]*\[([^\]]*)\]/.exec(parsed.remainder)
+    const doubleKind = m2 !== null && kindSet.has(m2[1]) ? m2[1] : null
+    const issue = issueCode(kind)
+    const node = {
+      ...item,
+      nodeType: template ? 'template' : 'entry',
+      line: facts.line,
+      parentId: null,
+      materialization: template ? 'template' : 'record',
+      syntax: !template && kind.type === 'known' && doubleKind === null ? 'valid' : 'malformed',
+      inlineBody: facts.inlineBody,
+      body: facts.body,
+      content: parsed.remainder,
+      slots: { kind },
+      countsAsGap: !template && countsAsGap(kind),
+      diagnostics: []
+    }
+    delete node.lineNode
+    if (!template && issue !== null) node.diagnostics.push({ code: issue, slot: kind.type })
+    if (!template && doubleKind !== null) node.diagnostics.push({ code: 'double-kind', value: doubleKind })
+    nodes.push(node, ...item.detailLines)
+    if (!template) entries.push(node)
+  }
+
+  diagnostics.push(...structure.diagnostics)
+  for (const e of entries) diagnostics.push(...e.diagnostics.map(d => ({ ...d, source: e.source, raw: e.raw })))
+  return { entries, nodes, diagnostics, badLine: structure.badLine, structure }
+}
+
+export function parseGapRegister (document, contract) {
+  const contractValid = contract.valid !== false
+  const sameRole = contractValid && contract.openName === contract.acceptedName
+  const boundaries = contractValid ? new Set([contract.openName, contract.acceptedName]) : new Set()
+  const openSections = contractValid ? sectionNodes(document, contract.openName, { boundaries }) : []
+  // One physical section cannot simultaneously mean unresolved and accepted. Keep the first role
+  // visible, make the second empty, and surface the invalid contract in the model itself so every
+  // consumer (not only validate) gives one answer.
+  const acceptedSections = !contractValid || sameRole ? [] : sectionNodes(document, contract.acceptedName, { boundaries })
+  const open = parseGapSections(openSections, contract.kinds)
+  const accepted = parseGapSections(acceptedSections, contract.kinds)
+
+  const inside = new Set()
+  for (const section of [...openSections, ...acceptedSections]) {
+    inside.add(section.heading.line)
+    for (const line of section.lines) inside.add(line.number)
+  }
+  const stray = []
+  for (const line of document.lines) {
+    if (inside.has(line.number)) continue
+    const parsed = parseTaggedBullet(line, [])
+    if (parsed.type === 'bullet' && parsed.lead === '') stray.push({ source: sourceRef(line), raw: line.live })
+  }
+
+  const headingCounts = contractValid
+    ? {
+        open: document.headings.filter(h => h.name === contract.openName).length,
+        accepted: document.headings.filter(h => h.name === contract.acceptedName).length
+      }
+    : { open: 0, accepted: 0 }
+  const structureDiagnostics = []
+  if (!contractValid) {
+    structureDiagnostics.push({ code: 'invalid-contract', reason: contract.error || 'invalid gaps register contract' })
+  } else {
+    if (sameRole) structureDiagnostics.push({ code: 'invalid-contract', reason: 'one section cannot hold both roles', name: contract.openName })
+    if (headingCounts.open !== 1) structureDiagnostics.push({ code: 'section-count', role: 'open', name: contract.openName, count: headingCounts.open })
+    if (headingCounts.accepted !== 1) structureDiagnostics.push({ code: 'section-count', role: 'accepted', name: contract.acceptedName, count: headingCounts.accepted })
+  }
+  for (const entry of stray) structureDiagnostics.push({ code: 'stray-entry', entry })
+
+  return {
+    document,
+    open,
+    accepted,
+    stray,
+    headingCounts,
+    structureDiagnostics
+  }
+}
+
+export function parseGapText (text, contract) {
+  return parseGapRegister(scanMarkdown(text, { frontmatter: false }), contract)
 }
