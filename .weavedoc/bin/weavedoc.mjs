@@ -9,9 +9,11 @@
 //   attest <verdict> <round> <standard> <id...>   record a verification: digest-bound sidecar row
 //   seal-review <doc-id> [draft|final]   pin the clean review to the reviewed bytes + context
 //   consecrate <doc-id>   stage candidate → verify seals → ONE full validation → atomic promote
-//   upgrade [--check|--dry-run|--apply]   v1 mine → schema 2 (default --check, read-only)
+//   upgrade [--check|--dry-run|--apply]   the migration surface (v2→v3 lands in slice 2; refuses meanwhile)
+//   conflict list|add <entry.json>|remove <cNNN>   the open-disagreement ledger (id granted by the allocator; resolution IS removal)
+//   alloc <conflict|material|truth>   grant the next id from the monotonic allocator (never max+1 scanning)
 //   gaps              mine census + declared-marker scan (non-blocking floor for the weavedoc-gaps skill)
-//   census            mine census only (truth files vs index, numbering holes, live/status tallies)
+//   census            mine census only (truth files vs index, coverage records)
 //   reindex [--check] regenerate truths/index.md + truths/tree.md from truth frontmatter (--check: diff only)
 //   retag <old> <new> rename/merge a tag across truths·required_tags·scope_tags (--dry: report only)
 //   version           the installed runtime bundle version (.weavedoc/VERSION)
@@ -196,8 +198,8 @@ async function cmdLocale () {
 // is a typo'd intention, and a tool that ignores it does something other than what was asked.
 const USAGE = 'weavedoc — validate | pull <term> | impact <material-id> | status [--open] | scope | ' +
   'attest <verdict> <round> <standard> <id...> | seal-review <doc-id> [draft|final] | ' +
-  'consecrate <doc-id> | upgrade [--check|--dry-run|--apply] | gaps | census | ' +
-  'reindex [--check] | retag <old> <new> [--dry] | version | lang | locale'
+  'consecrate <doc-id> | upgrade [--check|--dry-run|--apply] | conflict list|add|remove | ' +
+  'alloc <ns> | gaps | census | reindex [--check] | retag <old> <new> [--dry] | version | lang | locale'
 
 const usage2 = u => { errln(`usage: ${u}`); process.exit(2) }
 
@@ -233,6 +235,8 @@ const rest = argv.slice(1)
 // second checkout of a shared drive, is outside any lock this CLI can take — FORMATS carries that.
 const MUTATES = {
   attest: () => true,
+  alloc: () => true,
+  conflict: a => a[0] === 'add' || a[0] === 'remove',
   consecrate: () => true,
   'seal-review': () => true,
   upgrade: a => a.includes('--apply'),
@@ -395,6 +399,22 @@ switch (cmd) {
     const mine = openMine(SCRIPT_DIR)
     const g = versionGate(mine, errln); if (g) { rc = g; break }
     rc = cmdImpact(mine, outln, rest[0]); break
+  }
+  case 'conflict': {
+    if (rest.length < 1 || rest.length > 2) usage2('weavedoc conflict list | add <entry.json> | remove <cNNN>')
+    const { openMine, versionGate } = await import('./lib/mine.mjs')
+    const { cmdConflict } = await import('./lib/cmd-state.mjs')
+    const mine = openMine(SCRIPT_DIR)
+    const g = versionGate(mine, errln); if (g) { rc = g; break }
+    rc = cmdConflict(mine, outln, rest); break
+  }
+  case 'alloc': {
+    if (rest.length !== 1) usage2('weavedoc alloc <conflict|material|truth>')
+    const { openMine, versionGate } = await import('./lib/mine.mjs')
+    const { cmdAlloc } = await import('./lib/cmd-state.mjs')
+    const mine = openMine(SCRIPT_DIR)
+    const g = versionGate(mine, errln); if (g) { rc = g; break }
+    rc = cmdAlloc(mine, outln, rest); break
   }
   case 'version': {
     let json = false

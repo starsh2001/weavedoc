@@ -376,6 +376,9 @@ Every problem and warning the checker emits carries a **stable code**. The code 
 | `SCHEMA-VERIFY-SECTIONS` | `verify.sections` is not exactly three distinct non-empty positional roles (Verified units, Human queue, Adjudications), so no section may grant evidence |
 | `SEAL-QUOTE-MISSING` | a truth's verbatim body is not found in its source (laundering risk) |
 | `SEAL-SPLIT-BLOCK` | body lines are each verbatim but not one contiguous block |
+| `CONF-SOURCE-DANGLING` | a conflicts.json candidate cites a material the mine no longer holds |
+| `CONF-TARGET-DANGLING` | a conflicts.json entry targets a truth card the mine no longer holds |
+| `IDSEQ-BEHIND` | the allocator's next counter is at or below an observed id — the next grant would collide |
 | `STATE-MALFORMED` | a `.weavedoc-state` file does not parse as its contract (the model's finer codes ride in the message) |
 | `STATE-MISSING` | a v3 mine is missing `conflicts.json` or `id-sequences.json` — unreadable state never reads as empty |
 | `TRUTH-BODY-EMPTY` | truth body is empty — there is no verbatim quote to seal |

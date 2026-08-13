@@ -4,7 +4,17 @@
 
 ---
 
-## 2026-08-08.19
+## 2026-08-08.20
+
+**Unreleased — the state files get their write surfaces, and the tripwires close.** Slice 1's bundle B2: two commands and two cross-checks, all of them ledger machinery — the division of labour holds by construction, because there is no surface here that could pick a winner.
+
+**`weavedoc conflict list | add <entry.json> | remove <cNNN>`.** Detection arrives already made (the AI's judgment); the ruling never happens here — `remove` records that a ruling was applied elsewhere, by deleting the entry. `add` takes the payload as a JSON file (claims are project-language prose, and prose-through-argv is a per-shell quoting lottery this repo already refuses to play), validates it with the same parser `validate` trusts, and grants the id itself from the allocator — a caller can neither pick nor reuse a number, and a payload carrying `id` is refused outright. Allocator first, store second: a crash between the two burns one number (harmless — monotonicity is the contract, density never was) where the reverse order could seat an entry whose id would be granted again.
+
+**`weavedoc alloc <conflict|material|truth>`** grants the next id and prints it — the only minting path. Both commands ride the single-writer admission gate and the v3 version gate like every other mutating surface.
+
+**Two validate cross-checks, judged after the walks because they need the mine's id population:** `IDSEQ-BEHIND` (the allocator's next counter at or below an observed id — an allocator left behind by an out-of-band write, named before the collision instead of after it) and `CONF-TARGET-DANGLING`/`CONF-SOURCE-DANGLING` (a store entry pointing at a card or material the mine no longer holds — the reference the resolve flow would otherwise trip over).
+
+Seven new cases pin the surfaces (monotonic grants across a deletion, the closed namespace, the add/remove round-trip in which a NEW disagreement gets a NEW number, caller-supplied ids refused, the store contract enforced at the door with nothing written, and both tripwires). The first sweep caught the suite's own shape: ten fixtures hand-mint `t002`/`m002` and the new tripwire flagged every one — which is the tripwire working, so the fixtures now recompute the allocator from the tree (`mint`, one helper, never a per-case constant) instead of the tripwire learning to look away.
 
 **Unreleased — the flip: this runtime is v3-only, and a card that exists is canonical.** Slice 1's main bundle (B1), under the approved plan's three-line division of labour: meaning is judged by the AI, decisions are the human's, the machine keeps the ledger and pulls the tripwire.
 

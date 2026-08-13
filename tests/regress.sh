@@ -307,6 +307,7 @@ mkscale() { # deterministic 8-material · 60-truth mine — the scale where spaw
   done
   printf -- '---\nstatus: passed\nround: 1\nverified_at: 2026-07-30\n---\n\n## Verified units\n\n## Adjudications\n\n## Human queue\n' > "$W/truths/verify.md"
   ( cd "$W" && "${WDRUN[@]}" reindex >/dev/null 2>&1 ) || bad "mkscale: reindex failed"
+  mint
 }
 pass_locale_emoji_claim() {
   # gawk 5.0's multibyte machinery misread emoji-bearing claim lines under UTF-8 locales: five
@@ -319,6 +320,7 @@ pass_locale_emoji_claim() {
   printf -- '\n- 심사: t002\n' >> "$W/truths/coverage.md"
   printf -- '- added: t002 (2026-07-30)\n' >> "$W/truths/changelog.md"
   ( cd "$W" && "${WDRUN[@]}" reindex >/dev/null 2>&1 )
+  mint
   OUT=$( ( cd "$W" && LC_ALL= LANG=ko_KR.UTF-8 $TO "${WDRUN[@]}" validate ) 2>&1 ); RC=$?
   expect_pass
   OUT=$( ( cd "$W" && LC_ALL=C $TO "${WDRUN[@]}" validate ) 2>&1 ); RC=$?
@@ -371,6 +373,7 @@ mkplanstage() { # m002 (stage: plan) + t002 derived from it, with as_of — the 
   printf -- '---\nid: t002\nclaim: "앨범은 6곡으로 계획되었다"\nsource: m002\ntags: [음악]\nprovenance: derived\nderived_from: [m002]\nassumptions: [발매 전 변경 가능]\nas_of: 2026-07-01\n---\n\n6곡 앨범을 계획한다.\n' > "$W/truths/t002.md"
   printf '\n## m002\n\n- 계획: t002\n' >> "$W/truths/coverage.md"
   printf -- '- added: t002 (2026-07-30)\n' >> "$W/truths/changelog.md"
+  mint
 }
 acct_tree_carries_labels() {
   # D1 (field report): pull attached PLAN-STAGE/as_of/DERIVED while index.md/tree.md carried
@@ -1652,6 +1655,7 @@ addm2() { # $1=id — a second material, in catalog, sourced from m001's shape
   mkdir -p "$W/materials/$1"
   sed "s/^id: m001/id: $1/" "$W/materials/m001/converted.md" > "$W/materials/$1/converted.md"
   printf '| %s | 추가자료 | 계약서 |\n' "$1" >> "$W/catalog.md"
+  mint
 }
 acct_census_legacy_lenient_spelling() {
   # R5-S4: `- m3` for folder m003 is a REFERENCE, so it must canonicalise before mstatus looks it
@@ -1750,6 +1754,7 @@ pass_id_four_digit() {
   sed -i 's/^cited_truths: \[t001\]$/cited_truths: [t1000]/' "$W/documents/d1/plan.md"
   printf -- '- added: t1000 (2026-07-30)\n' >> "$W/truths/changelog.md"
   ( cd "$W" && "${WDRUN[@]}" reindex >/dev/null 2>&1 )
+  mint
   vrun validate; expect_pass
 }
 pass_id_generated_files_ignored() {
@@ -1784,10 +1789,22 @@ pass_retag_leaves_unclosed_list_alone() {
   expect_has "1"
   vrun validate; expect_block "never closes on this line"
 }
+mint() { # recompute .weavedoc-state/id-sequences.json from the fixture's hand-minted ids.
+  # Tests mint by hand — that is what makes them fixtures; real writers go through `alloc`.
+  # IDSEQ-BEHIND exists to catch exactly the hand-mint-without-bumping shape, so a fixture
+  # that hand-mints must also carry a consistent allocator — computed from the tree, never a
+  # per-case constant that drifts the day someone adds a t003.
+  local tmax mmax cmax
+  tmax=$(ls "$W/truths" 2>/dev/null | sed -n 's/^t0*\([0-9]\{1,\}\)\.md$/\1/p' | sort -n | tail -1); tmax=${tmax:-0}
+  mmax=$(ls "$W/materials" 2>/dev/null | sed -n 's/^m0*\([0-9]\{1,\}\)$/\1/p' | sort -n | tail -1); mmax=${mmax:-0}
+  cmax=$(sed -n 's/.*"id": "c0*\([0-9]\{1,\}\)".*/\1/p' "$W/.weavedoc-state/conflicts.json" 2>/dev/null | sort -n | tail -1); cmax=${cmax:-0}
+  printf '{\n  "version": 1,\n  "next": {\n    "conflict": %d,\n    "material": %d,\n    "truth": %d\n  }\n}\n' "$((cmax+1))" "$((mmax+1))" "$((tmax+1))" > "$W/.weavedoc-state/id-sequences.json"
+}
 addt2() { # register t002 in the ledgers so the only thing left to complain about is the seal
   printf -- '- 대금 조항: t002\n' >> "$W/truths/coverage.md"
   printf -- '- added: t002 (2026-07-30)\n' >> "$W/truths/changelog.md"
   ( cd "$W" && "${WDRUN[@]}" reindex >/dev/null 2>&1 )
+  mint
 }
 block_short_body_seal() {
   # A body too small to be evidence of anything: index() finds it inside almost any material.
@@ -1808,6 +1825,7 @@ pass_multiline_verbatim() {
   # spliced-quote check has bought a false failure on the shape FORMATS explicitly encourages.
   printf -- '---\nid: t002\nclaim: "대금과 납품 기한"\nsource: m001\ntags: [대금]\n---\n\n제3조 대금은 5천만원으로 한다.\n제5조 납품 기한은 2026년 12월 31일로 한다.\n' > "$W/truths/t002.md"
   addt2
+  mint
   vrun validate; expect_pass
 }
 pass_claim_shown_beside_seal() {
@@ -1895,6 +1913,7 @@ pass_cited_short_id() {
   sed -i 's/^cited_truths: \[t001\]$/cited_truths: [t5]/' "$W/documents/d1/plan.md"
   printf -- '- added: t005 (2026-07-30)\n' >> "$W/truths/changelog.md"
   ( cd "$W" && "${WDRUN[@]}" reindex >/dev/null 2>&1 )
+  mint
   vrun validate; expect_pass
 }
 pass_locales() {
@@ -2924,6 +2943,7 @@ e2e_user_answer_chain() {
   mkdoc2
   sed -i 's/^cited_truths: \[t001\]$/cited_truths: [t001, t002]/' "$W/documents/d2/plan.md"
   printf -- '\n지연 배상 한도는 계약금액의 20%%다. <!-- t:t002 -->\n' >> "$W/documents/d2/draft.md"
+  mint
   vrun seal-review d2 draft
   vrun consecrate d2;  expect_pass
   vrun validate;       expect_pass
@@ -4925,6 +4945,7 @@ pass_retag_leaves_body_alone() {
   printf -- '- 태그 선언 줄: t002\n' >> "$W/truths/coverage.md"
   printf -- '- added: t002 (2026-07-30)\n' >> "$W/truths/changelog.md"
   ( cd "$W" && "${WDRUN[@]}" reindex >/dev/null 2>&1 )
+  mint
   vrun validate; expect_pass
   ( cd "$W" && "${WDRUN[@]}" retag 위약 벌칙 >/dev/null 2>&1 )
   OUT=$(cat "$W/truths/t002.md")
@@ -4957,6 +4978,7 @@ pass_crlf_retag() {
   lfcount() { tr -cd '\n' < "$1" | wc -c | tr -d ' '; }
   local crb lfb; crb=$(crcount "$W/truths/t002.md"); lfb=$(lfcount "$W/truths/t002.md")
   [ "$crb" = "$lfb" ] || { bad "fixture is not uniformly CRLF (cr=$crb lf=$lfb) — the case would prove nothing"; return; }
+  mint
   vrun retag 대금 금액
   expect_pass
   local cra lfa; cra=$(crcount "$W/truths/t002.md"); lfa=$(lfcount "$W/truths/t002.md")
@@ -6241,6 +6263,80 @@ block_truth_v2_field_is_structural() {
   sed -i 's/^provenance: stated$/provenance: stated\nstatus: ok/' "$W/truths/t001.md"
   vrun validate
   expect_block "TRUTH-V2-FIELD"
+}
+
+# ---- schema v3 state-file write surfaces (slice 1, B2): alloc + conflict CLI, tripwires ---------
+pass_alloc_grants_monotonic_ids() {
+  # The allocator is the only minting path, and numbers move one way — a deleted card's number
+  # never comes back, because an old citation would then name a different fact.
+  vrun alloc truth
+  expect_pass
+  expect_has "t002"
+  vrun alloc truth
+  expect_has "t003"
+  rm -f "$W/truths/t001.md"
+  vrun alloc truth
+  expect_has "t004"
+  OUT=$(cat "$W/.weavedoc-state/id-sequences.json"); RC=0
+  expect_has '"truth": 5'
+}
+block_alloc_unknown_namespace() {
+  # `locus` was discarded by the 2026-08-12 rescope; a namespace the closed set does not name must
+  # be a refusal, never a lazily-created counter.
+  vrun alloc locus
+  expect_block "usage: weavedoc alloc"
+}
+pass_conflict_add_remove_roundtrip() {
+  # The ledger's whole life: add (id granted here, from the allocator) → blocks shipping and shows
+  # on the lane → remove (resolution IS deletion) → clean again → a NEW disagreement gets a NEW
+  # number, never the old one back.
+  printf '{\n  "targets": ["t001"],\n  "candidates": [\n    {\n      "claim": "위약금은 20%%다",\n      "source": "m001"\n    }\n  ],\n  "created": "2026-08-13"\n}\n' > "$W/entry.json"
+  vrun conflict add entry.json
+  expect_pass
+  expect_has "c001 recorded"
+  vrun validate
+  expect_block "CONFLICT-OPEN"
+  vrun conflict list
+  expect_has "c001 targets t001"
+  expect_has "위약금은 20%다"
+  vrun conflict remove c001
+  expect_pass
+  vrun validate
+  expect_pass
+  vrun conflict add entry.json
+  expect_has "c002 recorded"
+}
+block_conflict_add_rejects_caller_ids() {
+  # A caller that picks its own id is a second minting path — the reuse hole wearing a flag.
+  printf '{\n  "id": "c001",\n  "targets": [],\n  "candidates": [\n    {\n      "claim": "x",\n      "source": "m001"\n    }\n  ],\n  "created": "2026-08-13"\n}\n' > "$W/entry.json"
+  vrun conflict add entry.json
+  expect_block "granted here, from the allocator"
+}
+block_conflict_add_runs_the_store_contract() {
+  # add validates with the same parser validate trusts — an unpadded source is refused at the
+  # door, with the model's code named, and nothing is written.
+  printf '{\n  "targets": [],\n  "candidates": [\n    {\n      "claim": "x",\n      "source": "m1"\n    }\n  ],\n  "created": "2026-08-13"\n}\n' > "$W/entry.json"
+  vrun conflict add entry.json
+  expect_block "CONF-CANDIDATE"
+  OUT=$(cat "$W/.weavedoc-state/conflicts.json"); RC=0
+  expect_has '"open": []'
+}
+block_idseq_behind_observed_ids() {
+  # An allocator left behind by an out-of-band write: the next grant would collide with a card
+  # that already exists, and validate names it before the collision can happen.
+  printf '{\n  "version": 1,\n  "next": {\n    "conflict": 1,\n    "material": 2,\n    "truth": 1\n  }\n}\n' > "$W/.weavedoc-state/id-sequences.json"
+  vrun validate
+  expect_block "IDSEQ-BEHIND"
+}
+block_conflict_store_dangling_references() {
+  # A store entry pointing at a card or material the mine no longer holds is a reference the
+  # resolve flow would trip over — both directions named, per entry.
+  printf '{\n  "version": 1,\n  "open": [\n    {\n      "id": "c001",\n      "targets": ["t099"],\n      "candidates": [\n        {\n          "claim": "x",\n          "source": "m099"\n        }\n      ],\n      "created": "2026-08-13"\n    }\n  ]\n}\n' > "$W/.weavedoc-state/conflicts.json"
+  vrun validate
+  expect_block "CONF-TARGET-DANGLING"
+  expect_has "CONF-SOURCE-DANGLING"
+  expect_has "t099"
+  expect_has "m099"
 }
 
 # ---------------------------------------------------------------- driver

@@ -21,8 +21,8 @@ import { gapRegisterContract, parseGapText } from './gaps-register.mjs'
 import { verifiedUnitsContract } from './verified-units.mjs'
 import { fmvB as fmv, loadSchema, loadConfig } from './read.mjs'
 import { validateTruths } from './validate-truths.mjs'
-import { CONFLICTS_FILE, parseConflicts } from './conflict-store.mjs'
-import { ID_SEQUENCES_FILE, parseIdSequences } from './id-sequences.mjs'
+import { CONFLICTS_FILE, checkAgainstMine, maxConflictId, parseConflicts } from './conflict-store.mjs'
+import { ID_SEQUENCES_FILE, checkAgainstObserved, parseIdSequences } from './id-sequences.mjs'
 
 // BYTES, not text. Every value this command quotes back in a diagnostic comes through here, and a
 // UTF-8 decode folds an invalid byte to U+FFFD — printing something the runtime being replaced never
@@ -339,6 +339,8 @@ export function cmdValidate (m, out, json = false, consecOk = '') {
     if (pv === '2') { prob('VER-V2-UPGRADE', M`this mine is schema v2 and this runtime is v3-only — run 'node .weavedoc/bin/weavedoc.mjs upgrade' (the v2→v3 migrator) before any other command; nothing here has judged the v2 contents`); return refuse() }
   }
 
+  let stateConf = null
+  let stateSeq = null
   // --- the v3 state files: presence and hygiene ---------------------------------------------
   // Two machine-owned files are part of a v3 mine the way truths/ is: absent or malformed is a
   // structural problem, never "empty state" — a conflicts store that cannot be read must not read
@@ -358,8 +360,9 @@ export function cmdValidate (m, out, json = false, consecOk = '') {
       }
       return r
     }
-    const conf = readState(CONFLICTS_FILE, parseConflicts, 'without it open disagreements have nowhere to block shipping from')
-    readState(ID_SEQUENCES_FILE, parseIdSequences, 'without it a deleted id can be granted again and an old citation names a different fact')
+    stateConf = readState(CONFLICTS_FILE, parseConflicts, 'without it open disagreements have nowhere to block shipping from')
+    stateSeq = readState(ID_SEQUENCES_FILE, parseIdSequences, 'without it a deleted id can be granted again and an old citation names a different fact')
+    const conf = stateConf
     if (conf !== null && conf.open.length > 0) {
       const ids = conf.open.map(e => e.id).join(' ')
       prob('CONFLICT-OPEN', M`${CONFLICTS_FILE} holds ${conf.open.length} open conflict(s) (${ids}) — an undecided disagreement blocks shipping; resolve each (the human decides, the AI applies, resolution deletes the entry)`)
@@ -570,6 +573,30 @@ export function cmdValidate (m, out, json = false, consecOk = '') {
     }
     // (The v2 RES-REASON-UNQUOTED warning left with the resolution field itself — a v3 card that
     // carries `resolution:` at all is TRUTH-V2-FIELD, judged in the truths pass.)
+  }
+
+  // --- v3 state cross-checks: the allocator tripwire, and dangling store references -----------
+  // Judged HERE, after the walks, because both need the mine's id population: `next ≤ observed
+  // max` means the next grant collides with an id that already exists (an allocator left behind
+  // by an out-of-band write), and a store entry pointing at a card or material the mine no longer
+  // holds is a reference the resolve flow would trip over.
+  if (stateSeq !== null) {
+    const obs = {
+      truth: Math.max(0, ...globbed.map(n => parseInt((/^t0*([0-9]+)\.md$/.exec(n) ?? [])[1] ?? 'x', 10)).filter(Number.isFinite)),
+      material: Math.max(0, ...mids.map(i => parseInt((/^m0*([0-9]+)$/.exec(i) ?? [])[1] ?? 'x', 10)).filter(Number.isFinite)),
+      conflict: stateConf === null ? 0 : maxConflictId({ open: stateConf.open })
+    }
+    for (const d of checkAgainstObserved(stateSeq.next, obs)) {
+      prob('IDSEQ-BEHIND', M`${ID_SEQUENCES_FILE}  ${d.detail}; bump the counter above every observed id before any new grant`)
+    }
+  }
+  if (stateConf !== null) {
+    const tset = new Set(globbed.map(n => n.replace(/\.md$/, '')))
+    const mset = new Set(mids)
+    for (const d of checkAgainstMine(stateConf.open, tset, mset)) {
+      if (d.code === 'CONF-TARGET-DANGLING') prob('CONF-TARGET-DANGLING', M`${CONFLICTS_FILE}  ${d.detail}`)
+      else prob('CONF-SOURCE-DANGLING', M`${CONFLICTS_FILE}  ${d.detail}`)
+    }
   }
 
   // --- the verification sidecar is fail-closed: every row fully parsed, verdict from the closed
