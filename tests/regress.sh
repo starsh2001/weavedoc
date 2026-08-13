@@ -6386,7 +6386,7 @@ acct_upgrade_v2_to_v3_end_to_end() {
   expect_has "allocator next t74/m2/c2"
   # the machine ledgers travel with the deletion: the casualty's coverage row is scrubbed
   # (measured on the real mine — 26 deletions left 12 dangling mentions before this existed).
-  expect_has "coverage rows scrubbed (1 dropped"
+  expect_has "coverage rows scrubbed (1 marked skipped"
   OUT=$(cat "$W/truths/coverage.md"); RC=0
   expect_has "t001"
   expect_hasnt "t002"
@@ -6523,6 +6523,49 @@ block_upgrade_cited_leaving_in_chapter_blocks() {
   expect_has "d1/draft/01.md: t002"
   OUT=$(ls "$W/truths"); RC=0
   expect_has "t002.md"
+}
+acct_upgrade_coverage_element_survives_as_skip() {
+  # A coverage bullet whose every id left must NOT vanish. The ledger's whole job is the accounting
+  # "every fact-bearing element is extracted or explicitly skipped" — dropping the bullet erases the
+  # record that the element existed, so the next map reads the source element as unprocessed and
+  # re-extracts the value the mine just superseded. Measured on the real mine (2026-08-13, truths
+  # verify R2): m021's 생일 표 and 데뷔일 lines disappeared, and the old dates they carried would
+  # have come back to contradict the live cards. The bullet is REWRITTEN as a skipped entry instead.
+  # The reason may NOT name the deleted ids — validate rejects a coverage mention of an id the mine
+  # no longer holds, so naming them would trade one dangling reference for another.
+  mk_v2mine
+  vrun upgrade --apply
+  expect_pass
+  expect_has "coverage rows scrubbed (1 marked skipped, 0 trimmed)"
+  OUT=$(cat "$W/truths/coverage.md"); RC=0
+  expect_has "위약 15%"
+  expect_has "skipped:"
+  expect_has "deleted in the v2"
+  expect_hasnt "t002"
+  # and the rewritten bullet is one validate accepts: the migration's only expected red is the
+  # moved conflict entry, never a coverage diagnostic.
+  vrun validate
+  expect_has "CONFLICT-OPEN"
+  expect_hasnt "COVERAGE-"
+}
+acct_upgrade_ledger_lines_are_utf8() {
+  # The migrator appends one line to the mine log. It is written through the latin1 writer (the byte
+  # domain every mine write uses), so a source literal must pass through U() first — otherwise the
+  # encoder keeps only the low byte and U+2192 lands as 0x92, U+2014 as 0x14, a C0 CONTROL byte.
+  # Shipped exactly that way in v0.6.0 and measured in the real mine. write.mjs has carried the U()
+  # helper and this warning in its comment since the bundle .7 incident (four 0x14 bytes in
+  # schemas/v3, same cause); the migrator simply did not route through it. CI's control-character
+  # scan covers repository files only — nothing watched what the runtime WRITES INTO A MINE, which
+  # is why this case exists rather than another CI path.
+  mk_v2mine
+  vrun upgrade --apply
+  expect_pass
+  OUT=$(node "$REPO/tests/ctlscan.mjs" "$W/truths/changelog.md" | tail -1); RC=0
+  expect_has "lines with control chars: 0"
+  OUT=$(node "$REPO/tests/ctlscan.mjs" "$W/truths/coverage.md" | tail -1); RC=0
+  expect_has "lines with control chars: 0"
+  OUT=$(cat "$W/truths/changelog.md"); RC=0
+  expect_has "v2→v3 migration —"
 }
 acct_upgrade_check_is_readonly() {
   mk_v2mine
