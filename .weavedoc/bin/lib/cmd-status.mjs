@@ -181,9 +181,7 @@ export function cmdStatusOpen (m, out) {
   // door (cold review, v0.5.6). Same reason validate keeps its own latin1 schema map.
   const schB = loadSchema(m.schemaPath, 'latin1')
   const warns = []
-  // conflicts — every truth whose status is `conflict`, both sides of each pair by construction
-  // (map stamps both files), each with the SOURCE material behind it: the skills' rule is that a
-  // Open conflicts come from the v3 store, not from cards (schema v3): an undecided disagreement
+  // conflicts — open entries from the v3 store, not from cards (schema v3): an undecided disagreement
   // never wears a truth file. Read-only here — validate owns the blocking, this lane owns the
   // surface ("Surface, don't point": each entry names its targets, its candidate claims and their
   // sources, so the user learns what is undecided without opening the file). A store that cannot

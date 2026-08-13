@@ -22,7 +22,7 @@ The gate is the product; the panel is polish. Keep them separate.
 
 > **Thin context.** Don't read all truths for the whole document at once. For the fidelity gate, check each section against only its cited truths (grep by truth id from the draft's citations). For the advisory panel, reviewers receive only the draft + plan — not the full truth set.
 
-> **Write-scope.** This skill writes only to `documents/<doc-id>/review.md` (except two stage stamps: `status: reviewing` on this document's `plan.md` — step 5, and leaving it there on escalation — and `status: conflict` on truths when a new conflict is discovered). It does **not** otherwise modify `draft.md`, `truths/`, or `materials/`.
+> **Write-scope.** This skill writes only to `documents/<doc-id>/review.md` (except one stage stamp: `status: reviewing` on this document's `plan.md` — step 5, and leaving it there on escalation). A new conflict discovered here is recorded as a `.weavedoc-state/conflicts.json` entry through the CLI (`conflict add`) — never as an edit to a card. It does **not** otherwise modify `draft.md`, `truths/`, or `materials/`.
 
 > **Where it runs (the invocation contract).** Run weavedoc-review in your **main Claude Code session** — it spawns the cold reviewers as **subagents**. **Never run a weavedoc skill *as* a subagent** — then it can't spawn reviewers and silently degrades to a non-cold self-check, defeating the point.
 
@@ -38,17 +38,16 @@ The gate is the product; the panel is polish. Keep them separate.
 
 Runs before anything else and is **never skipped** (even at `config.review.scale: skip`, which skips only the advisory panel). Write each violation to `review.md` under `# Fidelity violations` as `- [<kind>] <where> — <what>`. These are facts, not opinions: **never triage them down, never adjudicate them away.** Empty = the gate passes.
 
-**A0. Conflict detection — the #1 job, most effort.** The top priority of the whole review. Do **not** merely trust existing truth statuses — **actively re-hunt**: for every load-bearing claim in the draft, grep truths by the same tags and re-check for disagreement, cross-checking every structured fact (number/date/amount/obligation) exhaustively (depth per `config.conflicts.detection`). **A0 always runs — it is part of the mandatory fidelity gate, never skipped regardless of scale.** At `standard` or `full` scale, spawn a **cold conflict-hunter** subagent (see `reviewers.md` fidelity gate lenses). At `light` scale, run A0 **inline** (self-check, not cold) — less independent but still executed. At `skip` scale, A0 still runs inline. Give this the heaviest effort — a miss is a defect, not an accepted cost. Violations (kind **contradiction**):
-   - the draft cites a truth with `status: conflict` (unresolved), or
-   - the draft **silently picks** one side of a conflict with no recorded `resolution`, or
-   - an **unauthorized attribution** (both sides written, but no `resolution.type: attribute` on record), or
-   - a truth-vs-truth contradiction the map missed → set both truths' `status: conflict` and flag it.
+**A0. Conflict detection — the #1 job, most effort.** The top priority of the whole review. Do **not** merely trust the open-conflict store — **actively re-hunt**: for every load-bearing claim in the draft, grep truths by the same tags and re-check for disagreement, cross-checking every structured fact (number/date/amount/obligation) exhaustively (depth per `config.conflicts.detection`). **A0 always runs — it is part of the mandatory fidelity gate, never skipped regardless of scale.** At `standard` or `full` scale, spawn a **cold conflict-hunter** subagent (see `reviewers.md` fidelity gate lenses). At `light` scale, run A0 **inline** (self-check, not cold) — less independent but still executed. At `skip` scale, A0 still runs inline. Give this the heaviest effort — a miss is a defect, not an accepted cost. Violations (kind **contradiction**):
+   - the draft cites a truth that is a **target of an open conflicts.json entry** (unruled), or
+   - the draft **silently picks** among an open entry's candidates — including writing both sides as if the user had ruled a split (the attribution of a real 분리·병합 lives in the split cards' own claims; an open entry has no such cards), or
+   - a truth-vs-truth contradiction the map missed → record a new conflicts.json entry (`conflict add` — never a card stamp) and flag it.
 
 **A1. Grounding (kind unsupported).** A claim traces to no truth, or its citation is invalid (the write step's rule, re-verified).
 
 **A2. Completeness (kind missing-required).** *Only if* `config.fidelity.completeness: required` — a required element/section is absent, or a `project.md` `required_tags` tag has zero truths. Drive off the plan's `required` notes and the normative materials.
 
-**Deterministic floor.** `weavedoc validate` mechanically checks the invariants the gate rests on — every truth source resolves to a material, every truth with `status: conflict` has `conflict_with`, every `required_tags` tag has at least one truth, no `final.md` ships with open fidelity violations, attribution is authorized. Run it; a non-zero exit is a blocking violation regardless of the AI pass. (Form is the machine's job; meaning is the gate's.)
+**Deterministic floor.** `weavedoc validate` mechanically checks the invariants the gate rests on — every truth source resolves to a material, the state files parse (a missing or malformed store fail-closes, never "no conflicts"), any open conflicts.json entry blocks shipping (`CONFLICT-OPEN`), dangling entry references are named, every `required_tags` tag has at least one truth, no `final.md` ships with open fidelity violations, every truth body seals against its source. Run it; a non-zero exit is a blocking violation regardless of the AI pass. (Form is the machine's job; meaning is the gate's.)
 
 ## B. Advisory panel — optional, editable
 

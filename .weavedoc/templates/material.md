@@ -24,14 +24,14 @@ summary: {2-3 line summary}
   Optional frontmatter:
     dated: {YYYY-MM-DD}     — the SOURCE's own date (signing date, meeting date,
       revision date), read from the source itself. `added` is intake order and a
-      batch makes them all equal, so `dated` is the only field a `supersedes`
-      resolution may order materials by. Omit it when the source states none —
-      map then asks instead of guessing which is newer.
+      batch makes them all equal. Context the user may lean on when ruling a
+      conflict — never a resolution axis: nobody, machine or AI, orders winners
+      by date. Omit it when the source states none; never guess one.
     stage: {plan|applied}   — the source is clearly a plan/proposal vs an applied
       record (truths from plan-stage materials carry an "실행 확인 안 됨" caveat).
     corrects: [{m<NNN> §<sec>}] — this material displaces named parts of earlier ones.
-      map reads it for the resolution `scope`, and it is what tells a reader of the
-      body alone that this is a correction and not a new setting.
+      map reads it to know exactly what to re-ground, and it is what tells a reader
+      of the body alone that this is a correction and not a new setting.
     url: / retrieved_at:   — REQUIRED when origin is `research` (validate blocks
       without them). `research` means the MACHINE fetched it: no human stood between
       the world and the record, so source.md keeps the values AS FETCHED (raw units,

@@ -324,7 +324,7 @@ export function validateTruths (m, ctx, truthPaths, matIds) {
   for (let ri = 0; ri < reqtags.length; ri++) {
     const rt = reqtags[ri]
     const rtB = ctx.reqtagsB[ri] ?? rt
-    if (rt !== '' && !seentag.has(rtB)) prob('REQTAG-EMPTY', M`required_tag ${q(rt)} has no live truths — retracted and discarded truths do not cover a topic (a tombstone is an extraction that never had standing); extract it from a material, queue the question (the ask loop turns the answer into a user-answer material), or remove the tag from project.md required_tags — removing it switches the completeness warranty off for that topic`)
+    if (rt !== '' && !seentag.has(rtB)) prob('REQTAG-EMPTY', M`required_tag ${q(rt)} has no truths — no canonical card carries this tag; extract it from a material, queue the question (the ask loop turns the answer into a user-answer material), or remove the tag from project.md required_tags — removing it switches the completeness warranty off for that topic`)
   }
   for (const kx of sortedKeys(kcount)) {
     if (kcount.get(kx) <= 1) continue

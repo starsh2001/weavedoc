@@ -1,8 +1,9 @@
 // weavedoc attest <verified|failed> <round> <standard> <id...> — THE verification write path.
 //
 // The digest is computed HERE and never by hand, so "which bytes were verified" has one spelling.
-// All-or-nothing: every id resolves, exists and is not a tombstone BEFORE one byte is written —
-// a partially applied attest would record coverage for units nobody checked.
+// All-or-nothing: every id resolves, exists and is not a retracted material BEFORE one byte is
+// written — a partially applied attest would record coverage for units nobody checked. (Every v3
+// truth card that exists is attestable; the material lifecycle is the one surviving status axis.)
 import { statSync, readFileSync, writeFileSync, appendFileSync, openSync, readSync, closeSync, truncateSync, unlinkSync } from 'node:fs'
 
 // The append, injectable (the consecrate/retag/upgrade precedent): node:fs cannot be reached by a

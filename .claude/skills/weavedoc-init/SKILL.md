@@ -28,7 +28,8 @@ Ask **exactly** these questions, in order. Don't improvise, skip, or silently de
 **Q2. Fidelity & conflicts** — explain briefly, then ask:
 - **Completeness** — *"누락이 그 자체로 위반인 프로젝트인가요? (계약서, SOW → required / 일반 보고서 → off)"* (추천: off)
 - **Conflict detection** — *"자료 간 충돌을 얼마나 적극적으로 찾을까요? (standard / deep)"* (추천: deep)
-- **Conflict attribution** — *"충돌 발견 시 병기(양쪽 다 기록)를 건별로 물을까요, 프로젝트 전체에 허용할까요? (ask / allow)"* (추천: ask)
+
+(There is no attribution question: every conflict ruling is the user's, per-entry — 병기 is the 분리·병합 ruling, whose record is the split cards themselves. A migrated v2 config may still carry `conflicts.attribution`; it is legal and unread.)
 
 **Q3. Verify & review intensity** — explain the scale briefly, then ask:
 - **Verify strength** — *"자료→진실 변환 검증 강도: 1(critical만) / 2(+should-fix) / 3(+nice-to-have)"* (추천: 2)

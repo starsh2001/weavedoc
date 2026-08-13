@@ -178,7 +178,7 @@ This section is a command and not advice because scope was a judgement call and 
 
    | what the fixes touched | re-check |
    |---|---|
-   | frontmatter fields only (tags, `as_of`, `provenance`, `resolution`) — no claim, no body | `validate`; no cold round |
+   | frontmatter fields only (tags, `as_of`, `provenance`, `corroborated_by`) — no claim, no body | `validate`; no cold round |
    | ≤3 truths' claims, or one material's `> [note]`/`> [machine-note]` lines | **diff-only mini-round** — one cold reviewer, only the edited hunks |
    | >3 truths, any body/quote, any converted.md prose, or a new truth | **full fresh round** at the current level |
    | anything a reviewer called `critical`, however small the edit | **full fresh round** — a critical means the lens that found it was right and the neighbourhood is suspect |
@@ -199,7 +199,7 @@ The blanket question — "추출된 진실이 정확합니까?" over a whole min
 
 What the human confirms is **the delta of this run**, rendered from `truths/changelog.md` (every block since the last `confirmed:` marker):
 
-1. **List every truth added / superseded / changed — the full delta, not a sample.** One line each: id · provenance tag (`[말한 그대로]` = stated · `[제안 채택]` = adopted · `[계산]` = derived) · the claim · for superseded: old → new pointer. Faithfully-sourced entries are listed too, **because recording can distort even direct user statements** (a real run re-based a user's stated reason onto a different biography fact) — only the user can see that their words were reflected correctly.
+1. **List every truth added / edited / removed — the full delta, not a sample.** One line each: id · provenance tag (`[말한 그대로]` = stated · `[제안 채택]` = adopted · `[계산]` = derived) · the claim · for edited: what changed (adoption, re-grounding, split). Faithfully-sourced entries are listed too, **because recording can distort even direct user statements** (a real run re-based a user's stated reason onto a different biography fact) — only the user can see that their words were reflected correctly.
 2. **Highlight the judgment set** on top of the list: `adopted`/`derived` truths, hedges hardened into assertions, machine-made negative propositions, guideline grade changes — labeled honestly ("리뷰어가 2회 지적, 기계는 '함의됨'으로 유보"). Each carries one line of **what breaks if it's wrong** ("만나이라면 나이표 전체가 한 살 밀림") + the truth link.
 3. **Render the Human queue split by ownership — always, unprompted.** Not one list of open entries, but three groups in this order, with counts: **당신만 답할 수 있는 것** (`user-only`) → **추천은 있지만 취향인 것** (`recommended`, each with your recommendation and its one-line why) → **"해줘" 한마디면 되는 것** (`machine`, listed compactly; no per-item decision needed). The user should never have to ask "내가 결정해야 하는 게 뭔데?" to get this — in a real run they did, after eleven entries had been reported as a flat list, and the split turned out to be 1 / 3 / 7. If `user-only` is empty, say so plainly: it means nothing is actually blocked on them.
 4. **State the mechanical guarantee** so the human reviews meaning, not typos: "축자 인용 존재는 validate가 N/N 확인 — 가사·프롬프트 전문의 오탈자 검토는 불필요합니다."

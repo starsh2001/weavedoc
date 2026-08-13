@@ -90,6 +90,22 @@ for f in \
     || say "the bar-crossing reset rule is missing from $f — five owners share this contract (engine, both counting SKILLs, FORMATS field contract, review template); one silent absence re-opens the two-documents-two-answers split (.15-.17)"
 done
 
+# 7. The tag discipline is map's to carry — four sentences, text-checked (acceptance test 19 of
+# the v3 plan). Same honesty as checks 5 and 6: a TEXT check proves the sentence a follower would
+# read is present, never that it is followed — skills cannot be executed, so the sentence's
+# presence IS the whole mechanical purchase available. The tokens are the rules' own vocabulary
+# (§3: read tree.md's list first · reuse similar tags · ask when ambiguous · re-check on edit);
+# rewording the discipline legitimately moves this list too. No extraction step, so no separate
+# vacuity guard: a missing file fails grep the same as a missing sentence.
+map="$REPO/.claude/skills/weavedoc-map/SKILL.md"
+for s in \
+  "read the existing tag list first" \
+  "Reuse similar tags" \
+  "tag choice is ambiguous, ask the user" \
+  "re-check that its tags still fit"; do
+  grep -qF "$s" "$map" || say "map's tag discipline lost a rule: '$s' — the tag vocabulary is the machine's whole search net (§3), and this text check is acceptance test 19's teeth"
+done
+
 # 3. The VERSION label and CHANGELOG's newest entry are one fact.
 v=$(cat "$REPO/.weavedoc/VERSION" 2>/dev/null)
 top=$(grep -m1 '^## ' "$REPO/CHANGELOG.md" | sed 's/^## *//')
