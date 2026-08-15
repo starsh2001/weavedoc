@@ -4612,9 +4612,23 @@ meta_key_covers_the_git_index() {
   sed -i '$ d' "$repo/.weavedoc/bin/lib/core.mjs"; sed -i '$ d' "$repo/.weavedoc/bin/lib/core.mjs"
   after=$( cd "$repo" && WD_REG_RES= WD_REG_KEY= TMPDIR="$W" bash tests/regress.sh --seal-check zzzzzzzzzzzz 2>&1 | sed -n 's/.*, \([0-9a-f]*\) now\..*/\1/p' )
   OUT="before=$before after=$after"
-  if [ -z "$before" ]; then bad "no key from the scratch repo — the comparison would be vacuous"
-  elif [ "$before" = "$after" ]; then bad "a staged-only change did not move the key — the index is not in it"
-  else ok; fi
+  if [ -z "$before" ]; then bad "no key from the scratch repo — the comparison would be vacuous"; return; fi
+  # MEASURE TWICE ON EQUALITY (2026-08-15). The subject is deterministic code: a key that truly
+  # stopped covering the index answers the same on every re-measure, so a second equal reading is a
+  # real red and loses nothing. What a single reading could NOT distinguish is the environmental
+  # shape this case kept producing on loaded sweeps — observed on MINGW -j6 and once on the Linux
+  # leg: staging VERIFIED in the parent, yet one child invocation answering with the unstaged key,
+  # i.e. a child that failed to read the scratch, not a key that failed to cover it. The re-measure
+  # spawns a fresh child; the diagnostics keep both readings plus the parent's own index hash, so a
+  # genuine failure names which side disagreed instead of wearing the flake's face.
+  if [ "$before" = "$after" ]; then
+    local idxhash after2
+    idxhash=$( cd "$repo" && git ls-files -s -z 2>/dev/null | sha256sum | cut -c1-12 )
+    after2=$( cd "$repo" && WD_REG_RES= WD_REG_KEY= TMPDIR="$W" bash tests/regress.sh --seal-check zzzzzzzzzzzz 2>&1 | sed -n 's/.*, \([0-9a-f]*\) now\..*/\1/p' )
+    OUT="before=$before after=$after after2=$after2 parent-index=$idxhash"
+    if [ "$before" = "$after2" ]; then bad "a staged-only change did not move the key on two measurements — the index is not in it"; return; fi
+  fi
+  ok
 }
 meta_git_env_ignored_by_key_and_manifest() {
   # NO GIT-LOCAL ENVIRONMENT VARIABLE MAY REACH THIS SUITE (external review, v0.5.17). v0.5.16 unset
