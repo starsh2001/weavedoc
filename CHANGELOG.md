@@ -4,7 +4,13 @@
 
 ---
 
-## 2026-08-08.28
+## 2026-08-08.29
+
+**Unreleased — two defects found by running `.28` against the first real mine that held anchored rows**; one in the bundle, one in the harness. Both are the classes this repo keeps names for, caught by its own record-floor step in a live verify round.
+
+**`census`'s intake line omitted `anchored`.** The classification is shared (`classifyIntake`), so the *split* cannot disagree between consumers — but each consumer's print statement is its own, and `census`'s shipped without the new word: `0 declared · 1 no-source · 0 legacy-unbound · 0 undeclared of 32` over a mine holding 31 anchored rows — four buckets summing to 1 while claiming to describe 32. The existing census case ran with the bucket at zero, which is exactly how an omitted bucket looks identical to a counted one; the new case pins the line with `anchored` **non-zero**. (The two-readers split on the display axis — the lane the `.28` work itself had just documented for `scope` vs `validate`, recommitted one consumer over.)
+
+**`meta_key_covers_the_git_index` staged its probe with rc unchecked and stderr discarded.** Under a `-j6` sweep on MINGW the `git add` sporadically failed outright, and the case then reported *"the index is not in the key"* — a key defect it had not found, wearing a parallel-only-flake face (solo runs always passed; observed twice, `before==after==`the unstaged key). The probe is now **verified by the index listing** — never rc alone, and never `git diff --cached`, which in this commit-less scratch repo has no HEAD to diff against (the first hardening attempt used it and manufactured a persistent false fixture-failure) — with three bounded retries; on true refusal the case fails as a **fixture fault quoting git's own words**, never as a false key verdict.
 
 **Unreleased — the mine had no door.** A material entered the mine by being written. `gather` created `materials/<id>/` with an ordinary file write, the CLI carried no intake command at all, and every one of the nine `MAT-*` checks asked whether the folder had the right *shape* — id padding, enum values, a resolvable `corrects`. Not one of them, and nothing anywhere else in the runtime, asked where its bytes came from. **So a material the user handed over and a material an agent invented were, to this runtime, the same object.**
 
