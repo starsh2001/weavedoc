@@ -4625,7 +4625,13 @@ meta_key_covers_the_git_index() {
     if [ -n "$blobnow" ] && [ "$blobnow" != "$blobwas" ]; then staged=1; break; fi
     sleep 0.3
   done
-  if [ -z "$staged" ]; then OUT="probe not staged after 3 attempts · index=[$blobnow] · git said: ${adderr:-nothing}"; RC=0; bad "the scratch add kept failing — a fixture fault, not a key verdict"; return; fi
+  # BOTH readings in the diagnostics, because one CI red arrived with exactly one and it was not
+  # enough to convict: index=[the PROBED blob] before this loop's add ever ran — a state no
+  # sequential execution of this function produces. With blobwas recorded, the next occurrence is
+  # decisive: probed-blob there proves the scratch outlived a previous execution of this case;
+  # empty there disproves the comparison logic instead. A diagnostic that cannot distinguish the
+  # two theories is the "check that reports without saying anything" class, one layer down.
+  if [ -z "$staged" ]; then OUT="probe not staged after 3 attempts · was=[$blobwas] · now=[$blobnow] · git said: ${adderr:-nothing}"; RC=0; bad "the scratch add kept failing — a fixture fault, not a key verdict"; return; fi
   sed -i '$ d' "$repo/.weavedoc/bin/lib/core.mjs"; sed -i '$ d' "$repo/.weavedoc/bin/lib/core.mjs"
   after=$( cd "$repo" && WD_REG_RES= WD_REG_KEY= TMPDIR="$W" bash tests/regress.sh --seal-check zzzzzzzzzzzz 2>&1 | sed -n 's/.*, \([0-9a-f]*\) now\..*/\1/p' )
   OUT="before=$before after=$after"
