@@ -30,7 +30,10 @@ function realDate (s) {
 // can — a `standard` column holding one splits or corrupts the row for the next reader, which is
 // how the same fact ended up spelled two ways on two surfaces before. Not a display concern: this
 // is the structure test, so it fails the row.
+// EXPORTED because the intake ledger is a TSV under the same rule, and a second spelling of "what
+// a TSV field may hold" is how one ledger comes to accept a byte the other rejects.
 const CTL = /[\x00-\x08\x0a-\x1f\x7f]/  // eslint-disable-line no-control-regex
+export const fieldHasControlByte = s => CTL.test(s)
 
 export function rowOk (f) {
   return f.length === 6 &&
@@ -104,10 +107,17 @@ const isSkippable = raw => raw === '' || raw.startsWith('#')
 // count above zero, like an unreadable file, means NO fallback may open anywhere (the consumers
 // enforce that; this function reports the number, and v0.5.0 shipped it as a counter nobody read —
 // the external review's P0-1b walked straight through that hole).
-export function ledgerIndex (file) {
+//
+// PARAMETERISED over the row filter and the recognised third-column words, because the INTAKE
+// ledger (materials/intake-ledger.tsv) is the same kind of file under the same rules — append-only,
+// last-row-wins, quarantine on an unreadable last row — and every rule above was won one review at
+// a time. A hand-copy for the second ledger would be those rules drifting apart file by file, which
+// is the class this runtime keeps a name for. What differs between the two ledgers is exactly two
+// things, and they are the two arguments.
+export function indexLedger (file, rowFilter, knownWords) {
   const r = ledgerRead(file)
   const win = new Map(); const quarantined = new Set(); const malformed = new Set()
-  const oddVerdicts = new Map()
+  const oddWords = new Map()
   let headless = 0
   for (const { raw, terminated } of r.lines) {
     // A comment or blank is skippable only when INTACT (review #6): a '#' line with no terminator
@@ -126,11 +136,11 @@ export function ledgerIndex (file) {
     // was invisible there, and "named in one, blocked in the other" split on the history axis.
     // Recording is not quarantining: a later valid row still wins (the repaired-ledger rule), but
     // the odd word is CARRIED so every consumer can name it.
-    if (f.length >= 3 && f[2] !== 'verified' && f[2] !== 'failed' && f[2] !== 'legacy-unbound') {
+    if (f.length >= 3 && !knownWords.includes(f[2])) {
       // EVERY odd word per id, not just the first (review #7): validate names each bad row, so
       // scope showing one word for an id carrying two was the two-readers split on the count axis.
-      if (!oddVerdicts.has(id)) oddVerdicts.set(id, new Set())
-      oddVerdicts.get(id).add(f[2])
+      if (!oddWords.has(id)) oddWords.set(id, new Set())
+      oddWords.get(id).add(f[2])
     }
     // ATTRIBUTION PRECEDES STRUCTURE (v0.5.2 cold-review round). This test sat on the
     // failed-structure path only, so a row with SIX well-formed columns and an EMPTY first one
@@ -140,7 +150,7 @@ export function ledgerIndex (file) {
     // one screen up. An id column emptied by an editor is exactly as unattributable as a
     // truncated one; how many columns survived beside it changes nothing.
     if (f[0] === '') { headless++; continue }   // no id to attribute the damage to — file-level
-    if (rowOk(f) && terminated) {
+    if (rowFilter(f) && terminated) {
       win.set(id, f)
       quarantined.delete(id)          // a later good row rehabilitates the id
       continue
@@ -149,8 +159,13 @@ export function ledgerIndex (file) {
     win.delete(id)
     quarantined.add(id)
   }
-  return { state: r.state, code: r.code, win, quarantined, malformed, headless, oddVerdicts }
+  return { state: r.state, code: r.code, win, quarantined, malformed, headless, oddWords }
 }
+
+// The VERIFY lane's binding of the reader above: the six-column verification row, and the three
+// words a verdict column may hold.
+export const LEDGER_VERDICTS = ['verified', 'failed', 'legacy-unbound']
+export const ledgerIndex = file => indexLedger(file, rowOk, LEDGER_VERDICTS)
 
 // -> "id\tdigest\tverdict\tstandard" per unit, sorted. Quarantined ids are ABSENT by construction.
 // The `-Of` form takes an ALREADY-BUILT index so a consumer holding one (scope) derives every view

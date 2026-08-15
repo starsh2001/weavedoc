@@ -59,6 +59,45 @@ Body: the material converted to readable markdown (project language). **The body
 ## catalog.md (generated)
 A table indexing all materials, columns: `id`, `title`, `role`, `origin`, `status`. Regenerated from material frontmatter; not hand-edited.
 
+## materials/intake-ledger.tsv (machine-owned intake ledger)
+**The mine's only mechanical record of how a material came IN.** Every other material check above asks whether the folder has the right *shape*; none of them asks where its bytes came from. That gap has one specific consequence: the agent that writes a material also writes the cards that cite it, so an **invented** material is structurally perfect — its quotes match, its coverage closes, its seals pass, `validate` is green. Adding checks downstream of a forgeable root only makes the mine state the forgery with more confidence; `247/247 sealed` means *the cards agree with the materials*, never *the materials agree with the world*. This ledger is the same device the verification lane has had since v0.3.2 — append-only, digest-bound, `legacy-unbound` for what predates it — applied to the lane it was never applied to.
+
+**It does not prevent fabrication and is not designed to.** An agent can call `intake` and invent a `source.md` in the same breath. What it removes is fabrication's status as the *default* and its invisibility: a silent file write is no longer sufficient, the alternative leaves a row with a digest bound to bytes that had to exist on disk, and a material with no row at all is named. The judgment stays with the human, where WeaveDoc puts every judgment.
+
+Written **only** by `weavedoc intake` (see its two forms below); never by hand — a hand-written row has no digest that anyone computed, which is the thing the file exists to record. Append-only TSV (`id · sha256 · declaration · sources · copy · note · date`; `#` lines are comments), **LAST row per id wins**, so re-declaring after a legitimate change is an append and the history stays.
+
+- `sha256` — a **tree digest** over every `source.*` in the material folder (`name NUL sha256 LF` per entry, sorted bytewise, re-hashed — the same manifest shape a directory artifact hashes to). Adding, removing, renaming *or* editing an original moves it, so `scope` reports `stale (source)`. `-` when the declaration binds no source.
+- `declaration` — enum: `declared` | `anchored` | `no-source` | `legacy-unbound`. The first three are what `intake` writes; **`legacy-unbound` is minted only by `upgrade`**, exactly as its verify-sidecar twin is.
+- `sources` — how many `source.*` files the digest covers, or `-`. A count rather than a filename because the digest covers the whole *set*, and naming one file would misdescribe a set of two.
+- `copy` — digest of the material's **`converted.md`**, via the same `matDigest` the verification lane uses for that file (frontmatter `status:` excluded, because status is the lifecycle axis and a copy digest that moved on a lifecycle stamp would cry stale on an ordinary day). `-` only for `legacy-unbound`.
+- `note` — free text, non-empty: how it arrived (who handed it over, from where), the **ruling** behind `--no-source`, or what an `--anchor-existing` run was vouching for. Migration writes the origin token `pre-intake-ledger` here.
+- `date` — `YYYY-MM-DD`.
+
+**Why the copy is bound at all — the half the source digest cannot see.** The source digest catches an *original* being rewritten and says nothing about `converted.md`. A real run found that is the half that gets edited: an owner said "drop this from the project", and the session carried it out by **deleting a column out of the material** — the mine's own record of what a document said. Nothing reported it, because the material had never been verified and so bound no bytes; every later reviewer met a mismatch it could not explain, and the pressure to invent an explanation followed. A copy edited to record a *decision* falsifies the record whatever the intention. The machine cannot tell a conversion fix from a decision, and does not try: it reports which side moved, in a sentence that names both possibilities, and the reader answers.
+
+The structural row filter is the verify sidecar's, plus **two cross-column clauses that are the point of the file**: a word that binds a source (`declared`, `anchored`) must carry a 64-hex digest *and* a positive `sources` count, and a word that binds a copy (those two plus `no-source`) must carry a 64-hex `copy`. `intake` always computes what it writes, so a hand-written row holding `-` would claim a binding to bytes nobody hashed — the exact move this ledger exists to make visible, performed on the ledger itself. Such a row is not a declaration with a missing field; it is not a declaration, and it fails the filter so every consumer reads it as damage. The two clauses are separate because the two bindings are: `no-source` binds no source — that is its whole content — and still binds a copy, because a material with no original is precisely the one no reviewer can ever re-derive from anything else. The rest of the reader is the verify lane's, parameterised and not copied: an unreadable file and a row with an empty id column each void the **whole** ledger (unknown evidence is not absence; an unattributable row could be any material's declaration), and an id whose *last* row is malformed is quarantined — no declaration at all, not even an earlier valid one.
+
+The `copy` column sits **fourth, not second**, and the reason is that same shared reader: it takes the declaration word from `f[2]` for *both* ledgers. Aligning columns 0–2 across the two files is what lets the intake lane reuse a parser two review rounds hardened, instead of growing a second one that drifts from it.
+
+`--no-source` is the **one ruled exception**, and it exists because without it the check dies of a single true case: a material whose original genuinely does not exist (a value the user stated with nothing to compare against) would be permanently undeclared, and one permanent false alarm is how a warning stops being read. It is not free — the ruling goes in the note, it binds no *source*, and it is counted apart from `declared` in `scope`, `census` and this format. It still binds the copy.
+
+### `intake --anchor-existing <note>` — the migration answer
+A mine that predates this ledger carries a backlog of materials bound to nothing: editable, on either side, with no trace. `upgrade` mints them `legacy-unbound` because that is the only honest thing a migration can say — **nobody witnessed those bytes** — and the backlog then sits there. The way out cannot be for `upgrade` to hash them on its way past: a digest minted by a migration reads afterwards as evidence while in fact recording whatever happened to be on disk the moment a tool ran, *including an edit made ten minutes earlier*. That is how a falsified copy becomes canon, and a real run came within one command of it.
+
+So the bytes are bound by a separate act, by a person, who is vouching that the tree is the one they mean. Three properties make that claim honest:
+
+- The word it writes is **`anchored`, not `declared`.** Nothing was handed over and the record may not imply it was. Collapsing the two would let a mine that anchored its backlog this morning report "32 declared".
+- **Anchored is not verified.** It records the bytes as they stood, and makes no claim that anyone read the material or that it says what its original says. It is counted apart from verification everywhere, in a different ledger.
+- **It never re-anchors a material that already carries a binding** — stale or not. Adopting whatever a stale material was edited into would turn the one command that exists to *expose* an edit into the one that buries it. Re-binding after a deliberate change stays available and has to name the material: `intake <id> <note>`.
+
+Materials that need a *ruling* (no `source.*` at all) are named and skipped, never batched — a ruling is the user's. If every target needs one, the command writes nothing and says so.
+
+`upgrade` now **reports** the unbound count and what it costs instead of minting its rows in silence. Leaving materials unbound was always a decision; it was taken on the owner's behalf and never put in front of them, and `legacy-unbound` reads as a verification backlog (old, low priority) when what it means is that nothing will notice if these files change.
+
+**`MAT-UNDECLARED` is a WARNING and never a block**, and the constraint is not a matter of taste: every mine in existence predates this ledger, so a blocking version would redden every project at once and be switched off within a day — the same outcome as not shipping it, minus the trust. (The judgment `CLAUDE-BLOCK-STALE` shipped under one bundle earlier: *a warning, never a problem, and it must not block a ship.*) `weavedoc upgrade --apply` fills a pre-ledger mine's rows as `legacy-unbound` — **real history that binds no bytes**, counted apart and never silently equal to a declaration. After that backfill, a `MAT-UNDECLARED` means what it is supposed to mean: a material that appeared *after* the ledger existed and was never declared.
+
+`scope` is where the digests are **compared**, because it is the command that re-reads every original; `validate` and `census` report row presence only and say so in their own wording — neither prints "digest-bound" for a comparison it did not run. A declaration whose source set can no longer be read as a set (a deleted original, a `source.*` turned symlink, a folder mid-write) is neither `declared` nor `undeclared`: `scope` names it separately, because collapsing it into either bucket would describe a state the mine is not in.
+
 ## truths/&lt;id&gt;.md
 Each truth is an atomic, citable fact extracted from a material. One file per truth, flat in `truths/`. The `map` skill creates these; the AI re-derives inter-truth relationships (supports, contradicts, supersedes) on the fly by reading relevant truths — no persistent edge store.
 
@@ -295,6 +334,14 @@ A **filled** gap does not live here — the value enters via `questions.md` → 
 - `review` — the **advisory** quality pass (never blocks consecration): `strength` (1 = block on critical, 2 = + should-fix, 3 = + nice-to-have — advisory findings only), `max_rounds` (exceeded → escalate to the user, never auto-pass), `repeat` (**clean rounds in a row** required, keyed by scale — `full` defaults to 2), `scale` (`skip` | `light` | `standard` | `full` — reviewer count/effort).
 - `gaps` — the **mine completeness register** knobs (`weavedoc-gaps`; non-blocking). `markers` — a `|`-separated grep alternation of project-language incompleteness markers scanned by `weavedoc gaps` (e.g. `미정|미완성|TBD|추후 보강`); optional, a Korean-leaning default applies if unset.
 
+## CLAUDE.md (the pointer block — bundle-owned)
+
+`weavedoc init` plants a fixed block in the project's `CLAUDE.md`, between `<!-- weavedoc:begin -->` and `<!-- weavedoc:end -->`. Its text is **the bundle's**, shipped as `.weavedoc/templates/claude-block.md` — one copy, hashed in the release manifest, copied verbatim (markers included). Project-specific text goes **outside** the markers; the marked region is machine-owned.
+
+It is a **pointer and only a pointer**: it says a mine is here and that `.weavedoc/READ.md` must be read before any data is, and it never restates what READ.md says. That is a hard rule, not a style preference. CLAUDE.md is injected into every session *before* any file is opened, so a summary living there does not merely go stale — it **primes**, and a primed reader reports the remembered version as the file's content. Observed on a real mine (2026-08-13): the block still carried a v2 parenthetical after migration had moved READ.md and every card to v3; a session read READ.md first, as instructed, reported the *v2* protocol as though quoting it, cited a `status:` field the mine does not have, and built the user's options on that model.
+
+`validate` byte-compares the marked region against the shipped template (CRLF-normalised, so a Windows checkout does not false-alarm) and warns `CLAUDE-BLOCK-STALE` on any difference — the block is not automatically rewritten, because the mine's writers do not reach outside the mine. The repair is re-running `weavedoc-init`, whose reconfigure path re-ensures the block. The check is silent when neither marker is present (a project that never planted the pointer has no pointer to be stale) and reports `CLAUDE-BLOCK-NOTEMPLATE` when the template is missing, rather than letting an un-run comparison read as a pass.
+
 ## Diagnostic codes (the machine contract)
 
 Every problem and warning the checker emits carries a **stable code**. The code is the contract — automation matches on it; the English message is presentation and may be reworded at any time. Human output prints `[CODE] message`; `--json` carries `{"code":…,"message":…}`. `meta_diag_code_table` fails the suite if the binary emits a code missing here, or if this table names a code the binary cannot emit.
@@ -310,6 +357,8 @@ Every problem and warning the checker emits carries a **stable code**. The code 
 | `CONFLICT-OPEN` | `.weavedoc-state/conflicts.json` holds open entries — undecided disagreements block shipping |
 | `CFG-RANGE` | config number outside its allowed range |
 | `CFG-UNKNOWN-KEY` | *(warning)* unknown top-level config key |
+| `CLAUDE-BLOCK-NOTEMPLATE` | *(warning)* CLAUDE.md carries the marker block but `.weavedoc/templates/claude-block.md` is missing — the comparison did not run |
+| `CLAUDE-BLOCK-STALE` | *(warning)* CLAUDE.md's weavedoc block is not the one this bundle ships (or its marker pair is broken) |
 | `COMP-MALFORMED` | completeness required but `gaps.md` is structurally unreadable (missing/duplicate sections, lexical damage, stray records, invalid kind slots or unreadable lines) |
 | `COMP-NO-REGISTER` | completeness `required` but no `gaps.md` — the warranty never ran |
 | `COMP-OPEN-GAPS` | completeness `required` and open gaps sit next to a consecrated output |
@@ -345,9 +394,11 @@ Every problem and warning the checker emits carries a **stable code**. The code 
 | `MAT-FM-UNCLOSED` | material frontmatter is never closed — the body is empty to every reader |
 | `MAT-ID-MISMATCH` | `id:` disagrees with the folder name |
 | `MAT-ID-NONCANON` | folder name is not the canonical zero-padded id |
+| `MAT-INTAKE-LEDGER` | *(warning)* `materials/intake-ledger.tsv` is unreadable, holds a row the reader cannot use, or names an id with no live material — the materials it covers read as undeclared |
 | `MAT-NO-CONVERTED` | material folder without `converted.md` |
 | `MAT-RESEARCH-FIELDS` | `origin: research` without `url` / `retrieved_at` |
 | `MAT-ROLE` | material role is not declared in `project.md` |
+| `MAT-UNDECLARED` | *(warning)* a material with no row in `materials/intake-ledger.tsv` — nothing records how it entered the mine, so a source the user handed over and a folder an agent wrote read identically |
 | `PLAN-AUDIENCE` | plan `audience` outside its enum |
 | `PLAN-CITED-DANGLING` | `cited_truths` names a truth that does not exist |
 | `PLAN-CITED-NOT-ID` | `cited_truths` entry is not a truth id |

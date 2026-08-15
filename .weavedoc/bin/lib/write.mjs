@@ -8,7 +8,7 @@
 // dies mid-write leaves a half file where a whole one used to be — for `truths/index.md` that is a
 // mine that no longer describes itself. Staging beside the target keeps the rename atomic on the
 // same filesystem, which is why the temp is never put in /tmp.
-import { writeFileSync, renameSync, unlinkSync, realpathSync, lstatSync, statSync, readFileSync, chmodSync } from 'node:fs'
+import { writeFileSync, renameSync, unlinkSync, realpathSync, lstatSync, statSync, readFileSync, chmodSync, appendFileSync, openSync, readSync, closeSync, truncateSync } from 'node:fs'
 
 // ---- byte-transparent text -----------------------------------------------------------------
 // A mine can hold bytes that are not valid UTF-8 — a Korean console pastes CP949 into a free-text
@@ -67,6 +67,80 @@ export function rename (from, to) {
     chmodSync(to, 0o666)
     renameSync(from, to)
   }
+}
+
+// ---- the append-only ledger transaction ------------------------------------------------------
+// ONE spelling for BOTH machine-owned ledgers — the verification sidecar `attest` writes and the
+// intake ledger `intake` writes. Every rule below was fought for on the attest path (v0.5.1
+// external review P1-3, then the cold review after it), and a second hand-copy of them on the
+// intake path would be the same four rules drifting apart file by file: the two-readers class this
+// runtime keeps a name for, in its writing clothes.
+//
+//   1. create-if-absent is ATOMIC ('wx') and carries the header. NEVER read-then-write: that loses
+//      a concurrent append, and on a READ failure it REPLACES a ledger whose bytes it could not
+//      read — history deleted, success reported.
+//   2. a final row with no terminator BLOCKS the append, because appending would FUSE two rows into
+//      one. That torn row is the signature of a writer that died mid-write.
+//   3. one append call can land SOME bytes and then fail (ENOSPC, a size limit); under last-row-wins
+//      the complete prefix rows become real evidence while the command reports failure. The
+//      pre-append size is rolled back — and the truncation is VERIFIED, because "restored" is a
+//      claim like any other.
+//   4. if THIS call created the file, "as before" means ABSENT: truncating to the header would leave
+//      a ledger where none existed, under a sentence claiming nothing was written.
+//
+// The RULES are shared; the SENTENCES are not. Each caller phrases its own outcome (`attest` says
+// "nothing counts as attested", `intake` "nothing counts as declared"), because a templated message
+// is how a precise refusal turns into a generic one.
+//
+// -> {ok: true, created} | {ok: false, kind, code, created}
+//    kind: 'create' · 'notfile' · 'torn' · 'tailread' · 'rolled-back' · 'rollback-failed'
+//          · 'created-removed' · 'created-stuck'
+export const realAppendOps = { append: (f, buf) => appendFileSync(f, buf) }
+
+export function appendLedgerRows (file, header, rows, ops = realAppendOps) {
+  const isFile = p => { try { return statSync(p).isFile() } catch { return false } }
+  let created = false
+  try {
+    writeFileSync(file, header, { flag: 'wx' })
+    created = true
+  } catch (e) {
+    if (e.code !== 'EEXIST') return { ok: false, kind: 'create', code: e.code, created }
+  }
+  try {
+    const st = statSync(file)
+    // NOT A REGULAR FILE — a directory wearing the ledger's name. Checked HERE, before the tail-byte
+    // guard, because the two OSes disagree about what happens next (v0.5.1 cold review): on Windows
+    // a directory stats as size 0, the guard never ran, the append failed EISDIR, and the failure
+    // branch told the user to hand-delete a torn row that never existed.
+    if (!st.isFile()) return { ok: false, kind: 'notfile', code: 'EISDIR', created }
+    if (st.size > 0) {
+      const fd = openSync(file, 'r')
+      const tail = Buffer.alloc(1)
+      try { readSync(fd, tail, 0, 1, st.size - 1) } finally { closeSync(fd) }
+      if (tail[0] !== 0x0a) return { ok: false, kind: 'torn', code: '', created }
+    }
+  } catch (e) {
+    return { ok: false, kind: 'tailread', code: e.code, created }
+  }
+  const sizeBefore = (() => { try { return statSync(file).size } catch { return null } })()
+  try {
+    ops.append(file, Buffer.from(rows.join(''), 'utf8'))
+  } catch (e) {
+    if (created) {
+      let gone = false
+      try { unlinkSync(file); gone = !isFile(file) } catch { gone = false }
+      return { ok: false, kind: gone ? 'created-removed' : 'created-stuck', code: e.code, created }
+    }
+    let restored = false
+    if (sizeBefore !== null) {
+      try {
+        truncateSync(file, sizeBefore)
+        restored = statSync(file).size === sizeBefore
+      } catch { restored = false }
+    }
+    return { ok: false, kind: restored ? 'rolled-back' : 'rollback-failed', code: e.code, created }
+  }
+  return { ok: true, created }
 }
 
 // A WRITE target outside the project, or reached through a symlink, is refused (WD-IO-001). Reads

@@ -6,7 +6,11 @@
 // and does not walk the directory again. A second walk is a second answer about which bytes were
 // verified, and that answer is the warranty.
 //
-// READ-ONLY AND UNWIRED (Phase 1). No production consumer imports this yet.
+// READ-ONLY. Its first production consumer is `weavedoc intake` (via intake-ledger.mjs), which
+// takes the tree digest as the bytes a declaration binds to — so every refusal below is now load
+// bearing: a `source.*` that is a symlink, a junction, a hardlink to `converted.md`, or a file
+// rewritten mid-read cannot be sealed as an original. The quote scanner and the conflict/support
+// projections still read it and still write nothing.
 import { createHash } from 'node:crypto'
 import { closeSync, fstatSync, lstatSync, openSync, readFileSync, readdirSync, realpathSync } from 'node:fs'
 import { relative as pathRelative } from 'node:path'

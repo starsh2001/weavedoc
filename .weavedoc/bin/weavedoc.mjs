@@ -6,6 +6,7 @@
 //   impact <mID>      which truths were extracted from a material + which documents cite it (blast radius)
 //   status [--open]   each document's status + the next step (--open: every item waiting on the user, one line each)
 //   scope             what a verify round still owes — unverified materials + truths, computed
+//   intake [--no-source] <material-id> <note>   declare how a material entered: digest-bound intake row
 //   attest <verdict> <round> <standard> <id...>   record a verification: digest-bound sidecar row
 //   seal-review <doc-id> [draft|final]   pin the clean review to the reviewed bytes + context
 //   consecrate <doc-id>   stage candidate → verify seals → ONE full validation → atomic promote
@@ -197,6 +198,7 @@ async function cmdLocale () {
 // Every command validates its FULL argument list (WD-CLI-001): an extra argument or an unknown flag
 // is a typo'd intention, and a tool that ignores it does something other than what was asked.
 const USAGE = 'weavedoc — validate | pull <term> | impact <material-id> | status [--open] | scope | ' +
+  'intake [--no-source] <material-id> <note> | ' +
   'attest <verdict> <round> <standard> <id...> | seal-review <doc-id> [draft|final] | ' +
   'consecrate <doc-id> | upgrade [--check|--dry-run|--apply] | conflict list|add|remove | ' +
   'alloc <ns> | gaps | census | reindex [--check] | retag <old> <new> [--dry] | version | lang | locale'
@@ -235,6 +237,7 @@ const rest = argv.slice(1)
 // second checkout of a shared drive, is outside any lock this CLI can take — FORMATS carries that.
 const MUTATES = {
   attest: () => true,
+  intake: () => true,
   alloc: () => true,
   conflict: a => a[0] === 'add' || a[0] === 'remove',
   consecrate: () => true,
@@ -338,6 +341,15 @@ switch (cmd) {
     const mine = openMine(SCRIPT_DIR)
     const g = versionGate(mine, errln); if (g) { rc = g; break }
     rc = cmdAttest(mine, outln, rest); break
+  }
+  case 'intake': {
+    // attest's shape: the whole argv goes to the command, which judges it and prints its usage line
+    // to STDOUT with exit 2 — a write command's refusals belong on the same stream as its receipts.
+    const { openMine, versionGate } = await import('./lib/mine.mjs')
+    const { cmdIntake } = await import('./lib/cmd-intake.mjs')
+    const mine = openMine(SCRIPT_DIR)
+    const g = versionGate(mine, errln); if (g) { rc = g; break }
+    rc = cmdIntake(mine, outln, rest); break
   }
   case 'reindex': {
     // Like attest, the bash dispatch forwards reindex's whole argv — but reindex's own usage line

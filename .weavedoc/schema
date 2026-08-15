@@ -93,6 +93,21 @@ verify.ledger.verdicts: verified|failed
 # t-id rows accept `-` too: the truths lane was always the right lane, so 0.3.1 rows stay valid.
 verify.ledger.origin.material: v1-material-frontmatter
 verify.ledger.origin.truths: v1-truths-ledger
+# Machine-owned INTAKE ledger — the same device as the verification sidecar above, applied to the
+# lane it was never applied to: how a material ENTERED the mine. Append-only TSV in materials/:
+# id<TAB>sha256<TAB>declaration<TAB>sources<TAB>note<TAB>date, LAST row per id wins. The digest is a
+# tree digest over every `source.*` in the material folder (raw-source-model.mjs), so adding,
+# removing, renaming or editing an original moves it. Written ONLY by `weavedoc intake`; a material
+# with no row is `MAT-UNDECLARED`, a WARNING and never a block — every mine that predates this
+# ledger has none, and a check that reddens every existing project is a check nobody reads.
+intake.ledger.file: intake-ledger.tsv
+# Declarations `weavedoc intake` writes. `no-source` is the ruled exception: a material with no
+# original to bind to (a value the user stated with nothing to compare against). Migration
+# additionally writes `legacy-unbound` rows, exactly as it does for the verify sidecar.
+intake.ledger.declarations: declared|no-source
+# The token `upgrade` writes into a backfilled row's `note` column — the intake twin of
+# verify.ledger.origin.*: it records that the row was minted by migration, not by a declaration.
+intake.ledger.origin.backfill: pre-intake-ledger
 # Artifact schema version this runtime reads and writes (WD-MIG-002). A project declares its own
 # in project.md AND config.yaml `version:` — two records of one fact, checked for agreement. A
 # project NEWER than this is fail-closed (guessing at a future format is how corruption ships).
