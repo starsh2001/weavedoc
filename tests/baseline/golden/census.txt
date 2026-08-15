@@ -1,1 +1,2 @@
 census: truth files 1 · index entries 1 · coverage records 1/1 material(s)
+  intake  1 declared · 0 no-source · 0 legacy-unbound · 0 undeclared  of 1 live material(s)  (row presence only — 'weavedoc scope' compares the digests)

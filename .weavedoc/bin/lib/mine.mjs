@@ -56,7 +56,8 @@ export function openMine (scriptDir, cwd = process.cwd()) {
     project: `${root}/project.md`,
     catalog: `${root}/catalog.md`,
     schemaVer: () => sch.get('schema.version') || '3',
-    ledgerFile: () => sch.get('verify.ledger.file') || 'verify-ledger.tsv'
+    ledgerFile: () => sch.get('verify.ledger.file') || 'verify-ledger.tsv',
+    intakeFile: () => sch.get('intake.ledger.file') || 'intake-ledger.tsv'
   }
 }
 
@@ -113,7 +114,13 @@ const isFileAt = p => { try { return statSync(p).isFile() } catch { return false
 // One folder name per line, in the order the filesystem gives — the bash side globs, which sorts,
 // so these are sorted to match.
 export function materialIds (m) {
-  return lsOr(m.materials).filter(n => { try { return statSync(join(m.materials, n)).isDirectory() } catch { return false } }).sort(bytewise)
+  // The intake ledger is a machine-owned FILE that lives in materials/, so the directory filter
+  // normally settles it. The one collision is a DIRECTORY wearing its name — and there the honest
+  // answer is that this is a broken ledger, not a material with no converted.md. Excluded by name
+  // so the mine gets ONE true sentence (MAT-INTAKE-LEDGER: the ledger cannot be read) instead of
+  // that sentence plus a fabricated material the user never created.
+  const ledger = m.intakeFile()
+  return lsOr(m.materials).filter(n => n !== ledger && (() => { try { return statSync(join(m.materials, n)).isDirectory() } catch { return false } })()).sort(bytewise)
 }
 
 export function docIds (m) {

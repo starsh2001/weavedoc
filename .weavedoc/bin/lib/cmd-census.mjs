@@ -6,8 +6,34 @@ import { basename } from 'node:path'
 import { canonId, splitLines } from './core.mjs'
 import { readCoverage } from './coverage-model.mjs'
 import { fm, join, materialIds, truthFiles } from './mine.mjs'
+import { classifyIntake, intakeIndex, intakeLedgerPath } from './intake-ledger.mjs'
 
 const readOr = p => { try { return readFileSync(p, 'utf8') } catch { return '' } }
+
+// The intake lane's census line, built for BOTH exits below. A mine mid-gather — materials in,
+// truths not yet extracted — takes the no-truths early return, and that is exactly the window in
+// which "how did these arrive" is the live question; a line printed only on the other branch would
+// be absent precisely when it matters. Row presence only: census never re-reads a source file, so
+// it never says "digest-bound" — that comparison is `scope`'s, and it says which.
+function intakeLines (m) {
+  const idx = intakeIndex(intakeLedgerPath(m))
+  const cls = classifyIntake(m, idx)
+  const live = cls.population
+  if (live === 0) return []
+  const rel = `${m.materials.replace(`${m.root}/`, '')}/${m.intakeFile()}`
+  const lines = [`  intake  ${cls.declared.length} declared · ${cls.noSource.length} no-source · ${cls.legacy.length} legacy-unbound · ${cls.undeclared.length} undeclared  of ${live} live material(s)  (row presence only — 'weavedoc scope' compares the digests)`]
+  if (cls.undeclared.length > 0) {
+    lines.push(`    → undeclared: ${cls.undeclared.join(' ')} — no record of how they arrived; declare with 'weavedoc intake', or fill a pre-ledger mine's rows once with 'weavedoc upgrade --apply'`)
+  }
+  if (idx.state === 'unreadable') {
+    lines.push(`  ⚠ ${rel} exists but cannot be read (${idx.code}) — declarations are unknown, not absent; validate names this [MAT-INTAKE-LEDGER]`)
+  } else if (idx.headless > 0) {
+    lines.push(`  ⚠ ${rel} holds ${idx.headless} row(s) with no id — an unattributable row could be any material's declaration, so none counts [MAT-INTAKE-LEDGER]`)
+  } else if (cls.malformed.length > 0 || cls.unknown.length > 0) {
+    lines.push(`  ⚠ ${rel} holds row(s) the reader cannot use (${[...cls.malformed, ...cls.unknown].join(' ')}) — those materials read as undeclared [MAT-INTAKE-LEDGER]`)
+  }
+  return lines
+}
 
 // (fmStatusLines, the per-status tally and the numbering-hole ledger left with schema v3: every
 // existing card is canonical, and holes are the allocator's normal trace, not census's question.)
@@ -31,6 +57,7 @@ const countLines = (text, re) => splitLines(text)
 export function cmdCensus (m, out) {
   const idxPath = join(m.truths, 'index.md')
   const files = truthFiles(m)
+  const intake = intakeLines(m)
 
   // "No truth files" is not "nothing to report": a mine whose truths were deleted while index.md
   // still lists them must not read as a fresh empty mine.
@@ -42,6 +69,7 @@ export function cmdCensus (m, out) {
     } else {
       out('census: no truths yet')
     }
+    for (const l of intake) out(l)
     return 0
   }
 
@@ -111,6 +139,7 @@ export function cmdCensus (m, out) {
   let covline = `coverage records ${nCov}/${nDenom} material(s)`
   if (nLegacy > 0) covline = `coverage records ${nCov}/${nDenom} of ${nMats} material(s) (${nLegacy} legacy-exempt)`
   out(`census: truth files ${nFiles} · index entries ${idx.set.length} · ${covline}`)
+  for (const l of intake) out(l)
   if (coverage !== null && !coverage.readable) {
     out('  ⚠ truths/coverage.md exists but cannot be read — coverage records are unknown, not zero; validate blocks this path')
   }

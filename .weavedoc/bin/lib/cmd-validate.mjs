@@ -12,6 +12,7 @@
 // and its reference are gone; the last run of it is in tests/baseline/parity-final-2026-08-05.md.
 import { statSync, realpathSync, readFileSync, readdirSync } from 'node:fs'
 import { canonId, isDate, isFence, isPlaceholder, inList, listField, fmVal, pipes, splitLines, U, M } from './core.mjs'
+import { DECLARATIONS, classifyIntake, intakeIndex, intakeLedgerPath } from './intake-ledger.mjs'
 import { join, materialIds, mdirFor, docIds, tfileFor, docFinalPath, contextDigest } from './mine.mjs'
 import { readCoverage } from './coverage-model.mjs'
 import { hqFiles, readHumanQueues } from './hq-ledger.mjs'
@@ -480,6 +481,47 @@ export function cmdValidate (m, out, json = false, consecOk = '') {
       const mid = mm[1]
       if (mdirFor(m, mid) === null) prob('MAT-CORRECTS-DANGLING', M`${U(f)}  corrects '${ref}' → no such material`)
       if (mid === id) prob('MAT-CORRECTS-SELF', M`${U(f)}  corrects itself`)
+    }
+  }
+
+  // --- the intake ledger: was this material DECLARED, or did it simply appear? -------------------
+  // Every MAT-* check above asks whether the folder has the right SHAPE. None of them — none of the
+  // checks anywhere in this file — asks where its bytes came from, and that gap has a specific
+  // consequence: the agent that writes a material also writes the cards that cite it, so an
+  // INVENTED material is structurally perfect. Its quotes match, its coverage closes, its seals
+  // pass. Adding checks downstream of a forgeable root only makes the mine state the forgery with
+  // more confidence, which is why this one is at the root instead.
+  //
+  // A WARNING, and the constraint is not a matter of taste. Every mine in existence predates this
+  // ledger, so every material in every one of them is undeclared on the day it lands — a blocking
+  // version would redden every project at once and be switched off or ignored within a day, which
+  // is the same outcome as not shipping it, minus the trust. (The same judgment CLAUDE-BLOCK-STALE
+  // was shipped under one bundle ago: a warning, never a problem, and it must not block a ship.)
+  // `upgrade --apply` fills the legacy rows; after that a warning here means a material that
+  // arrived after the ledger existed and was never declared.
+  {
+    const idx = intakeIndex(intakeLedgerPath(m))
+    const cls = classifyIntake(m, idx)
+    const rel = `${U(m.materials).replace(`${U(m.root)}/`, '')}/${m.intakeFile()}`
+    // The ledger's own damage, named ONCE and before the per-material lines. Without it a
+    // permissions fault reads as "every material in this mine was fabricated" — a false accusation
+    // at scale, and the fastest way to teach a reader to ignore the check underneath it.
+    if (idx.state === 'unreadable') {
+      warn('MAT-INTAKE-LEDGER', M`${rel} exists but cannot be read (${idx.code}) — the intake record is in an unknown state, which is not the same as absent, so every material below reads as undeclared until the file is fixed (permissions, or a directory wearing its name)`)
+    } else if (idx.headless > 0) {
+      warn('MAT-INTAKE-LEDGER', M`${rel}  ${idx.headless} row(s) carry no id (a leading tab, a truncated write) — an unattributable row could be ANY material's declaration, so none of them counts until the file is repaired`)
+    } else if (cls.malformed.length > 0 || cls.unknown.length > 0) {
+      const bits = [
+        cls.malformed.length > 0 ? `unparseable row(s) for ${cls.malformed.join(' ')}` : '',
+        cls.unknown.length > 0 ? `unknown declaration word(s): ${cls.unknown.join(' ')} (the enum is ${DECLARATIONS.join('|')})` : ''
+      ].filter(Boolean).join(' · ')
+      warn('MAT-INTAKE-LEDGER', M`${rel}  ${bits} — an id whose LAST row cannot be read has no declaration at all (not even an earlier valid one: unreadable evidence is not old evidence), so it is reported as undeclared below`)
+    }
+    if (cls.ghost.length > 0) {
+      warn('MAT-INTAKE-LEDGER', M`${rel}  names ${cls.ghost.length} id(s) with no live material: ${cls.ghost.join(' ')} — they declare nothing (shown rather than absorbed, so a renamed or deleted material does not look like a covered one)`)
+    }
+    for (const id of cls.undeclared) {
+      warn('MAT-UNDECLARED', M`${U(m.materials)}/${U(id)}/  has no row in ${rel} — nothing on this mine records how it arrived, so a source the user handed over and a folder an agent wrote read identically here. Declare it: 'node .weavedoc/bin/weavedoc.mjs intake ${id} "<how it arrived>"' (or '--no-source' with the ruling, when there is no original to bind to). A mine that predates the ledger fills its rows once with 'weavedoc upgrade --apply'`)
     }
   }
 
@@ -1098,6 +1140,57 @@ export function cmdValidate (m, out, json = false, consecOk = '') {
     if (!/^[A-Za-z_][A-Za-z0-9_]*:/.test(l)) continue
     const ck = l.replace(/:[\s\S]*$/, '')
     if (!inList(ck, sch('config.toplevel'))) warn('CFG-UNKNOWN-KEY', M`unknown config key '${ck}' in .weavedoc/config.yaml — known top-level keys: ${sch('config.toplevel')}`)
+  }
+
+  // --- the CLAUDE.md pointer block: OWNED, not merely planted ----------------------------------
+  // init writes the shipped block into the project's CLAUDE.md and, until this check, NOTHING ever
+  // read it back. Measured on a real mine (eclypse, 2026-08-13): `upgrade --apply` moved the
+  // schema, the validator, READ.md and 271 cards to v3 while the block kept its v2 parenthetical
+  // ("status filtering, as_of, provenance"). That is not a typo, because CLAUDE.md is injected into
+  // EVERY session BEFORE any file is opened: the stale line PRIMES. One session read READ.md first
+  // as instructed, reported the v2 protocol as though quoting it, cited a `status:` field the mine
+  // does not have, and offered the user options built on that model — which is how a wrong model
+  // stops being wrong-and-harmless and becomes a decision the user appears to have authorised.
+  //
+  // So the block has an owner: the BUNDLE. `.weavedoc/templates/claude-block.md` is the one copy,
+  // this is the tripwire, and the repair is re-running weavedoc-init (its reconfigure path
+  // re-ensures the block). A WARNING and never a problem — a stale pointer is not a mine-integrity
+  // failure and must not block a ship — and it fires ONLY when a marker is actually present: a
+  // project that never planted the block has no block to be stale, and validate does not lecture it.
+  // CRLF-NORMALISED on both sides. A consumer project is usually its own git repository, and on
+  // Windows `core.autocrlf=true` hands CLAUDE.md back with CRLF while the template checks out LF
+  // (.weavedoc/.gitattributes pins it) — a byte tripwire that fires on the line ending would cry
+  // wolf on every Windows clone until nobody read it any more.
+  {
+    const BEGIN = '<!-- weavedoc:begin -->'
+    const END = '<!-- weavedoc:end -->'
+    const lf = s => s.split('\r\n').join('\n').replace(/\n+$/, '')
+    const doc = readOr(`${m.root}/CLAUDE.md`)
+    const b = doc.indexOf(BEGIN)
+    const e = doc.indexOf(END)
+    if (b >= 0 || e >= 0) {
+      const tplRel = '.weavedoc/templates/claude-block.md'
+      const tpl = lf(readOr(join(m.root, tplRel)))
+      if (tpl === '') {
+        // The comparison's other half is missing, so the comparison did not happen. Said out loud:
+        // a check that runs zero times and prints nothing is indistinguishable from one that passed.
+        warn('CLAUDE-BLOCK-NOTEMPLATE', M`CLAUDE.md carries the weavedoc marker block but ${tplRel} is missing or empty — the block could NOT be compared against the bundle's, so nothing here says it is current. Restore the runtime bundle`)
+      } else if (b < 0 || e < b) {
+        // Three shapes, named apart: a begin with no end leaves the region UNBOUNDED, which reads
+        // nothing like "the end marker is early" — and a repair starts from what is actually wrong.
+        const why = b < 0 ? 'no begin marker' : (e < 0 ? 'no end marker' : 'end marker before begin')
+        warn('CLAUDE-BLOCK-STALE', M`CLAUDE.md's weavedoc marker pair is broken (${why}) — the marked region cannot be read, so it is not the block the bundle ships. Re-run weavedoc-init (reconfigure) to rewrite it from ${tplRel}`)
+      } else if (doc.indexOf(BEGIN, b + 1) >= 0) {
+        // A SECOND block is the same hole this check exists to close, one level down: init rewrites
+        // the FIRST marked region, so a duplicate below it is a pointer no repair reaches and no
+        // comparison sees — the first copy matching would report green over a stale one that is
+        // still injected into every session. Named before the content compare because it is the
+        // state a rewrite cannot fix: the extra copies have to be deleted by hand.
+        warn('CLAUDE-BLOCK-STALE', M`CLAUDE.md carries more than one weavedoc marker block — the block is idempotent and must appear exactly once. A rewrite reaches only the first, so a second copy is a pointer nothing updates: delete the extras, then re-run weavedoc-init (reconfigure)`)
+      } else if (lf(doc.slice(b, e + END.length)) !== tpl) {
+        warn('CLAUDE-BLOCK-STALE', M`CLAUDE.md's weavedoc block differs from ${tplRel} — this pointer is injected into every session before any file is read, so an out-of-date one primes readers against the mine's current rules. Re-run weavedoc-init (reconfigure) to rewrite it; project-specific text belongs outside the markers`)
+      }
+    }
   }
 
   // --- accounting, printed on both outcomes and BEFORE the verdict, so the verdict is never read

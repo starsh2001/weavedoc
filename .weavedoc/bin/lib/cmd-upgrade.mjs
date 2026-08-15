@@ -42,6 +42,8 @@ import { isFence } from './core.mjs'
 import { U } from './write.mjs'
 import { CONFLICTS_FILE, addConflict, emptyConflicts, serializeConflicts } from './conflict-store.mjs'
 import { ID_SEQUENCES_FILE, allocate, serializeIdSequences } from './id-sequences.mjs'
+import { INTAKE_HEADER, intakeIndex, intakeLedgerPath, intakePopulation, readIntake } from './intake-ledger.mjs'
+import { appendLedgerRows } from './write.mjs'
 
 const W = '[ \\t\\v\\f\\r]'
 const keyRe = k => new RegExp(`^${k}${W}*:`)
@@ -185,6 +187,63 @@ const gitState = root => {
   } catch { return 'no-repo' }
 }
 
+// ---- the intake backfill -----------------------------------------------------------------------
+// Every mine that exists predates the intake ledger, so on the day it ships every material in every
+// project is undeclared. Left that way, `validate` would print one MAT-UNDECLARED per material on
+// every real mine at once — and a warning that fires everywhere is a warning nobody reads, which
+// costs more than shipping nothing. So migration mints what the verify sidecar's own migration
+// minted for exactly this reason: a `legacy-unbound` row per material, carrying the origin token in
+// the note column. It is REAL HISTORY — the material did arrive, somehow — that BINDS NO BYTES, and
+// it is counted apart from a declaration everywhere it is counted, never silently equal to one.
+//
+// After this runs, a MAT-UNDECLARED means what it is supposed to mean: a material that appeared
+// AFTER the ledger existed and was never declared.
+const backfillPending = m => {
+  const idx = intakeIndex(intakeLedgerPath(m))
+  // A dead ledger (unreadable, or holding an unattributable row) is NOT an empty one: minting rows
+  // into a file whose contents cannot be read would append duplicates beside declarations that may
+  // already be there. Nothing is pending until a human repairs it, and the caller says so.
+  if (idx.state === 'unreadable' || idx.headless > 0) return null
+  return intakePopulation(m).filter(id => !idx.win.has(id))
+}
+
+// No intake-ledger lock here, for the same reason the verify-sidecar rewrite above takes none:
+// `upgrade --apply` and `intake` are both in the dispatcher's MUTATES set, so the mine lock — the
+// single-writer admission gate — already excludes them from each other. `attest` additionally takes
+// the per-ledger lock; taking it in ONE of this command's two ledger writes and not the other would
+// be worse than either consistent choice.
+function writeBackfill (m, ids, day) {
+  const token = m.sch.get('intake.ledger.origin.backfill') || 'pre-intake-ledger'
+  // BOTH digest columns are `-`, and the copy column is the one worth saying out loud about. This
+  // command is holding every one of these files open; hashing them would cost nothing and would
+  // produce a row that binds bytes. It does not, because a binding minted by a migration records
+  // whatever was on disk when a tool happened to run — including an edit made minutes earlier — and
+  // reads afterwards as though someone had witnessed it. A real run is what settled this: a
+  // material had a column deleted out of it to record a DECISION, and a migration-minted digest
+  // would have promoted that falsified copy to the canonical one, permanently and invisibly.
+  // Binding these bytes is a person's act (`intake --anchor-existing`), and the report below is
+  // this command's whole job on that axis: say the number, say what it costs, name the way out.
+  const rows = ids.map(id => `${id}\t-\tlegacy-unbound\t-\t-\t${token}\t${day}\n`)
+  return appendLedgerRows(intakeLedgerPath(m), INTAKE_HEADER, rows)
+}
+
+// WHAT AN UNBOUND MATERIAL COSTS, said at the one moment someone is looking. `upgrade` used to mint
+// its legacy rows and fall silent, which was a DECISION — "leave these unbound" — taken on the
+// owner's behalf and never put in front of them. The consequence is not obvious from the word
+// `legacy-unbound`, which reads as a verification backlog (old, low priority) when what it actually
+// means is that nothing will notice if these files change. A real run spent eleven days on a mine
+// where 24 of 32 materials sat in that state, and the edit that eventually cost the most went
+// unseen the whole time.
+function reportUnbound (m, out) {
+  const cls = readIntake(m)
+  const unbound = cls.legacy.length + cls.undeclared.length
+  if (unbound === 0) return
+  out(`  ${unbound} of ${cls.population} material(s) bind no bytes.`)
+  out('    Until a material is bound, an edit to its original OR to the mine\'s copy of it leaves no trace — nothing compares them, so nothing can report a change.')
+  out('    To bind them at today\'s bytes: weavedoc intake --anchor-existing "<what you are vouching for>"')
+  out('    That is not verification and does not claim anyone read them. Check the tree is the one you mean FIRST — an anchor adopts what it finds.')
+}
+
 export function cmdUpgrade (m, out, args, reindex, validateCollect) {
   const known = new Set(['--check', '--dry-run', '--apply'])
   for (const a of args) {
@@ -194,7 +253,44 @@ export function cmdUpgrade (m, out, args, reindex, validateCollect) {
 
   const pv = (fmLoad(m.project).get('version') ?? '').trim()
   const cv = (m.cfg.flat.get('version') ?? '').trim()
-  if (pv === '3' && cv === '3') { out('upgrade: this mine is already schema v3 — nothing to migrate.'); return 0 }
+  if (pv === '3' && cv === '3') {
+    // A v3 mine has no SCHEMA to migrate, and until the intake ledger there was nothing else this
+    // command could owe it — so it returned here unconditionally. It cannot any more: a mine that
+    // migrated to v3 before the ledger existed still needs its legacy rows minted, and `upgrade` is
+    // the one command a user runs when a mine is behind its bundle. The refusal words for a mine
+    // with nothing pending are unchanged; what is new is that "nothing pending" is now CHECKED
+    // rather than assumed from the version alone.
+    const pending = backfillPending(m)
+    if (pending === null) {
+      out('upgrade: this mine is already schema v3, but its intake ledger cannot be read (permissions, a directory wearing its name, or a row with no id) — repair it before any backfill; run validate for the diagnostic. Nothing written')
+      return 2
+    }
+    if (pending.length === 0) { out('upgrade: this mine is already schema v3 — nothing to migrate.'); return 0 }
+    out(`upgrade: this mine is already schema v3, and ${pending.length} material(s) predate the intake ledger: ${pending.join(' ')}`)
+    out('  they would be backfilled as legacy-unbound — real history that binds no bytes, counted apart from a declaration and never equal to one.')
+    // NO CLEAN-WORKTREE PRECONDITION on this path, and the asymmetry with the v2→v3 path below is
+    // deliberate rather than an oversight. That path is a TRANSFORM — it deletes cards and rewrites
+    // frontmatter, and git is the only thing that can undo it. This one is an APPEND to a
+    // machine-owned ledger: it creates rows for materials that have none, touches nothing else, and
+    // its inverse is deleting those rows. Every other append-only ledger write in this runtime
+    // (`attest`, `conflict add`, `seal-review`) requires no backup for exactly that reason, and
+    // importing a transform's precondition here would put the friction on the one command every
+    // existing mine has to run to adopt the ledger at all — while the mine is mid-gather and its
+    // worktree is dirty, which is the normal state of working.
+    if (!apply) {
+      out("upgrade: ready — run 'weavedoc upgrade --apply' (it appends to the intake ledger and changes nothing else; the inverse is deleting the rows it adds).")
+      return 0
+    }
+    const day = new Date().toISOString().slice(0, 10)
+    const ap = writeBackfill(m, pending, day)
+    if (!ap.ok) {
+      out(`upgrade: ✗ the intake backfill could not be written (${ap.kind}${ap.code ? ` ${ap.code}` : ''}) — nothing was migrated; run validate, repair the ledger, then re-run`)
+      return 1
+    }
+    out(`upgrade: ✓ backfilled ${pending.length} intake row(s) as legacy-unbound — re-declare by risk with 'weavedoc intake', never wholesale. Nothing else was touched; the inverse is deleting those rows`)
+    reportUnbound(m, out)
+    return 0
+  }
   if (pv === '1' || cv === '1') {
     out('upgrade: this mine is schema v1, and this runtime carries no v1 reader.')
     out("  migrate with the pinned bridge runtime v0.5.21 (commit 0257167): run ITS 'weavedoc upgrade' to reach v2,")
@@ -258,6 +354,13 @@ export function cmdUpgrade (m, out, args, reindex, validateCollect) {
   if (conflicts.length > 0) out(`  move:   ${conflicts.map(c => c.id).join(' ')} — migration MOVES an undecided disagreement, it never resolves one; validate stays red until the human rules`)
   if (machinePicked.length > 0) out(`  report: ${machinePicked.length} card(s) carry a decided_by: machine resolution (${machinePicked.map(c => c.id).join(' ')}) — a v2 machine pick survives as the standing card; re-litigating it is the user's call, after migration`)
   out(`  allocator high water: truth ${hw.tmax} · material ${hw.mmax} (next = max+1; a deleted number is never granted again)`)
+  // Announced in the DRY report too, not only in the receipt: a migration that silently grows a new
+  // machine-owned file is a migration whose diff surprises the person who ran --dry-run first.
+  {
+    const pi = backfillPending(m)
+    if (pi === null) out('  ⚠ an intake ledger exists here but cannot be read — the backfill cannot run over evidence it cannot see, and --apply would stop after the schema migration; repair it first')
+    else if (pi.length > 0) out(`  intake backfill: ${pi.length} material(s) predate the intake ledger and become legacy-unbound rows (history that binds no bytes; re-declare by risk with 'weavedoc intake')`)
+  }
 
   let blocked = false
   if (unsupported.length > 0) {
@@ -425,6 +528,25 @@ export function cmdUpgrade (m, out, args, reindex, validateCollect) {
   flip(m.project)
   flip(m.config)
 
+  // 5b. the intake backfill. A v2 mine predates the intake ledger by definition, so every material
+  // it carries arrived before anything recorded arrivals — legacy-unbound, one row each. Done HERE,
+  // before the exact-validate verify below, so the migrated mine answers that verification in the
+  // state it will actually be shipped in rather than in a transient one.
+  const pendingIntake = backfillPending(m)
+  let backfilled = 0
+  if (pendingIntake === null) {
+    out('upgrade: ✗ the intake ledger exists but cannot be read — the schema migration is applied and the intake backfill is NOT; repair the ledger (validate names it) and re-run to mint the legacy rows. Restore with: git restore . && rm -rf .weavedoc-state')
+    return 1
+  }
+  if (pendingIntake.length > 0) {
+    const ap = writeBackfill(m, pendingIntake, today)
+    if (!ap.ok) {
+      out(`upgrade: ✗ the intake backfill could not be written (${ap.kind}${ap.code ? ` ${ap.code}` : ''}) — the schema migration is applied and the backfill is not. Restore with: git restore . && rm -rf .weavedoc-state`)
+      return 1
+    }
+    backfilled = pendingIntake.length
+  }
+
   // 6. regenerated views, one best-effort log line (a human record — its failure changes nothing).
   reindex()
   try {
@@ -460,7 +582,10 @@ export function cmdUpgrade (m, out, args, reindex, validateCollect) {
     return 1
   }
   const covNote = (covSkipped + covTrimmed) > 0 ? ` · coverage rows scrubbed (${covSkipped} marked skipped, ${covTrimmed} trimmed)` : ''
-  out(`upgrade: ✓ migrated — kept ${kept.length} (${stripped} stripped) · deleted ${deleted.length} · moved ${conflicts.length} into ${store.open.length} open entr(ies) · allocator next t${seq.truth}/m${seq.material}/c${seq.conflict}${covNote}`)
+  const intakeNote = backfilled > 0 ? ` · ${backfilled} intake row(s) backfilled as legacy-unbound` : ''
+  out(`upgrade: ✓ migrated — kept ${kept.length} (${stripped} stripped) · deleted ${deleted.length} · moved ${conflicts.length} into ${store.open.length} open entr(ies) · allocator next t${seq.truth}/m${seq.material}/c${seq.conflict}${covNote}${intakeNote}`)
+  if (backfilled > 0) out("  those rows are HISTORY, not declarations: they bind no bytes and are counted apart everywhere. Re-declare by risk with 'weavedoc intake', never wholesale")
+  reportUnbound(m, out)
   if (expectOpen) out(`  validate is red by design (${store.open.length} open conflict(s)) until the human rules — resolution is deletion of the entry`)
   out("  the past is in git; this migration's inverse is 'git restore . && rm -rf .weavedoc-state'")
   return 0

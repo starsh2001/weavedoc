@@ -12,6 +12,7 @@ import { join, materialIds, truthFiles } from './mine.mjs'
 import { fmv } from './read.mjs'
 import { ledgerRowsOf, ledgerIndex, matDigest, truthDigest } from './verify.mjs'
 import { readVerifiedUnits, verifiedUnitsContract } from './verified-units.mjs'
+import { classifyIntake, intakeIndex, intakeLedgerPath } from './intake-ledger.mjs'
 
 const readOr = p => { try { return readFileSync(p, 'utf8') } catch { return '' } }
 const pad = (p, n) => `${p}${String(n).padStart(3, '0')}`
@@ -171,12 +172,28 @@ export function cmdScope (m, out, json) {
   const tunver = minus(minus(ondisk, scov), vids)
   const tghost = minus(uniqSort([...vids, ...scov]), diskany)
 
+  // ---- the INTAKE lane. The verify lane above answers "were these bytes checked against their
+  // source"; this one answers the question underneath it — "is there any record that this material
+  // was handed over at all". THIS is where the digests are compared (compareDigests): scope is the
+  // command that reports what a round owes, so it pays the cost of re-reading every original, while
+  // validate and census, which never claim a unit is bound, do not.
+  const intakeRel = `${m.materials.replace(`${m.root}/`, '')}/${m.intakeFile()}`
+  const iidx = intakeIndex(intakeLedgerPath(m))
+  const intake = classifyIntake(m, iidx, { compareDigests: true })
+
   if (json) {
     const jarr = a => `[${a.map(x => `"${x}"`).join(',')}]`
     out(`{"output_schema_version":1,"command":"scope","bundle":"${readOr(join(m.root, '.weavedoc', 'VERSION')).replace(/\n+$/, '')}","schema_version":${m.schemaVer()},` +
       `"ledger_state":"${ledgerDead ? (lidx.state === 'unreadable' ? 'unreadable' : 'headless-rows') : lidx.state}",` +
       `"materials":{"converted":${nMconv},"verified_bound":${nMbound},"legacy_unbound":${nMlegacy},"stale":${nMstale},"failed":${nMfail},"unverified":${nMunver},"used_but_unverified":${nMused},"originless_rows_ignored":${jarr(mOriginless)},"owed":${jarr([...munver, ...mstale, ...mfail])}},` +
       `"truths":{"live":${ondisk.length},"verified_bound":${nTbound},"legacy_unbound":${tlegacy.length},"stale":${nTstale},"failed":${nTfail},"unverified":${tunver.length},"owed":${jarr([...tunver, ...tstale, ...tfail])}},` +
+      // The intake lane on the machine surface too. A human line the JSON does not carry is the
+      // two-surfaces split this runtime has paid for twice; additive keys, so schema 1 still holds.
+      `"intake":{"ledger_state":"${intake.dead ? (iidx.state === 'unreadable' ? 'unreadable' : 'headless-rows') : iidx.state}",` +
+      `"declared_bound":${intake.declared.length},"no_source":${intake.noSource.length},"legacy_unbound":${intake.legacy.length},` +
+      `"anchored":${intake.anchored.length},"stale":${intake.stale.length},"undeclared":${intake.undeclared.length},"undeclared_ids":${jarr(intake.undeclared)},` +
+      `"stale_ids":${jarr(intake.stale)},"stale_source_ids":${jarr(intake.staleSource)},"stale_copy_ids":${jarr(intake.staleCopy)},` +
+      `"anchored_ids":${jarr(intake.anchored)},"unreadable_source":${jarr(intake.unreadableSource)},"ghost_ledger_ids":${jarr(intake.ghost)}},` +
       `"ghost_ledger_ids":${jarr(tghost)}}`)
     return 0
   }
@@ -208,6 +225,34 @@ export function cmdScope (m, out, json) {
     // canonicalisation and keeps its raw spelling) were absorbed in silence — against this
     // command's own SHOWN-never-absorbed discipline (v0.5.1 cold review).
     if (mghost.length) out(`    ledger names ${mghost.length} id(s) with no material on disk — they cover nothing: ${compressIds(uniqSort(mghost))}`)
+    out(`  intake     ${intake.declared.length} declared · ${intake.anchored.length} anchored · ${intake.noSource.length} no-source · ${intake.legacy.length} legacy-unbound · ${intake.stale.length} stale · ${intake.undeclared.length} undeclared   (source: ${intakeRel})`)
+    // UNDECLARED FIRST, because it is the only bucket that means "nothing records how this arrived".
+    if (intake.undeclared.length) out(`    → undeclared: ${compressIds(uniqSort(intake.undeclared))}`)
+    // A binding whose bytes moved, SPLIT BY SIDE. One count in the line above, two sentences here,
+    // because the two sides fail for different reasons and want different answers — and a run that
+    // reads "stale" without knowing which side moved will check the wrong file.
+    if (intake.staleSource.length) out(`    → stale (source): ${compressIds(uniqSort(intake.staleSource))} — the ORIGINAL's bytes are not the ones declared. New information enters as a correction material, never as an edit to a source; re-run intake if the change is intended`)
+    // THE m003 LINE. The machine cannot tell a conversion fix from a decision written into the copy,
+    // so it does not try — it says which file moved and what the two possibilities are, and the
+    // reader answers. Naming the wrong-and-right pair here is the point: a real run edited a
+    // material to record an owner's decision, and every reviewer downstream then met a mismatch
+    // with no explanation, which is where the pressure to invent one came from.
+    if (intake.staleCopy.length) out(`    → stale (copy): ${compressIds(uniqSort(intake.staleCopy))} — converted.md changed since it was bound. A conversion FIX belongs here; a DECISION about the mine does not — retract the truths or enter a correction material, and never edit the copy to say what the original did not`)
+    if (intake.noSource.length) out(`    → no-source (ruled — no original to bind; the copy is still bound): ${compressIds(uniqSort(intake.noSource))}`)
+    if (intake.anchored.length) out(`    → anchored (bytes bound in place, provenance NOT recorded — never read as verified): ${compressIds(uniqSort(intake.anchored))}`)
+    // The consequence, not just the word. `legacy-unbound` reads as a verification backlog — old,
+    // low priority — when what it means is that these files can change and nothing will report it.
+    if (intake.legacy.length) out(`    → legacy-unbound: ${compressIds(uniqSort(intake.legacy))} — binds NO bytes: an edit to the original or to the copy leaves no trace. Bind them in place with 'intake --anchor-existing', or re-declare by risk with 'intake <id>'; never wholesale`)
+    // SHOWN, never absorbed — the discipline the verify lane applies to its own ignored rows.
+    if (intake.unreadableSource.length) out(`    → declared but the source set cannot be re-read: ${intake.unreadableSource.join(' ')} — an original that is gone, aliased, or mid-write; the declaration stands and nothing can be compared against it`)
+    if (intake.ghost.length) out(`    intake ledger names ${intake.ghost.length} id(s) with no live material — they declare nothing: ${intake.ghost.join(' ')}`)
+    if (intake.state === 'unreadable') {
+      out(`    ledger: ${intakeRel} exists but CANNOT BE READ (${intake.code}) — unknown evidence is not absence, so no material counts as declared [MAT-INTAKE-LEDGER]`)
+    } else if (intake.headless > 0) {
+      out(`    ledger: ${intake.headless} row(s) carry no id — an unattributable row could be any material's declaration, so none counts [MAT-INTAKE-LEDGER]`)
+    }
+    if (intake.malformed.length) out(`    ledger: structurally malformed row(s) — they declare nothing [MAT-INTAKE-LEDGER]: ${intake.malformed.join(' ')}`)
+    if (intake.unknown.length) out(`    ledger: row(s) with unknown declaration words — they declare nothing [MAT-INTAKE-LEDGER]: ${intake.unknown.join(' ')}`)
   }
   if (ondisk.length > 0) {
     out(`  truths     ${ondisk.length} live · ${nTbound} verified (digest-bound) · ${tlegacy.length} legacy-unbound · ${nTstale} stale · ${nTfail} failed · ${tunver.length} unverified   (source: truths/${m.ledgerFile()} + ## Verified units)`)
@@ -251,7 +296,7 @@ export function cmdScope (m, out, json) {
     // Only ids with a VALID winning row are "superseded history" (v0.5.2 cold review): an odd word
     // on a QUARANTINED id (typo'd last row, no later row) is that id's latest, not history — the
     // malformed line already covers it — and a HEADLESS odd row keys to '' and belongs to no id.
-    const hist = [...lidx.oddVerdicts].filter(([id]) => lidx.win.has(id) && !winnersBad.has(id)).map(([id, ws]) => `${id} (${[...ws].join('·')})`)
+    const hist = [...lidx.oddWords].filter(([id]) => lidx.win.has(id) && !winnersBad.has(id)).map(([id, ws]) => `${id} (${[...ws].join('·')})`)
     if (hist.length) out(`  ledger: superseded row(s) carry unknown verdicts — history, not evidence, and validate blocks on them [LEDGER-VERDICT]: ${hist.join(' ')}`)
   }
   if (ledgerSbad.length) {

@@ -4,13 +4,11 @@
 // All-or-nothing: every id resolves, exists and is not a retracted material BEFORE one byte is
 // written — a partially applied attest would record coverage for units nobody checked. (Every v3
 // truth card that exists is attestable; the material lifecycle is the one surviving status axis.)
-import { statSync, readFileSync, writeFileSync, appendFileSync, openSync, readSync, closeSync, truncateSync, unlinkSync } from 'node:fs'
+import { statSync } from 'node:fs'
 
 // The append, injectable (the consecrate/retag/upgrade precedent): node:fs cannot be reached by a
 // PATH shim, so the fault-injection driver is the only caller that ever passes anything else.
-export const realOps = {
-  append: (f, buf) => appendFileSync(f, buf)
-}
+export const realOps = realAppendOps
 
 // THE LEDGER LOCK lives in lock.mjs since review #6: upgrade --apply writes this ledger too, and a
 // protocol only attest spoke was measured being walked straight through by upgrade. The WHY of the
@@ -21,7 +19,7 @@ import { acquireLedgerLock, releaseLedgerLock } from './lock.mjs'
 import { canonId, inList } from './core.mjs'
 import { clearFileCaches } from './read.mjs'
 import { join, fm, tfileFor, unitDigest } from './mine.mjs'
-import { today, writeAtomic, textBuf, U } from './write.mjs'
+import { today, writeAtomic, textBuf, U, appendLedgerRows, realAppendOps } from './write.mjs'
 import { insertMirrorRow, readVerifiedUnits, verifiedUnitsContract } from './verified-units.mjs'
 
 // `-f` and `-d`, not "exists". The distinction is not pedantry here: readFileSync on a directory
@@ -113,75 +111,29 @@ export function cmdAttest (m, out, argv, ops = realOps) {
     names.push(cid)
   }
 
-  // THE LEDGER IS APPENDED TO, NOT REWRITTEN (§11 2026-08-05). It used to be read whole, joined
-  // with the new rows and renamed into place, which had two consequences the external review named:
-  //   1. a read that FAILED on an existing file fell back to a fresh header — so an unreadable
-  //      ledger was REPLACED and its verification history deleted, reporting success. The fix is
-  //      not a better error path: this command no longer reads the ledger to write it, so there is
-  //      nothing to fail to read and nothing to accidentally replace.
-  //   2. read-then-rewrite is a lost-update window — two attests both read, both rewrite, and the
-  //      later one drops the earlier's rows. An append is one operation; concurrent appends
-  //      interleave by row and cannot overwrite each other — and since v0.5.2 the whole sequence
-  //      sits under the lock anyway, because the truncate-back rollback is a rewrite in disguise.
-  // The file is created with its header via 'wx' — atomic create-if-absent.
-  let createdHere = false
-  try {
-    writeFileSync(lf, LEDGER_HEADER, { flag: 'wx' })
-    createdHere = true
-  } catch (e) {
-    if (e.code !== 'EEXIST') { out(`attest: cannot create the ledger (${e.code}) — nothing written`); return 1 }
-  }
-  // An append onto a file whose last row was never terminated would FUSE the two rows into one.
-  // validate already blocks such a ledger (that torn row is the signature of an attest that died
-  // mid-write), and this refuses to make it worse. Reading one byte is also the only read left
-  // here, and a failure to do it is fatal on purpose — the case above is what silent fallback costs.
-  try {
-    const st = statSync(lf)
-    // NOT A REGULAR FILE — a directory wearing the ledger's name. Checked HERE, before the
-    // tail-byte guard, because the two OSes disagree about what happens next (v0.5.1 cold review):
-    // on Windows a directory stats as size 0, the guard never ran, the append failed EISDIR, and
-    // the failure branch told the user to hand-delete a torn row that never existed. One refusal,
-    // one true sentence, both platforms.
-    if (!st.isFile()) {
-      out('attest: the ledger path exists but is not a regular file (a directory wearing its name) — fix the path first; nothing written'); return 1
-    }
-    if (st.size > 0) {
-      const fd = openSync(lf, 'r')
-      const tail = Buffer.alloc(1)
-      try { readSync(fd, tail, 0, 1, st.size - 1) } finally { closeSync(fd) }
-      if (tail[0] !== 0x0a) {
-        out('attest: the ledger\'s last row has no line terminator — appending would fuse it with the new row. That torn row is what an interrupted attest leaves behind; run validate, repair or delete it, then re-run. Nothing written'); return 1
-      }
-    }
-  } catch (e) {
-    out(`attest: cannot read the ledger's end (${e.code}) — refusing to append blind; nothing written`); return 1
-  }
-  // All-or-nothing SURVIVES a partial append (v0.5.1, external review P1-3): one append call can
-  // land some bytes and then fail (ENOSPC, a size limit), and whatever COMPLETE rows landed become
-  // real evidence under last-row-wins while the command reports failure — the first id verified,
-  // the second not, under one rc 1. The size is recorded before the append and the file is put back
-  // on failure; the truncation is then VERIFIED, because "restored" is a claim like any other.
-  const sizeBefore = (() => { try { return statSync(lf).size } catch { return null } })()
-  try {
-    ops.append(lf, Buffer.from(rows.join(''), 'utf8'))
-  } catch (e) {
-    // If THIS run created the file, "as before" means ABSENT — truncating to the header would leave
-    // a ledger where none existed and a sentence claiming otherwise (v0.5.1 cold review).
-    if (createdHere) {
-      let gone = false
-      try { unlinkSync(lf); gone = !isFile(lf) } catch { gone = false }
-      if (gone) { out(`attest: ledger write failed (${e.code}) — the ledger this run created was removed again; there was none before and there is none now`); return 1 }
-      out(`attest: ledger write failed (${e.code}) AND the just-created ledger could not be removed — it holds a header and possibly a torn row; run validate, then delete the file by hand`); return 1
-    }
-    let restored = false
-    if (sizeBefore !== null) {
-      try {
-        truncateSync(lf, sizeBefore)
-        restored = statSync(lf).size === sizeBefore
-      } catch { restored = false }
-    }
-    if (restored) { out(`attest: ledger write failed (${e.code}) — the partial append was rolled back, the ledger is as before; nothing counts as attested`); return 1 }
-    out(`attest: ledger write failed (${e.code}) AND the partial bytes could not be removed — run validate: it will name the torn row; delete it by hand before re-running`); return 1
+  // THE LEDGER IS APPENDED TO, NOT REWRITTEN (§11 2026-08-05), through the ONE append transaction
+  // both machine-owned ledgers share (write.mjs — atomic create, torn-row refusal, verified
+  // rollback, and the created-here case where "as before" means ABSENT). The rules live there
+  // because `intake` writes a ledger under the same four; the SENTENCES live here, because
+  // "nothing counts as attested" is this command's claim and no other's.
+  const ap = appendLedgerRows(lf, LEDGER_HEADER, rows, ops)
+  if (!ap.ok) {
+    const say = {
+      create: `attest: cannot create the ledger (${ap.code}) — nothing written`,
+      notfile: 'attest: the ledger path exists but is not a regular file (a directory wearing its name) — fix the path first; nothing written',
+      torn: "attest: the ledger's last row has no line terminator — appending would fuse it with the new row. That torn row is what an interrupted attest leaves behind; run validate, repair or delete it, then re-run. Nothing written",
+      tailread: `attest: cannot read the ledger's end (${ap.code}) — refusing to append blind; nothing written`,
+      'created-removed': `attest: ledger write failed (${ap.code}) — the ledger this run created was removed again; there was none before and there is none now`,
+      'created-stuck': `attest: ledger write failed (${ap.code}) AND the just-created ledger could not be removed — it holds a header and possibly a torn row; run validate, then delete the file by hand`,
+      'rolled-back': `attest: ledger write failed (${ap.code}) — the partial append was rolled back, the ledger is as before; nothing counts as attested`,
+      'rollback-failed': `attest: ledger write failed (${ap.code}) AND the partial bytes could not be removed — run validate: it will name the torn row; delete it by hand before re-running`
+    }[ap.kind]
+    // A kind with no sentence here would print `undefined` and return 1 — a real refusal wearing a
+    // word that names nothing, which is this repo's own worst class (a check that reports without
+    // saying anything). The table is total today (both consumers cover all eight); this is what
+    // happens the day write.mjs grows a ninth and only one consumer is taught it.
+    out(say ?? `attest: the ledger write failed in a way this command has no sentence for (kind '${ap.kind}'${ap.code ? `, ${ap.code}` : ''}) — treat it as a failed write: run validate before re-running, and report this message`)
+    return 1
   }
 
   // Human mirror into `## Verified units` — the markdown stays the readable view while the sidecar

@@ -5,7 +5,7 @@ WD-PERF-001의 기준선. 계획서 §2의 방법대로 동일 fixture를 3회 �
 ## 측정
 
 - fixture: 최소 정상 프로젝트 (1 material · 1 truth · 1 document · final.md, `tests/regress.sh`의 `mkpristine` 정의 그대로)
-- 명령: `bash .weavedoc/bin/weavedoc validate`
+- 명령: `bash .weavedoc/bin/weavedoc validate` — **당시(2026-08-02)의 bash 런타임.** 그 엔트리포인트는 번들 `2026-08-05.3`에서 삭제됐다. 이 줄은 그때 실제로 돌린 명령의 기록이므로 고치지 않는다(측정 기록을 grep에 맞춰 바꾸는 것이 곧 기록 위조다). 지금 같은 측정을 재현하려면 `node .weavedoc/bin/weavedoc.mjs validate`.
 - 조건: 다른 부하 없는 상태에서 연속 3회
 
 | run | real |

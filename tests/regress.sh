@@ -205,6 +205,10 @@ trap 'trap - INT TERM; kill 0 2>/dev/null' INT TERM
 W=""
 OUT=""; RC=0
 CASE=""
+# A well-formed 64-hex stand-in digest, for ledger rows a case writes BY HAND. Every such row must
+# be valid in every column except the one under test — a fixture that also fails the shape filter
+# turns its case into a second arity test wearing the name of the rule it was meant to exercise.
+HEXD="d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1"
 JOBS=6
 FILTER=""
 ONE=""
@@ -448,6 +452,19 @@ EOF
 | m001 | 용역 계약서 | 계약서 | converted |
 EOF
 
+  # The ORIGINAL beside the conversion, and then a real declaration of it (bundle 2026-08-08.28).
+  # The pristine mine is a CURRENT mine, not a legacy one: without the intake row every one of the
+  # 570-odd cases would carry a MAT-UNDECLARED warning it is not about, and the two states this
+  # ledger distinguishes — declared and undeclared — would be untestable apart. Declared by RUNNING
+  # `intake`, never by writing the row: a hand-written row carries a digest nobody computed, which
+  # is exactly what the ledger exists to refuse, and hand-writing it here would also make the
+  # fixture stop exercising the command every sweep.
+  cat > "$PRISTINE/materials/m001/source.md" <<'EOF'
+제3조 대금은 5천만원으로 한다.
+제5조 납품 기한은 2026년 12월 31일로 한다.
+제7조 위약금은 계약금액의 10%로 한다.
+EOF
+
   cat > "$PRISTINE/materials/m001/converted.md" <<'EOF'
 ---
 id: m001
@@ -538,6 +555,11 @@ EOF
   cp "$PRISTINE/documents/d1/draft.md" "$PRISTINE/documents/d1/final.md"
   review4 "$PRISTINE" ""
   ( cd "$PRISTINE" && "${WDRUN[@]}" reindex >/dev/null 2>&1 )
+  # Not `set -e`, so a silent failure here would hand every case an undeclared fixture and the
+  # MAT-UNDECLARED cases would then pass for the wrong reason (never declared is observably
+  # identical to a declaration that was removed). Loud, like mk_sealed's.
+  ( cd "$PRISTINE" && "${WDRUN[@]}" intake m001 'inbox/contract.md — fixture drop' >/dev/null 2>&1 ) \
+    || { echo "mkpristine: intake failed — every case would run against an undeclared mine"; exit 2; }
 }
 
 # ---------------------------------------------------------------- assertions
@@ -6350,6 +6372,10 @@ mk_v2mine() { # rebuild $W as a REAL v2 mine under git — the migrator's whole 
   sed -i 's/^version: 3/version: 2/' "$W/.weavedoc/config.yaml"
   sed -i 's/^required_tags: \[\]$/required_tags: [위약]/' "$W/project.md"
   rm -rf "$W/.weavedoc-state"
+  # A REAL v2 mine predates the intake ledger entirely — it inherits one from the v3 pristine, and
+  # a fixture carrying an artifact its own schema version never had would leave the migrator's
+  # backfill with nothing to do and the whole path untested (bundle 2026-08-08.28).
+  rm -f "$W/materials/intake-ledger.tsv"
   rm -f "$W/truths"/t*.md
   printf -- '---\nid: m001\ntitle: 용역 계약서\norigin: file\nrole: 계약서\ntopics: [대금, 위약]\nformat: md\nsource_path: inbox/contract.md\nadded: 2026-07-01\nstatus: converted\nsummary: 대금과 위약금을 정한 최소 계약서.\n---\n\n# 용역 계약서\n\n제3조 대금은 5천만원으로 한다.\n제7조 위약금은 계약금액의 10%%로 한다.\n제8조 위약금은 계약금액의 20%%로 한다.\n' > "$W/materials/m001/converted.md"
   printf -- '---\nid: t001\nclaim: "위약금은 계약금액의 10%%다"\nsource: m001\nlocation: "제7조"\ntags: [위약]\nstatus: ok\nprovenance: stated\nresolution: {type: pick, winner: t001, decided_by: machine, reason: "v2 기계 선택"}\nsuperseded: [t002]\n---\n\n제7조 위약금은 계약금액의 10%%로 한다.\n' > "$W/truths/t001.md"
@@ -6387,6 +6413,20 @@ acct_upgrade_v2_to_v3_end_to_end() {
   # the machine ledgers travel with the deletion: the casualty's coverage row is scrubbed
   # (measured on the real mine — 26 deletions left 12 dangling mentions before this existed).
   expect_has "coverage rows scrubbed (1 marked skipped"
+  # ...and so does the intake backfill: a v2 mine predates that ledger by definition, so every
+  # material it carries becomes a legacy-unbound row in the same --apply. Without it every
+  # migrated mine would leave MAT-UNDECLARED on every material — a warning firing everywhere,
+  # which is a warning nobody reads.
+  expect_has "1 intake row(s) backfilled as legacy-unbound"
+  # AND the migration says what that row COSTS, on the path a real pre-ledger mine actually takes.
+  # This is the moment someone is looking — the only one, for a mine that migrates once — and
+  # `upgrade` used to mint the rows and fall silent. Leaving 24 of 32 materials bound to nothing was
+  # a decision taken on the owner's behalf and never put in front of them; the edit that eventually
+  # cost the most went unseen for eleven days underneath it.
+  expect_has "bind no bytes"
+  expect_has "an edit to its original OR to the mine's copy of it leaves no trace"
+  expect_has "intake --anchor-existing"
+  expect_has "an anchor adopts what it finds"
   OUT=$(cat "$W/truths/coverage.md"); RC=0
   expect_has "t001"
   expect_hasnt "t002"
@@ -6586,6 +6626,71 @@ acct_upgrade_orphaned_reqtag_refuses_apply() {
   expect_has "t005.md"
 }
 
+# ---- the CLAUDE.md pointer block: planted by init, byte-checked by validate ----------------------
+# THE DEFECT THESE PIN (eclypse, 2026-08-13). init plants a fixed block in the project's CLAUDE.md
+# and nothing ever read it back, so `upgrade --apply` moved the schema, the validator, READ.md and
+# 271 cards to v3 while the block kept its v2 parenthetical. CLAUDE.md is injected into every
+# session BEFORE any file is opened: a session read READ.md first, as told, and still reported the
+# v2 protocol as though quoting it — then built the user's options on that model. A pointer with a
+# marker pair and no owner is worse than no marker at all, because the markers imply an owner.
+plant_block() { cat "$W/.weavedoc/templates/claude-block.md" > "$W/CLAUDE.md"; }
+
+pass_claude_block_absent_is_silent() {
+  # No CLAUDE.md: nothing to be stale. A mine is readable outside Claude Code, and validate does not
+  # lecture a project that never opted into the pointer.
+  vrun validate; expect_pass; expect_hasnt "CLAUDE-BLOCK"
+}
+pass_claude_block_current_is_silent() {
+  # The shipped block, plus project text OUTSIDE the markers — the supported way to add your own.
+  plant_block
+  printf '\n## 이 저장소에 대하여\n\n마커 바깥은 프로젝트의 것이다.\n' >> "$W/CLAUDE.md"
+  vrun validate; expect_pass; expect_hasnt "CLAUDE-BLOCK"
+}
+pass_claude_block_stale_warns_without_blocking() {
+  # The observed bytes, near enough: a v2 summary sitting inside live markers.
+  printf '<!-- weavedoc:begin -->\nRead `.weavedoc/READ.md` (status filtering, as_of, provenance).\n<!-- weavedoc:end -->\n' > "$W/CLAUDE.md"
+  vrun validate
+  expect_pass            # a WARNING — a stale pointer is not a mine-integrity failure
+  expect_has "CLAUDE-BLOCK-STALE"
+}
+pass_claude_block_crlf_is_not_stale() {
+  # A consumer project is its own git repository and on Windows core.autocrlf hands CLAUDE.md back
+  # with CRLF, while .weavedoc/.gitattributes pins the template to LF. A tripwire that fires on the
+  # line ending cries wolf on every Windows clone until nobody reads it.
+  awk '{ printf "%s\r\n", $0 }' "$W/.weavedoc/templates/claude-block.md" > "$W/CLAUDE.md"
+  vrun validate; expect_pass; expect_hasnt "CLAUDE-BLOCK"
+}
+pass_claude_block_broken_marker_pair_warns() {
+  # A begin with no end: the region is unbounded, so it is not the block the bundle ships. Silence
+  # here would make deleting one marker a way to switch the check off.
+  printf '<!-- weavedoc:begin -->\nThis repo contains a WeaveDoc data mine.\n' > "$W/CLAUDE.md"
+  vrun validate; expect_pass; expect_has "CLAUDE-BLOCK-STALE"
+}
+pass_claude_block_duplicate_warns() {
+  # Two blocks: the FIRST is current, so a check that stops at the first match reports green over a
+  # second, stale pointer that is injected into the session just the same. This is the defect the
+  # whole check exists for, one level down.
+  plant_block
+  printf '\n<!-- weavedoc:begin -->\nRead `.weavedoc/READ.md` (status filtering, as_of, provenance).\n<!-- weavedoc:end -->\n' >> "$W/CLAUDE.md"
+  vrun validate; expect_pass; expect_has "more than one weavedoc marker block"
+}
+pass_claude_block_missing_template_says_so() {
+  # The comparison's other half is gone, so the comparison did not run — and this suite's oldest
+  # named class is the check that runs zero times while printing green.
+  plant_block
+  rm -f "$W/.weavedoc/templates/claude-block.md"
+  vrun validate; expect_pass; expect_has "CLAUDE-BLOCK-NOTEMPLATE"
+}
+acct_json_claude_block_is_a_warning() {
+  # The machine surface: in `warnings`, not `diagnostics`, and result stays pass.
+  printf '<!-- weavedoc:begin -->\nstale pointer\n<!-- weavedoc:end -->\n' > "$W/CLAUDE.md"
+  vrun validate --json
+  expect_pass
+  expect_has '"result":"pass"'
+  expect_has '"diagnostics":[]'
+  expect_has '"code":"CLAUDE-BLOCK-STALE"'
+}
+
 # ---------------------------------------------------------------- driver
 
 runone() { # $1 = case name; runs in its own fixture copy, writes $RES/<case>
@@ -6614,6 +6719,370 @@ if [ -n "$SEALCHECK" ]; then
   echo "seal: key unchanged ($KEY)"
   exit 0
 fi
+
+# ---- the intake ledger: how a material entered the mine (bundle 2026-08-08.28) ------------------
+# The defect these cover: nothing mechanical stood between a material and the mine. `gather` wrote
+# the folder with an ordinary file write, the CLI had no intake command, and every MAT-* check asked
+# about SHAPE — so a material the user handed over and one an agent invented were indistinguishable.
+# The fix is not detection (an agent can invent a source.md and declare it); it is that the silent
+# path is gone and the declared one leaves a digest. Every case below is about that difference.
+mkmat2() { # a second material with an original — the folder shape `gather` produces
+  mkdir -p "$W/materials/m002"
+  printf -- '---\nid: m002\ntitle: 회의록\norigin: file\nrole: 계약서\ntopics: [위약]\nformat: md\nsource_path: inbox/minutes.md\nadded: 2026-08-14\nstatus: converted\nsummary: 두 번째 자료.\n---\n\n# 회의록\n\n위약금 조항을 확인했다.\n' > "$W/materials/m002/converted.md"
+  printf '# 회의록\n\n위약금 조항을 확인했다.\n' > "$W/materials/m002/source.md"
+  printf '| m002 | 회의록 | 계약서 | converted |\n' >> "$W/catalog.md"
+  mint
+}
+mknosrc() { # a material with NO original — the m028 case the user ruled on a real mine
+  mkdir -p "$W/materials/m002"
+  printf -- '---\nid: m002\ntitle: 구두 진술\norigin: conversation\nrole: 계약서\ntopics: [위약]\nformat: md\nsource_path: 2026-08-14 세션\nadded: 2026-08-14\nstatus: converted\nsummary: 원본이 없는 자료.\n---\n\n# 구두 진술\n\n대금은 협의로 정한다.\n' > "$W/materials/m002/converted.md"
+  printf '| m002 | 구두 진술 | 계약서 | converted |\n' >> "$W/catalog.md"
+  mint
+}
+pass_intake_declared_is_silent() {
+  # The pristine declares m001 by RUNNING intake, so a current mine carries no warning at all.
+  vrun validate; expect_pass
+  expect_hasnt "MAT-UNDECLARED"
+  OUT=$(cat "$W/materials/intake-ledger.tsv"); RC=0
+  expect_has "	declared	1	"
+}
+acct_intake_undeclared_warns_but_never_blocks() {
+  # THE CONSTRAINT, as a case: every mine in existence predates this ledger, so a blocking version
+  # would redden every project at once and be switched off within a day. rc 0 is the assertion.
+  rm -f "$W/materials/intake-ledger.tsv"
+  vrun validate
+  expect_pass
+  expect_has "[MAT-UNDECLARED]"
+  expect_has "materials/m001/"
+}
+acct_intake_undeclared_on_the_json_surface() {
+  # A human line the machine surface does not carry is the two-surfaces split this runtime has paid
+  # for twice. It rides `warnings`, never `diagnostics` — a warning that lands among the problems
+  # would flip an automated consumer's verdict on a mine nothing is wrong with.
+  rm -f "$W/materials/intake-ledger.tsv"
+  vrun validate --json
+  expect_pass
+  expect_has '"code":"MAT-UNDECLARED"'
+  OUT=$(printf '%s' "$OUT" | sed -n 's/.*"diagnostics":\(\[[^]]*\]\).*/\1/p'); RC=0
+  expect_hasnt "MAT-UNDECLARED"
+}
+acct_intake_new_material_is_the_one_that_warns() {
+  # After a backfill (or on a mine born with the ledger) MAT-UNDECLARED means what it is supposed
+  # to mean: a material that appeared AFTER the ledger existed and was never declared. m001 stays
+  # silent, m002 does not — that difference is the whole product.
+  mkmat2
+  vrun validate; expect_pass
+  expect_has "materials/m002/"
+  OUT=$(printf '%s' "$OUT" | grep MAT-UNDECLARED); RC=0
+  expect_hasnt "materials/m001/"
+}
+block_intake_no_source_points_at_the_ruling() {
+  # A material with no original is REFUSED rather than silently written with an empty digest — and
+  # the refusal names the one legal way through, so the exception is taken deliberately.
+  mknosrc
+  vrun intake m002 '구두로 받음'
+  expect_block "holds no source.* file"
+  expect_has "--no-source"
+  OUT=$(cat "$W/materials/intake-ledger.tsv"); RC=0
+  expect_hasnt "m002"
+}
+pass_intake_no_source_is_counted_apart() {
+  # The ruled exception exists because without it one true case (the real mine's m028) leaves a
+  # permanent false alarm, and one permanent false alarm is how a warning stops being read. It is
+  # not free: it binds no bytes and never merges into the declared count.
+  mknosrc
+  vrun intake --no-source m002 '원본 없음 — 대조할 대상이 없다 (사용자 재정)'
+  expect_pass
+  expect_has "recorded as a RULING about the ORIGINAL, not a binding to one"
+  vrun validate; expect_pass; expect_hasnt "MAT-UNDECLARED"
+  vrun scope
+  expect_has "1 declared · 0 anchored · 1 no-source"
+  # THE COPY IS STILL BOUND. A material with no original is the one no reviewer can ever re-derive
+  # from anything else, so it is the one where an unrecorded edit is least recoverable — the ruling
+  # is about the source and must not quietly exempt the mine's own copy as well.
+  printf '\n재정 이후에 덧붙인 줄.\n' >> "$W/materials/m002/converted.md"
+  vrun scope
+  expect_has "→ stale (copy): m002"
+}
+acct_intake_stale_when_the_original_moves() {
+  # The digest has a CONSUMER — recording a hash nobody ever compares is decoration, and this
+  # runtime has a name for checks that run zero times. Editing the declared original moves the
+  # tree digest, and scope says so rather than reporting a binding that no longer holds.
+  printf 'appended after the declaration\n' >> "$W/materials/m001/source.md"
+  vrun scope
+  expect_has "0 declared"
+  expect_has "→ stale (source): m001"
+  # AND NOT the other side. The two axes are reported separately precisely so a run can tell which
+  # file to open; a source edit that also lit the copy line would send every reader to the wrong one.
+  expect_hasnt "→ stale (copy)"
+  # re-declaring supersedes: last row per id wins, and the history stays in the file.
+  vrun intake m001 '원본 갱신'
+  expect_pass
+  vrun scope
+  expect_has "1 declared"
+  # NOT "→ stale:" — that substring no longer occurs in either stale line, so the old spelling of
+  # this guard would now pass while a material sat stale on both axes. The check follows the words.
+  expect_hasnt "→ stale ("
+}
+acct_intake_stale_when_the_copy_is_edited() {
+  # THE OTHER HALF, and the one a real run needed. The source digest catches an ORIGINAL being
+  # rewritten and says nothing about converted.md — so an owner's "drop this from the project" that
+  # was carried out by DELETING A COLUMN OUT OF THE MATERIAL passed every check the mine had. The
+  # copy is the mine's record of what a document said; an edit that makes it disagree with the
+  # original is a falsified record whichever intention produced it.
+  printf '\n원본에는 없는 줄.\n' >> "$W/materials/m001/converted.md"
+  vrun scope
+  expect_has "→ stale (copy): m001"
+  expect_hasnt "→ stale (source)"
+  expect_has "0 declared"
+  # and the sentence has to name what the reader is deciding between, or it is just an alarm
+  expect_has "A conversion FIX belongs here; a DECISION about the mine does not"
+}
+acct_intake_lifecycle_stamp_is_not_a_copy_edit() {
+  # The copy digest excludes the frontmatter `status:` line, and this is why: status is the
+  # lifecycle axis and the mine writes it on its own (converted → verified → used). A digest that
+  # moved on a lifecycle stamp would cry stale on an ordinary day, and a stale line that is usually
+  # wrong is one nobody reads by the time it is right.
+  sed -i 's/^status: converted$/status: verified/' "$W/materials/m001/converted.md"
+  vrun scope
+  expect_hasnt "→ stale ("
+  expect_has "1 declared"
+}
+block_intake_note_is_one_tsv_field() {
+  # A control byte in the free-text column corrupts the row for the next reader: a TAB widens it,
+  # a newline splits it in two. Refused at the door rather than escaped — an escape puts a spelling
+  # in the file that no reader un-escapes.
+  vrun intake m001 "$(printf 'a\tb')"
+  expect_block "may not contain a tab, newline or other control character"
+  vrun intake m001 ''
+  expect_block "may not be empty"
+}
+acct_intake_hand_written_declared_row_is_damage() {
+  # THE CROSS-COLUMN CLAUSE, which is the point of the whole file. `declared` is the word intake
+  # writes, and intake always computes a digest; a hand-written `declared` row carrying `-` claims
+  # a binding to bytes nobody hashed — this ledger's own subject, performed on the ledger. It is
+  # not a declaration with a missing field: it is damage, and the material reads as undeclared.
+  # VALID IN EVERY OTHER RESPECT — seven columns, a well-formed copy digest, a real date — so the
+  # cross-column clause is the only thing that can be rejecting it. A six-column stand-in would be
+  # rejected on ARITY and this case would go green while the clause it names never ran.
+  printf 'm001\t-\tdeclared\t-\t%s\thand written\t2026-08-14\n' "$HEXD" >> "$W/materials/intake-ledger.tsv"
+  vrun validate
+  expect_pass
+  expect_has "[MAT-INTAKE-LEDGER]"
+  expect_has "[MAT-UNDECLARED]"
+}
+acct_intake_hand_written_row_without_a_copy_digest_is_damage() {
+  # The COPY half of the same clause, and it needs its own case: the source clause passing says
+  # nothing about this one, and a mine can only be caught being edited on the side that is bound.
+  # Source digest well-formed, count real — the copy column is the sole defect.
+  printf 'm001\t%s\tdeclared\t1\t-\thand written\t2026-08-14\n' "$HEXD" >> "$W/materials/intake-ledger.tsv"
+  vrun validate
+  expect_pass
+  expect_has "[MAT-INTAKE-LEDGER]"
+  expect_has "[MAT-UNDECLARED]"
+}
+acct_intake_unknown_declaration_word_declares_nothing() {
+  # An unknown word covers nothing AND opens no weaker reading — scope's rule for an unknown
+  # verdict, kept. Quarantined before classification, and NAMED: a word absorbed in silence looks
+  # exactly like a ledger that never held it.
+  # Structurally VALID: an unrecognised word binds nothing, so `-` in both digest columns is legal
+  # here. The row reaches the unknown-word quarantine on its own merits rather than tripping the
+  # shape filter first — otherwise this case would be a second arity test wearing a better name.
+  printf 'm001\t-\tprobably-fine\t-\t-\tx\t2026-08-14\n' >> "$W/materials/intake-ledger.tsv"
+  vrun validate; expect_pass
+  expect_has "unknown declaration word(s): m001 (probably-fine)"
+  expect_has "[MAT-UNDECLARED]"
+}
+acct_intake_headless_row_voids_the_whole_ledger() {
+  # An id-less row could be ANY material's declaration, so per-id last-row-wins is undecidable for
+  # everyone — the verify sidecar's rule, and the conservative direction here is "nothing counts".
+  printf '\t-\tno-source\t-\t%s\tx\t2026-08-14\n' "$HEXD" >> "$W/materials/intake-ledger.tsv"
+  vrun validate; expect_pass
+  expect_has "carry no id"
+  expect_has "[MAT-UNDECLARED]"
+}
+acct_intake_unreadable_ledger_is_not_an_absent_one() {
+  # A directory wearing the ledger's name — the portable stand-in for a permissions fault. Without
+  # this branch such a fault reads as "every material in this mine was fabricated": a false
+  # accusation at scale, and the fastest way to teach a reader to ignore the check underneath it.
+  # ONE true sentence, too: the ledger's name is excluded from the material enumerator, so this
+  # does NOT additionally report a material with no converted.md that the user never created.
+  rm -f "$W/materials/intake-ledger.tsv"
+  mkdir -p "$W/materials/intake-ledger.tsv"
+  vrun validate; expect_pass
+  expect_has "cannot be read"
+  expect_has "[MAT-INTAKE-LEDGER]"
+  expect_hasnt "MAT-NO-CONVERTED"
+  # and upgrade refuses to backfill over evidence it cannot see, rather than appending duplicates
+  vrun upgrade
+  expect_block "intake ledger cannot be read"
+}
+acct_intake_ghost_row_declares_nothing() {
+  # Shown, never absorbed — the discipline scope applies to its own ghost ids, so a renamed or
+  # deleted material cannot look like a covered one.
+  printf 'm099\t-\tno-source\t-\t%s\tx\t2026-08-14\n' "$HEXD" >> "$W/materials/intake-ledger.tsv"
+  vrun validate; expect_pass
+  expect_has "names 1 id(s) with no live material: m099"
+}
+pass_intake_retracted_material_is_not_warned() {
+  # ONE population, spelled once and shared by validate/scope/census: a withdrawn material grounds
+  # nothing, so nothing is owed for it. A population that differed between commands would let one
+  # of them warn about a material another does not count.
+  mkmat2
+  sed -i 's/^status: converted$/status: retracted/' "$W/materials/m002/converted.md"
+  vrun validate; expect_pass
+  expect_hasnt "MAT-UNDECLARED"
+}
+block_intake_aliased_source_is_refused() {
+  # raw-source-model.mjs was shipped hardened and UNWIRED; intake is its first production consumer,
+  # which makes its refusals load bearing. A `source.*` that is a directory (the portable stand-in
+  # for the symlink/junction/hardlink family — a Windows host cannot always create those) is not a
+  # regular file, so the set cannot be sealed and the declaration is refused rather than written
+  # over an unknown set.
+  mkmat2
+  rm -f "$W/materials/m002/source.md"
+  mkdir -p "$W/materials/m002/source.d"
+  vrun intake m002 'x'
+  expect_block "source set cannot be sealed"
+}
+acct_intake_census_counts_the_split() {
+  # census reports ROW PRESENCE and says so — it never re-reads a source file, so it must never
+  # print "digest-bound" for a comparison it did not run. That sentence is the assertion.
+  mkmat2
+  vrun census
+  expect_has "1 declared · 0 no-source · 0 legacy-unbound · 1 undeclared"
+  expect_has "row presence only"
+}
+acct_intake_census_reports_before_any_truth_exists() {
+  # A mine mid-gather — materials in, truths not yet extracted — takes census's no-truths early
+  # return, and that is exactly the window in which "how did these arrive" is the live question.
+  # A line printed only on the other branch would be absent precisely when it matters.
+  rm -f "$W/truths"/t*.md
+  vrun census
+  expect_has "truth files 0"
+  expect_has "1 declared"
+}
+acct_intake_backfill_on_an_already_v3_mine() {
+  # `upgrade` used to return "already schema v3" from the version field ALONE. It cannot any more:
+  # a mine that migrated before this ledger existed still owes its legacy rows, and upgrade is the
+  # one command a user runs when a mine is behind its bundle.
+  #
+  # NO GIT HERE, and that is the assertion. The v2→v3 path is a transform (cards deleted,
+  # frontmatter rewritten) and git is its only undo; this path APPENDS to a machine-owned ledger and
+  # touches nothing else, which is the same class as attest — and no append-only ledger write in
+  # this runtime demands a backup. Requiring one would put the friction on the single command every
+  # existing mine must run to adopt the ledger, while its worktree is dirty from ordinary work.
+  mkmat2
+  vrun upgrade
+  expect_pass
+  expect_has "1 material(s) predate the intake ledger: m002"
+  vrun upgrade --apply
+  expect_pass
+  expect_has "backfilled 1 intake row(s) as legacy-unbound"
+  # AND it says what the unbound row costs, in the one place a person is looking. The word
+  # `legacy-unbound` reads as a verification backlog; what it means is that nothing will notice if
+  # this material changes. `upgrade` used to mint the row and fall silent — a decision taken on the
+  # owner's behalf and never put in front of them.
+  expect_has "bind no bytes"
+  expect_has "intake --anchor-existing"
+  # the backfilled material stops warning, and is counted APART from the declared one — never
+  # silently equal to it (that equality is what would make the whole ledger a decoration).
+  vrun validate; expect_pass; expect_hasnt "MAT-UNDECLARED"
+  vrun scope
+  expect_has "1 declared · 0 anchored · 0 no-source · 1 legacy-unbound"
+  # and scope names the consequence too, not just the word — the reader who never runs upgrade again
+  expect_has "an edit to the original or to the copy leaves no trace"
+  # idempotent: a second run has nothing to do and says the old sentence.
+  vrun upgrade
+  expect_has "already schema v3 — nothing to migrate."
+}
+acct_anchor_existing_binds_the_unbound_backlog() {
+  # THE MIGRATION ANSWER. `upgrade` mints legacy rows because that is the only honest thing it can
+  # say — nobody witnessed those bytes — and the backlog then just sits there, editable in either
+  # direction with no trace. The way out is a separate act by a person, and this is it.
+  mkmat2
+  vrun upgrade --apply; expect_pass
+  vrun scope; expect_has "1 legacy-unbound"
+  vrun intake --anchor-existing '이주 후 현재 트리를 기준선으로 확정 (소유자)'
+  expect_pass
+  expect_has "1 material(s) anchored"
+  # ANCHORED IS NOT VERIFIED, and the command has to say so itself. A row that binds bytes sitting
+  # in the same file as verification evidence is exactly the confusion that would let a mine report
+  # a backlog as read when nobody read it.
+  expect_has "ANCHORED IS NOT VERIFIED"
+  vrun scope
+  expect_has "1 declared · 1 anchored · 0 no-source · 0 legacy-unbound"
+  expect_has "provenance NOT recorded"
+  # and from that row on, an edit to the copy shows — which is the whole point of having done it
+  printf '\n닻 이후에 덧붙인 줄.\n' >> "$W/materials/m002/converted.md"
+  vrun scope; expect_has "→ stale (copy): m002"
+}
+block_anchor_existing_will_not_relaunder_a_stale_material() {
+  # THE ANTI-LAUNDERING RULE, and the reason this command targets only the unbound. Re-anchoring a
+  # material whose bytes already moved would silently adopt whatever it was edited into — turning
+  # the one command that exists to EXPOSE an edit into the one that buries it. Re-binding after a
+  # deliberate change is still available; it just has to name the material.
+  printf '\n선언 이후에 덧붙인 줄.\n' >> "$W/materials/m001/converted.md"
+  vrun scope; expect_has "→ stale (copy): m001"
+  vrun intake --anchor-existing '전부 확정'
+  # nothing to anchor: m001 already carries a binding, stale or not
+  expect_pass
+  expect_has "every material already carries a binding"
+  vrun scope
+  expect_has "→ stale (copy): m001"
+}
+block_anchor_existing_refuses_when_every_target_needs_a_ruling() {
+  # A material with no original needs a RULING, and a ruling is the user's — never a batch's. When
+  # that is true of EVERY target the batch has nothing left to do, so it refuses and writes nothing
+  # rather than reporting a success of size zero.
+  mknosrc
+  vrun upgrade --apply; expect_pass
+  vrun intake --anchor-existing '현재 트리 확정'
+  expect_block "none of the 1 unbound material(s) could be anchored — m002 (empty)"
+  expect_has "Each needs a ruling of its own"
+  vrun scope
+  expect_has "0 anchored"
+  expect_has "1 legacy-unbound"
+}
+acct_anchor_existing_anchors_what_it_can_and_names_the_rest() {
+  # THE PARTIAL BATCH, which is the shape a real mine actually presents: most materials have an
+  # original, one or two do not. Without this case the skipped-list branch of the success path never
+  # executes — the class this runtime keeps a name for (a check that reports green having run zero
+  # times). m002 has a source and is anchored; m003 has none and is named, not silently dropped.
+  mkmat2
+  mkdir -p "$W/materials/m003"
+  printf -- '---\nid: m003\ntitle: 구두 진술\norigin: conversation\nrole: 계약서\ntopics: [위약]\nformat: md\nsource_path: 2026-08-14 세션\nadded: 2026-08-14\nstatus: converted\nsummary: 원본이 없는 자료.\n---\n\n# 구두 진술\n\n대금은 협의로 정한다.\n' > "$W/materials/m003/converted.md"
+  printf '| m003 | 구두 진술 | 계약서 | converted |\n' >> "$W/catalog.md"
+  mint
+  vrun upgrade --apply; expect_pass
+  vrun intake --anchor-existing '이주 후 현재 트리 확정 (소유자)'
+  expect_pass
+  expect_has "1 material(s) anchored"
+  expect_has "NOT anchored, each needs its own ruling: m003 (empty)"
+  vrun scope
+  expect_has "1 declared · 1 anchored · 0 no-source · 1 legacy-unbound"
+  # the named one is STILL unbound — a batch that reported partial success must not have quietly
+  # counted the material it skipped
+  expect_has "legacy-unbound: m003"
+}
+block_anchor_existing_and_no_source_cannot_combine() {
+  # --no-source is a ruling about ONE material and has to name it; a batch cannot rule.
+  vrun intake --anchor-existing --no-source 'x'
+  expect_block "cannot be combined"
+}
+pass_intake_backfill_needs_no_clean_worktree() {
+  # The twin of the case above, stated from the other side: a DIRTY worktree does not stop the
+  # backfill. It is an append to one machine-owned file, its inverse is deleting those rows, and the
+  # mine that most needs it is one in the middle of a gather. (The v2→v3 transform's git precondition
+  # is unchanged — block_upgrade_dirty_worktree_refuses still holds it.)
+  mkmat2
+  ( cd "$W" && git init -q && git add -A >/dev/null 2>&1 && git -c user.email=x@x -c user.name=x commit -qm base ) \
+    || { bad "git setup failed"; return; }
+  printf 'dirt\n' > "$W/dirty.txt"
+  vrun upgrade --apply
+  expect_pass
+  expect_has "backfilled 1 intake row(s) as legacy-unbound"
+}
 
 if [ -n "$BATCH" ]; then
   # A WORKER: many cases, ONE bash. The startup this amortises is not small on Windows — MSYS

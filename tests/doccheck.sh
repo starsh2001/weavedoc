@@ -106,6 +106,40 @@ for s in \
   grep -qF "$s" "$map" || say "map's tag discipline lost a rule: '$s' — the tag vocabulary is the machine's whole search net (§3), and this text check is acceptance test 19's teeth"
 done
 
+# 8. The CLAUDE.md pointer block has ONE copy, it is a pointer, and the command it names exists.
+# The block is planted by init into a downstream project's CLAUDE.md, where it is injected into
+# every session BEFORE any file is read — so a wrong line there does not just mislead, it primes.
+# Measured (eclypse, 2026-08-13): the block still said "(status filtering, as_of, provenance)" after
+# migration had moved READ.md and 271 cards to v3, and it told the reader to run a bash script that
+# had been deleted three months earlier. Both survived because the text lived only in SKILL.md prose
+# and nothing compared it to anything. Now the bundle ships the block as a file and `validate`
+# byte-compares it; these are the checks a shipped FILE makes possible.
+blk="$REPO/.weavedoc/templates/claude-block.md"
+if [ ! -f "$blk" ]; then
+  say "the shipped CLAUDE.md block ($blk) is missing — validate's CLAUDE-BLOCK-STALE check has no other half and every planted block goes unchecked"
+else
+  grep -q '<!-- weavedoc:begin -->' "$blk" || say "the shipped CLAUDE.md block has no begin marker — init copies this file verbatim, so the markers must be IN it"
+  grep -q '<!-- weavedoc:end -->' "$blk"   || say "the shipped CLAUDE.md block has no end marker — init copies this file verbatim, so the markers must be IN it"
+  grep -qF '.weavedoc/READ.md' "$blk"      || say "the shipped CLAUDE.md block no longer names .weavedoc/READ.md — a pointer that points nowhere is the whole artifact gone"
+  # A TEXT check, and named as one (same honesty as checks 5-7): it cannot prove the block avoids
+  # every summary, only that it has stopped carrying the ONE piece of versioned vocabulary that
+  # caused the incident. `status` is the v2 card axis v3 deleted; a block that mentions it is
+  # describing READ.md's contents rather than pointing at them.
+  grep -q 'status' "$blk" && say "the shipped CLAUDE.md block names 'status' — the block is a POINTER and may not restate READ.md's rules; a summary in CLAUDE.md is read before the file it summarises and wins against it"
+fi
+grep -qF 'claude-block.md' "$init" || say "weavedoc-init no longer points at .weavedoc/templates/claude-block.md — the block would be retyped from prose again, which is how it drifted out of the schema's vocabulary the first time"
+
+# 9. No live surface spells the runtime as an executable that does not exist. The bash entrypoint
+# `.weavedoc/bin/weavedoc` was deleted in bundle 2026-08-05.3; every call is `node …weavedoc.mjs`.
+# Matched with a trailing space, which is what makes it a COMMAND — README's prose mentions the
+# deleted file by name (`.weavedoc/bin/weavedoc`, backtick-closed) as history and must stay legal.
+# notes/ and CHANGELOG.md are excluded on purpose: they record runs that really did use bash, and
+# rewriting a measurement to satisfy a grep is falsifying the record.
+stale_cmd=$(grep -rnE '\.weavedoc/bin/weavedoc[[:space:]]' \
+  "$REPO/.weavedoc" "$REPO/.claude/skills" \
+  "$REPO/README.md" "$REPO/WORKFLOW.md" "$REPO/METHODOLOGY.md" "$REPO/UPGRADING.md" 2>/dev/null || true)
+[ -z "$stale_cmd" ] || say "a live surface invokes the deleted bash entrypoint (it is 'node .weavedoc/bin/weavedoc.mjs <cmd>'): $stale_cmd"
+
 # 3. The VERSION label and CHANGELOG's newest entry are one fact.
 v=$(cat "$REPO/.weavedoc/VERSION" 2>/dev/null)
 top=$(grep -m1 '^## ' "$REPO/CHANGELOG.md" | sed 's/^## *//')
