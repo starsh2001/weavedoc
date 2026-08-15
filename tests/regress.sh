@@ -4590,7 +4590,25 @@ meta_key_covers_the_git_index() {
   # A STAGED-ONLY change: the file on disk is edited AND staged, so a key that ignored the index
   # would still move — stage a change and then restore the worktree copy, leaving only the index.
   printf '\n// staged only\n' >> "$repo/.weavedoc/bin/lib/core.mjs"
-  ( cd "$repo" && git add .weavedoc/bin/lib/core.mjs >/dev/null 2>&1 )
+  # The staging add is VERIFIED, not trusted (2026-08-15). It ran with rc unchecked and stderr
+  # discarded, and under a -j6 sweep on MINGW it sporadically failed outright (process pressure —
+  # the same load axis the harness's own speed notes name). The case then reported "the index is
+  # not in the key": a key defect it had not found, when the truth was a fixture that never staged.
+  # Solo runs always passed, so the flake wore the face of a parallel-only regression. Bounded
+  # retries absorb the transient; what makes the case honest is the check that the probe blob
+  # actually LANDED — on continued refusal it fails as a fixture problem, in its own words.
+  local staged="" try adderr="" blobnow blobwas
+  blobwas=$( cd "$repo" && git ls-files -s -- .weavedoc/bin/lib/core.mjs 2>/dev/null )
+  for try in 1 2 3; do
+    adderr=$( cd "$repo" && git add .weavedoc/bin/lib/core.mjs 2>&1 )
+    # Verified by the INDEX LISTING, not by rc alone and never by `diff --cached` — this repo has
+    # no commit, so HEAD does not resolve and that diff answers a different question. The probe
+    # landed exactly when the file's index entry (mode+blob) is no longer the pre-append one.
+    blobnow=$( cd "$repo" && git ls-files -s -- .weavedoc/bin/lib/core.mjs 2>/dev/null )
+    if [ -n "$blobnow" ] && [ "$blobnow" != "$blobwas" ]; then staged=1; break; fi
+    sleep 0.3
+  done
+  if [ -z "$staged" ]; then OUT="probe not staged after 3 attempts · index=[$blobnow] · git said: ${adderr:-nothing}"; RC=0; bad "the scratch add kept failing — a fixture fault, not a key verdict"; return; fi
   sed -i '$ d' "$repo/.weavedoc/bin/lib/core.mjs"; sed -i '$ d' "$repo/.weavedoc/bin/lib/core.mjs"
   after=$( cd "$repo" && WD_REG_RES= WD_REG_KEY= TMPDIR="$W" bash tests/regress.sh --seal-check zzzzzzzzzzzz 2>&1 | sed -n 's/.*, \([0-9a-f]*\) now\..*/\1/p' )
   OUT="before=$before after=$after"
@@ -6950,8 +6968,21 @@ acct_intake_census_counts_the_split() {
   # print "digest-bound" for a comparison it did not run. That sentence is the assertion.
   mkmat2
   vrun census
-  expect_has "1 declared · 0 no-source · 0 legacy-unbound · 1 undeclared"
+  expect_has "1 declared · 0 anchored · 0 no-source · 0 legacy-unbound · 1 undeclared"
   expect_has "row presence only"
+}
+acct_intake_census_counts_anchored() {
+  # EVERY consumer prints every sound bucket, measured with the bucket NON-ZERO — the split case
+  # above ran with 0 anchored, which is exactly how census shipped without the word: a print
+  # statement that omits a bucket looks identical to one that counts it, until a mine actually
+  # holds one. The first real mine did (31 anchored), and census described 32 materials with four
+  # buckets summing to 1. Caught by the record-floor step of a live verify round, not by CI.
+  mkmat2
+  vrun upgrade --apply; expect_pass
+  vrun intake --anchor-existing '닻'
+  expect_pass
+  vrun census
+  expect_has "1 declared · 1 anchored · 0 no-source · 0 legacy-unbound · 0 undeclared"
 }
 acct_intake_census_reports_before_any_truth_exists() {
   # A mine mid-gather — materials in, truths not yet extracted — takes census's no-truths early

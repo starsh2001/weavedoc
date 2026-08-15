@@ -1,5 +1,5 @@
 census: truth files 1 · index entries 1 · coverage records 1/1 material(s)
-  intake  1 declared · 0 no-source · 0 legacy-unbound · 0 undeclared  of 1 live material(s)  (row presence only — 'weavedoc scope' compares the digests)
+  intake  1 declared · 0 anchored · 0 no-source · 0 legacy-unbound · 0 undeclared  of 1 live material(s)  (row presence only — 'weavedoc scope' compares the digests)
 declared-marker scan (converted.md + truths/t*.md only):
 unchecked-checkbox scan (converted.md + truths/t*.md only):
 — 0 marker line(s) + 0 unchecked checkbox(es) — RAW scan, not an open count: gaps.md records 0 already accepted. Non-blocking; run the weavedoc-gaps skill to reconcile these against gaps.md and to cover reference/enumeration/symmetry + fill-or-accept.

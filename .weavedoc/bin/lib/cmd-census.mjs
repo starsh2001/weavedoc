@@ -21,7 +21,14 @@ function intakeLines (m) {
   const live = cls.population
   if (live === 0) return []
   const rel = `${m.materials.replace(`${m.root}/`, '')}/${m.intakeFile()}`
-  const lines = [`  intake  ${cls.declared.length} declared · ${cls.noSource.length} no-source · ${cls.legacy.length} legacy-unbound · ${cls.undeclared.length} undeclared  of ${live} live material(s)  (row presence only — 'weavedoc scope' compares the digests)`]
+  // EVERY sound bucket, or the line stops summing. This line shipped without `anchored` for the
+  // hours between the word's birth and the first real mine that used it — census then reported
+  // "0 declared · 1 no-source · 0 legacy-unbound · 0 undeclared of 32" over a mine holding 31
+  // anchored rows: four buckets summing to 1 while claiming to describe 32. The classification is
+  // shared (classifyIntake), so the split CANNOT disagree between consumers — but each consumer's
+  // print statement is its own, and a bucket a print statement omits vanishes only there. That is
+  // the two-readers split on the display axis, caught by this project's own record-floor step.
+  const lines = [`  intake  ${cls.declared.length} declared · ${cls.anchored.length} anchored · ${cls.noSource.length} no-source · ${cls.legacy.length} legacy-unbound · ${cls.undeclared.length} undeclared  of ${live} live material(s)  (row presence only — 'weavedoc scope' compares the digests)`]
   if (cls.undeclared.length > 0) {
     lines.push(`    → undeclared: ${cls.undeclared.join(' ')} — no record of how they arrived; declare with 'weavedoc intake', or fill a pre-ledger mine's rows once with 'weavedoc upgrade --apply'`)
   }

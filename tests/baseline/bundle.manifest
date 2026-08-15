@@ -15,7 +15,7 @@ ec8c206b0985cfcd3786d8ada5ada3661b9ed2e5d4524ac9c5bcf5df073bb871  .weavedoc/PARS
 33cb56552ffdacd0069b8626f27ac8fdb2cee62c161ad04aec72e87be7c3c356  .weavedoc/VERSION
 d84c7e74d36aec1a04a0b12dd2c0f09ff664963a692a90956224a368d1cf20b5  .weavedoc/bin/lib/artifact-contracts.mjs
 02d4f236a69c6f1709f5ea24a613e3200af40694fb5dc68816d0bfd366e3e5de  .weavedoc/bin/lib/cmd-attest.mjs
-6837e4117e0eae004853299893ee43c2ec71955cdd3d82fa93376253c13f6a70  .weavedoc/bin/lib/cmd-census.mjs
+c3cf21e1a8aa6db9c6232f2d8ffb8888ae5e6549f9e5071260569f5e05ff906a  .weavedoc/bin/lib/cmd-census.mjs
 de08795b1a49535978c16daa15bf11eeb93778f0d0d9fbbf974e6e92c6a60284  .weavedoc/bin/lib/cmd-consecrate.mjs
 53e083a4afa318f0311d84374fc5f50afc1efb01f777cf4bf80c21a89b7ab775  .weavedoc/bin/lib/cmd-gaps.mjs
 af4e0dab93931bb30ac6c9bd18aea06d90d2a7673c838e8b862c3a2bc9b96dbb  .weavedoc/bin/lib/cmd-impact.mjs
