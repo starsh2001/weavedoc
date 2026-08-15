@@ -4585,7 +4585,24 @@ meta_key_covers_the_git_index() {
   # standing, so these two calls wrote 79 objects of this scratch repo into whatever repository that
   # variable named — measured, with the case still reporting PASS. tests/git-env.sh clears the whole
   # set for the process instead, which is what meta_git_env_writes_stay_inside exercises.
-  ( cd "$repo" && git init -q . && git add -A >/dev/null 2>&1 ) || { bad "could not build a scratch git repo"; return; }
+  # THE INDEX IS SEEDED WITH ONE FILE, NOT THE TREE (2026-08-15). This stood as `git add -A` —
+  # hundreds of files staged whose contents the assertion never reads: the case only needs an index
+  # whose LISTING changes when the probe is staged, and a one-entry index gives exactly that. The
+  # wide add was also where the load flake moved next: after the probe add was verified and
+  # retried, CI went red one step earlier with "could not build a scratch git repo" on two OSes —
+  # the same silent-git-failure shape, relocated to the biggest remaining IO burst. Every git step
+  # here is now (a) small, (b) verified by its observable effect, (c) failed loudly WITH git's own
+  # words when it truly refuses — because three rounds of this case's history say the next silent
+  # step is where the flake goes.
+  local giterr=""
+  giterr=$( cd "$repo" && git init -q . 2>&1 ) || { OUT="git init said: ${giterr:-nothing}"; RC=0; bad "could not init the scratch git repo"; return; }
+  local seeded="" try
+  for try in 1 2 3; do
+    giterr=$( cd "$repo" && git add .weavedoc/VERSION 2>&1 )
+    [ -n "$( cd "$repo" && git ls-files -s -- .weavedoc/VERSION 2>/dev/null )" ] && { seeded=1; break; }
+    sleep 0.3
+  done
+  [ -n "$seeded" ] || { OUT="seed add not in the index after 3 attempts · git said: ${giterr:-nothing}"; RC=0; bad "could not seed the scratch index — a fixture fault, not a key verdict"; return; }
   before=$( cd "$repo" && WD_REG_RES= WD_REG_KEY= TMPDIR="$W" bash tests/regress.sh --seal-check zzzzzzzzzzzz 2>&1 | sed -n 's/.*, \([0-9a-f]*\) now\..*/\1/p' )
   # A STAGED-ONLY change: the file on disk is edited AND staged, so a key that ignored the index
   # would still move — stage a change and then restore the worktree copy, leaving only the index.
