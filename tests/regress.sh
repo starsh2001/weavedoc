@@ -74,11 +74,15 @@ key_paths() { ( cd "$1" && find tests .weavedoc/templates .weavedoc/bin .weavedo
 # computed and that cannot differ (same commit, same bytes, same tools — the worker is the same
 # process tree). The parent exports WD_REG_RES; a worker takes it and skips straight to the run.
 # Set only by this script for its own children, so a human running `--one` still keys normally.
-if [ -n "${WD_REG_RES:-}" ]; then
-  RES="$WD_REG_RES"
-  CACHE=$(dirname "$RES")
-  KEY="${WD_REG_KEY:-inherited}"
-else
+# compute_key is DEFINED unconditionally and CALLED only by the driver (2026-08-16). It used to
+# live inside the else-branch, so a WORKER had no such function — which is why any case needing a
+# key for a scratch tree had to spawn a NESTED regress.sh child with WD_REG_RES cleared. That child
+# was the flake: seven CI rounds chased it around meta_key_covers_the_git_index (a silent add, then
+# a silent init, then an empty key), green solo every time and red only under a loaded -j6 sweep.
+# The function is pure over $REPO, so defining it here lets those cases call it IN-PROCESS and
+# deletes both the nested bash startup and the ~25 spawns it re-did. The worker still never CALLS
+# it — the key is inherited exactly as before, which is the property v0.5.12 bought.
+
 # A FUNCTION, because the key is computed TWICE (v0.5.13): once to name the cache, and once when
 # the workers are done, to prove the tree did not move under them. Two spellings would be two
 # answers about the same bytes — the class this repo keeps closing — so there is one.
@@ -162,7 +166,12 @@ compute_key() { { git -C "$REPO" rev-parse HEAD 2>/dev/null
          uname -sr; bash --version | head -1; awk --version 2>/dev/null | head -1; sed --version 2>/dev/null | head -1
          printf '%s' "${WD_REG_KEY_SALT:-}"
        } | sha256sum | awk '{print $1}' | cut -c1-12 ; }
-KEY=$(compute_key)
+if [ -n "${WD_REG_RES:-}" ]; then
+  RES="$WD_REG_RES"
+  CACHE=$(dirname "$RES")
+  KEY="${WD_REG_KEY:-inherited}"
+else
+  KEY=$(compute_key)
 
 # THE SEAL, as a function so the REFUSAL ITSELF can be exercised (cold review, v0.5.13). The first
 # version was a bare `if` at the tally and a source-shape case that counted its text — and text is
@@ -4574,7 +4583,7 @@ meta_key_covers_the_git_index() {
   local repo="$W/gitrepo" before after
   mkdir -p "$repo" && cp -r "$REPO/tests" "$REPO/.weavedoc" "$repo"/ 2>/dev/null
   mkdir -p "$repo/.claude" && cp -r "$REPO/.claude/skills" "$repo/.claude"/ 2>/dev/null
-  cp "$REPO/README.md" "$REPO/CHANGELOG.md" "$repo"/ 2>/dev/null
+  cp "$REPO/README.md" "$REPO/CHANGELOG.md" "$REPO/WORKFLOW.md" "$repo"/ 2>/dev/null
   # `git init` HONOURS an inherited GIT_DIR — it re-initialises THAT dir instead of making
   # one here, and the `git add -A` then stages this scratch tree into the REAL repository's index,
   # marking every real entry deleted (measured; the case still reported PASS). GIT_DIR is set inside
@@ -4603,10 +4612,27 @@ meta_key_covers_the_git_index() {
     sleep 0.3
   done
   [ -n "$seeded" ] || { OUT="seed add not in the index after 3 attempts · git said: ${giterr:-nothing}"; RC=0; bad "could not seed the scratch index — a fixture fault, not a key verdict"; return; }
-  before=$( cd "$repo" && WD_REG_RES= WD_REG_KEY= TMPDIR="$W" bash tests/regress.sh --seal-check zzzzzzzzzzzz 2>&1 | sed -n 's/.*, \([0-9a-f]*\) now\..*/\1/p' )
-  # A STAGED-ONLY change: the file on disk is edited AND staged, so a key that ignored the index
-  # would still move — stage a change and then restore the worktree copy, leaving only the index.
-  printf '\n// staged only\n' >> "$repo/.weavedoc/bin/lib/core.mjs"
+  # THE KEY IS COMPUTED IN-PROCESS, not by a nested regress.sh child. `compute_key` is pure over
+  # $REPO and is defined in every branch since 2026-08-16, so a subshell with $REPO repointed
+  # answers exactly what the child answered — minus a bash startup, a 5,000-line re-parse and the
+  # ~25 spawns it redid, and minus the flake that lived in precisely those (seven CI rounds chased
+  # it through this case, green solo every single time).
+  before=$( REPO="$repo" compute_key )
+  # THE PROBE IS A FILE THE KEY DOES NOT HASH BY CONTENT. Four CI rounds went into this choice.
+  # The probe used to append to `bin/lib/core.mjs` — which the key DOES hash — so isolating the
+  # index effect needed the worktree edit undone afterwards, making this a three-step dance in
+  # which every step could fail silently under load. It did, twice, in two different places; and
+  # the second failure's diagnostic showed the index already holding the PROBED blob before that
+  # probe had run — a state no sequential execution of this function produces. The lesson taken
+  # was not "explain that state" but "stop building it".
+  #
+  # `WORKFLOW.md` is tracked and NOT content-hashed by `compute_key` (which hashes README.md,
+  # CHANGELOG.md and the .weavedoc tree, not this file). So staging it can move the key through
+  # EXACTLY ONE path — `git ls-files -s -z`, the index half this case exists to police — and no
+  # worktree restore is needed, because the key never looked at these bytes. Three fragile steps
+  # become one. If someone later adds WORKFLOW.md to the key's content list this case would go
+  # VACUOUS rather than red, which is why the staging below is asserted by the index listing too.
+  printf '\nstaged-only probe\n' >> "$repo/WORKFLOW.md"
   # The staging add is VERIFIED, not trusted (2026-08-15). It ran with rc unchecked and stderr
   # discarded, and under a -j6 sweep on MINGW it sporadically failed outright (process pressure —
   # the same load axis the harness's own speed notes name). The case then reported "the index is
@@ -4614,43 +4640,26 @@ meta_key_covers_the_git_index() {
   # Solo runs always passed, so the flake wore the face of a parallel-only regression. Bounded
   # retries absorb the transient; what makes the case honest is the check that the probe blob
   # actually LANDED — on continued refusal it fails as a fixture problem, in its own words.
-  local staged="" try adderr="" blobnow blobwas
-  blobwas=$( cd "$repo" && git ls-files -s -- .weavedoc/bin/lib/core.mjs 2>/dev/null )
+  local staged="" try adderr="" idxnow
   for try in 1 2 3; do
-    adderr=$( cd "$repo" && git add .weavedoc/bin/lib/core.mjs 2>&1 )
+    adderr=$( cd "$repo" && git add WORKFLOW.md 2>&1 )
     # Verified by the INDEX LISTING, not by rc alone and never by `diff --cached` — this repo has
-    # no commit, so HEAD does not resolve and that diff answers a different question. The probe
-    # landed exactly when the file's index entry (mode+blob) is no longer the pre-append one.
-    blobnow=$( cd "$repo" && git ls-files -s -- .weavedoc/bin/lib/core.mjs 2>/dev/null )
-    if [ -n "$blobnow" ] && [ "$blobnow" != "$blobwas" ]; then staged=1; break; fi
+    # no commit, so HEAD does not resolve and that diff answers a different question. WORKFLOW.md
+    # was not in the index before (the seed staged only VERSION), so its mere presence is the proof.
+    idxnow=$( cd "$repo" && git ls-files -s -- WORKFLOW.md 2>/dev/null )
+    [ -n "$idxnow" ] && { staged=1; break; }
     sleep 0.3
   done
-  # BOTH readings in the diagnostics, because one CI red arrived with exactly one and it was not
-  # enough to convict: index=[the PROBED blob] before this loop's add ever ran — a state no
-  # sequential execution of this function produces. With blobwas recorded, the next occurrence is
-  # decisive: probed-blob there proves the scratch outlived a previous execution of this case;
-  # empty there disproves the comparison logic instead. A diagnostic that cannot distinguish the
-  # two theories is the "check that reports without saying anything" class, one layer down.
-  if [ -z "$staged" ]; then OUT="probe not staged after 3 attempts · was=[$blobwas] · now=[$blobnow] · git said: ${adderr:-nothing}"; RC=0; bad "the scratch add kept failing — a fixture fault, not a key verdict"; return; fi
-  sed -i '$ d' "$repo/.weavedoc/bin/lib/core.mjs"; sed -i '$ d' "$repo/.weavedoc/bin/lib/core.mjs"
-  after=$( cd "$repo" && WD_REG_RES= WD_REG_KEY= TMPDIR="$W" bash tests/regress.sh --seal-check zzzzzzzzzzzz 2>&1 | sed -n 's/.*, \([0-9a-f]*\) now\..*/\1/p' )
-  OUT="before=$before after=$after"
+  if [ -z "$staged" ]; then OUT="probe not staged after 3 attempts · index=[$idxnow] · git said: ${adderr:-nothing}"; RC=0; bad "the scratch add kept failing — a fixture fault, not a key verdict"; return; fi
+  after=$( REPO="$repo" compute_key )
+  OUT="before=$before after=$after index=[$idxnow]"
+  # BOTH keys must be non-empty before the comparison means anything — an empty second reading made
+  # `before != after` true once and would report "covered" while measuring nothing (the sibling
+  # case learned this the same way). Each emptiness gets its own sentence: they are different
+  # faults, and one message for both is one message that names neither.
   if [ -z "$before" ]; then bad "no key from the scratch repo — the comparison would be vacuous"; return; fi
-  # MEASURE TWICE ON EQUALITY (2026-08-15). The subject is deterministic code: a key that truly
-  # stopped covering the index answers the same on every re-measure, so a second equal reading is a
-  # real red and loses nothing. What a single reading could NOT distinguish is the environmental
-  # shape this case kept producing on loaded sweeps — observed on MINGW -j6 and once on the Linux
-  # leg: staging VERIFIED in the parent, yet one child invocation answering with the unstaged key,
-  # i.e. a child that failed to read the scratch, not a key that failed to cover it. The re-measure
-  # spawns a fresh child; the diagnostics keep both readings plus the parent's own index hash, so a
-  # genuine failure names which side disagreed instead of wearing the flake's face.
-  if [ "$before" = "$after" ]; then
-    local idxhash after2
-    idxhash=$( cd "$repo" && git ls-files -s -z 2>/dev/null | sha256sum | cut -c1-12 )
-    after2=$( cd "$repo" && WD_REG_RES= WD_REG_KEY= TMPDIR="$W" bash tests/regress.sh --seal-check zzzzzzzzzzzz 2>&1 | sed -n 's/.*, \([0-9a-f]*\) now\..*/\1/p' )
-    OUT="before=$before after=$after after2=$after2 parent-index=$idxhash"
-    if [ "$before" = "$after2" ]; then bad "a staged-only change did not move the key on two measurements — the index is not in it"; return; fi
-  fi
+  if [ -z "$after" ]; then bad "the second key came back empty — the child could not read the scratch, so nothing was measured"; return; fi
+  if [ "$before" = "$after" ]; then bad "a staged-only change did not move the key — the index is not in it"; return; fi
   ok
 }
 meta_git_env_ignored_by_key_and_manifest() {
@@ -4919,7 +4928,12 @@ meta_key_seal_is_one_function_called_twice() {
   # and looks like a real drift).
   local src="$REPO/tests/regress.sh" defs start tally
   defs=$(grep -c '^compute_key() {' "$src")
-  start=$(grep -c '^KEY=\$(compute_key)$' "$src")
+  # Two spaces: the call sits inside the driver's else-branch since 2026-08-16, when the DEFINITION
+  # was hoisted above the worker gate so scratch-tree cases could call it in-process. The property
+  # this line pins is unchanged — the start-of-run key is a CALL, never re-inlined — so the pattern
+  # follows the source's indent exactly rather than being loosened to \s*, which would let a future
+  # inline hide inside whitespace.
+  start=$(grep -c '^  KEY=\$(compute_key)$' "$src")
   tally=$(grep -c '^if \[ -z "\${WD_REG_RES:-}" \]; then seal_or_refuse "\$KEY"; fi$' "$src")
   OUT="defs=$defs start=$start tally=$tally"; RC=0
   if [ "$defs" != 1 ]; then bad "compute_key must be defined exactly once, found $defs"
