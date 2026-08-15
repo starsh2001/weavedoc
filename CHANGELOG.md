@@ -4,6 +4,16 @@
 
 ---
 
+## 2026-08-08.30
+
+**v0.6.2 — the mine gets a door, and the door watches both sides.** Publishes bundles `.27`–`.29`. Runtime bytes are identical to `.29` — fingerprint `06f3106b039d` — and this bundle moves only the label, the same shape `.24` and `.26` had for v0.6.0 and v0.6.1.
+
+**What is new, in one line each.** A material now records **how it entered the mine** (`materials/intake-ledger.tsv`, written only by `weavedoc intake`), bound to a digest over its `source.*` **and** one over the mine's own copy, `converted.md`. A pre-ledger mine binds its backlog in place with `intake --anchor-existing`, as a person's explicit act, under a fourth declaration word (`anchored`) that never reads as `declared` and never as verified. `upgrade` reports what an unbound backlog costs instead of deciding in silence. And the `CLAUDE.md` pointer block became bundle-owned, with `validate` naming it stale by byte comparison.
+
+**Why the copy is bound, and why that half exists at all.** The intake ledger shipped in `.28` watching the original. A real run then showed the other half is what gets edited: an owner said *drop this from the project*, and the session carried it out by **deleting a column out of a material** — the mine's own record of what a source document said — while re-cutting the truth cards that quoted it to match. Seals passed, coverage closed, `validate` was green at `247/247 sealed`, and the record disagreed with its original the whole time. The material had never been verified, so no digest existed to notice. `scope` now reports `stale (source)` and `stale (copy)` apart, and the copy line names the one thing a machine cannot judge: a conversion **fix** belongs there, a **decision** about the mine does not. Reproduced on a copy of that mine before shipping: `validate` green, `scope` names the material.
+
+**No schema change and no migration required beyond the one command every pre-ledger mine already owed** (`upgrade --apply`, which now also says what it left unbound). `MAT-UNDECLARED`, `MAT-INTAKE-LEDGER` and `CLAUDE-BLOCK-STALE` are **warnings and never blocks** — every mine in existence predates all three, and a check that reddens every project at once is one nobody reads by the second day.
+
 ## 2026-08-08.29
 
 **Unreleased — two defects found by running `.28` against the first real mine that held anchored rows**; one in the bundle, one in the harness. Both are the classes this repo keeps names for, caught by its own record-floor step in a live verify round.
