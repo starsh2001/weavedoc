@@ -4583,7 +4583,7 @@ meta_key_covers_the_git_index() {
   local repo="$W/gitrepo" before after
   mkdir -p "$repo" && cp -r "$REPO/tests" "$REPO/.weavedoc" "$repo"/ 2>/dev/null
   mkdir -p "$repo/.claude" && cp -r "$REPO/.claude/skills" "$repo/.claude"/ 2>/dev/null
-  cp "$REPO/README.md" "$REPO/CHANGELOG.md" "$REPO/WORKFLOW.md" "$repo"/ 2>/dev/null
+  cp "$REPO/README.md" "$REPO/CHANGELOG.md" "$repo"/ 2>/dev/null
   # `git init` HONOURS an inherited GIT_DIR — it re-initialises THAT dir instead of making
   # one here, and the `git add -A` then stages this scratch tree into the REAL repository's index,
   # marking every real entry deleted (measured; the case still reported PASS). GIT_DIR is set inside
@@ -4626,13 +4626,21 @@ meta_key_covers_the_git_index() {
   # probe had run — a state no sequential execution of this function produces. The lesson taken
   # was not "explain that state" but "stop building it".
   #
-  # `WORKFLOW.md` is tracked and NOT content-hashed by `compute_key` (which hashes README.md,
-  # CHANGELOG.md and the .weavedoc tree, not this file). So staging it can move the key through
-  # EXACTLY ONE path — `git ls-files -s -z`, the index half this case exists to police — and no
-  # worktree restore is needed, because the key never looked at these bytes. Three fragile steps
-  # become one. If someone later adds WORKFLOW.md to the key's content list this case would go
-  # VACUOUS rather than red, which is why the staging below is asserted by the index listing too.
-  printf '\nstaged-only probe\n' >> "$repo/WORKFLOW.md"
+  # THE PROBE FILE IS CREATED HERE, not copied from the repo. It first pointed at `WORKFLOW.md`
+  # — tracked, and not content-hashed by `compute_key` — which was the right PROPERTY reached by
+  # the wrong means: the scratch build copies root files under `2>/dev/null`, nothing asserted the
+  # copy landed, and on the Windows leg it did not (`pathspec 'WORKFLOW.md' did not match any
+  # files`). That silence had been harmless for years because the key hashes `$REPO/README.md`,
+  # never the scratch copy — until this case made one of those copies load-bearing.
+  #
+  # A file created in place has the same property by construction and depends on nothing: it sits
+  # outside every path `compute_key` hashes (`tests`, `.weavedoc/{templates,bin,schemas}`, plus
+  # named root files), so staging it moves the key through EXACTLY ONE route — `git ls-files -s
+  # -z`, the index half this case exists to police. No worktree restore is needed either, because
+  # the key never looked at these bytes: three fragile steps became one, and now zero of them
+  # depend on a copy nobody checked.
+  local probe="index-probe.txt"
+  printf 'staged-only probe\n' > "$repo/$probe"
   # The staging add is VERIFIED, not trusted (2026-08-15). It ran with rc unchecked and stderr
   # discarded, and under a -j6 sweep on MINGW it sporadically failed outright (process pressure —
   # the same load axis the harness's own speed notes name). The case then reported "the index is
@@ -4642,11 +4650,11 @@ meta_key_covers_the_git_index() {
   # actually LANDED — on continued refusal it fails as a fixture problem, in its own words.
   local staged="" try adderr="" idxnow
   for try in 1 2 3; do
-    adderr=$( cd "$repo" && git add WORKFLOW.md 2>&1 )
+    adderr=$( cd "$repo" && git add "$probe" 2>&1 )
     # Verified by the INDEX LISTING, not by rc alone and never by `diff --cached` — this repo has
     # no commit, so HEAD does not resolve and that diff answers a different question. WORKFLOW.md
     # was not in the index before (the seed staged only VERSION), so its mere presence is the proof.
-    idxnow=$( cd "$repo" && git ls-files -s -- WORKFLOW.md 2>/dev/null )
+    idxnow=$( cd "$repo" && git ls-files -s -- "$probe" 2>/dev/null )
     [ -n "$idxnow" ] && { staged=1; break; }
     sleep 0.3
   done
