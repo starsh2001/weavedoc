@@ -4,6 +4,12 @@
 
 ---
 
+## 2026-08-08.32
+
+**v0.6.3 — verify's rules move to the write side.** Publishes bundle `.31`. Runtime bytes are identical to it — and to v0.6.2's, fingerprint `06f3106b039d` — because everything this release changes is **skill documents**: `gather` audits its conversion in both directions with a value sweep, `map` gains a self-audit step (including the corrections-are-re-grounded-in-place check), and `verify` states that it is the second pass. A new mine copied from this release gets write-time rules a v0.6.2 copy does not; nothing else differs. The fingerprint cannot distinguish the two installs — it hashes `bin+schema`, not skills — so compare the bundle date label for THIS upgrade.
+
+**No schema change, no command change, no migration.** Existing mines adopt it by re-copying `.claude/skills/weavedoc-*`; `.weavedoc/` may be re-copied too but carries no behavioral change.
+
 ## 2026-08-08.31
 
 **The verify lane's rules move to the write side, where they were always supposed to be.** Unreleased. Skill documents only — no runtime change, no schema change.
