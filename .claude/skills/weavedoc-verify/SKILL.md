@@ -7,6 +7,8 @@ description: Cold verification of gather/map transformations — material (원�
 
 Per-transformation fidelity check — the data mine's quality gate. WeaveDoc's three hops each need a gate:
 
+> **This is the SECOND pass, not the first (ruled 2026-08-16).** Every lens below is also a write-time rule: `gather` step 7 runs M1–M3 on the conversion it just wrote, and `map` step 7 runs T1–T3 on the cards it just wrote. **This lane exists for what those missed** — it is the cold, independent re-read, not the place the rules live. Two consequences. (1) A finding here is *also* evidence that a write-side self-audit did not run or did not catch it; when a round finds something the writer's own step should have, say so in the round record, because the repeating defect is the skipped procedure, not the missed check. (2) Never treat "verify will catch it" as licence to write loosely — a mine that leans on this lane pays a cold panel per material forever, and a real one accumulated 50 unpassed cards exactly that way.
+
 | hop | gate | checks |
 |-----|------|--------|
 | 원본 → converted.md | **this skill (material)** | conversion fidelity |

@@ -4,6 +4,28 @@
 
 ---
 
+## 2026-08-08.32
+
+**v0.6.3 — verify's rules move to the write side.** Publishes bundle `.31`. Runtime bytes are identical to it — and to v0.6.2's, fingerprint `06f3106b039d` — because everything this release changes is **skill documents**: `gather` audits its conversion in both directions with a value sweep, `map` gains a self-audit step (including the corrections-are-re-grounded-in-place check), and `verify` states that it is the second pass. A new mine copied from this release gets write-time rules a v0.6.2 copy does not; nothing else differs. The fingerprint cannot distinguish the two installs — it hashes `bin+schema`, not skills — so compare the bundle date label for THIS upgrade.
+
+**No schema change, no command change, no migration.** Existing mines adopt it by re-copying `.claude/skills/weavedoc-*`; `.weavedoc/` may be re-copied too but carries no behavioral change.
+
+## 2026-08-08.31
+
+**The verify lane's rules move to the write side, where they were always supposed to be.** Unreleased. Skill documents only — no runtime change, no schema change.
+
+**The defect, stated by the user:** *"검증에 있는 룰은 자료를 작성할때부터 적용이 되어야해. 그걸 미처 못했을때를 대비해서 검증이 있을뿐이야."* Measured, they were right and the gap was wide. `verify` grades a conversion on three lenses (completeness · accuracy · hallucination) and an extraction on five (quote · coverage · atomicity · tags · consumer). Of those, `gather`'s self-audit carried **one** — the hallucination direction, converted→source — and `map` had **no self-audit step at all**. So the write side wrote loosely and a cold panel paid for it later, per material, forever: one real mine reached 50 unpassed cards that way, and a single material's re-check this week cost three cold reviewers plus a defender.
+
+**`gather` step 7 now runs both directions and the value sweep.** The old step asked only "can every element of converted.md be pointed back at the source" — which cannot see a *dropped* table, and its own flag line said so out loud ("a converted.md with **more** sections than its source is an automatic flag" — more, never fewer). Added: the source→converted walk (nothing lost) and an exact cross-check of every value, table cell, date, name and quoted string. Spacing inside a quote is part of the value — a real run's `이야기 속` vs `이야기속`, preserved per position, was the evidence that no normalization had happened.
+
+**`map` gains a self-audit step (new step 7; reindex and log shift to 8 and 9).** It runs *before* the indexes and the changelog on purpose: everything below it describes the cards as they stand, so auditing after logging means logging a delta you are about to change. Four checks — bodies are contiguous verbatim quotes, each claim says what its own body says (a real claim covered 5 of a table's 7 rows and `pull` shows the claim only, so the missing two were invisible to every consumer), the coverage manifest actually closes when read back, and one card holds one fact. Plus a fifth that fires when the run applied a `corrects:` material: the corrected cards must be **re-grounded in place at the same `tNNN`**. New cards carrying a correction while the old cards still point at the old material is the correction *appended, not applied* — a v2-style supersession chain in a schema that exists to be rid of them. That is precisely what happened on 2026-08-16, four times in one session, and nothing caught it because the rule lived only in map's §On-demand correction, which a run that never opens that section never reads.
+
+**`verify` says out loud that it is the second pass.** A finding there is now also evidence that a write-side self-audit did not run — the repeating defect being the skipped procedure, not the missing check — and the lane warns against being leaned on.
+
+**Harness (no bundle bytes).** The key-index probe stopped depending on a file it did not create. It briefly pointed at `WORKFLOW.md` — tracked, and deliberately not content-hashed by `compute_key` — which was the right property reached by the wrong means: the scratch build copies root files under `2>/dev/null`, nothing asserted the copy landed, and on the Windows leg it did not (`pathspec 'WORKFLOW.md' did not match any files`). That silence had been harmless for years, because the key hashes `$REPO/README.md` and never the scratch copy — until this case made one of those copies load-bearing. The probe now **creates its own file**, which has the same property by construction and depends on nothing.
+
+**No check was added, and that is the point.** The first instinct was a `regrounded:` field plus a `MAT-CORRECTS-UNAPPLIED` diagnostic; the user rejected the reflex: *"불확실성을 기계적 처리로 해결하려는 경향이 있는데 … 문제가 생긴다는건 절차적으로 문제가 있는거지."* The honest reading of this defect is procedural — the rule existed, the run never read it — and a diagnostic would have let the same run proceed and print one more warning. Machinery earns its place where evidence sits *outside* the mine's readable surface (the intake ledger's `source.*` digests, where a falsified copy and its lockstep-edited cards are indistinguishable from the inside); it does not earn its place where a later reader can simply see the wrong shape, as here.
+
 ## 2026-08-08.30
 
 **v0.6.2 — the mine gets a door, and the door watches both sides.** Publishes bundles `.27`–`.29`. Runtime bytes are identical to `.29` — fingerprint `06f3106b039d` — and this bundle moves only the label, the same shape `.24` and `.26` had for v0.6.0 and v0.6.1.
