@@ -75,7 +75,7 @@ gaps.md                 the mine completeness register (# Open / # Accepted)
 .weavedoc/READ.md        the read protocol — how ANY consumer safely reads the mine
 .weavedoc/bin/weavedoc.mjs  deterministic checks — validate · pull · impact · status · scope ·
                          intake · attest · seal-review · consecrate · upgrade · gaps · census ·
-                         reindex · retag · version · lang · locale
+                         reindex · retag · version · lang · locale · interview
 .weavedoc/bin/lib/       the runtime's modules (the behavior lives here, not in the entrypoint)
 .weavedoc/VERSION        runtime bundle label (date) — identity is `version`'s fingerprint, not the date
 ```
@@ -125,6 +125,7 @@ WeaveDoc is a set of Claude Code skills. To use it in a project:
 - `alloc <conflict|material|truth>` — grant the next id from the monotonic allocator (`.weavedoc-state/id-sequences.json`) and print it. Skills never mint ids by max+1 scanning: canonical-current deletes cards, and a rescanned highest-deleted number would point an old citation at a different fact.
 - `status` — each document's stage and its next step, plus the open Human-queue split (you decide / recommendation ready / machine can just do). `status --open` lists the waiting items themselves — every open conflict · question · Human-queue entry · fidelity violation · gap, one line each, through the same judges validate uses (the register reader, the gate's own body reader, the one Human-queue classifier the counters share) — so a closing report can paste the list instead of re-composing it. `version` — bundle date · fingerprint · schema version.
 - `lang` — the project's prose language from config (skills read every reply's language from this). `locale` — the OS language probe init uses for its default (a short code + exit 0, or empty + exit 1 meaning "init should ask").
+- `interview` — init's fixed setup questions as two ready-made `AskUserQuestion` payloads (fidelity/conflicts, then verify/review intensity). The output is **entirely ASCII**, every Korean character pre-escaped, because the step it removes is an agent hand-encoding Hangul on the way into a tool call — which is where the sibling project GroveSpec measured two corrupted syllables reaching the user's screen. The option labels *are* the config values, so the answer needs no translation table. Like `version`/`lang`/`locale` it opens no mine and takes no schema-version gate: init runs it before there is a mine to have a version.
 
 **The `examined:` line.** Every `validate` run prints, before its verdict, what it actually looked at:
 

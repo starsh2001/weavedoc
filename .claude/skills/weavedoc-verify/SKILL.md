@@ -211,6 +211,11 @@ What the human confirms is **the delta of this run**, rendered from `truths/chan
 - **Material**: "이 변환이 정확합니까?" — the human confirms an already-verified conversion, not doing the verification themselves; same delta principle (show what this conversion added/changed).
 - Escalated or rejected → fix and loop back; nothing advances.
 
+## Report
+Open and close this run with the **step report** — the fixed shape in `.weavedoc/FORMATS.md` ("The step report"): the `[weavedoc-verify material]` / `[weavedoc-verify truths] starting` anchor and 2–4 sentences, then `done — …` carrying `Result` · `Open` · `Your turn` · `Next`, in that order, none omitted. `Next` is the section below. What this skill puts in the two middle slots:
+- **Open** — blocking findings not yet repaired, units this round did not reach (`weavedoc scope` owes the list), and a round count still short of `repeat`.
+- **Your turn** — every `Human queue` entry this round wrote, and the confirmation deltas that are the user's to accept or reject.
+
 ## Next
 - After **material verify** → still in the mine-building phase; **map** is available to extract truths.
 - After **truths verify** → the mine is built and verified, which **closes the mine-building phase**. Writing a document is a separate phase, enterable with **plan** when the user wants — or the mine can keep growing (gather / map more). Neither is required. Present it as available ("이제 plan을 할 수 있습니다"), never as an obligation.

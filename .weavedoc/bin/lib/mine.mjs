@@ -66,8 +66,9 @@ export function openMine (scriptDir, cwd = process.cwd()) {
 // green in miniature (a v2 card satisfies every v3 required key while its whole state machinery
 // stays invisible), so a non-v3 mine gets ONE answer — which migration path — and no verdict about
 // anything else. `validate` carries its own richer copy of this gate (stable prob codes, JSON);
-// `upgrade`/`version`/`lang`/`locale` are exempt by design: the migrator must be able to look at
-// the mine it migrates, and the identity commands read no mine at all.
+// `upgrade`/`version`/`lang`/`locale`/`interview` are exempt by design: the migrator must be able
+// to look at the mine it migrates, and the identity commands read no mine at all (`interview`
+// prints init's questionnaire, which is asked BEFORE a mine exists to declare a version).
 // Returns 0 to proceed, or the exit code to return after the printed refusal.
 export function versionGate (m, errln) {
   const pv = (fmLoad(m.project).get('version') ?? '').trim()

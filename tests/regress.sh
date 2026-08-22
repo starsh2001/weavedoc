@@ -3270,12 +3270,52 @@ acct_upgrade_mid_not_material_evidence() {
   expect_has "1 unverified"
   vrun validate; expect_pass
 }
+block_truth_bom_before_the_fence_is_named() {
+  # A BOM'd file shows `---` on line 1 in every editor, every diff and every paste, so the message
+  # "line 1 must be '---'" sent the reader to inspect the one thing that was already correct.
+  # validate has always FAILED CLOSED here — the file is named, the truth is excluded, the run exits
+  # non-zero (measured before this clause existed) — so what was added is the CAUSE, not the refusal.
+  # ONE OF TWO CONSUMERS, not one of two decodings: validate's truth walk and seal-review's fence
+  # check both read latin1, so both hand the predicate EF BB BF. An earlier comment here claimed
+  # this case pinned a "UTF-8 half" — review measured that no caller decodes at all, and the
+  # predicate lost the U+FEFF branch it was describing. Two cases because two call sites can drift.
+  printf '\xEF\xBB\xBF' > "$W/.bom"
+  cat "$W/.bom" "$W/truths/t001.md" > "$W/t" && mv "$W/t" "$W/truths/t001.md"
+  vrun validate
+  expect_block "TRUTH-NO-FM"
+  expect_has "byte-order mark"
+}
+block_truth_missing_fence_does_not_blame_a_bom() {
+  # The other direction, and the reason the clause is conditional: an ordinary missing fence must NOT
+  # be blamed on an invisible byte. A diagnostic that names a cause it did not check is worse than
+  # one that names none — it is a confident wrong answer, and the reader spends the round on encoding.
+  sed -i '1s/^---$/notafence/' "$W/truths/t001.md"
+  vrun validate
+  expect_block "TRUTH-NO-FM"
+  expect_hasnt "byte-order mark"
+}
 block_sealreview_dashnote_fm() {
   # `---note` satisfied the loose `^---` precheck while the strict awk never entered the
   # frontmatter — seal-review printed digests and a success line WITHOUT writing a seal.
   sed -i '1s/^---$/---note/' "$W/documents/d1/review.md"
   vrun seal-review d1 draft
   expect_block "no frontmatter"
+}
+block_sealreview_bom_before_the_fence_is_named() {
+  # The SECOND CONSUMER of the same byte-domain predicate: seal-review reads its lines through
+  # latin1 (byte transparency for the reviewer's prose), exactly as validate's truth walk does, so
+  # both hand it EF BB BF. The two cases exist because two call sites can drift apart — not because
+  # two decodings are covered; review corrected that claim, and the predicate now says in its NAME
+  # which domain it answers for so a decoded caller cannot collect a silent `false`.
+  #
+  # The mark is WRITTEN by the case and never pasted into this file: a literal BOM in a source line
+  # is invisible, which is the trap tests/ctlscan.mjs now watches for after it cost two rounds inside
+  # one patch (and three inside the sibling project's equivalent).
+  printf '\xEF\xBB\xBF' > "$W/.bom"
+  cat "$W/.bom" "$W/documents/d1/review.md" > "$W/t" && mv "$W/t" "$W/documents/d1/review.md"
+  vrun seal-review d1 draft
+  expect_block "no frontmatter"
+  expect_has "byte-order mark"
 }
 block_sealreview_unclosed_fm_keeps_the_seal() {
   # The SIBLING of the case above, and the worse half. `---note` fails the opening precheck; a block
@@ -4436,6 +4476,75 @@ meta_doc_sync() {
 
 # ---- command smoke floor (Phase 2: every CLI command has at least one covered run) ----
 acct_smoke_version() { vrun version; expect_pass; expect_has "fingerprint:"; }
+acct_interview_output_is_pure_ascii() {
+  # The command exists to DELETE the step where Hangul is hand-encoded on its way into an
+  # AskUserQuestion call — the step the sibling project GroveSpec measured going wrong twice on this
+  # exact shape (a mis-recalled codepoint printed 나뉜니다 for 나뉩니다, on the user's screen both
+  # times; the rule "copy it exactly" prevented neither). The whole promise is therefore one
+  # property: NO byte above 0x7e leaves this command. Comments included, not just the arrays — a
+  # rule with an exception is a rule the copier has to judge, and judging is the step being removed.
+  vrun interview
+  expect_pass
+  local nonascii
+  nonascii=$(printf '%s\n' "$OUT" | LC_ALL=C grep -n '[^ -~]' | head -3)
+  [ -z "$nonascii" ] || { bad "interview printed non-ASCII, so the payload is not copy-safe: $nonascii"; return; }
+  # Two arrays, five questions: AskUserQuestion takes at most four questions per call and the
+  # interview asks five, so a single-array payload is unusable no matter how correct its bytes are.
+  local na nq
+  na=$(printf '%s\n' "$OUT" | grep -c '^\[')
+  nq=$(printf '%s\n' "$OUT" | grep -o '"question":"' | grep -c .)
+  [ "$na" = "2" ] || { bad "interview printed $na array(s), not 2 (AskUserQuestion caps a call at 4 questions; the interview asks 5)"; return; }
+  [ "$nq" = "5" ] || { bad "interview printed $nq question(s), not 5"; return; }
+  ok
+}
+acct_interview_labels_are_the_schemas_own_values() {
+  # The questionnaire may only offer values `validate` accepts, and may not withhold one it does.
+  # A label outside the schema hands the user a config value their next validate rejects; a schema
+  # value with no label is a legal setting the interview quietly denies. Both directions, per axis.
+  #
+  # Compared VERBATIM — no suffix is stripped on the way in. An earlier spelling put the
+  # recommendation in the label (`off (추천)`) and stripped it here, so this case asserted
+  # "labels-minus-a-suffix match the schema" while the skill told its reader "the label is the
+  # value": two different claims, with the weaker one under test and the stronger one shipped.
+  # Found in review. The mark now opens the description, the strip is gone from both sides, and what
+  # is asserted is the sentence a follower actually acts on.
+  #
+  # Checked WITHOUT decoding anything: a label is now pure ASCII, so this case is a second consumer
+  # of the ASCII property the case above pins, and it stays a black-box read of stdout.
+  vrun interview
+  expect_pass
+  local chunks line hdr key want got n=0 wrong=""
+  chunks=$(printf '%s\n' "$OUT" | grep '^\[' | sed 's/{"question":"/\n{"question":"/g' | grep '^{"question":"')
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    n=$((n + 1))
+    hdr=$(printf '%s' "$line" | sed -n 's/.*"header":"\([^"]*\)".*/\1/p')
+    case "$hdr" in
+      Completeness)  key=config.enum.completeness ;;
+      Conflicts)     key=config.enum.detection ;;
+      Verify|Review) key=config.strength.range ;;
+      Scale)         key=config.enum.scale ;;
+      *) wrong="$wrong [unmapped header '$hdr']"; continue ;;
+    esac
+    want=$(grep -m1 "^$key:" "$REPO/.weavedoc/schema" | sed "s/^$key:[ 	]*//" | tr '|' '\n' | LC_ALL=C sort | tr '\n' ' ')
+    got=$(printf '%s' "$line" | grep -oE '"label":"[^"]*"' \
+      | sed 's/^"label":"//; s/"$//' \
+      | LC_ALL=C sort | tr '\n' ' ')
+    [ "$want" = "$got" ] || wrong="$wrong [$hdr: schema='$want' asked='$got']"
+  done <<EOF
+$chunks
+EOF
+  # VACUITY GUARD: a broken split would leave the loop with nothing to disagree with and this case
+  # would pass over an unread payload — the failure mode every extraction in this suite refuses.
+  [ "$n" = "5" ] || { bad "the payload split found $n question(s), not 5 — the parse is broken, so nothing was compared"; return; }
+  [ -z "$wrong" ] || { bad "interview offers values the schema does not agree with:$wrong"; return; }
+  ok
+}
+block_interview_extra_arg() {
+  # WD-CLI-001, on a command that takes none: a typo'd intention is refused, never ignored.
+  vrun interview ko
+  expect_block "usage: weavedoc interview"
+}
 acct_golden_outputs_current() {
   # tests/baseline/golden/ is the record of what each command PRINTS on a clean minimal mine, and
   # until now NOTHING read it — it sat a whole release out of date (bundle 2026-08-05.1 next to a
@@ -6674,13 +6783,20 @@ acct_upgrade_ledger_lines_are_utf8() {
   # schemas/v3, same cause); the migrator simply did not route through it. CI's control-character
   # scan covers repository files only — nothing watched what the runtime WRITES INTO A MINE, which
   # is why this case exists rather than another CI path.
+  #
+  # THE SCANNER HAS TWO KINDS OF CONSUMER and bundle .33 taught it the hard way: most read the count
+  # as `tail -1 | sed 's/[^0-9]//g'` and do not care what the label says, while THESE two assert the
+  # sentence. Widening the scanner's net to BOM renamed the label, every count-reading consumer
+  # stayed green, and this case was the only thing that went red — the "rule taught to one consumer"
+  # class, caught by the suite instead of by a reader. The label is contract HERE; the count is
+  # contract everywhere else.
   mk_v2mine
   vrun upgrade --apply
   expect_pass
   OUT=$(node "$REPO/tests/ctlscan.mjs" "$W/truths/changelog.md" | tail -1); RC=0
-  expect_has "lines with control chars: 0"
+  expect_has "lines with invisible characters: 0"
   OUT=$(node "$REPO/tests/ctlscan.mjs" "$W/truths/coverage.md" | tail -1); RC=0
-  expect_has "lines with control chars: 0"
+  expect_has "lines with invisible characters: 0"
   OUT=$(cat "$W/truths/changelog.md"); RC=0
   expect_has "v2→v3 migration —"
 }

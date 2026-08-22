@@ -342,6 +342,29 @@ It is a **pointer and only a pointer**: it says a mine is here and that `.weaved
 
 `validate` byte-compares the marked region against the shipped template (CRLF-normalised, so a Windows checkout does not false-alarm) and warns `CLAUDE-BLOCK-STALE` on any difference — the block is not automatically rewritten, because the mine's writers do not reach outside the mine. The repair is re-running `weavedoc-init`, whose reconfigure path re-ensures the block. The check is silent when neither marker is present (a project that never planted the pointer has no pointer to be stale) and reports `CLAUDE-BLOCK-NOTEMPLATE` when the template is missing, rather than letting an un-run comparison read as a pass.
 
+## The step report (what a skill run says to the user)
+
+The one contract in this file **no parser reads**. Its readers are people, its writers are the nine skills, and it is here for the same reason every other shape is: a surface that is improvised per run has to be re-learned per run. The motive is measured, in the sibling project GroveSpec and here — a skill's opening and closing remarks were composed fresh every time, so the user re-derived "what did it do · what is left · what do I do now" from a different arrangement each run. Fixing the artifact formats and leaving the *report* free left the human gate reading an unformatted surface.
+
+**Opening** — the anchor `[weavedoc-<verb> <target>] starting` (target omitted when the run has none), then 2–4 sentences: what this step is (even on the tenth run), what it will do to *this* mine or document, and what will be in the user's hands when it ends.
+
+**Closing** — the anchor `done — <half-line outcome>`, then four slots, **in this order, none omitted**:
+
+| slot | what it holds |
+|---|---|
+| `Result` | what changed on disk — files written, ids minted, rows appended. Counts, not adjectives. |
+| `Open` | what this run could not settle: refusals the CLI printed, conflicts left open, questions parked in `questions.md`, gaps accepted rather than filled. |
+| `Your turn` | the decisions that are the user's and nobody else's — an adjudication, a tag ruling, a fill-or-accept. Empty is a claim: it says the machine checked and found none. |
+| `Next` | which steps are **available** now. |
+
+An abnormal end is `stopped — <why>` with the same four slots.
+
+- **An empty slot is still a sentence.** "없음" is a checked assertion, and a slot that disappears when empty is indistinguishable from one nobody looked at — the vacuity class this runtime names everywhere else, in its reporting clothes.
+- **Labels are fixed English** (`Result`, `Open`, `Your turn`, `Next`), like every other structural identifier here; the prose in them is `config.language`.
+- **Offer, don't direct.** `Next` says what the user *can* do ("이제 verify를 할 수 있습니다"), never what they must. The workflow runs in alternating phases and no boundary between them is obligatory — the machine offers, the human decides. The rule's **owner is here**: before this section it lived only inside two of the nine skills, so seven runs inherited nothing.
+- **The structure is fixed; the content is not.** Every sentence must be verifiable against *this* run. A fixed reassurance phrase ("모든 검사를 통과했습니다") that is not read off this run's output is a rubber stamp wearing the skeleton's clothes — the failure the fixed shape exists to prevent, not a way to satisfy it.
+- **Tone: warm, complete sentences**, addressed to someone who may not read code. A telegram is a format violation even when it is true. This does not contradict the artifacts' compression rule: an artifact is written to be re-read, so it is cut to the bone; a report is said once to orient a person, so the explanation *is* the body. When `config.language` is Korean the report is **합니다체** (the artifacts stay 문어체 — `~한다`/`~이다`, which is what Korean technical prose does and is addressed to no one).
+
 ## Diagnostic codes (the machine contract)
 
 Every problem and warning the checker emits carries a **stable code**. The code is the contract — automation matches on it; the English message is presentation and may be reworded at any time. Human output prints `[CODE] message`; `--json` carries `{"code":…,"message":…}`. `meta_diag_code_table` fails the suite if the binary emits a code missing here, or if this table names a code the binary cannot emit.

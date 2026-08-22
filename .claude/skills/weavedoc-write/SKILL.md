@@ -36,6 +36,11 @@ Draw a document from the data mine — write the draft from the plan, grounded s
 6. Repeat step 5 until no necessary placeholders or open conflicts remain. If a fact is genuinely unobtainable even by asking, leave a clearly flagged blank (last resort) — never invent.
 7. **Update `cited_truths`.** Scan all draft files (`draft.md` or `draft/*.md`) for `<!-- t:<id> -->` markers and write the collected truth ids to `plan.md` frontmatter `cited_truths`. This enables change propagation — when a cited truth changes, this document gets marked `stale`.
 
+## Report
+Open and close this run with the **step report** — the fixed shape in `.weavedoc/FORMATS.md` ("The step report"): the `[weavedoc-write <doc-id>] starting` anchor and 2–4 sentences, then `done — …` carrying `Result` · `Open` · `Your turn` · `Next`, in that order, none omitted. `Next` is the section below. What this skill puts in the two middle slots:
+- **Open** — sections written thinner than planned because the mine had nothing to ground them, and any claim you could not cite.
+- **Your turn** — the facts a section needs and no material holds; the draft itself is not the user's to approve yet, the review gate comes first.
+
 ## Next
 Still in the **document-writing phase**. **review** is available next — the fidelity gate (mandatory for consecration) + the cold advisory pass. Offer it as the path forward; note only that final output requires a clean gate.
 

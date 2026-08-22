@@ -49,6 +49,30 @@ export const M = (strs, ...vals) => strs.reduce((a, s, i) => a + U(s) + (i < val
 // class for the line that carried two of them, which both runtimes still read as a fence.
 export const isFence = l => /^---[ \t\v\f\r]*$/.test(l)
 
+// A fence hiding behind a UTF-8 byte-order mark, IN THE BYTE DOMAIN. NOT an acceptance — a BOM'd
+// file has no frontmatter here and every reader agrees on that, loudly, which is why this is a
+// diagnostic aid and not a parser change. What it fixes is the SENTENCE: a file whose first line is
+// plainly `---` on screen was told "line 1 must be '---'", and the invisible byte that made the
+// claim true shows up in no editor, no diff and no paste. (Measured: `validate` names the file and
+// exits 1 — fail-closed — but a reader following the message inspects the one thing already right.)
+// Accepting the byte instead would cost more than it buys: `splitLines` is the single door for BOTH
+// byte domains, and stripping there would make the utf8 readers and the latin1 writers disagree
+// about the file's bytes — the split-judgment class, bought at the price of a rare input.
+//
+// `…Bytes` LIKE `fmLoadBytes`, and for the same reason. BOTH callers read latin1 — cmd-validate has
+// its own byte-domain `readOr`, and seal-review reads bytes so the reviewer's prose survives a
+// rewrite — so the mark arrives as the three characters EF BB BF and never as U+FEFF. The first
+// spelling of this rule also matched the decoded U+FEFF "for the utf8 readers", and review found
+// that branch could not run: no caller decodes. A branch nothing reaches is indistinguishable from
+// a broken one, so the guarantee is narrowed to what is measured — and the NAME carries the domain
+// to the call site rather than leaving a decoded caller to collect a silent `false`.
+//
+// Written as ESCAPES, never as the characters themselves: an editor shows a literal BOM as nothing
+// at all, so a source line carrying one looks identical to a source line that does not. (Landed one
+// here while writing this and only a byte dump found it — the same trap GroveSpec recorded hitting
+// three times in the equivalent patch; tests/ctlscan.mjs now watches for it.)
+export const bomFenceBytes = l => /^\xEF\xBB\xBF---[ \t\v\f\r]*$/.test(l)
+
 // THE whitespace class between a ledger entry's tags — ONE spelling, because it had three and each
 // pair disagreed somewhere (external review, v0.5.11): validate stripped `[ \t\n\v\f\r]`, status's
 // ownership buckets took `[ \t\v\f]`, and the fold test took `[ \t]`. Measured consequences: a

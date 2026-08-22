@@ -110,6 +110,11 @@ When the user withdraws a source ("m005 빼줘", "이 자료는 잘못됐어") �
 3. **Regenerate `catalog.md`** (the status column shows it).
 4. **Route to map for propagation** — truths are map's write-scope, not gather's: every truth grounded on the retracted material is re-grounded on a live one or deleted (map's correction table, "source retracted" row), citing documents → `stale`. `weavedoc validate` enforces it mechanically — a canonical card still grounded on a retracted material is `TRUTH-SOURCE-DANGLING`, so nothing rides on memory.
 
+## Report
+Open and close this run with the **step report** — the fixed shape in `.weavedoc/FORMATS.md` ("The step report"): the `[weavedoc-gather] starting` anchor and 2–4 sentences, then `done — …` carrying `Result` · `Open` · `Your turn` · `Next`, in that order, none omitted. `Next` is the section below. What this skill puts in the two middle slots:
+- **Open** — materials collected but not converted, a conversion that failed, an intake row that could not be anchored to source bytes (`no-source`), a duplicate left unresolved.
+- **Your turn** — the role classification you could not settle from the material itself, a fact only the user has, and any duplicate whose merge-or-keep ruling is theirs.
+
 ## Next
 Still in the **mine-building phase**. Present these as available, not required:
 - **verify** (material mode) — cold-check conversion fidelity.

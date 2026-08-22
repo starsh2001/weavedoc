@@ -113,7 +113,7 @@ function validateMarker (attrs) {
     // has when the machine cannot compare, so "present" is not the test — legible is.
     // `\s` alone is not enough: U+200B and its zero-width relatives are not Unicode whitespace, so
     // a location made only of them counted as legible while rendering as nothing at all.
-    const INVISIBLE = /[­͏؜᠎​-‏‪-‮⁠-⁤﻿]/
+    const INVISIBLE = /[\u00AD\u034F\u061C\u180E\u200B-\u200F\u202A-\u202E\u2060-\u2064\uFEFF]/
     const legible = attrs.location === undefined
       ? ''
       : [...attrs.location].filter(ch => !/\s/.test(ch) && !INVISIBLE.test(ch) &&
