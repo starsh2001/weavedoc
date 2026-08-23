@@ -4,7 +4,7 @@
 // on the user — the listing is pasted/rendered, never re-composed from memory).
 import { existsSync, statSync, readdirSync } from 'node:fs'
 import { readFileSync } from 'node:fs'
-import { canonId, pipes } from './core.mjs'
+import { canonId, listField, pipes } from './core.mjs'
 import { fmvB, loadSchema } from './read.mjs'
 import { fm, join, docIds, materialIds, truthFiles, basename } from './mine.mjs'
 import { parseReview } from './review-model.mjs'
@@ -167,12 +167,17 @@ export function cmdStatus (m, out) {
   try { ninbox = readdirSync(m.inbox).filter(n => !n.startsWith('.')).length } catch { ninbox = 0 }
   if (ninbox > 0) avail.push(['gather', `${ninbox} file(s) waiting in ${m.inbox.startsWith(`${m.root}/`) ? m.inbox.slice(m.root.length + 1) : m.inbox}/`])
 
-  // map — a material nothing cites as `source` has not been mined yet. Read off the truths' own
-  // frontmatter, which is where the citation lives; canonId so `m5` and `m005` are one material.
+  // map — a material NO TRUTH REFERENCES has not been mined yet. Both reference fields count:
+  // `source` (extraction) and `corroborated_by` (a material map processed as supporting evidence
+  // for claims extracted from elsewhere). The first spelling read `source` alone, so a
+  // corroboration-only material was listed as "no truth extracted yet" — true as a sentence, wrong
+  // as a work item: map already read it, and running map again would find nothing to do (caught in
+  // the pre-push cold review). canonId so `m5` and `m005` are one material.
   const cited = new Set()
   for (const f of truthFiles(m)) {
     const s = (fm(f, 'source') || '').trim()
     if (s !== '') cited.add(canonId(s) ?? s)
+    for (const c of listField(fm(f, 'corroborated_by') || '')) cited.add(canonId(c) ?? c)
   }
   const unmined = materialIds(m).filter(id => {
     if (!existsSync(join(m.materials, id, 'converted.md'))) return false
@@ -189,20 +194,33 @@ export function cmdStatus (m, out) {
   // units` markdown fallback through its typed model). A unit with no row and no legacy mention has
   // certainly never been verified, whatever the digests would say; the line names the rest as
   // scope's. A strictly weaker claim that states its limit cannot disagree with the stronger one.
+  // UNKNOWN EVIDENCE IS NOT ABSENCE — the ledger's own rule (LEDGER-UNREADABLE), owed here too.
+  // A dead ledger (unreadable bytes, or a headless row that makes last-row-wins undecidable) and an
+  // existing-but-unreadable verify.md both leave `recorded` empty for reasons that are NOT "never
+  // verified" — the first spelling then counted every unit as having "no record AT ALL", which is
+  // this block making exactly the claim the runtime forbids (caught in the pre-push cold review).
+  // An ABSENT verify.md stays legal and contributes nothing: the verify lane is on-demand, and a
+  // file that does not exist genuinely holds no records (readVerifiedUnits cannot tell the two
+  // apart — readable:false for both — so absence is asked with existsSync, the one fact it owns).
   const lidx = ledgerIndex(join(m.truths, m.ledgerFile()))
-  const recorded = new Set()
-  if (lidx.state !== 'unreadable' && lidx.headless === 0) {
+  const ledgerDead = lidx.state === 'unreadable' || lidx.headless > 0
+  const vuPath = join(m.truths, 'verify.md')
+  const vu = readVerifiedUnits(vuPath, verifiedUnitsContract(m.sch))
+  const vuDead = existsSync(vuPath) && !vu.readable
+  if (ledgerDead || vuDead) {
+    avail.push(['verify', `the verification evidence cannot be read (${ledgerDead ? `truths/${m.ledgerFile()}` : 'truths/verify.md'}) — nothing counts as verified until it is repaired; 'weavedoc validate' names the damage`])
+  } else {
+    const recorded = new Set()
     for (const r of ledgerRowsOf(lidx)) { const id = r.split('\t')[0]; if (id) recorded.add(canonId(id) ?? id) }
-  }
-  const vu = readVerifiedUnits(join(m.truths, 'verify.md'), verifiedUnitsContract(m.sch))
-  if (vu.readable) for (const id of vu.coveredIds) recorded.add(canonId(id) ?? id)
-  const noRecord = xs => xs.filter(id => !recorded.has(canonId(id) ?? id))
-  const mNo = noRecord(materialIds(m).filter(id => existsSync(join(m.materials, id, 'converted.md')) &&
-    fm(join(m.materials, id, 'converted.md'), 'status') !== 'retracted' &&
-    fm(join(m.materials, id, 'converted.md'), 'status') !== 'verified'))
-  const tNo = noRecord(truthFiles(m).map(f => basename(f, '.md')))
-  if (mNo.length + tNo.length > 0) {
-    avail.push(['verify', `${mNo.length} material(s) · ${tNo.length} truth(s) with no verification record at all — 'weavedoc scope' is the full account (it also compares digests for stale/failed)`])
+    if (vu.readable) for (const id of vu.coveredIds) recorded.add(canonId(id) ?? id)
+    const noRecord = xs => xs.filter(id => !recorded.has(canonId(id) ?? id))
+    const mNo = noRecord(materialIds(m).filter(id => existsSync(join(m.materials, id, 'converted.md')) &&
+      fm(join(m.materials, id, 'converted.md'), 'status') !== 'retracted' &&
+      fm(join(m.materials, id, 'converted.md'), 'status') !== 'verified'))
+    const tNo = noRecord(truthFiles(m).map(f => basename(f, '.md')))
+    if (mNo.length + tNo.length > 0) {
+      avail.push(['verify', `${mNo.length} material(s) · ${tNo.length} truth(s) with no verification record at all — 'weavedoc scope' is the full account (it also compares digests for stale/failed)`])
+    }
   }
 
   // gaps — the register is non-blocking, so it is offered whenever completeness is armed and no

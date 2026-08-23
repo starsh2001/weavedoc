@@ -26,7 +26,7 @@ dbc7879a75727c6d311a88fe8a8652883b04771be239d993339f1e84849b5580  .weavedoc/bin/
 58dad4a3592db81c7584384bbd5bafec4d430e4ae397cd760d340b457029b0e0  .weavedoc/bin/lib/cmd-scope.mjs
 db6e9d60e95c8e1b000a79e1ef43ecb65220b7dad8ef279abbf3a4b83d20e1db  .weavedoc/bin/lib/cmd-seal-review.mjs
 5b9436ca39a481e7489f01c7af65cacf5bb2ce2fbe8fec3637cd80d23d87c9c1  .weavedoc/bin/lib/cmd-state.mjs
-f4385b38dad088e2c400c10255b8349791fa5766e364ac975a4fd8015a6919dc  .weavedoc/bin/lib/cmd-status.mjs
+3b15ed114bf619bc8907284d2f807af90885bd30d3d66d2e00c1233825e9f656  .weavedoc/bin/lib/cmd-status.mjs
 0578864e63fd647a40ca4cefd617468d9a570a7e3a290c47c783be0e50587830  .weavedoc/bin/lib/cmd-upgrade.mjs
 252bb3a94e875c93bf65ca4f225b1e4627253f2f52740669adf0032bd040b616  .weavedoc/bin/lib/cmd-validate.mjs
 cc932ba4aa321119aa9239b052b3428d5394704cf75287fb1aac2a1d2d7dc190  .weavedoc/bin/lib/conflict-store.mjs

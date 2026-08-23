@@ -6326,6 +6326,34 @@ acct_status_available_is_silent_on_a_settled_mine() {
   expect_hasnt "map     "
   expect_hasnt "verify  "
 }
+acct_status_map_entry_counts_corroboration_as_mined() {
+  # Both reference fields, not one: `corroborated_by` is map's own output as much as `source` is,
+  # so a corroboration-only material has BEEN mined and must not be listed as map work. The first
+  # spelling read `source` alone — "no truth extracted yet" was true as a sentence and wrong as a
+  # work item (running map again would find nothing to do). Caught in the pre-push cold review.
+  mkdir -p "$W/materials/m002"
+  printf -- '---\nid: m002\ntitle: 보강\norigin: file\nrole: 계약서\ntopics: [x]\nformat: md\nsource_path: inbox/c.md\nadded: 2026-08-01\nstatus: converted\nsummary: 보강 전용 자료.\n---\n\n본문\n' > "$W/materials/m002/converted.md"
+  printf -- 'corroborated_by: [m002]\n' > "$W/.fm.add"
+  sed -i '/^source: /r '"$W"'/.fm.add' "$W/truths/t001.md"
+  rm -f "$W/.fm.add"
+  vrun status
+  expect_pass
+  expect_hasnt "map     "
+}
+block_status_dead_ledger_is_not_counted_as_absence() {
+  # UNKNOWN EVIDENCE IS NOT ABSENCE — the ledger's own rule (LEDGER-UNREADABLE), owed by every
+  # consumer. With the sidecar unreadable the first spelling counted every unit as having "no
+  # verification record AT ALL": records that exist and cannot be read, reported as never-written.
+  # The entry must become the honest sentence instead — and the COUNT must be gone, because a
+  # number next to a warning still gets read as the number. (block_, though rc stays 0: status is
+  # a report, not a gate — what is blocked is the false claim, and validate owns the exit code.)
+  rm -f "$W/truths/verify-ledger.tsv"
+  mkdir "$W/truths/verify-ledger.tsv"
+  vrun status
+  expect_pass
+  expect_has "the verification evidence cannot be read"
+  expect_hasnt "no verification record at all"
+}
 acct_status_verify_entry_names_its_own_limit() {
   # THE WEAKER CLAIM, stated. `scope` owns the verification verdict — it compares digests and splits
   # stale from failed from bound. This block counts only units with NO RECORD AT ALL, because a
