@@ -4,6 +4,12 @@
 
 ---
 
+## 2026-08-08.35
+
+**v0.6.4 — four ports back from the sibling, and the ledger's first catch.** Publishes bundles `.33` and `.34`; this bundle adds only the release claim, so runtime bytes are identical to `.34` — fingerprint `da599df99393`. What ships since v0.6.3: the **step report** skeleton (FORMATS' one parser-free contract, carried by all nine skills, held by doccheck check 10 — "Offer, don't direct" finally has one owner), the **`interview`** command (init's fixed questionnaire printed pre-escaped and pure ASCII, so nobody transcribes Hangul into a tool call again; option labels ARE the config values, verbatim both ways against the schema), the **known-issue ledger** in IMPROVEMENT_PLAN §11 (swept the same day it opened: four transcribed rows were already closed, one was mis-described, and every surviving row now reads 실측), **BOM diagnostics** (fail-closed as before — what changed is that the refusal names the invisible byte instead of pointing at the one line that already looks right; ctlscan's net gained the BOM and its first run found a real one), and the repair that mis-description was hiding: `upgrade` **refuses two mode tokens** (exit 2, duplicates included) instead of quietly letting `--apply` beat `--check` and writing.
+
+**No schema change, no migration.** One new command (`interview` — read-only, ungated), one new refusal on `upgrade`; no success-path behavior moved. Existing mines adopt by re-copying `.weavedoc/` and `.claude/skills/weavedoc-*`.
+
 ## 2026-08-08.34
 
 **`upgrade`가 상충하는 모드를 받고 썼다 — 장부를 훑다가 나왔다.** `.33`이 연 known-issue 장부의 `전사` 10건을 그날 바로 재봤고, 그 스윕이 **(b)급 결함 하나**를 냈다. 장부가 존재하는 이유를 개설 첫날 스스로 증명한 셈이다.
