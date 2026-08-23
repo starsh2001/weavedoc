@@ -6429,6 +6429,36 @@ block_upgrade_stub_bad_flag() {
   vrun upgrade --frobnicate
   expect_block "unknown argument"
 }
+block_upgrade_two_modes_refuses_and_writes_nothing() {
+  # THE WRITE, not just the message. `--check` promises not to write and `--apply` writes, and the
+  # argv gate could not see the contradiction because it only judges flags it does not KNOW — so
+  # `apply` won and the migration RAN. Measured 2026-08-22 on exactly this shape: the intake backfill
+  # printed its receipt and materials/intake-ledger.tsv appeared, rc 0, with no word about the
+  # `--check` that had just been ignored. Asserting the refusal string alone would leave the case
+  # green if a later change refused loudly and wrote anyway, so the file's ABSENCE is the assertion.
+  rm -f "$W/materials/intake-ledger.tsv"
+  [ -e "$W/materials/intake-ledger.tsv" ] && { bad "fixture still has an intake ledger — the case would prove nothing"; return; }
+  vrun upgrade --check --apply
+  expect_block "give at most one mode"
+  [ -e "$W/materials/intake-ledger.tsv" ] && { bad "upgrade wrote the intake ledger while refusing two modes — the refusal did not reach the write"; return; }
+  ok
+}
+block_upgrade_repeated_mode_refuses() {
+  # A logical flag appears ONCE. `--apply --apply` is not a contradiction, it is a slip, and the same
+  # rule covers both: the count is of TOKENS, not of distinct modes. (The sibling project settled the
+  # same wording in its own argv round — a duplicate is a typo'd intention like any other.) Without
+  # this case the rule could be narrowed to "two DIFFERENT modes" and nothing would go red.
+  vrun upgrade --apply --apply
+  expect_block "give at most one mode"
+}
+acct_upgrade_one_mode_still_runs() {
+  # The other direction, and the reason the rule counts to two rather than to one: a single mode must
+  # still work. A refusal that also blocks the ordinary invocation is the (b) class in the mirror —
+  # the sibling's own criterion is symmetric about over-blocking, and this is the case that holds it.
+  vrun upgrade --apply
+  expect_pass
+  expect_has "already schema v3"
+}
 block_state_missing_is_not_empty() {
   # A conflicts store that cannot be read must never read as "no conflicts" — that silence would
   # unblock shipping over the exact thing the file exists to block.
