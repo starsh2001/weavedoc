@@ -4,6 +4,24 @@
 
 ---
 
+## 2026-08-08.37
+
+**v0.6.5 — status answers what you could start.** Publishes bundle `.36` (two commits); this bundle adds only the release claim, so runtime bytes are identical to it — fingerprint `4aeac2b66ba0`. What ships since v0.6.4: plain `status` closes with **where you are and what you could start** — a `phase:` line and an `available` block naming every action with work actually waiting, each with its reason. It **lists, it never picks** (WeaveDoc has no obligatory order; choosing stays the user's), an action with no reason is simply absent, and the verify entry is deliberately the weaker claim — units with no record at all, read through the same shared models `scope` uses, with the line handing the verdict itself to `scope` by name. Cross-checked on a real 263-truth mine: the weaker claim's counts equal `scope`'s unverified sets exactly. The pre-push cold review's two catches ship inside the same bundle: unreadable verification evidence is named instead of counted as absence, and a corroboration-only material is not offered as map work.
+
+**No schema change, no command change, no migration.** A read-only report grew a section; nothing else moved. Existing mines adopt by re-copying `.weavedoc/`.
+
+## 2026-08-08.36
+
+**`status`가 "여기까지 왔고, 지금 뭘 시작할 수 있나"까지 답한다.** 자매 프로젝트의 `next` 스킬을 보고 나온 것인데, **이식하지 않고 `status`를 완성하는 쪽**을 택했다. 근거는 실측이다: 9개 스킬이 호출하는 것은 전부 `status --open`이고 **plain `status`를 파싱하는 스킬은 하나도 없다** — 즉 plain `status`는 이미 사람용 뷰였고, 절반만 답하고 있었다(문서 축과 계수기 셋은 있고, 광산 축과 "할 수 있는 것"이 없었다). 그래서 사용자는 `status` + `status --open` + `scope` 셋을 돌려 머리로 합쳐야 했다. 새 명령을 만들었다면 같은 질문에 답하는 두 번째 리더가 생겼을 것이다.
+
+**나열하지, 고르지 않는다.** GroveSpec의 `next`는 due한 스텝 **하나를 지목**한다 — 상태를 가진 노드가 의존 트리를 이루기 때문에 가능한 일이다. WeaveDoc엔 그런 순서가 없다: 광산은 언제나 더 자랄 수 있고 단계 경계는 의무가 아니며, 무엇을 할지 고르는 것은 사람 몫이다. 그래서 새 블록은 **일이 실제로 밀려 있는 것만** 근거와 함께 나열하고("`map` — 자료 1건에서 아직 진실을 뽑지 않았다"), 어순은 순위가 아니다. 이 도구에선 거의 모든 스킬이 거의 항상 합법이므로, 합법인 것을 전부 나열하는 블록은 **매 프로젝트를 붉히는 검사와 같은 운명**이 된다 — 참이지만 아무도 안 읽는다.
+
+**verify 줄은 일부러 더 약한 주장이고, 그렇다고 적는다.** 검증 판정은 `scope`의 것이다 — digest를 비교해 stale·failed·bound를 가르는 130줄짜리 증거 우선순위다. 그걸 여기서 다시 계산하면 이 런타임이 가장 엄격한 바로 그 지점에 **두 번째 판정자**가 생긴다. 그래서 이 블록은 **기록이 아예 없는 단위**만 센다(집합 소속 문제) — 판정기를 복제하지 않고 `scope`가 쓰는 **같은 공유 리더**(장부 인덱스 · `## Verified units` 타입 모델)에서 읽는다. 행도 없고 legacy 언급도 없는 단위는 digest가 뭐라 하든 확실히 검증된 적이 없고, 나머지는 줄이 직접 scope의 몫이라고 말한다. **한계를 스스로 밝힌 약한 주장은 강한 주장과 어긋날 수 없다.**
+
+**회귀 3건.** 항목이 근거와 함께 뜨는 것(양) · **정리된 광산에서는 뜨지 않는 것**(음 — 조건을 `true`로 바꾸면 이쪽만 빨개진다) · verify 줄이 제 한계를 말하는 것(그 문구가 빠지면 숫자가 scope 행세를 시작한다). golden의 `status.txt`가 새 4줄을 고정한다.
+
+**push 전 콜드 리뷰가 2건을 잡아 같은 번들에서 닫았다** (+회귀 2, 변이 확인). ① **죽은 장부를 부재로 셌다** — sidecar가 unreadable/headless면 `recorded`가 비어 전 단위가 "no verification record **at all**"로 나왔다: 존재하는데 읽을 수 없는 기록을 "쓴 적 없다"로 보고한 것이고, "unknown evidence is not absence"는 이 런타임이 `LEDGER-UNREADABLE`에 박아 둔 자기 규칙이다. 이제 그 상태에선 카운트 대신 정직한 한 줄이 나온다("the verification evidence cannot be read … nothing counts as verified until it is repaired") — 숫자를 경고 옆에 남기지 않는 이유는, 경고 옆의 숫자도 숫자로 읽히기 때문이다. 부재한 verify.md는 종전대로 합법이고 아무것도 보태지 않는다(없는 파일은 진짜로 기록이 없다 — `readVerifiedUnits`는 둘을 못 가르므로 부재는 `existsSync`로 묻는다). ② **corroboration-only 자료를 map 일감으로 올렸다** — `cited`가 `source`만 모아서, `corroborated_by`로만 참조된 자료가 "no truth extracted yet"으로 떴다: 문장으로는 참이지만 일감으로는 거짓이다(map은 이미 그 자료를 읽었고, 다시 돌려도 할 일이 없다). 두 참조 필드를 다 모은다. **Echo 실광산 교차 확인**: 새 블록의 verify 카운트 6·26이 scope의 unverified 집합(m028·m033-m037 / t278-t299·t301-t304)과 정확히 일치 — 한계를 밝힌 약한 주장이 강한 주장과 일치함을 263-truth 광산에서 확인했다.
+
 ## 2026-08-08.35
 
 **v0.6.4 — four ports back from the sibling, and the ledger's first catch.** Publishes bundles `.33` and `.34`; this bundle adds only the release claim, so runtime bytes are identical to `.34` — fingerprint `da599df99393`. What ships since v0.6.3: the **step report** skeleton (FORMATS' one parser-free contract, carried by all nine skills, held by doccheck check 10 — "Offer, don't direct" finally has one owner), the **`interview`** command (init's fixed questionnaire printed pre-escaped and pure ASCII, so nobody transcribes Hangul into a tool call again; option labels ARE the config values, verbatim both ways against the schema), the **known-issue ledger** in IMPROVEMENT_PLAN §11 (swept the same day it opened: four transcribed rows were already closed, one was mis-described, and every surviving row now reads 실측), **BOM diagnostics** (fail-closed as before — what changed is that the refusal names the invisible byte instead of pointing at the one line that already looks right; ctlscan's net gained the BOM and its first run found a real one), and the repair that mis-description was hiding: `upgrade` **refuses two mode tokens** (exit 2, duplicates included) instead of quietly letting `--apply` beat `--check` and writing.
