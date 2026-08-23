@@ -20,6 +20,7 @@
 //   version           the installed runtime bundle version (.weavedoc/VERSION)
 //   lang              the project's reply/artifact language (config.language)
 //   locale            detect the OS language (for init); prints nothing if undetectable
+//   interview         init's fixed questionnaire as AskUserQuestion payloads, non-ASCII pre-escaped
 //
 // THE SPECIFICATION IS tests/regress.sh — every case is a CLI black box (build a mine, run a
 // command, assert stdout and the exit code), which is what let this runtime be graded against the
@@ -194,6 +195,122 @@ async function cmdLocale () {
   return 0
 }
 
+// ---- the setup interview -----------------------------------------------------------------------
+// THE CANONICAL COPY of init's fixed questions. It used to live as prose in weavedoc-init/SKILL.md,
+// where the agent had to TRANSCRIBE it into an AskUserQuestion call — and transcription is where
+// Korean breaks. The sibling project GroveSpec measured it twice on the identical shape: hand-
+// encoding Hangul into `\uXXXX` mis-recalled a codepoint (`나뉩니다` came out `나뉜니다`), the rule
+// "copy it exactly" failed to prevent either one, and the broken syllable went to the user's screen.
+//
+// So the fix is not a stricter rule. The step that can go wrong is REMOVED: the runtime prints the
+// payload with every non-ASCII character already escaped, and the agent copies pure ASCII. Same
+// family as `locale` — something the agent used to improvise, moved into a deterministic command.
+//
+// Q1 (language) is NOT here. It is assembled per run from the detected locale and names the language
+// as a word, so it has no fixed spelling to hand out; both measured corruptions were in the fixed
+// questions. If Q1 is ever seen to corrupt, it joins them — not before.
+//
+// TWO CALLS, not one. AskUserQuestion takes at most 4 questions, the interview asks 5, and the split
+// follows the grouping the skill already documents (Q2 fidelity · Q3 intensity) rather than an
+// arbitrary 4+1. SKILL.md said "you may batch Q2-Q3 in one call", which was never possible.
+//
+// A LABEL IS A CONFIG VALUE, with no exception. Writing the answer into config.yaml is therefore a
+// copy, not a translation — one more place a spelling could drift, removed. The recommendation mark
+// opens the DESCRIPTION (`(추천) …`) instead of trailing the label: as `off (추천)` the rule needed
+// a "strip the suffix first" clause, and a rule with a strip step is a rule someone skips. Caught in
+// review — the doc said "the label is the value" while five of ten labels were not.
+const INTERVIEW = [
+  ['1 of 2 - fidelity & conflicts (Q2)', [
+    {
+      question: '누락이 그 자체로 위반인 프로젝트입니까?',
+      header: 'Completeness',
+      multiSelect: false,
+      options: [
+        { label: 'off', description: '(추천) 다루지 않은 주제가 결함은 아닌 문서 — 보고서·요약·설명서. 나중에 required로 바꿀 수 있습니다.' },
+        { label: 'required', description: '빠진 항목 자체가 위반인 문서 — 계약서·SOW. project.md의 required_tags를 채워야 실제로 검사됩니다.' }
+      ]
+    },
+    {
+      question: '자료끼리 어긋나는 곳을 얼마나 깊이 찾을까요?',
+      header: 'Conflicts',
+      multiSelect: false,
+      options: [
+        { label: 'deep', description: '(추천) 값·날짜·수치까지 대조해 어긋남을 찾습니다. 충돌 탐지 자체는 끌 수 없고, 이 설정은 얼마나 깊이 볼지만 정합니다.' },
+        { label: 'standard', description: '같은 주제의 자료끼리 눈에 띄는 어긋남만 찾습니다. 자료가 아주 많을 때 시간을 아낍니다.' }
+      ]
+    }
+  ]],
+  ['2 of 2 - verify & review intensity (Q3)', [
+    {
+      question: '자료에서 진실을 뽑아낸 변환을 어느 강도로 검증할까요?',
+      header: 'Verify',
+      multiSelect: false,
+      options: [
+        { label: '2', description: '(추천) critical과 should-fix에서 멈춥니다. 대부분의 프로젝트에 맞는 기본값입니다.' },
+        { label: '1', description: 'critical에서만 멈춥니다. 초안을 빠르게 굴릴 때.' },
+        { label: '3', description: 'nice-to-have에서도 멈춥니다. 가장 엄격하고 가장 느립니다.' }
+      ]
+    },
+    {
+      question: '완성된 문서를 어느 강도로 리뷰할까요?',
+      header: 'Review',
+      multiSelect: false,
+      options: [
+        { label: '1', description: '(추천) critical만 다룹니다. 이 리뷰는 조언이라 출력을 막지 않습니다 — 출력을 막는 것은 충실성 게이트뿐입니다.' },
+        { label: '2', description: 'should-fix까지 다룹니다.' },
+        { label: '3', description: 'nice-to-have까지 다룹니다.' }
+      ]
+    },
+    {
+      question: '검증과 리뷰를 어느 규모로 돌릴까요?',
+      header: 'Scale',
+      multiSelect: false,
+      options: [
+        { label: 'standard', description: '(추천) 자료·문서의 크기에 맞춰 검증자를 붙입니다. 기본값입니다.' },
+        { label: 'light', description: '한 명이 빠르게 훑습니다. 자료가 적거나 초안 단계일 때.' },
+        { label: 'full', description: '여러 시선으로 가장 깊게 봅니다. 계약서처럼 틀리면 안 되는 문서일 때.' },
+        { label: 'skip', description: '검증·리뷰를 돌리지 않습니다. 충실성 게이트는 이 설정과 무관하게 그대로 작동합니다.' }
+      ]
+    }
+  ]]
+]
+
+// JSON escaping that also lifts every non-ASCII character to `\uXXXX`. Per UTF-16 CODE UNIT, which
+// is what JSON's \u escape addresses: an astral character correctly leaves as its surrogate pair.
+// Not jsonEsc() above — that one DROPS carriage returns, which is right for echoing mine bytes and
+// wrong for a payload whose whole promise is that what comes out is what goes in.
+const uniEsc = s => {
+  let o = ''
+  for (let i = 0; i < s.length; i++) {
+    const ch = s[i]
+    const c = s.charCodeAt(i)
+    if (ch === '\\') o += '\\\\'
+    else if (ch === '"') o += '\\"'
+    else if (c >= 0x20 && c <= 0x7e) o += ch
+    else o += `\\u${c.toString(16).padStart(4, '0')}`
+  }
+  return o
+}
+
+function cmdInterview () {
+  const q = x => `{"question":"${uniEsc(x.question)}","header":"${uniEsc(x.header)}","multiSelect":${x.multiSelect},` +
+    `"options":[${x.options.map(o => `{"label":"${uniEsc(o.label)}","description":"${uniEsc(o.description)}"}`).join(',')}]}`
+  // THE WHOLE OUTPUT is ASCII, comments included — not just the arrays. One property is testable
+  // ("no byte above 0x7e leaves this command"); "the payload is ASCII but the prose around it is
+  // not" is a rule with an exception, and an exception is what a copier has to judge.
+  outln("# weavedoc interview - paste each array as AskUserQuestion's `questions` argument, VERBATIM.")
+  outln('# It is already escaped: copy it. Do not retype it, and do not re-encode the Korean yourself.')
+  outln('# If config.language is not Korean, TRANSLATE the decoded text - translating is not transcribing.')
+  for (const [label, qs] of INTERVIEW) {
+    outln('')
+    outln(`# call ${label}`)
+    // ONE line per array, so a copy is one action. A payload split across lines is a payload the
+    // copier has to reassemble, and reassembly is the class of step this command exists to delete.
+    outln(`[${qs.map(q).join(',')}]`)
+  }
+  return 0
+}
+
 // ---- dispatch ----
 // Every command validates its FULL argument list (WD-CLI-001): an extra argument or an unknown flag
 // is a typo'd intention, and a tool that ignores it does something other than what was asked.
@@ -201,7 +318,8 @@ const USAGE = 'weavedoc — validate | pull <term> | impact <material-id> | stat
   'intake [--no-source] <material-id> <note> | ' +
   'attest <verdict> <round> <standard> <id...> | seal-review <doc-id> [draft|final] | ' +
   'consecrate <doc-id> | upgrade [--check|--dry-run|--apply] | conflict list|add|remove | ' +
-  'alloc <ns> | gaps | census | reindex [--check] | retag <old> <new> [--dry] | version | lang | locale'
+  'alloc <ns> | gaps | census | reindex [--check] | retag <old> <new> [--dry] | version | lang | ' +
+  'locale | interview'
 
 const usage2 = u => { errln(`usage: ${u}`); process.exit(2) }
 
@@ -265,6 +383,11 @@ switch (cmd) {
   case 'lang':
     if (rest.length !== 0) usage2('weavedoc lang')
     rc = cmdLang(); break
+  case 'interview':
+    // No mine is opened and no version gate is taken: like `version`/`lang`/`locale` this command
+    // answers about the RUNTIME, and init runs it before a mine exists to have a version.
+    if (rest.length !== 0) usage2('weavedoc interview')
+    rc = cmdInterview(); break
   case 'locale':
     if (rest.length !== 0) usage2('weavedoc locale')
     // Top-level await (ESM): keeps node:child_process off the startup path — it is loaded only on

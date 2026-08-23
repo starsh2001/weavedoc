@@ -13,6 +13,8 @@ git restore . && rm -rf .weavedoc-state
 ```bash
 node .weavedoc/bin/weavedoc.mjs upgrade --check     # 분류·차단 항목·high-water 보고 (read-only; --dry-run 동일)
 node .weavedoc/bin/weavedoc.mjs upgrade --apply     # 변환 + 보존식·exact-validate 검증 (clean git 필수)
+# 모드는 하나만. `--check --apply`처럼 둘 이상 주면 exit 2로 거부한다 — 쓰지 말라는 말과 쓰라는 말을
+# 함께 받았을 때 기계가 하나를 고르지 않는다 (번들 .34 전에는 --apply가 이겨서 실제로 썼다).
 ```
 
 ## 무엇이 일어나나

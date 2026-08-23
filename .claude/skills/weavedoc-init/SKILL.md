@@ -21,20 +21,24 @@ Setup of a WeaveDoc data mine — the persistent, growing truth-source that docu
 **Check the directory first.** Does `.weavedoc/config.yaml` already exist? → this is a **reconfigure**: run only **§2 (the interview)**, update config, and **stop** — don't recreate folders. Otherwise, first-time setup — continue to §3+.
 
 ### 2. Setup interview — the fixed questionnaire (ask before creating anything)
-Ask **exactly** these questions, in order. Don't improvise, skip, or silently default. A fixed interview keeps every project configured consciously and nothing decided in the dark. You may batch Q2–Q3 in one AskUserQuestion call.
+Ask **exactly** these questions, in order. Don't improvise, skip, or silently default. A fixed interview keeps every project configured consciously and nothing decided in the dark.
 
-**Q1. Language** — confirm the detected locale (see the callout above).
+**Q1. Language** — confirm the detected locale (see the callout above). This one you assemble yourself: it names the detected language as a word, so it has no fixed wording to hand out.
 
-**Q2. Fidelity & conflicts** — explain briefly, then ask:
-- **Completeness** — *"누락이 그 자체로 위반인 프로젝트인가요? (계약서, SOW → required / 일반 보고서 → off)"* (추천: off)
-- **Conflict detection** — *"자료 간 충돌을 얼마나 적극적으로 찾을까요? (standard / deep)"* (추천: deep)
+**Q2 and Q3 come from the runtime, not from this file.**
+
+```
+node .weavedoc/bin/weavedoc.mjs interview
+```
+
+It prints **two JSON arrays** — Q2 (`completeness`, `conflicts.detection`) and Q3 (`verify.strength`, `review.strength`, `scale`). **Paste each array verbatim as `AskUserQuestion`'s `questions` argument**, one call per array. Two calls, not one: the tool takes at most four questions and the interview asks five.
+
+- **Copy, never retype.** The output is entirely ASCII with every Korean character pre-escaped, precisely so that no one has to encode Hangul by hand — the step where the sibling project GroveSpec measured two corruptions (`나뉩니다` printed as `나뉜니다`) that reached the user's screen. Re-typing or re-encoding the payload puts that step back.
+- **Explain before you ask.** The arrays carry the questions and the options; the one- or two-sentence framing of what each group decides is yours to say in the report's opening.
+- **If `config.language` is not Korean, translate the decoded text.** Translating is a different act from transcribing, and it is the agent's job.
+- **A label IS a config value** (`off`, `required`, `deep`, `standard`, `1`, `2`, `3`, `light`, `full`, `skip`) — with no exception and no suffix to strip: write the chosen label into `config.yaml` exactly as it came back. The recommendation is marked at the **start of the option's description** (`(추천) …`), and the recommended option is listed first. A regression case compares the labels against `.weavedoc/schema` **verbatim, both directions**, so the questionnaire can neither offer a value `validate` would reject nor withhold a legal one.
 
 (There is no attribution question: every conflict ruling is the user's, per-entry — 병기 is the 분리·병합 ruling, whose record is the split cards themselves. A migrated v2 config may still carry `conflicts.attribution`; it is legal and unread.)
-
-**Q3. Verify & review intensity** — explain the scale briefly, then ask:
-- **Verify strength** — *"자료→진실 변환 검증 강도: 1(critical만) / 2(+should-fix) / 3(+nice-to-have)"* (추천: 2)
-- **Review strength** — *"문서 리뷰 강도: 1 / 2 / 3"* (추천: 1)
-- **Scale** — *"검증/리뷰 규모: skip / light / standard / full"* (추천: standard)
 
 Write the answers to `.weavedoc/config.yaml`. On a **reconfigure**, update config, then re-ensure the **three** idempotent guards from §3 — the **configured folders and their `.gitkeep` markers**, the **search shield (`.ignore`)** and the **CLAUDE.md pointer block** — and **stop here**. (This said *two* through v0.5.20 while the folder bullet below already claimed to run on reconfigure — the two lines contradicted each other, and a reconfigure that renames a path leaves a NEW empty directory that Git cannot carry, so the marker guard belongs in this list. External review, v0.5.21.) (Both bullets are marked *runs on reconfigure too*; a reconfigured mine that skips the shield leaves its raw layer searchable until the next gather.)
 
@@ -68,6 +72,13 @@ Write the answers to `.weavedoc/config.yaml`. On a **reconfigure**, update confi
 
 ### 4. Hand off
 The data mine is ready to grow — this opens the **mine-building phase**. When ready, the user can drop materials into `inbox/` and say **"gather"**, or seed from this conversation by saying so (gather distills it). Offer these as available options ("이제 gather를 할 수 있습니다"), not instructions.
+
+## Report
+Open and close this run with the **step report** — the fixed shape in `.weavedoc/FORMATS.md` ("The step report"): the `[weavedoc-init] starting` anchor and 2–4 sentences, then `done — …` carrying `Result` · `Open` · `Your turn` · `Next`, in that order, none omitted. §4 above is the `Next` slot. What this skill puts in the two middle slots:
+- **Open** — anything the interview deferred rather than decided, above all `required_tags` left empty under `completeness: required` (the setting has no mechanical teeth until that list is filled, and saying so is this slot's job).
+- **Your turn** — nothing, on an ordinary run: the interview already collected every decision. Say that in a sentence rather than dropping the slot.
+
+The opening report matters most here, because this is the run where the user meets WeaveDoc: the interview questions come first, and the anchor plus its 2–4 sentences are what tell someone what they are about to be asked and why.
 
 ## Rules
 - Fixed English keys/enums; prose in `config.language` (see `.weavedoc/FORMATS.md`).

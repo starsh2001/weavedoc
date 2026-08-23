@@ -11,7 +11,7 @@
 // cases build — a substring suite cannot grade a rewrite whose contract is bytes. Both that scale
 // and its reference are gone; the last run of it is in tests/baseline/parity-final-2026-08-05.md.
 import { statSync, realpathSync, readFileSync, readdirSync } from 'node:fs'
-import { canonId, isDate, isFence, isPlaceholder, inList, listField, fmVal, pipes, splitLines, U, M } from './core.mjs'
+import { bomFenceBytes, canonId, isDate, isFence, isPlaceholder, inList, listField, fmVal, pipes, splitLines, U, M } from './core.mjs'
 import { DECLARATIONS, classifyIntake, intakeIndex, intakeLedgerPath } from './intake-ledger.mjs'
 import { join, materialIds, mdirFor, docIds, tfileFor, docFinalPath, contextDigest } from './mine.mjs'
 import { readCoverage } from './coverage-model.mjs'
@@ -610,7 +610,18 @@ export function cmdValidate (m, out, json = false, consecOk = '') {
         prob('TRUTH-FM-UNCLOSED', M`${U(m.truths)}/${tb}.md  frontmatter is never closed (a second '---' is missing) — the parser stays inside it to EOF, so every check on this file runs zero times and its body is never sealed`)
       } else {
         nofm.add(tb)
-        prob('TRUTH-NO-FM', M`${U(m.truths)}/${tb}.md  no frontmatter (line 1 must be '---') — this file is not read as a truth at all, so every check on it silently passes and no index entry can ever be generated for it`)
+        // The invisible cause, named. Without this clause the message points at the one thing that
+        // already looks right: a BOM'd file shows `---` on line 1 in every editor and every diff,
+        // and the reader retypes a line that was never the problem.
+        // The BYTE-domain predicate, because `lines` came from THIS file's own latin1 readOr (line
+        // 31) — the mark is here as EF BB BF, never as a decoded U+FEFF.
+        // U()-LIFTED, because M passes interpolated VALUES through untouched: an em dash left as a
+        // decoded string is encoded to the single byte 0x14 on the way out — an invisible control
+        // character in the middle of the diagnostic. (Measured here, on the first run of this line.)
+        const why = bomFenceBytes(lines[0])
+          ? U(" — line 1 IS `---`, but a UTF-8 byte-order mark (EF BB BF) sits in front of it, so no reader finds the fence. Save the file as UTF-8 WITHOUT a BOM")
+          : ''
+        prob('TRUTH-NO-FM', M`${U(m.truths)}/${tb}.md  no frontmatter (line 1 must be '---')${why} — this file is not read as a truth at all, so every check on it silently passes and no index entry can ever be generated for it`)
       }
     }
     // (The v2 RES-REASON-UNQUOTED warning left with the resolution field itself — a v3 card that

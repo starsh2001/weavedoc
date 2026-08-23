@@ -156,6 +156,11 @@ Tags are the mine's neighbourhood structure: the machine narrows every lookup by
 
 T4 in verify checks tag quality; propagation trigger B depends on it.
 
+## Report
+Open and close this run with the **step report** — the fixed shape in `.weavedoc/FORMATS.md` ("The step report"): the `[weavedoc-map] starting` anchor and 2–4 sentences, then `done — …` carrying `Result` · `Open` · `Your turn` · `Next`, in that order, none omitted. `Next` is the section below. What this skill puts in the two middle slots:
+- **Open** — conflicts detected and entered in the store (`cNNN`) that no ruling has closed, truths whose tag choice you had to guess, materials read but not yet mined.
+- **Your turn** — every conflict ruling (the machine never resolves one), the ambiguous tag decisions, and any correction whose re-grounding needs a new material.
+
 ## Next
 Still in the **mine-building phase**. **verify** (truths mode) is available to cold-check extraction fidelity (recommended guard, skippable). Once truths are verified, the mine-building phase is complete and **plan** — the document-writing phase — becomes available *when the user wants it*; the mine can also keep growing. Offer, don't direct ("이제 verify를 할 수 있습니다"), never an obligation.
 

@@ -4,6 +4,42 @@
 
 ---
 
+## 2026-08-08.35
+
+**v0.6.4 — four ports back from the sibling, and the ledger's first catch.** Publishes bundles `.33` and `.34`; this bundle adds only the release claim, so runtime bytes are identical to `.34` — fingerprint `da599df99393`. What ships since v0.6.3: the **step report** skeleton (FORMATS' one parser-free contract, carried by all nine skills, held by doccheck check 10 — "Offer, don't direct" finally has one owner), the **`interview`** command (init's fixed questionnaire printed pre-escaped and pure ASCII, so nobody transcribes Hangul into a tool call again; option labels ARE the config values, verbatim both ways against the schema), the **known-issue ledger** in IMPROVEMENT_PLAN §11 (swept the same day it opened: four transcribed rows were already closed, one was mis-described, and every surviving row now reads 실측), **BOM diagnostics** (fail-closed as before — what changed is that the refusal names the invisible byte instead of pointing at the one line that already looks right; ctlscan's net gained the BOM and its first run found a real one), and the repair that mis-description was hiding: `upgrade` **refuses two mode tokens** (exit 2, duplicates included) instead of quietly letting `--apply` beat `--check` and writing.
+
+**No schema change, no migration.** One new command (`interview` — read-only, ungated), one new refusal on `upgrade`; no success-path behavior moved. Existing mines adopt by re-copying `.weavedoc/` and `.claude/skills/weavedoc-*`.
+
+## 2026-08-08.34
+
+**`upgrade`가 상충하는 모드를 받고 썼다 — 장부를 훑다가 나왔다.** `.33`이 연 known-issue 장부의 `전사` 10건을 그날 바로 재봤고, 그 스윕이 **(b)급 결함 하나**를 냈다. 장부가 존재하는 이유를 개설 첫날 스스로 증명한 셈이다.
+
+**결함.** `weavedoc upgrade --check --apply`가 **썼다.** 사용자가 "쓰지 마라"(`--check`)와 "써라"(`--apply`)를 한 줄에 적었는데 명령은 조용히 후자를 골랐다 — usage 오류도, `--check`를 무시했다는 말도 없이 rc 0. 실측: v3 광산에서 intake 장부를 지워 backfill 대상을 만든 뒤 실행하니 `materials/intake-ledger.tsv`에 행이 실제로 기록됐다. argv 게이트(WD-CLI-001)는 **모르는** 플래그만 보므로, **아는 플래그 둘이 상충할 때**가 그 게이트의 사각이었다. 10차 리뷰가 "upgrade 모드 둘 이상 = usage 오류 · last-wins는 게이트가 공유 못 하는 숨은 규칙"을 결정으로 적었는데 **구현이 따라가지 않았고**, 그래서 릴리스 노트에 남은 파킹 항목("held-lock과 복수-모드 오류의 선행 순서")은 **존재하지 않는 거부 둘의 순서**를 서술하고 있었다.
+
+**수리.** 모드 **토큰이 둘 이상이면 exit 2**. 서로 다른 모드가 아니라 토큰을 세므로 `--apply --apply`도 거부한다 — 논리 플래그는 한 번 나오고, 중복은 모순과 똑같은 종류의 실수다(자매 프로젝트가 제 argv 라운드에서 정착시킨 문구). 잠금과의 순서는 그대로 두고 코드 주석에 적었다: 쥐어진 `.weavedoc/mine.lock`은 dispatcher에서 rc 1로 거부하고 이 usage 거부는 rc 2이며, **둘 다 아무것도 안 쓴다** — 이제 규칙이 존재하므로 그 순서를 말할 수 있다.
+
+**회귀 3건, 양방향 변이로 확인.** 핵심 케이스는 **문구가 아니라 쓰기**를 잰다 — 파일의 **부재**가 단언이라, 나중에 시끄럽게 거부하면서 쓰는 변경이 와도 초록으로 남지 않는다(규칙을 지우면 바로 그 줄에서 빨개진다). 중복 토큰 케이스가 규칙이 "서로 다른 모드 둘"로 좁혀지는 것을 막고, `--apply` 단독이 여전히 도는 것을 재는 케이스가 **오차단**을 막는다(`> 1`을 `> 0`으로 바꾸면 그 케이스만 빨개진다).
+
+**장부 스윕 결과도 §11에 기록했다.** 전사 10건 중 **4건은 이미 닫혀 있었다** — 고아 continuation은 이제 부모에 붙어 나오고, `\v` 공백 병리와 합성된 펜스 opener는 양쪽 모드에서 명명되며(후자는 `required`에서 rc 1), validate와 CLI의 latin1/utf8 갈림은 전 리더가 latin1이라 없다. 1건은 위의 오서술. 남은 6건은 전부 재현해 서술을 실제 관측에 맞췄고, 이제 장부의 모든 행이 `실측`이다.
+
+**No schema change, no migration.** 거부가 하나 늘었을 뿐 성공 경로의 동작은 그대로다.
+
+## 2026-08-08.33
+
+**자매 프로젝트 GroveSpec에서 대칭 이식 4건.** 지금까지 차용은 거의 전부 GroveSpec ← WeaveDoc 방향이었다(GroveSpec 설계노트 "WeaveDoc 차용 2차"가 lock·원자적 쓰기·config version 독자·argv 게이트·schema vacuity 가드·doccheck를 이식했고, 기각 목록에는 WeaveDoc이 앞선 것들이 적혀 있다). 이번은 반대 방향에서 실제로 남아 있던 넷이다. 확인만 하고 **가져오지 않은 것**도 적어 둔다: 삼상 null 전파·dispatch급 버전 경계·fingerprint 공허 케이스·argv 게이트는 전부 이미 닫혀 있었고, `id` 도출(GroveSpec이 counter 파일 대신 택한 것)은 전제가 다르다 — 광산은 git 저장소가 아닐 수 있고, WeaveDoc은 두 번째 기록을 `IDSEQ-BEHIND` tripwire로 지킨다.
+
+**① step report — 보고 골격 (문서만).** 스킬 런의 시작·마무리 멘트가 매번 즉흥이라, 사람 게이트에 들어가는 표면을 런마다 다시 배워야 했다(GroveSpec의 사용자 실측). `FORMATS.md`에 **"The step report"** 절이 생겼다 — 이 파일에서 **파서가 읽지 않는 유일한 계약**이고, 그렇게 명시했다: 시작 앵커 `[weavedoc-<verb> <target>] starting` + 2~4문장, 마무리 `done — …` + **Result · Open · Your turn · Next** 네 슬롯, 순서 고정, **빈 슬롯도 문장으로**(생략된 슬롯은 "아무도 안 봤다"와 구별되지 않는다 — 이 저장소가 도처에서 이름 붙인 vacuity 클래스의 보고판). 라벨은 영어 붙박이, 본문은 `config.language`, 한국어면 보고는 **합니다체**(아티팩트는 문어체). 구조는 고정이되 **내용은 고정이 아니다** — 이 런의 사실로 검증 안 되는 붙박이 안심 문구는 틀을 쓴 도장-찍기다. 9개 스킬 전부에 `## Report` 절이 붙어 어느 것이 Open/Your turn에 실리는지만 스킬별로 적는다. **"Offer, don't direct"의 소유자가 여기로 옮겨졌다** — 이 절 전에는 9개 중 2개 안에만 있었고 나머지 7개는 아무것도 물려받지 못했다. doccheck **검사 10**이 양방향 텍스트 검사로 지킨다(FORMATS에 절이 있고, 9스킬 전원이 포인터와 제 앵커를 갖는다 + 스킬 열거의 공허 가드).
+
+**② `interview` 명령 — 질문지를 기계가 낸다.** `weavedoc-init`의 고정 문항은 한국어 원문이 SKILL.md 산문에 박혀 있어 에이전트가 **옮겨 적어야** 했다. GroveSpec이 동일한 모양에서 **두 번 실측한** 실패가 그 자리다: 한글을 손수 `\uXXXX`로 인코딩하다 코드포인트를 잘못 회상해 `나뉩니다`가 `나뉜니다`로 나갔고, 두 번 다 사용자 화면에 그대로 보였으며, "베껴 써라"는 규칙은 둘 다 못 막았다. 그래서 규칙을 세게 쓰는 대신 **틀릴 수 있는 단계를 없앤다** — 정본이 런타임 상수로 옮겨 오고, `interview`가 AskUserQuestion `questions`에 그대로 붙는 JSON 배열을 **전부 ASCII로**(비ASCII 전량 사전 이스케이프) 찍는다. **두 번의 호출**로 나온다: 도구 상한이 4문항인데 설문은 5문항이라, "Q2–Q3를 한 번에 배치해도 된다"던 SKILL.md의 문장은 처음부터 성립하지 않았다. 옵션 **label이 곧 config 값**이라 답을 옮길 때 대응표가 필요 없다 — **예외 없이**. 첫 철자는 추천 표시를 label에 달아(`off (추천)`) "suffix는 값이 아니다"라는 벗기기 단계를 문서로 덧댔고, 커밋 전 리뷰가 짚었다: 스킬은 "label이 곧 값"이라 말하는데 10개 중 5개가 아니었고, **회귀 케이스는 suffix를 벗긴 뒤 비교해 그 갈림을 가리고 있었다**(결함을 잠근 테스트). 표시를 description 앞머리로 옮겨 label을 enum과 바이트 동일하게 만들고, 테스트에서 벗기기를 지웠다 — 이제 비교가 **축자**다. `version`/`lang`/`locale`처럼 광산을 열지 않고 버전 게이트도 안 탄다(설문은 광산이 생기기 전에 묻는다). 회귀 3건: 출력 전체가 ASCII이고 배열 2·문항 5임 · **옵션 label이 schema의 값과 양방향으로 일치**(제안한 값을 validate가 거부하거나, 합법 값을 설문이 감추는 것 둘 다 차단) · 인자 거부. 셋 다 변이로 빨개지는 것을 확인했다.
+
+**③ known-issue 장부 — "지금 열린 것"의 자리.** §11이 "known-issue로 기록한다"고만 정하고 **기록되는 한 곳**은 안 정했다. 실제로는 릴리스마다 CHANGELOG 안에 적고 나중에 취소선을 긋는 방식이었고, 그래서 오늘의 미결을 알려면 번들을 걸어가며 취소선을 적용해야 했다 — 그 비용은 실측됐다(2026-08-06 전수 점검이 **이미 닫혔는데 미결로 보이던 것 3건**을 찾았다). `IMPROVEMENT_PLAN.md` §11에 **현재 열린 것**의 장부를 열었다. 릴리스별 절은 이력으로 그대로 두고, 이 절은 상태다. 나가는 조건은 수리 또는 **실측 승격** 둘뿐. 각 행에 **출처 표기**를 달았다 — `실측`(이번에 재현함)과 `전사`(릴리스 노트에서 옮겨 적었고 다시 재보지 않음). 재보지 않은 것을 재본 것처럼 적지 않는 것이 이 장부가 대체하려는 실패의 정확한 반대다.
+
+**④ BOM — 등급을 내려 잡고 문장만 고쳤다.** GroveSpec은 BOM에서 갈라진 판정(validate는 통과, writer는 거부)을 겪어 리더에서 벗기는 쪽으로 닫았다. WeaveDoc에서 **재봤더니 갈림이 없다**: BOM 붙은 truth는 `TRUTH-NO-FM`으로 파일까지 지목하고 rc 1, BOM 붙은 자료는 14건을 내며 rc 1 — 전부 fail-closed다. 남은 비용은 **문구**였다: 화면에서 1행이 멀쩡히 `---`인 파일에 "line 1 must be '---'"이라고 답해, 읽는 사람을 이미 맞는 곳으로 보냈다. 그래서 파서를 바꾸지 않고 원인을 지목한다(`core.mjs`의 `bomFenceBytes`). **이름이 바이트 도메인을 말한다** — 첫 철자는 utf8 리더를 위해 U+FEFF도 받았는데, 커밋 전 리뷰가 **그 분기가 도달 불가**임을 짚었다: 두 호출자(validate의 truth 순회 · seal-review의 펜스 검사) 모두 latin1로 읽어 마크가 항상 EF BB BF로 온다. 아무도 안 닿는 분기는 고장 난 분기와 구별되지 않으므로 보장을 실측 범위로 좁히고, 대신 **이름이 호출 지점에서 도메인을 말하게** 했다(디코드한 호출자가 조용한 `false`를 받아 가지 않도록). 회귀 두 건도 "두 디코딩"이 아니라 **두 소비자**를 잠그는 것으로 설명을 고쳤다. 받아들이는 쪽을 택하지 않은 이유도 적어 뒀다: `splitLines`가 두 도메인의 단일 관문이라 거기서 벗기면 utf8 리더와 latin1 라이터가 갈라지고(`seal-review`가 `splitLines` 결과를 다시 이어 붙여 쓴다 — 사용자 파일의 BOM이 조용히 사라지고 digest가 바뀐다), 드문 입력을 위해 split-judgment를 사는 거래가 된다. 클래스는 §11 장부에 승격 조건과 함께 올렸다.
+
+**덤 — `ctlscan`이 BOM도 잡는다, 그리고 그 자리에서 실물을 하나 찾았다.** 이 패치를 쓰는 동안 **BOM을 지목하는 코드에 BOM 리터럴이 두 번 박혔다**(편집 계층이 escape를 번갈아 삼켰다; GroveSpec은 같은 자리에서 세 번 겪었다고 기록했다). 눈에 안 보이는 문자는 소스에서 안 보인다 — 그래서 기존 invisible-character 스캐너의 그물에 BOM을 넣었다(새 도구가 아니라 있던 그물의 확장). 첫 실행이 `quote-marker-model.mjs`의 **invisible 문자 목록을 invisible 문자로 적은 정규식**을 찾아냈고, 코드포인트 20개가 BMP 전 구간에서 동일함을 증명한 뒤 `\uXXXX` 표기로 바꿨다(property 168케이스 불변). 요약 줄의 라벨에서 숫자를 뺐다 — 소비자가 `sed 's/[^0-9]//g'`로 세므로 라벨의 숫자는 계수에 붙는다.
+
+**No schema change, no migration.** 새 명령 하나(`interview`, 읽기 전용·비게이트)와 진단 문구 두 곳이 전부다. 기존 광산은 `.weavedoc/`와 `.claude/skills/weavedoc-*`를 다시 복사하면 된다.
+
 ## 2026-08-08.32
 
 **v0.6.3 — verify's rules move to the write side.** Publishes bundle `.31`. Runtime bytes are identical to it — and to v0.6.2's, fingerprint `06f3106b039d` — because everything this release changes is **skill documents**: `gather` audits its conversion in both directions with a value sweep, `map` gains a self-audit step (including the corrections-are-re-grounded-in-place check), and `verify` states that it is the second pass. A new mine copied from this release gets write-time rules a v0.6.2 copy does not; nothing else differs. The fingerprint cannot distinguish the two installs — it hashes `bin+schema`, not skills — so compare the bundle date label for THIS upgrade.

@@ -77,5 +77,10 @@ This lane is advisory, so the count never blocks `final.md` — the fidelity gat
 
 **Stop safety**: if advisory rounds exceed `config.review.max_rounds` without converging, stop and take the open issues to the human. Do **not** auto-pass. Leave `plan.md` at `status: reviewing` — `plan.fm.enum.status` is the document's *stage* axis (`planned|drafting|reviewing|done|stale`), not a verdict axis, and `escalated` is not one of its values; writing it there makes `validate` fail. The escalation itself belongs in `review.md`'s `# Human queue` — and the closing message states the escalated items themselves (Surface, don't point); the file is the record, never the report.
 
+## Report
+Open and close this run with the **step report** — the fixed shape in `.weavedoc/FORMATS.md` ("The step report"): the `[weavedoc-review <doc-id>] starting` anchor and 2–4 sentences, then `done — …` carrying `Result` · `Open` · `Your turn` · `Next`, in that order, none omitted. `Next` is the section below. What this skill puts in the two middle slots:
+- **Open** — every `# Fidelity violations` entry (these block consecration) and the advisory findings above the configured strength, kept apart because only the first kind is a gate.
+- **Your turn** — adjudications on findings you dispute, and the escalation itself when the round count passes `max_rounds` (which never auto-passes).
+
 ## Next
 Still in the **document-writing phase**. **refine** is available next — resolve every fidelity violation (all of them — non-negotiable for the gate) and the advisory findings per the gate, then loop. Offer it as the path forward; the user chooses when to run it.

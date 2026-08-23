@@ -140,6 +140,28 @@ stale_cmd=$(grep -rnE '\.weavedoc/bin/weavedoc[[:space:]]' \
   "$REPO/README.md" "$REPO/WORKFLOW.md" "$REPO/METHODOLOGY.md" "$REPO/UPGRADING.md" 2>/dev/null || true)
 [ -z "$stale_cmd" ] || say "a live surface invokes the deleted bash entrypoint (it is 'node .weavedoc/bin/weavedoc.mjs <cmd>'): $stale_cmd"
 
+# 10. The step report has ONE owner and every skill points at it. The report is the surface a human
+# reads to decide what happens next, and before it was fixed each skill improvised its own opening
+# and closing — so the user re-learned the shape every run (measured in the sibling project
+# GroveSpec, whose skeleton this mirrors). A shape that only SOME skills carry is worse than none:
+# the reader cannot tell a skill with nothing open from a skill that never had the slot. Hence both
+# directions — the contract exists in FORMATS, and no skill is missing its pointer. Same honesty as
+# checks 5-7: a TEXT check. It proves the sentence a follower would read is present, never that the
+# run obeyed it — skills are not executable, so presence is the whole mechanical purchase there is.
+# VACUITY GUARD on the skill enumeration: an empty glob would run this loop zero times and print
+# agreement over nine unchecked files.
+grep -q '^## The step report' "$REPO/.weavedoc/FORMATS.md" \
+  || say "FORMATS.md has no '## The step report' section — the nine skills point at a contract that is not there"
+skills=$(ls -d "$REPO"/.claude/skills/weavedoc-*/ 2>/dev/null)
+ns=$(printf '%s\n' "$skills" | grep -c . || true)
+[ "${ns:-0}" -ge 9 ] || say "skill enumeration found only ${ns:-0} skill(s) — the glob is broken, not the docs"
+for s in $skills; do
+  grep -qF 'The step report' "$s/SKILL.md" \
+    || say "$(basename "$s") does not point at the step report contract — its run would open and close in a shape of its own, which is the drift FORMATS' skeleton exists to end"
+  grep -qE '\[weavedoc-[a-z]+( <[a-z-]+>| [a-z]+)?\] starting' "$s/SKILL.md" \
+    || say "$(basename "$s") never spells its own '[weavedoc-… ] starting' anchor — the anchor is per-skill and cannot be inherited from the contract"
+done
+
 # 3. The VERSION label and CHANGELOG's newest entry are one fact.
 v=$(cat "$REPO/.weavedoc/VERSION" 2>/dev/null)
 top=$(grep -m1 '^## ' "$REPO/CHANGELOG.md" | sed 's/^## *//')

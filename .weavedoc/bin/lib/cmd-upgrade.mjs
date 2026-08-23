@@ -249,6 +249,25 @@ export function cmdUpgrade (m, out, args, reindex, validateCollect) {
   for (const a of args) {
     if (!known.has(a)) { out(`upgrade: unknown argument '${a}' — usage: weavedoc upgrade [--check|--dry-run|--apply]`); return 2 }
   }
+  // AT MOST ONE MODE TOKEN. The argv gate above only sees flags it does not KNOW, so two known
+  // flags that contradict each other walked straight through it — and `apply` won, because it is
+  // the one that gets asked for. Measured 2026-08-22: `upgrade --check --apply` on a mine with a
+  // pending backfill printed its receipt and WROTE the intake rows, rc 0, without a word about the
+  // `--check` it had just ignored. A user who says "do not write" and "write" in one line has said
+  // something the machine cannot resolve, and last-wins is a hidden rule no gate shares — the (b)
+  // class of §11, and the exact thing WD-CLI-001 says a tool may not do ("a typo'd intention, and a
+  // tool that ignores it does something other than what was asked"). The rule counts TOKENS rather
+  // than distinct modes, so `--apply --apply` is refused too: a logical flag appears once, and a
+  // repeat is as much a slip as a contradiction. Review #10 recorded this rule as decided; nothing
+  // implemented it, which is why the review's own note about lock-vs-usage ORDER described two
+  // refusals when only one existed. That order stands and is by design: a held `.weavedoc/mine.lock`
+  // refuses at the dispatcher (rc 1) before this usage refusal (rc 2), and both write nothing.
+  const modes = args.filter(a => known.has(a))
+  if (modes.length > 1) {
+    out(`upgrade: give at most one mode — got '${modes.join(' ')}'; usage: weavedoc upgrade [--check|--dry-run|--apply]`)
+    out('  refusing rather than picking one: --check and --dry-run promise NOT to write, --apply writes. Nothing written')
+    return 2
+  }
   const apply = args.includes('--apply')
 
   const pv = (fmLoad(m.project).get('version') ?? '').trim()

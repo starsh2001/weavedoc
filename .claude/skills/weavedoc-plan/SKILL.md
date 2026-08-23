@@ -79,6 +79,11 @@ Pull a document from the data mine — decide its structure, tone, and which tru
 
 10. Set `status: planned`.
 
+## Report
+Open and close this run with the **step report** — the fixed shape in `.weavedoc/FORMATS.md` ("The step report"): the `[weavedoc-plan <doc-id>] starting` anchor and 2–4 sentences, then `done — …` carrying `Result` · `Open` · `Your turn` · `Next`, in that order, none omitted. `Next` is the section below. What this skill puts in the two middle slots:
+- **Open** — structural gaps the section→material map exposed (a section with no material behind it), and required tags with no truth to carry them.
+- **Your turn** — approving the structure and tone, and deciding what to do about each gap: gather more, or write the document without that section.
+
 ## Next
 Now inside the **document-writing phase**. **write** is available to draft the document from this plan — offer it when the user is ready, don't command it.
 

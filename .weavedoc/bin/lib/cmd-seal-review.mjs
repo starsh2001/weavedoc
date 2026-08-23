@@ -9,7 +9,7 @@
 // definition", and a freshly sealed review is neither. Leaving it would park a demotion path —
 // strip the seal later and the review reads as legacy again, reopening the gate.
 import { statSync } from 'node:fs'
-import { isFence, splitLines } from './core.mjs'
+import { bomFenceBytes, isFence, splitLines } from './core.mjs'
 import { join, contextDigest, docDraftPath, docFinalPath } from './mine.mjs'
 import { artifactDigest } from './verify.mjs'
 import { writeAtomic, readText, textBuf } from './write.mjs'
@@ -32,7 +32,12 @@ export function cmdSealReview (m, out, d, kindArg) {
   // the findings prose below them is the reviewer's, in whatever encoding they wrote it.
   const lines = splitLines(readText(rev))
   if (!FENCE.test(lines[0] ?? '')) {
-    out("seal-review: review.md has no frontmatter block to seal into (line 1 must be exactly '---') — nothing sealed"); return 2
+    // These lines are LATIN1 (byte-transparent, see above), so the mark arrives here as EF BB BF
+    // rather than U+FEFF — hence the byte-domain predicate, named for the domain it answers in.
+    const why = bomFenceBytes(lines[0] ?? '')
+      ? " — line 1 IS `---`, but a UTF-8 byte-order mark (EF BB BF) sits in front of it, so the fence is invisible to every reader. Save review.md as UTF-8 WITHOUT a BOM"
+      : ''
+    out(`seal-review: review.md has no frontmatter block to seal into (line 1 must be exactly '---')${why} — nothing sealed`); return 2
   }
 
   const art = kind === 'draft' ? docDraftPath(m, d) : docFinalPath(m, d)
