@@ -6295,6 +6295,50 @@ acct_openlist_nothing_waiting() {
   expect_pass
   expect_has "nothing is waiting on you"
 }
+acct_status_available_lists_pending_work() {
+  # "How far along am I, and what could I start?" used to take three commands (status, status --open,
+  # scope) assembled by hand. The block answers it — and it LISTS rather than PICKS: WeaveDoc has no
+  # obligatory order (the mine may always grow), so naming one step as due would be the machine
+  # taking a decision that is the user's. Each entry therefore carries its REASON.
+  mkdir -p "$W/inbox" && printf 'x\n' > "$W/inbox/새자료.md" && printf 'y\n' > "$W/inbox/b.txt"
+  mkdir -p "$W/materials/m002"
+  printf -- '---\nid: m002\ntitle: 두번째\norigin: file\nrole: 계약서\ntopics: [x]\nformat: md\nsource_path: inbox/b.md\nadded: 2026-08-01\nstatus: converted\nsummary: 아직 안 캔 자료.\n---\n\n본문\n' > "$W/materials/m002/converted.md"
+  rm -f "$W/documents/d1/final.md"; rm -rf "$W/documents/d1/final"
+  vrun status
+  expect_pass
+  expect_has "phase: mine-building · document-writing (d1)"
+  expect_has "gather   2 file(s) waiting in inbox/"
+  expect_has "map      1 material(s) with no truth extracted yet: m002"
+  expect_has "write    d1 is planned"
+  # The over-report control, in the same fixture: completeness is off here, so the gaps entry has no
+  # reason to exist. A block that listed every LEGAL skill — which in this tool is nearly all of them
+  # nearly always — would name it, and a list that always says everything is a list nobody reads.
+  expect_hasnt "gaps     completeness"
+}
+acct_status_available_is_silent_on_a_settled_mine() {
+  # The negative direction, and the one that keeps the block honest: the pristine has its material
+  # mined, its units recorded and nothing in the inbox, so gather/map/verify must NOT appear. Drop
+  # any of the three conditions from the runtime and this case goes red where the case above stays
+  # green — the pair is what proves the entries are computed rather than printed.
+  vrun status
+  expect_pass
+  expect_hasnt "gather  "
+  expect_hasnt "map     "
+  expect_hasnt "verify  "
+}
+acct_status_verify_entry_names_its_own_limit() {
+  # THE WEAKER CLAIM, stated. `scope` owns the verification verdict — it compares digests and splits
+  # stale from failed from bound. This block counts only units with NO RECORD AT ALL, because a
+  # second judge of that verdict is the last thing this runtime should grow. That is only safe while
+  # the line SAYS so: a reader who takes this count as the round's scope has been misled by a number
+  # that is true. Delete the deferral clause and the count starts impersonating scope.
+  mkdir -p "$W/materials/m002"
+  printf -- '---\nid: m002\ntitle: 두번째\norigin: file\nrole: 계약서\ntopics: [x]\nformat: md\nsource_path: inbox/b.md\nadded: 2026-08-01\nstatus: converted\nsummary: 기록 없는 자료.\n---\n\n본문\n' > "$W/materials/m002/converted.md"
+  vrun status
+  expect_pass
+  expect_has "with no verification record at all"
+  expect_has "'weavedoc scope' is the full account"
+}
 block_status_open_typo() {
   # WD-CLI-001: an unknown flag is a typo'd intention, refused — not ignored.
   vrun status --opne

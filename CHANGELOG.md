@@ -4,6 +4,16 @@
 
 ---
 
+## 2026-08-08.36
+
+**`status`가 "여기까지 왔고, 지금 뭘 시작할 수 있나"까지 답한다.** 자매 프로젝트의 `next` 스킬을 보고 나온 것인데, **이식하지 않고 `status`를 완성하는 쪽**을 택했다. 근거는 실측이다: 9개 스킬이 호출하는 것은 전부 `status --open`이고 **plain `status`를 파싱하는 스킬은 하나도 없다** — 즉 plain `status`는 이미 사람용 뷰였고, 절반만 답하고 있었다(문서 축과 계수기 셋은 있고, 광산 축과 "할 수 있는 것"이 없었다). 그래서 사용자는 `status` + `status --open` + `scope` 셋을 돌려 머리로 합쳐야 했다. 새 명령을 만들었다면 같은 질문에 답하는 두 번째 리더가 생겼을 것이다.
+
+**나열하지, 고르지 않는다.** GroveSpec의 `next`는 due한 스텝 **하나를 지목**한다 — 상태를 가진 노드가 의존 트리를 이루기 때문에 가능한 일이다. WeaveDoc엔 그런 순서가 없다: 광산은 언제나 더 자랄 수 있고 단계 경계는 의무가 아니며, 무엇을 할지 고르는 것은 사람 몫이다. 그래서 새 블록은 **일이 실제로 밀려 있는 것만** 근거와 함께 나열하고("`map` — 자료 1건에서 아직 진실을 뽑지 않았다"), 어순은 순위가 아니다. 이 도구에선 거의 모든 스킬이 거의 항상 합법이므로, 합법인 것을 전부 나열하는 블록은 **매 프로젝트를 붉히는 검사와 같은 운명**이 된다 — 참이지만 아무도 안 읽는다.
+
+**verify 줄은 일부러 더 약한 주장이고, 그렇다고 적는다.** 검증 판정은 `scope`의 것이다 — digest를 비교해 stale·failed·bound를 가르는 130줄짜리 증거 우선순위다. 그걸 여기서 다시 계산하면 이 런타임이 가장 엄격한 바로 그 지점에 **두 번째 판정자**가 생긴다. 그래서 이 블록은 **기록이 아예 없는 단위**만 센다(집합 소속 문제) — 판정기를 복제하지 않고 `scope`가 쓰는 **같은 공유 리더**(장부 인덱스 · `## Verified units` 타입 모델)에서 읽는다. 행도 없고 legacy 언급도 없는 단위는 digest가 뭐라 하든 확실히 검증된 적이 없고, 나머지는 줄이 직접 scope의 몫이라고 말한다. **한계를 스스로 밝힌 약한 주장은 강한 주장과 어긋날 수 없다.**
+
+**회귀 3건.** 항목이 근거와 함께 뜨는 것(양) · **정리된 광산에서는 뜨지 않는 것**(음 — 조건을 `true`로 바꾸면 이쪽만 빨개진다) · verify 줄이 제 한계를 말하는 것(그 문구가 빠지면 숫자가 scope 행세를 시작한다). golden의 `status.txt`가 새 4줄을 고정한다.
+
 ## 2026-08-08.35
 
 **v0.6.4 — four ports back from the sibling, and the ledger's first catch.** Publishes bundles `.33` and `.34`; this bundle adds only the release claim, so runtime bytes are identical to `.34` — fingerprint `da599df99393`. What ships since v0.6.3: the **step report** skeleton (FORMATS' one parser-free contract, carried by all nine skills, held by doccheck check 10 — "Offer, don't direct" finally has one owner), the **`interview`** command (init's fixed questionnaire printed pre-escaped and pure ASCII, so nobody transcribes Hangul into a tool call again; option labels ARE the config values, verbatim both ways against the schema), the **known-issue ledger** in IMPROVEMENT_PLAN §11 (swept the same day it opened: four transcribed rows were already closed, one was mis-described, and every surviving row now reads 실측), **BOM diagnostics** (fail-closed as before — what changed is that the refusal names the invisible byte instead of pointing at the one line that already looks right; ctlscan's net gained the BOM and its first run found a real one), and the repair that mis-description was hiding: `upgrade` **refuses two mode tokens** (exit 2, duplicates included) instead of quietly letting `--apply` beat `--check` and writing.

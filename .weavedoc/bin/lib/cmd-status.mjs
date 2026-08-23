@@ -2,9 +2,9 @@
 // weavedoc status --open — the waiting items THEMSELVES, one line each: the mechanical source for
 // the skills' "Surface, don't point" rule (a run's closing message must carry every item waiting
 // on the user — the listing is pasted/rendered, never re-composed from memory).
-import { existsSync, statSync } from 'node:fs'
+import { existsSync, statSync, readdirSync } from 'node:fs'
 import { readFileSync } from 'node:fs'
-import { pipes } from './core.mjs'
+import { canonId, pipes } from './core.mjs'
 import { fmvB, loadSchema } from './read.mjs'
 import { fm, join, docIds, materialIds, truthFiles, basename } from './mine.mjs'
 import { parseReview } from './review-model.mjs'
@@ -12,6 +12,10 @@ import { gapRegisterContract, parseGapText } from './gaps-register.mjs'
 import { hqFiles, readHumanQueues } from './hq-ledger.mjs'
 import { CONFLICTS_FILE, parseConflicts } from './conflict-store.mjs'
 import { readQuestions } from './questions-ledger.mjs'
+// The verify axis is READ here, never re-judged — see the `available` block's comment: these are
+// the same shared models `scope` reads, and this command makes a strictly weaker claim on them.
+import { ledgerIndex, ledgerRowsOf } from './verify.mjs'
+import { readVerifiedUnits, verifiedUnitsContract } from './verified-units.mjs'
 
 const isDir = p => { try { return statSync(p).isDirectory() } catch { return false } }
 
@@ -141,6 +145,99 @@ export function cmdStatus (m, out) {
   // checked, and a status that never says so lets "no gaps reported" read as "no gaps exist".
   if ((m.cfg.flat.get('completeness') || '') !== 'required') {
     out("completeness: off — omissions are not checked (fidelity.completeness in .weavedoc/config.yaml; 'required' wires gaps.md into the gate)")
+  }
+
+  // ---- where you are, and what you could start now ----------------------------------------------
+  // The lines above say what the mine HOLDS. They never said what is left undone, so answering "how
+  // far along am I, and what can I start?" meant running `status`, `status --open` and `scope` and
+  // assembling the three by hand. That assembly is what this block is.
+  //
+  // IT LISTS, IT DOES NOT PICK. The sibling project's `next` names the one step that is due, which
+  // it can do because its nodes carry a status in a dependency tree. WeaveDoc has no such order: the
+  // mine can always grow, no phase boundary is obligatory, and choosing among what is available is
+  // the user's. So every entry is something with work ACTUALLY waiting — availability with a reason,
+  // never a queue position — and the phrasing stays "you could", never "you should".
+  //
+  // Only entries with a REASON appear. In this tool nearly every skill is always legal, so a block
+  // that listed them all would be the check that reddens every project: true, and unread.
+  const avail = []
+
+  // gather — the inbox is a queue, so a file sitting in it is work not started.
+  let ninbox = 0
+  try { ninbox = readdirSync(m.inbox).filter(n => !n.startsWith('.')).length } catch { ninbox = 0 }
+  if (ninbox > 0) avail.push(['gather', `${ninbox} file(s) waiting in ${m.inbox.startsWith(`${m.root}/`) ? m.inbox.slice(m.root.length + 1) : m.inbox}/`])
+
+  // map — a material nothing cites as `source` has not been mined yet. Read off the truths' own
+  // frontmatter, which is where the citation lives; canonId so `m5` and `m005` are one material.
+  const cited = new Set()
+  for (const f of truthFiles(m)) {
+    const s = (fm(f, 'source') || '').trim()
+    if (s !== '') cited.add(canonId(s) ?? s)
+  }
+  const unmined = materialIds(m).filter(id => {
+    if (!existsSync(join(m.materials, id, 'converted.md'))) return false
+    if (fm(join(m.materials, id, 'converted.md'), 'status') === 'retracted') return false
+    return !cited.has(canonId(id) ?? id)
+  })
+  if (unmined.length > 0) avail.push(['map', `${unmined.length} material(s) with no truth extracted yet: ${unmined.slice(0, 6).join(' ')}${unmined.length > 6 ? ' …' : ''}`])
+
+  // verify — DELIBERATELY THE WEAKER CLAIM, and it says so. `scope` owns the verification verdict:
+  // it compares digests and separates stale from failed from bound, ~130 lines of evidence
+  // precedence. Recomputing that here would be a second judge of the one thing this runtime is
+  // strictest about. So this counts only units with NO RECORD AT ALL — a question answered by set
+  // membership, using the SAME shared readers scope uses (the ledger index, and the `## Verified
+  // units` markdown fallback through its typed model). A unit with no row and no legacy mention has
+  // certainly never been verified, whatever the digests would say; the line names the rest as
+  // scope's. A strictly weaker claim that states its limit cannot disagree with the stronger one.
+  const lidx = ledgerIndex(join(m.truths, m.ledgerFile()))
+  const recorded = new Set()
+  if (lidx.state !== 'unreadable' && lidx.headless === 0) {
+    for (const r of ledgerRowsOf(lidx)) { const id = r.split('\t')[0]; if (id) recorded.add(canonId(id) ?? id) }
+  }
+  const vu = readVerifiedUnits(join(m.truths, 'verify.md'), verifiedUnitsContract(m.sch))
+  if (vu.readable) for (const id of vu.coveredIds) recorded.add(canonId(id) ?? id)
+  const noRecord = xs => xs.filter(id => !recorded.has(canonId(id) ?? id))
+  const mNo = noRecord(materialIds(m).filter(id => existsSync(join(m.materials, id, 'converted.md')) &&
+    fm(join(m.materials, id, 'converted.md'), 'status') !== 'retracted' &&
+    fm(join(m.materials, id, 'converted.md'), 'status') !== 'verified'))
+  const tNo = noRecord(truthFiles(m).map(f => basename(f, '.md')))
+  if (mNo.length + tNo.length > 0) {
+    avail.push(['verify', `${mNo.length} material(s) · ${tNo.length} truth(s) with no verification record at all — 'weavedoc scope' is the full account (it also compares digests for stale/failed)`])
+  }
+
+  // gaps — the register is non-blocking, so it is offered whenever completeness is armed and no
+  // register exists: `required` without a gaps.md is a warranty with nothing behind it.
+  if ((m.cfg.flat.get('completeness') || '') === 'required' && !existsSync(join(m.root, 'gaps.md'))) {
+    avail.push(['gaps', "completeness is 'required' but there is no gaps.md — the warranty has not run once"])
+  }
+
+  // plan — a document is startable once there is anything to draw on. Offered when the mine holds
+  // truths and no document is still in flight; a mine with documents mid-pipeline says so below.
+  const docs = docIds(m)
+  const inflight = docs.filter(d => {
+    const st = fm(join(m.documents, d, 'plan.md'), 'status') || ''
+    return st !== 'done' && !(existsSync(join(m.documents, d, 'final.md')) || isDir(join(m.documents, d, 'final')))
+  })
+  if (truthFiles(m).length > 0 && inflight.length === 0) {
+    avail.push(['plan', docs.length === 0 ? 'the mine has truths and no document yet' : 'every document is finished — a new one can start'])
+  }
+  // the document axis — the same switch the lines at the top print, named as an action.
+  for (const d of inflight) {
+    const st = fm(join(m.documents, d, 'plan.md'), 'status') || '(no plan)'
+    const step = { planned: 'write', drafting: 'write', reviewing: 'refine', stale: 'review' }[st] ?? 'plan'
+    avail.push([step, `${d} is ${st}`])
+  }
+
+  out('')
+  const phase = []
+  if (materialIds(m).length > 0 || truthFiles(m).length > 0 || ninbox > 0) phase.push('mine-building')
+  if (inflight.length > 0) phase.push(`document-writing (${inflight.join(' ')})`)
+  out(`phase: ${phase.length ? phase.join(' · ') : 'empty mine — nothing collected yet'}`)
+  if (avail.length === 0) {
+    out('available: nothing is pending — the mine can still grow (gather · map), and a document can start (plan) whenever you want one')
+  } else {
+    out('available — where work is actually waiting (yours to choose among, in any order):')
+    for (const [name, why] of avail) out(`  ${name.padEnd(8)} ${why}`)
   }
   return 0
 }

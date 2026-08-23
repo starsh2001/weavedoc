@@ -2,3 +2,7 @@ d1                 planned     → — (final)
 materials: 1
 human queue: 0
 completeness: off — omissions are not checked (fidelity.completeness in .weavedoc/config.yaml; 'required' wires gaps.md into the gate)
+
+phase: mine-building
+available — where work is actually waiting (yours to choose among, in any order):
+  plan     every document is finished — a new one can start
