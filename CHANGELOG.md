@@ -4,6 +4,12 @@
 
 ---
 
+## 2026-08-08.37
+
+**v0.6.5 — status answers what you could start.** Publishes bundle `.36` (two commits); this bundle adds only the release claim, so runtime bytes are identical to it — fingerprint `4aeac2b66ba0`. What ships since v0.6.4: plain `status` closes with **where you are and what you could start** — a `phase:` line and an `available` block naming every action with work actually waiting, each with its reason. It **lists, it never picks** (WeaveDoc has no obligatory order; choosing stays the user's), an action with no reason is simply absent, and the verify entry is deliberately the weaker claim — units with no record at all, read through the same shared models `scope` uses, with the line handing the verdict itself to `scope` by name. Cross-checked on a real 263-truth mine: the weaker claim's counts equal `scope`'s unverified sets exactly. The pre-push cold review's two catches ship inside the same bundle: unreadable verification evidence is named instead of counted as absence, and a corroboration-only material is not offered as map work.
+
+**No schema change, no command change, no migration.** A read-only report grew a section; nothing else moved. Existing mines adopt by re-copying `.weavedoc/`.
+
 ## 2026-08-08.36
 
 **`status`가 "여기까지 왔고, 지금 뭘 시작할 수 있나"까지 답한다.** 자매 프로젝트의 `next` 스킬을 보고 나온 것인데, **이식하지 않고 `status`를 완성하는 쪽**을 택했다. 근거는 실측이다: 9개 스킬이 호출하는 것은 전부 `status --open`이고 **plain `status`를 파싱하는 스킬은 하나도 없다** — 즉 plain `status`는 이미 사람용 뷰였고, 절반만 답하고 있었다(문서 축과 계수기 셋은 있고, 광산 축과 "할 수 있는 것"이 없었다). 그래서 사용자는 `status` + `status --open` + `scope` 셋을 돌려 머리로 합쳐야 했다. 새 명령을 만들었다면 같은 질문에 답하는 두 번째 리더가 생겼을 것이다.
