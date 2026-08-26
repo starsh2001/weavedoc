@@ -4423,6 +4423,24 @@ acct_json_version() {
   expect_pass
   expect_has '"fingerprint"'
   expect_has '"schema_version":3'
+  # The version key carries the SemVer from `.weavedoc/VERSION`.
+  local ver
+  ver=$(tr -d ' \r\n' < "$W/.weavedoc/VERSION")
+  expect_has "\"version\":\"$ver\""
+}
+acct_json_version_key_consistent_across_commands() {
+  # THE `version` KEY IS THE SAME FACT in all three commands that publish it — version, scope,
+  # validate — read from the same file (`.weavedoc/VERSION`). Teaching one command and not the
+  # other is a defect this repo has paid for by name. Point any of the three at a different
+  # source → this goes red.
+  local ver c
+  ver=$(tr -d ' \r\n' < "$W/.weavedoc/VERSION")
+  [ -n "$ver" ] || { bad "VERSION is empty"; return; }
+  for c in version scope validate; do
+    vrun "$c" --json
+    expect_pass
+    expect_has "\"version\":\"$ver\""
+  done
 }
 meta_diag_code_table() {
   # FORMATS documents every code the runtime can emit, and documents no code it cannot — the table
@@ -4554,9 +4572,9 @@ acct_golden_outputs_current() {
   # This makes an intentional output change SHOW UP: the case fails until `bash tests/refresh-golden.sh`
   # is run, and the change then appears in that directory's diff where a reviewer can see it.
   #
-  # version.txt is compared on its LABEL LINE ONLY. The fingerprint hashes the whole runtime, so
+  # version.txt is compared on its VERSION LINE ONLY. The fingerprint hashes the whole runtime, so
   # asserting it would demand a golden refresh on every lib edit — friction with no signal, since
-  # what this case is for is OUTPUT drift, and doccheck already ties the label to the CHANGELOG.
+  # what this case is for is OUTPUT drift, and doccheck already ties the version to the CHANGELOG.
   local G="$REPO/tests/baseline/golden" c bad=""
   for c in validate census scope status gaps; do
     [ -f "$G/$c.txt" ] || { bad="$bad MISSING:$c.txt"; continue; }
@@ -7440,7 +7458,7 @@ CASES=$(declare -F | awk '{print $3}' | grep -E '^(block|pass|acct|meta|e2e)_' |
 if [ -n "$FILTER" ]; then CASES=$(printf '%s\n' "$CASES" | grep -F "$FILTER" || true); fi
 [ -z "$CASES" ] && { echo "no cases match [$FILTER]"; exit 2; }
 
-echo "weavedoc regression — $(git -C "$REPO" rev-parse --short HEAD 2>/dev/null) / bundle $(cat "$REPO/.weavedoc/VERSION") / $(printf '%s\n' "$CASES" | wc -l | tr -d ' ') cases, -j$JOBS"
+echo "weavedoc regression — $(git -C "$REPO" rev-parse --short HEAD 2>/dev/null) / $(cat "$REPO/.weavedoc/VERSION") / $(printf '%s\n' "$CASES" | wc -l | tr -d ' ') cases, -j$JOBS"
 echo "  env: $(uname -sr) · bash ${BASH_VERSION%%(*} · cache key $KEY"
 # Syntax-check the entrypoint before building a fixture: a runtime that does not parse fails every
 # case identically and buries the one line that says why.

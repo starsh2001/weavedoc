@@ -183,7 +183,7 @@ export function cmdScope (m, out, json) {
 
   if (json) {
     const jarr = a => `[${a.map(x => `"${x}"`).join(',')}]`
-    out(`{"output_schema_version":1,"command":"scope","bundle":"${readOr(join(m.root, '.weavedoc', 'VERSION')).replace(/\n+$/, '')}","schema_version":${m.schemaVer()},` +
+    out(`{"output_schema_version":1,"command":"scope","version":"${readOr(join(m.root, '.weavedoc', 'VERSION')).replace(/\n+$/, '')}","schema_version":${m.schemaVer()},` +
       `"ledger_state":"${ledgerDead ? (lidx.state === 'unreadable' ? 'unreadable' : 'headless-rows') : lidx.state}",` +
       `"materials":{"converted":${nMconv},"verified_bound":${nMbound},"legacy_unbound":${nMlegacy},"stale":${nMstale},"failed":${nMfail},"unverified":${nMunver},"used_but_unverified":${nMused},"originless_rows_ignored":${jarr(mOriginless)},"owed":${jarr([...munver, ...mstale, ...mfail])}},` +
       `"truths":{"live":${ondisk.length},"verified_bound":${nTbound},"legacy_unbound":${tlegacy.length},"stale":${nTstale},"failed":${nTfail},"unverified":${tunver.length},"owed":${jarr([...tunver, ...tstale, ...tfail])}},` +

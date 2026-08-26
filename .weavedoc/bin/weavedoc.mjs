@@ -17,7 +17,7 @@
 //   census            mine census only (truth files vs index, coverage records)
 //   reindex [--check] regenerate truths/index.md + truths/tree.md from truth frontmatter (--check: diff only)
 //   retag <old> <new> rename/merge a tag across truths·required_tags·scope_tags (--dry: report only)
-//   version           the installed runtime bundle version (.weavedoc/VERSION)
+//   version           the installed runtime version (.weavedoc/VERSION), fingerprint and schema
 //   lang              the project's reply/artifact language (config.language)
 //   locale            detect the OS language (for init); prints nothing if undetectable
 //   interview         init's fixed questionnaire as AskUserQuestion payloads, non-ASCII pre-escaped
@@ -98,14 +98,11 @@ const jsonEsc = s => s
 
 // ---- commands ----
 function cmdVersion (json) {
-  // The date label alone cannot identify a bundle — two installs can share it while their runtime
-  // differs. The fingerprint is content, so comparing installs is real. It covers the WHOLE
-  // runtime — this file, every file under lib/ (name + bytes, so a rename or a new module counts),
-  // and the schema. Hashing the entrypoint alone was enough for the bash runtime, which WAS one
-  // file; here the behavior lives in lib/, and the v0.4.0 external review found real commit pairs
-  // that differed only in lib/ while this fingerprint stayed the same — the exact comparison the
-  // field exists to make honest. A bash install and a Node install of the same bundle date still
-  // report different fingerprints: different runtimes, and the label cannot say so.
+  // VERSION is the SemVer release version. It is the ONE label: the git tag, the CHANGELOG section
+  // heading, and the value an embedding installer shows a user all read this file. It moves every
+  // bundle (patch bump), so there is no second stamp to keep in sync. The fingerprint below is
+  // content identity — two installs can share a version while their bytes differ, and this is what
+  // tells them apart.
   let vf = join(ROOT, '.weavedoc', 'VERSION')
   if (!existsSync(vf)) vf = join(SCRIPT_DIR, '..', 'VERSION')
   if (!existsSync(vf)) { outln('(no VERSION file)'); return 1 }
@@ -144,15 +141,13 @@ function cmdVersion (json) {
     fp = h.digest('hex')
   } catch { /* a runtime that cannot read itself still reports its label */ }
   if (json) {
-    // `bundle` goes through command substitution in the bash version, which strips trailing
-    // newlines — so the JSON value is the trimmed label while the human view keeps the file's own
-    // newline below. Two different renderings of one fact, and both are contract.
-    outln(`{"output_schema_version":1,"command":"version","bundle":"${jsonEsc(body.replace(/\n+$/, ''))}",` +
+    const ver = jsonEsc(body.replace(/\n+$/, ''))
+    outln(`{"output_schema_version":1,"command":"version","version":"${ver}",` +
           `"fingerprint":"${jsonEsc(fp.slice(0, 12))}","schema_version":${schemaVer()}}`)
     return 0
   }
   out(body)
-  if (fp) outln(`fingerprint: ${fp.slice(0, 12)}  (bin+schema — compare this, not just the date)`)
+  if (fp) outln(`fingerprint: ${fp.slice(0, 12)}  (bin+schema — compare this, not just the version)`)
   outln(`schema: ${schemaVer()} (v3-only; a v2 mine migrates via 'upgrade', a v1 mine via the v0.5.21 bridge first)`)
   return 0
 }

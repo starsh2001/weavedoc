@@ -230,11 +230,11 @@ project/config `version: 1`은 breaking change 이후에도 그대로이며 vali
 
 #### WD-REL-001 — 여러 버전 체계와 부분 fingerprint
 
-현재 Git tag, `.weavedoc/VERSION` 날짜, project/config `version`, bin+schema fingerprint가 별도로 움직인다. fingerprint는 behavior를 결정하는 skills/templates를 포함하지 않는다.
+~~현재 Git tag, `.weavedoc/VERSION` 날짜, project/config `version`, bin+schema fingerprint가 별도로 움직인다.~~ → **첫 항목 완료**(v0.6.6): 제품 버전이 `.weavedoc/VERSION` **하나**다. 날짜 스탬프 체계는 제거했다 — 번들마다 patch를 올리므로 릴리스와 번들을 가를 두 번째 라벨이 필요 없다. CHANGELOG 절 제목과 git 태그가 그 파일을 따르며, doccheck 검사 3(매 스윕)과 release job(태그 ≠ `v`+VERSION이면 발행 거부)이 강제한다. 계기는 외부 소비자였다 — 번들을 동봉하는 설치기가 `VERSION`을 읽어 사용자에게 보여주는데 거기 날짜가 들어 있었다. fingerprint는 여전히 behavior를 결정하는 skills/templates를 포함하지 않는다(그쪽은 manifest digest가 덮는다).
 
 **해결 방향**
 
-- 사용자용 제품 버전은 SemVer 하나로 둔다.
+- ~~사용자용 제품 버전은 SemVer 하나로 둔다.~~ → 완료(위 참조).
 - artifact schema version은 별도 정수로 둔다.
 - exact install identity는 bundle manifest SHA-256으로 둔다.
 - manifest는 다음을 포함한다.

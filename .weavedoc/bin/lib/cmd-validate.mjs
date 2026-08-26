@@ -1221,9 +1221,9 @@ export function cmdValidate (m, out, json = false, consecOk = '') {
   if (json) {
     // The machine contract (WD-CLI-002): stdout carries ONLY the JSON object; codes are the stable
     // surface, messages are presentation; exit-code semantics unchanged (0 pass · 1 fail).
-    const bundle = readOr(`${m.root}/.weavedoc/VERSION`).replace(/\n+$/, '')
+    const ver = readOr(`${m.root}/.weavedoc/VERSION`).replace(/\n+$/, '')
     const arr = rs => `[${rs.map(([c, msg]) => `{"code":"${jsonEsc(c)}","message":"${jsonEsc(msg)}"}`).join(',')}]`
-    out(Buffer.from(`{"output_schema_version":1,"command":"validate","bundle":"${jsonEsc(bundle)}","schema_version":${m.schemaVer()},"result":"${problems > 0 ? 'fail' : 'pass'}","problems":${problems},` +
+    out(Buffer.from(`{"output_schema_version":1,"command":"validate","version":"${jsonEsc(ver)}","schema_version":${m.schemaVer()},"result":"${problems > 0 ? 'fail' : 'pass'}","problems":${problems},` +
         `"examined":{"materials":${nMat},"truths":${nTruth},"sealed":${counts.nsealed},"seal_failed":${counts.nsealfail},"not_checked":${nUnchk},"documents":${nDoc},"consecrated":${nConsec},"gate_checked":${nGated},"review_seals_bound":${nRseal},"review_seals_legacy":${nRlegacy}},` +
         `"diagnostics":${arr(diags)},"warnings":${arr(warns)}}`, 'latin1'))
     return problems > 0 ? 1 : 0

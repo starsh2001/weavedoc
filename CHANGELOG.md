@@ -1,8 +1,18 @@
 # WeaveDoc — 변경 내역
 
-번들 버전은 `.weavedoc/VERSION`에 있습니다. **날짜만으로는 설치본을 구분할 수 없으므로**(같은 날짜 라벨로 다른 `bin/weavedoc`이 돌 수 있음) `weavedoc version`이 함께 찍는 **fingerprint**(bin+schema 해시)로 비교하세요.
+각 절의 제목이 버전입니다(`.weavedoc/VERSION`). 버전은 번들마다 patch가 올라가고, git 태그가 같은 값을 따릅니다. **설치본의 정체성은 버전이 아니라 fingerprint**(bin+schema 해시)로 비교하세요 — `weavedoc version`이 찍습니다.
+
+> 0.6.5 이하의 절은 날짜 스탬프(예: `2026-08-08.37`)를 제목으로 씁니다. 당시 VERSION 파일이 날짜를 담았기 때문이고, 과거 기록이므로 고치지 않습니다.
 
 ---
+
+## 0.6.6
+
+**버전 체계 통일.** `.weavedoc/VERSION`이 날짜 스탬프를 담고 있어서, 번들을 동봉하는 소비자(Hammoc)의 설치 피커에 `0.6.5` 대신 `2026-08-08.37`이 떴다. 원인: 릴리스 버전은 git 태그에만 있었고, 번들 안에서 읽을 방법이 없었다. 그리고 릴리스 사이에 번들이 여러 개 쌓이니까 날짜 스탬프라는 별도 체계가 필요했는데, patch를 번들마다 올리면 그럴 이유가 없다.
+
+**바뀐 것.** `.weavedoc/VERSION`이 SemVer를 담는다. CHANGELOG 절 제목도 버전이다. 번들마다 patch가 올라가므로 날짜 스탬프 체계를 완전히 제거했다(`.weavedoc/BUNDLE` 없음). JSON 출력의 `bundle` 키는 `version`으로 교체됐다(`output_schema_version`은 1 그대로). doccheck 검사 3이 `VERSION` ↔ CHANGELOG 최상단 절을 묶고, release job이 태그 ≠ `v`+VERSION이면 발행을 거부한다. `release-notes.sh`의 CHANGELOG 슬라이스가 정지 표지 없이 파일 끝까지 달리던 것도 같이 고쳤다.
+
+**스키마 변경 없음, 명령 변경 없음, 마이그레이션 없음.** 기존 설치본은 `.weavedoc/`를 다시 복사하면 된다.
 
 ## 2026-08-08.37
 
