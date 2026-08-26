@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Docs ↔ code consistency (Phase 5, WD-DOC-001 완료 조건: 문서에 기재된 명령이 자동 검사된다).
 # Runs as the suite's meta_doc_sync case and stays green only while three surfaces agree:
-# dispatch ↔ README ↔ the bin header comment, and VERSION ↔ CHANGELOG's top bundle.
+# dispatch ↔ README ↔ the bin header comment, and VERSION ↔ CHANGELOG's top section.
 set -u
 REPO=$(cd "$(dirname "$0")/.." >/dev/null 2>&1 && pwd)
 BIN="$REPO/.weavedoc/bin/weavedoc.mjs"
@@ -162,10 +162,14 @@ for s in $skills; do
     || say "$(basename "$s") never spells its own '[weavedoc-… ] starting' anchor — the anchor is per-skill and cannot be inherited from the contract"
 done
 
-# 3. The VERSION label and CHANGELOG's newest entry are one fact.
-v=$(cat "$REPO/.weavedoc/VERSION" 2>/dev/null)
+# 3. VERSION and CHANGELOG's newest entry are one fact. VERSION is SemVer now and moves every
+# bundle (patch bump), so it IS the section heading. The git tag follows it too — the release job
+# refuses to publish a tag that disagrees.
+rv=$(tr -d ' \r\n' < "$REPO/.weavedoc/VERSION" 2>/dev/null)
 top=$(grep -m1 '^## ' "$REPO/CHANGELOG.md" | sed 's/^## *//')
-[ "$v" = "$top" ] || say "VERSION ($v) != CHANGELOG top entry ($top)"
+[ "$rv" = "$top" ] || say "VERSION ($rv) != CHANGELOG top entry ($top)"
+printf '%s\n' "$rv" | grep -qE '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$' \
+  || say "VERSION ('$rv') is not MAJOR.MINOR.PATCH — the date-stamp era is over"
 
 [ "$fail" -eq 0 ] && echo "doccheck: docs and code agree"
 exit "$fail"

@@ -15,8 +15,11 @@ PREV=${1:?usage: release-notes.sh <prev-tag> <this-tag>}
 THIS=${2:?usage: release-notes.sh <prev-tag> <this-tag>}
 cd "$REPO"
 
-bundle=$(cat .weavedoc/VERSION)
-prevbundle=$(git show "$PREV:.weavedoc/VERSION" 2>/dev/null | head -1)
+version=$(cat .weavedoc/VERSION)
+# The previous tag's CHANGELOG section heading. Tags v0.6.5 and earlier used a date stamp as the
+# VERSION value (and as the section heading); v0.6.6+ uses SemVer. Either way, reading VERSION
+# from the tag gives the heading that tag's section carries.
+prevver=$(git show "$PREV:.weavedoc/VERSION" 2>/dev/null | head -1)
 schema=$(grep -m1 '^schema.version:' .weavedoc/schema | sed 's/.*:[[:space:]]*//')
 manifest_sha=$(bash tests/make-manifest.sh | sha256sum | awk '{print $1}')
 cases=$(grep -cE '^(block|pass|acct|meta|e2e)_[a-z0-9_]*\(\)' tests/regress.sh)
@@ -31,7 +34,7 @@ newcmds=$(comm -13 <(git show "$PREV:.weavedoc/bin/weavedoc.mjs" 2>/dev/null | d
                    <(dispatch < .weavedoc/bin/weavedoc.mjs) | tr '\n' ' ')
 
 printf '# WeaveDoc %s\n\n' "$THIS"
-printf -- '- **runtime bundle**: `%s` (previous tag: `%s` = bundle `%s`)\n' "$bundle" "$PREV" "${prevbundle:-?}"
+printf -- '- **version**: `%s` (`.weavedoc/VERSION`)\n' "$version"
 printf -- '- **artifact schema**: `%s`\n' "$schema"
 printf -- '- **bundle manifest sha256**: `%s` — every behavior-deciding file (bin · schema · templates · READ · FORMATS · skills), hashed from git blob bytes; the attached `bundle.manifest` lists them\n' "$manifest_sha"
 printf -- '- **regression suite**: %s cases, tracked in `tests/` — the tallies for THIS tag are in this workflow'"'"'s regression jobs (Ubuntu, Windows and macOS, all three required)\n' "$cases"
@@ -41,8 +44,10 @@ else
   printf -- '- **new commands since %s**: none\n' "$PREV"
 fi
 printf '\n## Changes since %s (from CHANGELOG, newest first)\n\n' "$PREV"
-if [ -n "${prevbundle:-}" ]; then
-  awk -v stop="## $prevbundle" 'BEGIN { go = 0 } $0 == stop { exit } /^## / { go = 1 } go { print }' CHANGELOG.md
+if [ -z "${prevver:-}" ]; then
+  printf "(the previous tag %s has no .weavedoc/VERSION — no slice to take; see CHANGELOG.md)\n" "$PREV"
+elif ! grep -qxF "## $prevver" CHANGELOG.md; then
+  printf "(the previous tag %s says VERSION '%s', which is not a '## ' section of CHANGELOG.md — no slice to take; see the file)\n" "$PREV" "$prevver"
 else
-  echo "(previous bundle unknown — see CHANGELOG.md)"
+  awk -v stop="## $prevver" 'BEGIN { go = 0 } $0 == stop { exit } /^## / { go = 1 } go { print }' CHANGELOG.md
 fi
