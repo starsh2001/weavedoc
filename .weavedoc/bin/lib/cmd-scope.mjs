@@ -242,7 +242,11 @@ export function cmdScope (m, out, json) {
     if (intake.anchored.length) out(`    → anchored (bytes bound in place, provenance NOT recorded — never read as verified): ${compressIds(uniqSort(intake.anchored))}`)
     // The consequence, not just the word. `legacy-unbound` reads as a verification backlog — old,
     // low priority — when what it means is that these files can change and nothing will report it.
-    if (intake.legacy.length) out(`    → legacy-unbound: ${compressIds(uniqSort(intake.legacy))} — binds NO bytes: an edit to the original or to the copy leaves no trace. Bind them in place with 'intake --anchor-existing', or re-declare by risk with 'intake <id>'; never wholesale`)
+    // THE CAVEAT RIDES WITH THE COMMAND. `anchored ≠ verified` was said only in the `anchored` line
+    // above, which prints AFTER someone has already run it — the one reader who needed the warning
+    // is the one who had not. An anchor is the one write here that adopts bytes nobody witnessed,
+    // so the sentence that offers it carries what it does not claim, in the same breath.
+    if (intake.legacy.length) out(`    → legacy-unbound: ${compressIds(uniqSort(intake.legacy))} — binds NO bytes: an edit to the original or to the copy leaves no trace. Bind them in place with 'intake --anchor-existing "<what you are vouching for>"', or re-declare by risk with 'intake <id>'; never wholesale. An anchor ADOPTS whatever is on disk the moment it runs and claims nobody read it (anchored ≠ verified) — check the tree is the one you mean FIRST`)
     // SHOWN, never absorbed — the discipline the verify lane applies to its own ignored rows.
     if (intake.unreadableSource.length) out(`    → declared but the source set cannot be re-read: ${intake.unreadableSource.join(' ')} — an original that is gone, aliased, or mid-write; the declaration stands and nothing can be compared against it`)
     if (intake.ghost.length) out(`    intake ledger names ${intake.ghost.length} id(s) with no live material — they declare nothing: ${intake.ghost.join(' ')}`)
@@ -306,12 +310,29 @@ export function cmdScope (m, out, json) {
     out(`  ledger: structurally malformed row(s) — they cover nothing [LEDGER-MALFORMED]: ${ledgerSbad.join(' ')} `)
   }
   const owed = nMunver + nMstale + nMfail + tunver.length + nTstale + nTfail
-  if (owed === 0 && nMlegacy + tlegacy.length > 0) {
-    out(`  → nothing unverified — ${nMlegacy + tlegacy.length} legacy-unbound unit(s) await digest binding: re-verify by risk (final-cited · high-risk · research/adopted/derived first). History is preserved, never counted digest-bound.`)
+  const nLegacy = nMlegacy + tlegacy.length
+  if (owed === 0 && nLegacy > 0) {
+    out(`  → nothing unverified — ${nLegacy} legacy-unbound unit(s) await digest binding. History is preserved, never counted digest-bound.`)
   } else if (owed === 0) {
     out('  → nothing unverified. A round here would re-check what the ledger already covers.')
   } else {
     out('  → a round examines the sets above. Units already covered are not re-verified without a reason recorded in verify.md.')
+  }
+  // THE WAY OUT, UNGATED. "re-verify by risk" was a clause inside the `owed === 0` branch — the one
+  // state a working mine is almost never in — so the mines carrying a legacy backlog were exactly
+  // the mines never told what closes it. Measured on a real mine 2026-08-26: 223 legacy-unbound
+  // rows minted by one migration, reported by every run for three months, under the branch that
+  // says only "a round examines the sets above". Reporting the count and withholding the command is
+  // the same DECISION `upgrade` was corrected for — "leave these unbound", taken on the owner's
+  // behalf and never put in front of them — and a count with no path down stops being read, which
+  // is this runtime's own argument for `--no-source`. Naming the command loosens nothing it
+  // protects: no digest is minted here, and the way out is still a round a person runs cold.
+  if (nLegacy > 0) {
+    // NAMED BY LANE. Both ledgers spell the word `legacy-unbound` and they close by different acts —
+    // the intake row by a person anchoring bytes, this one by a verification round — so an
+    // unqualified sentence arriving after both sections would offer each lane the other's answer.
+    out('    a legacy-unbound unit in the VERIFY lane closes by RE-VERIFYING it, never by a stamp: run the round cold, then record it — weavedoc attest verified <round> <standard> <id...>')
+    out('    by risk, never wholesale: final-cited · high-risk · research/adopted/derived first.')
   }
   return 0
 }

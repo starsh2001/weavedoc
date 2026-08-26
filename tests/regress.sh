@@ -2050,6 +2050,36 @@ acct_scope_legacy_unbound() {
   vrun scope
   expect_has "truths     1 live · 0 verified (digest-bound) · 1 legacy-unbound"
 }
+acct_scope_legacy_names_its_way_out_while_units_are_owed() {
+  # THE UNGATED LINE, and the pristine mine is the reported shape exactly: t001 legacy-unbound
+  # WHILE m001 is owed. The way out used to be a clause inside the `owed === 0` branch — a state a
+  # working mine is almost never in — so the mines carrying a backlog were the ones never told what
+  # closes it. Measured on a live mine 2026-08-26: 223 legacy rows minted by one migration, read
+  # out by every run for three months, with no command ever named. Reporting a count while
+  # withholding the command is the decision `upgrade` was already corrected for.
+  vrun scope
+  expect_has "→ a round examines the sets above"
+  expect_has "closes by RE-VERIFYING it, never by a stamp"
+  expect_has "weavedoc attest verified <round> <standard> <id...>"
+  expect_has "by risk, never wholesale"
+}
+acct_scope_legacy_way_out_survives_a_clean_round() {
+  # NOT MERELY MOVED. With nothing owed, the count line and the way out are both there — a fix that
+  # swapped one branch for the other would leave the same hole facing the other way, and the branch
+  # that had the sentence is the one a passing suite would have kept covering.
+  vrun attest verified 2 standard m001
+  vrun scope
+  expect_has "legacy-unbound unit(s) await digest binding"
+  expect_has "weavedoc attest verified <round> <standard> <id...>"
+}
+acct_scope_no_legacy_leaves_the_way_out_unsaid() {
+  # And silent when there is nothing to close: guidance that prints unconditionally is decoration,
+  # and decoration is how the next real line stops being read.
+  vrun attest verified 2 standard m001 t001
+  vrun scope
+  expect_has "→ nothing unverified. A round here would re-check"
+  expect_hasnt "closes by RE-VERIFYING"
+}
 acct_scope_fenced_verified_heading_covers_nothing() {
   # A heading-looking line inside a code fence is payload, not the verification register. The
   # shared Markdown model must not let it mint legacy coverage merely because it has the right
@@ -7318,6 +7348,11 @@ acct_intake_backfill_on_an_already_v3_mine() {
   expect_has "1 declared · 0 anchored · 0 no-source · 1 legacy-unbound"
   # and scope names the consequence too, not just the word — the reader who never runs upgrade again
   expect_has "an edit to the original or to the copy leaves no trace"
+  # AND THE CAVEAT RIDES WITH THE OFFER. `anchored ≠ verified` was said only in the `anchored` line,
+  # which prints AFTER someone has already run it — the one reader who needed the warning is the one
+  # who had not. An anchor adopts bytes nobody witnessed, so the sentence offering it says so.
+  expect_has "anchored ≠ verified"
+  expect_has "check the tree is the one you mean FIRST"
   # idempotent: a second run has nothing to do and says the old sentence.
   vrun upgrade
   expect_has "already schema v3 — nothing to migrate."
