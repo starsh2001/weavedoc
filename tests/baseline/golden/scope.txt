@@ -5,3 +5,5 @@ scope — what a verify round still owes (computed from disk + the ledgers, not 
   truths     1 live · 0 verified (digest-bound) · 1 legacy-unbound · 0 stale · 0 failed · 0 unverified   (source: truths/verify-ledger.tsv + ## Verified units)
     → legacy-unbound: t001 
   → a round examines the sets above. Units already covered are not re-verified without a reason recorded in verify.md.
+    a legacy-unbound unit in the VERIFY lane closes by RE-VERIFYING it, never by a stamp: run the round cold, then record it — weavedoc attest verified <round> <standard> <id...>
+    by risk, never wholesale: final-cited · high-risk · research/adopted/derived first.
