@@ -7207,7 +7207,13 @@ acct_json_claude_block_is_a_warning() {
 # WEAVEDOC_LEASE_DIR keeps every case off the shared temp directory — without it a lease from one
 # case would answer another's gate.
 hookenv() { # sets NROOT + LDIR for the helpers below
-  NROOT=$( cd "$W" && pwd -W )
+  # `pwd -W` is MSYS-only and prints the NATIVE path; everywhere else the plain builtin already
+  # does. Measured on CI: without the fallback, NROOT came out EMPTY on Linux and macOS, so every
+  # payload named a path outside the mine, the gate correctly allowed it, and five deny cases went
+  # red — loud, this time. The guard below is for the quiet direction, which is the same mistake
+  # landing in a case that asserts an ALLOW.
+  NROOT=$( cd "$W" && { pwd -W 2>/dev/null || pwd; } )
+  [ -n "$NROOT" ] || { bad "hookenv resolved no native root — every payload would name a path outside the mine and the allow cases would pass having measured nothing"; return 1; }
   LDIR="$W/.leasedir"; mkdir -p "$LDIR"
 }
 hlease() { # $1=session $2=skill
@@ -7260,6 +7266,11 @@ acct_hook_lease_never_fails_on_garbage() {
 }
 acct_hook_gate_allows_ungated_path() {
   # inbox/, output/, docs/, anything else: not the gate's to police. Silence is "no opinion".
+  # DIFFERENTIAL, because a bare allow proves nothing — a gate that never engaged (a root it could
+  # not resolve, a payload naming a path outside the mine) is silent in exactly the same way. The
+  # gated sibling in the same case is what says the gate was awake when it stayed quiet.
+  hgate s1 materials/m001/converted.md
+  expect_has "$DENY"
   hgate s1 output/notes.md
   expect_pass
   expect_hasnt "$DENY"
@@ -7274,6 +7285,10 @@ acct_hook_gate_denies_materials_without_lease() {
   expect_has 'Skill(weavedoc-gather)'
 }
 acct_hook_gate_allows_with_owning_lease() {
+  # Same differential: prove the path denies FIRST, so the allow below is the lease's doing and not
+  # a gate that was never engaged to begin with.
+  hgate s1 materials/m001/converted.md
+  expect_has "$DENY"
   hlease s1 weavedoc-gather
   hgate s1 materials/m001/converted.md
   expect_pass; expect_hasnt "$DENY"
