@@ -5181,6 +5181,48 @@ acct_smoke_impact() {
   expect_has "truths extracted from it"
   expect_has "t001"
 }
+acct_impact_shows_who_corrects_it() {
+  # Field report (2026-08-27): every section of `impact` ran FORWARD (material -> truths ->
+  # documents), and `corrects:` is declared on the CORRECTING material — so the one reader who
+  # needed the warning, someone opening the superseded material, was the only one who could not
+  # see it. Measured on a real mine: m003 was amended by six later materials and its radius named
+  # none of them.
+  addm2 m002
+  sed -i 's/^status: /corrects: [m001 §4]\nstatus: /' "$W/materials/m002/converted.md"
+  vrun impact m001
+  expect_pass
+  expect_has "materials that correct it"
+  expect_has "m002"
+  expect_has "m001 §4"        # the SECTION survives — word-splitting the field would discard it
+  # …and the reverse edge must not leak into the forward one: m002 corrects m001, it is not a
+  # document citing it.
+  OUT=$(printf '%s\n' "$OUT" | sed -n '/truths extracted from it/,$p')
+  expect_hasnt "m001 §4"
+  # The same field, read forward, still blocks a dangling target — one reader, both directions.
+  sed -i 's/^corrects: \[m001 §4\]/corrects: [m404 §4]/' "$W/materials/m002/converted.md"
+  vrun validate
+  expect_has "MAT-CORRECTS-DANGLING"
+  expect_has "corrects 'm404'"
+}
+acct_impact_none_is_a_claim() {
+  # Silence and "nobody corrects this" are different facts, and a reader cannot tell a version that
+  # found nothing from one that never looked. The empty listing says so.
+  vrun impact m001
+  expect_pass
+  expect_has "materials that correct it"
+  expect_has "(none)"
+}
+acct_impact_retracted_corrector_is_shown_withdrawn() {
+  # A retracted material grounds nothing from its retraction on, so its amendment no longer stands.
+  # Dropping the row would leave the reader believing the passage was never contested at all — the
+  # row is kept and the withdrawal is named on it.
+  addm2 m002
+  sed -i 's/^status: .*/corrects: [m001 §4]\nstatus: retracted/' "$W/materials/m002/converted.md"
+  vrun impact m001
+  expect_pass
+  expect_has "m002"
+  expect_has "no longer stands"
+}
 acct_smoke_gaps() {
   vrun gaps
   expect_pass

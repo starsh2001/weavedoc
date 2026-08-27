@@ -11,7 +11,7 @@
 // cases build — a substring suite cannot grade a rewrite whose contract is bytes. Both that scale
 // and its reference are gone; the last run of it is in tests/baseline/parity-final-2026-08-05.md.
 import { statSync, realpathSync, readFileSync, readdirSync } from 'node:fs'
-import { bomFenceBytes, canonId, isDate, isFence, isPlaceholder, inList, listField, fmVal, pipes, splitLines, U, M } from './core.mjs'
+import { bomFenceBytes, canonId, correctsRefs, isDate, isFence, isPlaceholder, inList, listField, fmVal, pipes, splitLines, U, M } from './core.mjs'
 import { DECLARATIONS, classifyIntake, intakeIndex, intakeLedgerPath } from './intake-ledger.mjs'
 import { join, materialIds, mdirFor, docIds, tfileFor, docFinalPath, contextDigest } from './mine.mjs'
 import { readCoverage } from './coverage-model.mjs'
@@ -473,12 +473,10 @@ export function cmdValidate (m, out, json = false, consecOk = '') {
         if (k === 'retrieved_at' && !isDate(v)) prob('DATE-INVALID', M`${U(f)}  retrieved_at '${v}' is not a date (YYYY-MM-DD, zero-padded, real month and day) — a field the format calls a date and nobody reads as one is a field that can say anything`)
       }
     }
-    // corrects: this material displaces named parts of earlier materials.
-    for (const ref of words(listField(fmv(f, 'corrects')).join('\n'))) {
-      if (!/^m[0-9]/.test(ref)) continue
-      const mm = /^(m[0-9]+)/.exec(ref)
-      if (!mm) continue
-      const mid = mm[1]
+    // corrects: this material displaces named parts of earlier materials. The field is parsed by
+    // core's correctsRefs — the same reader `impact` walks backward, so the two surfaces cannot
+    // disagree about which ids one `corrects:` line names.
+    for (const { ref, id: mid } of correctsRefs(fmv(f, 'corrects'))) {
       if (mdirFor(m, mid) === null) prob('MAT-CORRECTS-DANGLING', M`${U(f)}  corrects '${ref}' → no such material`)
       if (mid === id) prob('MAT-CORRECTS-SELF', M`${U(f)}  corrects itself`)
     }

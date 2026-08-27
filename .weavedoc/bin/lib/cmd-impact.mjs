@@ -5,8 +5,8 @@
 // moment the command exists for.
 import { existsSync, readFileSync, statSync } from 'node:fs'
 import { basename } from 'node:path'
-import { canonId, listField } from './core.mjs'
-import { fm, mtitle, truthFiles, walkFiles, join } from './mine.mjs'
+import { canonId, correctsRefs, listField } from './core.mjs'
+import { fm, materialIds, mtitle, truthFiles, walkFiles, join } from './mine.mjs'
 
 const readOr = p => { try { return readFileSync(p, 'utf8') } catch { return '' } }
 const rxEscape = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
@@ -19,8 +19,45 @@ export function cmdImpact (m, out, id) {
 
   const title = mtitle(m, id)
   out(`impact of material ${id} (${title}):`)
-  out('  -- truths extracted from it --')
   const ncanon = canonId(id) || id
+
+  // ---- the one REVERSE edge, and it comes first --------------------------------------------------
+  // Everything below this block runs forward: material -> truths -> documents. `corrects:` is
+  // declared on the CORRECTING material, and the only reader it ever had is validate's existence
+  // check (MAT-CORRECTS-DANGLING). So a material amended by six later ones printed exactly the same
+  // radius as one nobody ever touched, and the reader most in need of the warning — someone opening
+  // the superseded material — was the one person who could not see it. It prints BEFORE the extracted
+  // truths because it is a caveat on everything underneath: some of those claims may already be
+  // displaced.
+  //
+  // Scanned from the materials on every run, never stored. A persisted back-link is a second copy of
+  // a fact the frontmatter already holds, and the truths layer deleted exactly that shape (graph.md
+  // edges) rather than keep two records that can drift apart.
+  //
+  // `(none)` is printed rather than skipped: silence here cannot be told apart from a version that
+  // does not look, and this listing is only worth anything if its emptiness is a claim.
+  out('  -- materials that correct it --')
+  let ncorr = 0
+  for (const other of materialIds(m)) {
+    const cf = join(m.materials, other, 'converted.md')
+    if (!existsSync(cf)) continue
+    // Self-correction is validate's to reject (MAT-CORRECTS-SELF); listing it here as an amendment
+    // of itself would dress a defect up as a finding.
+    if ((canonId(other) || other) === ncanon) continue
+    for (const { entry, id: target } of correctsRefs(fm(cf, 'corrects'))) {
+      if ((canonId(target) || target) !== ncanon) continue
+      const ct = mtitle(m, other)
+      // A retracted corrector grounds nothing from its retraction on, so its amendment no longer
+      // stands. Shown WITH that fact rather than filtered out — dropping the row would leave the
+      // reader believing the passage was never contested.
+      const withdrawn = fm(cf, 'status') === 'retracted' ? ' [retracted — this correction no longer stands]' : ''
+      out(`  ${other}${ct === '' ? '' : ` (${ct})`}: ${entry}${withdrawn}`)
+      ncorr++
+    }
+  }
+  if (ncorr === 0) out('  (none)')
+
+  out('  -- truths extracted from it --')
 
   const sourced = []
   for (const f of truthFiles(m)) {

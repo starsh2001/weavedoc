@@ -1,6 +1,6 @@
 ---
 name: weavedoc-map
-description: Extract truths from materials, tag and classify them, hunt contradictions, and correct existing truths on demand. Use when the user says "map", "build the graph", "그래프", "관계 정리", "진실 추출", "truths", or after gather — also when the user says a stored fact/truth is wrong and wants it fixed ("정정", "틀렸어", "고쳐줘", "이 truth 수정", "correct a truth", "fix a truth"). Creates or updates truths/.
+description: Extract truths from materials, tag and classify them, hunt contradictions, resolve conflicts, and correct existing truths on demand. Use when the user says "map", "build the graph", "그래프", "관계 정리", "진실 추출", "truths", or after gather — also when the user says a stored fact/truth is wrong and wants it fixed ("정정", "틀렸어", "고쳐줘", "이 truth 수정", "correct a truth", "fix a truth"), or when the user wants to resolve an open conflict ("충돌", "충돌 해소", "conflict", "resolve conflict", "c001 해소", "c002 판정", "판정 적용", "이 충돌 처리해줘"). Creates or updates truths/.
 ---
 
 # weavedoc-map
