@@ -129,6 +129,21 @@ else
 fi
 grep -qF 'claude-block.md' "$init" || say "weavedoc-init no longer points at .weavedoc/templates/claude-block.md — the block would be retyped from prose again, which is how it drifted out of the schema's vocabulary the first time"
 
+# 8b. The hooks template is the pointer block's twin — the second planted artifact the bundle checks.
+# Same three pins: the template FILE exists (HOOKS-STALE has no other half without it), init names it
+# (or the entries get retyped from prose, which is how the CLAUDE block drifted the first time), and
+# the template carries the marker substring init identifies our entries by — an entry without it can
+# never be recognised as ours, so it would survive every upgrade unreplaced.
+hjson="$REPO/.weavedoc/templates/hooks.json"
+if [ ! -f "$hjson" ]; then
+  say "the shipped hooks template ($hjson) is missing — validate's HOOKS-STALE check has no other half, and every planted gate goes unchecked"
+else
+  grep -qF '.weavedoc/bin/hooks/' "$hjson" \
+    || say "the hooks template carries no '.weavedoc/bin/hooks/' marker — init and validate both identify our entries by that substring, so these could never be recognised as ours nor replaced on upgrade"
+fi
+grep -qF 'hooks.json' "$init" \
+  || say "weavedoc-init no longer points at .weavedoc/templates/hooks.json — the hook entries would be retyped from prose, which is the drift this pin exists to stop"
+
 # 9. No live surface spells the runtime as an executable that does not exist. The bash entrypoint
 # `.weavedoc/bin/weavedoc` was deleted in bundle 2026-08-05.3; every call is `node …weavedoc.mjs`.
 # Matched with a trailing space, which is what makes it a COMMAND — README's prose mentions the
@@ -170,6 +185,28 @@ top=$(grep -m1 '^## ' "$REPO/CHANGELOG.md" | sed 's/^## *//')
 [ "$rv" = "$top" ] || say "VERSION ($rv) != CHANGELOG top entry ($top)"
 printf '%s\n' "$rv" | grep -qE '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$' \
   || say "VERSION ('$rv') is not MAJOR.MINOR.PATCH — the date-stamp era is over"
+
+# 11. The skill-handoff rule is ONE block with NINE copies, byte-identical — like "One writer per
+# mine" before it. A DRIFTED copy is worse than a missing one: the reader of the drifted file learns
+# a different rule and can cite the file to prove it. Shape borrowed from check 10 (its $skills
+# enumeration and >=9 vacuity guard already ran above), plus a byte-compare: the block is extracted
+# from its opening line through the contiguous '>' lines and every copy compared to the first.
+# TEXT, never obedience — the same honesty checks 5-7 state about themselves.
+# VACUITY GUARD: if no file carried the block, g4ref stays empty and the last line fails; an empty
+# extraction must not read as nine agreeing copies.
+g4ref=""; g4refname=""
+for s in $skills; do
+  g4blk=$(awk '/^> \*\*The work.s owner is the skill/{f=1} f{ if ($0 ~ /^>/) print; else exit }' "$s/SKILL.md")
+  if [ -z "$g4blk" ]; then
+    say "$(basename "$s") is missing the skill-handoff block — the rule has nine owners and this one dropped it"
+    continue
+  fi
+  if [ -z "$g4ref" ]; then g4ref="$g4blk"; g4refname=$(basename "$s")
+  elif [ "$g4blk" != "$g4ref" ]; then
+    say "$(basename "$s")'s skill-handoff block differs from $g4refname's — nine byte-identical copies is the contract, and this copy has drifted"
+  fi
+done
+[ -n "$g4ref" ] || say "no skill carries the skill-handoff block at all — nine missing copies must not read as nine agreeing ones"
 
 [ "$fail" -eq 0 ] && echo "doccheck: docs and code agree"
 exit "$fail"

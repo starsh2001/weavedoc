@@ -24,6 +24,8 @@ The gate is the product; the panel is polish. Keep them separate.
 
 > **Write-scope.** This skill writes only to `documents/<doc-id>/review.md` (except one stage stamp: `status: reviewing` on this document's `plan.md` — step 5, and leaving it there on escalation). A new conflict discovered here is recorded as a `.weavedoc-state/conflicts.json` entry through the CLI (`conflict add`) — never as an edit to a card. It does **not** otherwise modify `draft.md`, `truths/`, or `materials/`.
 
+> **The work's owner is the skill, not the session.** When a run spawns work another skill owns — a ruling mid-verify that needs a material (gather), a card correction (map), a document edit (write) — invoke that skill before doing the work; never imitate its output shape from memory. Imitation carries the visible conventions and drops the invisible duties. Measured (a real run): a verify walkthrough produced 8 materials and 23 cards inline with gather/map never loaded — all seven of the round's blocking findings clustered in that unloaded work, while the loaded skill's own procedure ran clean. Rule distance, not context volume, corrodes.
+
 > **Where it runs (the invocation contract).** Run weavedoc-review in your **main Claude Code session** — it spawns the cold reviewers as **subagents**. **Never run a weavedoc skill *as* a subagent** — then it can't spawn reviewers and silently degrades to a non-cold self-check, defeating the point.
 
 ## Shared review engine

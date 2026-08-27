@@ -17,6 +17,8 @@ Draw a document from the data mine — write the draft from the plan, grounded s
 
 > **Write-scope.** This skill writes only to `documents/<doc-id>/` and `questions.md`. It does **not** touch `materials/` or `truths/` — a conflict discovered during writing is recorded as a `.weavedoc-state/conflicts.json` entry through the CLI (`conflict add`), never as an edit to a card.
 
+> **The work's owner is the skill, not the session.** When a run spawns work another skill owns — a ruling mid-verify that needs a material (gather), a card correction (map), a document edit (write) — invoke that skill before doing the work; never imitate its output shape from memory. Imitation carries the visible conventions and drops the invisible duties. Measured (a real run): a verify walkthrough produced 8 materials and 23 cards inline with gather/map never loaded — all seven of the round's blocking findings clustered in that unloaded work, while the loaded skill's own procedure ran clean. Rule distance, not context volume, corrodes.
+
 ## Prerequisite gate
 - `documents/<doc-id>/plan.md` must exist with `status: planned`. If not → `weavedoc plan`.
 - If `plan.md` `status` is `stale` → **warn** the user that the underlying truths have changed since the plan was made. Recommend re-running `weavedoc plan` or at least `weavedoc review` after writing. Don't stop, but make the risk visible.
