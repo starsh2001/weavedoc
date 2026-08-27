@@ -16,7 +16,7 @@ import { DECLARATIONS, classifyIntake, intakeIndex, intakeLedgerPath } from './i
 import { join, materialIds, mdirFor, docIds, tfileFor, docFinalPath, contextDigest } from './mine.mjs'
 import { readCoverage } from './coverage-model.mjs'
 import { hqFiles, readHumanQueues } from './hq-ledger.mjs'
-import { artifactDigest, ledgerRead } from './verify.mjs'
+import { artifactDigest, ledgerIndex, ledgerRead } from './verify.mjs'
 import { parseReview } from './review-model.mjs'
 import { gapRegisterContract, parseGapText } from './gaps-register.mjs'
 import { verifiedUnitsContract } from './verified-units.mjs'
@@ -722,6 +722,51 @@ export function cmdValidate (m, out, json = false, consecOk = '') {
     }
   }
 
+  // --- the material lifecycle MIRROR vs the ledger's winning evidence -----------------------------
+  // Measured on a real mine: two materials carried a winning verdict of `verified` in the sidecar
+  // while their frontmatter `status:` sat at `converted` for nearly three weeks — validate green the
+  // whole time, so every reader of the one field catalog/pull/census consult saw "not verified" over
+  // materials a recorded round had passed. Nothing compared the two words.
+  //
+  // THE AXES STAY SPLIT. `status` is the lifecycle axis and the ledger is the evidence axis — that
+  // is WD-COR-001, and `matDigest` excludes the `status:` line precisely so a lifecycle stamp can
+  // never move a verification digest. This check does not re-fuse them. It asks one narrower thing:
+  // did the MIRROR keep up, in the two shapes where both words cannot be right at once. Everything
+  // else is legal ON PURPOSE and stays silent — `used` and `retracted` overwrite `verified` because
+  // they are later lifecycle, `legacy-unbound` binds no bytes and judges nothing, and a frontmatter
+  // `verified` with NO row at all is preserved v1 history (the legacy-unbound class scope names).
+  //
+  // NO DIGEST COMPARE. Whether the bytes still match is scope's judgment, and a digest test here
+  // would be the second judge of that call — the exact check the previous bundle measured and
+  // declined to seat. Two recorded words disagreeing is a fact this file owns; staleness is not.
+  //
+  // STANDS DOWN WHOLE on file damage. LEDGER-UNREADABLE and LEDGER-MALFORMED above name that once,
+  // and per-material accusations stacked on an unreadable file are the false-accusation-at-scale
+  // shape MAT-INTAKE-LEDGER already refuses to make. An id whose LAST row is malformed is dropped
+  // from `win` by the shared index (quarantined), so it is silent here for the same reason.
+  {
+    // A second read of the sidecar in one command — accepted deliberately. The one-read rule in
+    // verify.mjs is about a command deriving MANY views from one parse; this is one view, and
+    // hand-rolling "last row wins" here would be a second spelling of the index's quarantine and
+    // headless rules, which is the class this runtime keeps deleting.
+    const lidx = ledgerIndex(lfv)
+    if (lidx.state === 'ok' && lidx.headless === 0) {
+      for (const id of mids) {
+        // The index keys canonically; a folder need not be canonical (MAT-ID-NONCANON names that
+        // separately), so the lookup canonicalises or the check silently misses `m5/`.
+        const row = lidx.win.get(canonId(id) ?? id)
+        if (row === undefined) continue
+        const cf = join(m.materials, id, 'converted.md')
+        const cst = fmv(cf, 'status')
+        if (row[2] === 'verified' && (cst === 'collected' || cst === 'converted')) {
+          prob('MAT-STATUS-LEDGER', M`${U(cf)}  status '${cst}' while truths/${lfName}'s winning row for '${U(id)}' records 'verified' — the lifecycle mirror fell behind the evidence: a round ran and was recorded, and the one field catalog and pull consult still reports this material unverified. Advance the mirror (status: verified) — the verification digest excludes the status line, so the stamp cannot un-verify anything`)
+        } else if (row[2] === 'failed' && cst === 'verified') {
+          prob('MAT-STATUS-LEDGER', M`${U(cf)}  status 'verified' while truths/${lfName}'s winning row for '${U(id)}' records 'failed' — the frontmatter claims what the evidence refutes, and a reader consulting status alone would trust a conversion the last recorded round rejected. Set it back to 'converted' and either repair the conversion and re-attest, or retract the material`)
+        }
+      }
+    }
+  }
+
   // --- ledgers ABOUT the truths, checked whether or not any truth file exists ---
   // OUTSIDE the truth-file guard: deleting the last truth file must not switch these off while
   // index.md and coverage.md still name the deleted truth. "No truths" is the strongest thing they
@@ -1198,6 +1243,69 @@ export function cmdValidate (m, out, json = false, consecOk = '') {
         warn('CLAUDE-BLOCK-STALE', M`CLAUDE.md carries more than one weavedoc marker block — the block is idempotent and must appear exactly once. A rewrite reaches only the first, so a second copy is a pointer nothing updates: delete the extras, then re-run weavedoc-init (reconfigure)`)
       } else if (lf(doc.slice(b, e + END.length)) !== tpl) {
         warn('CLAUDE-BLOCK-STALE', M`CLAUDE.md's weavedoc block differs from ${tplRel} — this pointer is injected into every session before any file is read, so an out-of-date one primes readers against the mine's current rules. Re-run weavedoc-init (reconfigure) to rewrite it; project-specific text belongs outside the markers`)
+      }
+    }
+  }
+
+  // --- the planted hook entries (the skill gate's wiring) -----------------------------------------
+  // The pointer block's twin, one layer down. Both are artifacts init PLANTS outside the mine and
+  // the bundle only READS back — the runtime's writers do not reach outside the mine, so the repair
+  // for either is re-running weavedoc-init, never an automatic rewrite from here. And both are
+  // checked for the same reason: nobody has cause to open them. The block is injected into a session
+  // before any file is read; the hook entries are executed by the harness without any session
+  // reading them at all, so a stale pair enforces the previous release's write rules, or none.
+  //
+  // A WARNING, and SILENT when nothing is planted: a project that never wired the gate has no
+  // entries to be stale, and validate does not lecture it. Same judgment as CLAUDE-BLOCK-STALE —
+  // this is not a mine-integrity failure and must not block a ship.
+  //
+  // STRUCTURAL COMPARE, NOT BYTES. settings.json belongs to the project: its own editors reformat
+  // it, reorder keys, and legitimately carry hooks that are none of ours. So the comparison is over
+  // the marker-bearing entries only, as (event, matcher, command-from-the-marker-onward) tuples,
+  // order-insensitive. The command PREFIX is environment, not content — an install that had to
+  // spell an absolute path is the same wiring — and a tripwire that fired on that would cry wolf
+  // until nobody read it. This is the CRLF-normalisation judgment above, transposed.
+  {
+    const MARK = '.weavedoc/bin/hooks/'
+    const tplRel = '.weavedoc/templates/hooks.json'
+    const settingsRel = '.claude/settings.json'
+    const raw = readOr(join(m.root, settingsRel))
+    if (raw.includes(MARK)) {
+      // Marker-bearing tuples out of one settings-shaped object. A tail is taken from the marker on,
+      // so `node X/.weavedoc/bin/hooks/gate.mjs` and `node .weavedoc/bin/hooks/gate.mjs` are one
+      // wiring — while trailing arguments after the script are NOT dropped, because those change
+      // what runs.
+      const tuples = text => {
+        const hooks = JSON.parse(text)?.hooks
+        if (hooks === null || typeof hooks !== 'object') return []
+        const out = []
+        for (const [event, arr] of Object.entries(hooks)) {
+          if (!Array.isArray(arr)) continue
+          for (const group of arr) {
+            for (const h of (Array.isArray(group?.hooks) ? group.hooks : [])) {
+              const cmd = typeof h?.command === 'string' ? h.command : ''
+              const at = cmd.indexOf(MARK)
+              if (at >= 0) out.push(JSON.stringify([event, group?.matcher ?? '', cmd.slice(at)]))
+            }
+          }
+        }
+        return out.sort()
+      }
+      let want = null
+      try { want = tuples(readOr(join(m.root, tplRel))) } catch { want = null }
+      if (want === null || want.length === 0) {
+        // A check that could not run must never read as a pass — the same rule the pointer block's
+        // NOTEMPLATE branch states one section up.
+        warn('HOOKS-NOTEMPLATE', M`${settingsRel} carries weavedoc hook entries (marker '${MARK}') but ${tplRel} is missing, unreadable, or names none — the planted entries could NOT be compared against the bundle's, so nothing here says they are current. Restore the runtime bundle`)
+      } else {
+        let have = null
+        try { have = tuples(raw) } catch { have = null }
+        if (have === null) {
+          warn('HOOKS-STALE', M`${settingsRel} holds the weavedoc hook marker but the file does not parse as JSON — whatever state the entries are in, it is not the planted one, and a harness reading this file may be loading no hooks at all. Re-run weavedoc-init (reconfigure) to replant them from ${tplRel}`)
+        } else if (have.length !== want.length || have.some((t, i) => t !== want[i])) {
+          const shown = have.length === 0 ? '(none readable)' : have.join(' · ')
+          warn('HOOKS-STALE', M`${settingsRel}'s weavedoc hook entries differ from ${tplRel} — found: ${shown}. The gate and the lease are how a session learns which skill owns a path, so a stale or half-planted pair enforces the previous release's rules, or none at all. Re-run weavedoc-init (reconfigure); entries without the marker are the project's own and are never compared`)
+        }
       }
     }
   }

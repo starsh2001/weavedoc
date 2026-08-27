@@ -19,6 +19,8 @@ Pull a document from the data mine — decide its structure, tone, and which tru
 
 > **Write-scope.** This skill writes only to `documents/<doc-id>/` and `questions.md`. It does **not** touch `materials/`, `truths/`, or `project.md`.
 
+> **The work's owner is the skill, not the session.** When a run spawns work another skill owns — a ruling mid-verify that needs a material (gather), a card correction (map), a document edit (write) — invoke that skill before doing the work; never imitate its output shape from memory. Imitation carries the visible conventions and drops the invisible duties. Measured (a real run): a verify walkthrough produced 8 materials and 23 cards inline with gather/map never loaded — all seven of the round's blocking findings clustered in that unloaded work, while the loaded skill's own procedure ran clean. Rule distance, not context volume, corrodes.
+
 ## Prerequisite gate
 - `truths/` must have truth files. If not → `weavedoc map`.
 - If `truths/verify.md` exists and `status` = `stale` or `failed`, warn the user that the truth set hasn't been verified and recommend running `weavedoc verify` first.

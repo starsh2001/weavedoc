@@ -27,7 +27,9 @@ The agent that produced the conversion must NOT grade its own work. Verify spawn
 
 > **Thin context.** Don't read all materials or truths into context. Load only the specific material or truth cluster being verified. The truth is on disk; re-read when you need it.
 
-> **Write-scope.** Material mode writes only to `materials/<id>/converted.md` (fixes) and material frontmatter. Truths mode writes only to `truths/*.md` and `truths/verify.md`. Neither mode touches `documents/`.
+> **Write-scope.** Material mode writes only to `materials/<id>/converted.md` (fixes) and material frontmatter. Truths mode writes only to `truths/*.md` — naming the three that glob reaches past the cards: `truths/verify.md` (round state), `truths/coverage.md` (a T2 legacy ruling lands in its `## legacy` section), and `truths/changelog.md` (edits this lane itself made, logged the way map logs its own). Neither mode touches `documents/`.
+
+> **The work's owner is the skill, not the session.** When a run spawns work another skill owns — a ruling mid-verify that needs a material (gather), a card correction (map), a document edit (write) — invoke that skill before doing the work; never imitate its output shape from memory. Imitation carries the visible conventions and drops the invisible duties. Measured (a real run): a verify walkthrough produced 8 materials and 23 cards inline with gather/map never loaded — all seven of the round's blocking findings clustered in that unloaded work, while the loaded skill's own procedure ran clean. Rule distance, not context volume, corrodes.
 
 > **Where it runs (the invocation contract).** Run weavedoc-verify in your **main Claude Code session** — it spawns the cold reviewers as **subagents**. **Never run a weavedoc skill *as* a subagent** — then it can't spawn reviewers and silently degrades to a non-cold self-check, defeating the point.
 
@@ -105,7 +107,7 @@ Each lens marks **PASS / PARTIAL / FAIL** with evidence. An unshown check is PAR
 
 **A lens the level didn't run is `— (level)`, not PARTIAL** — the same rule as the truth axis, and for the same reason: `light` runs one reviewer and `standard` two, so marking the unrun lenses PARTIAL would make every `docx` and `xlsx` verify structurally unpassable. `M4` on a non-`research` material is `— (n/a)`. The pass condition is all-PASS **over the lenses the level ran**.
 
-- **M1 Completeness** — every section, paragraph, table, and data point in the original appears in converted.md. **Show the mapping**: original element → converted location. Missing content = FAIL.
+- **M1 Completeness** — on a `conversation`/`user-answer` material, START by reproducing the write-audit line (`쓰기 대조`, the final `> [machine-note]` gather step 7 leaves): re-run its counts. An absent line, or counts that do not reproduce, are findings — the line is the writer's claim, and this lens is where a claim gets checked. Then the lens itself: every section, paragraph, table, and data point in the original appears in converted.md. **Show the mapping**: original element → converted location. Missing content = FAIL.
 - **M2 Accuracy** — every value (number, date, name, amount, label) in converted.md matches the original exactly. Cross-check ALL structured data: table cells, enumerated items, figures, dates, proper nouns. Show the comparison. Misread value = FAIL.
 - **M3 Hallucination** — nothing in converted.md that isn't in the original. For image descriptions: no inference beyond what's visible. For xlsx: no formula interpretation stated as fact. Trace each element back. Untraceable element = FAIL.
 

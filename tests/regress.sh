@@ -1682,6 +1682,13 @@ acct_census_unreadable_coverage_warns() {
   expect_has "coverage records are unknown, not zero"
   expect_has "validate blocks this path"
 }
+mirror_verified() { # $1=material id — advance the lifecycle mirror after an attest recorded `verified`
+  # MAT-STATUS-LEDGER blocks a mirror that lags its own evidence, so a fixture that attests a
+  # material and then expects a clean validate has to do what the skills do: stamp the frontmatter.
+  # Safe at any point after the attest — matDigest excludes the `status:` line, so the stamp cannot
+  # move a binding it is standing next to (that exclusion is why the two axes are separable at all).
+  sed -i 's/^status: converted$/status: verified/' "$W/materials/$1/converted.md"
+}
 addm2() { # $1=id — a second material, in catalog, sourced from m001's shape
   mkdir -p "$W/materials/$1"
   sed "s/^id: m001/id: $1/" "$W/materials/m001/converted.md" > "$W/materials/$1/converted.md"
@@ -2155,6 +2162,7 @@ acct_scope_failed_recorded() {
 pass_attest_validate_clean() {
   # The sidecar is additive: no v1 glob or census sees it, and validate stays clean next to it.
   vrun attest verified 2 standard m001 t001
+  mirror_verified m001
   vrun validate; expect_pass
 }
 pass_attest_standard_verbatim_in_mirror() {
@@ -2264,6 +2272,7 @@ acct_attest_concurrent_row_survives_rollback() {
   [ "$(grep -c $'\tastd\t' "$W/truths/verify-ledger.tsv")" = 1 ] || bad "A's committed row did not survive B's rollback"
   [ "$(grep -c $'\tseed\t' "$W/truths/verify-ledger.tsv")" = 1 ] || bad "the seed row is gone"
   [ ! -d "$W/truths/verify-ledger.tsv.lock" ] || bad "the lock was not released"
+  mirror_verified m001
   vrun validate; expect_pass
 }
 acct_attest_concurrent_new_ledger_survives_unlink() {
@@ -2281,6 +2290,7 @@ acct_attest_concurrent_new_ledger_survives_unlink() {
   [ "$brc" -ne 0 ] || bad "the injected attest reported success"
   [ -f "$W/truths/verify-ledger.tsv" ] || { bad "the ledger was unlinked with A's committed row inside"; return; }
   [ "$(grep -c $'\tastd\t' "$W/truths/verify-ledger.tsv")" = 1 ] || bad "A's committed row did not survive"
+  mirror_verified m001
   vrun validate; expect_pass
 }
 acct_attest_stale_lock_refuses_human_only() {
@@ -2346,6 +2356,7 @@ acct_attest_slow_holder_not_stolen() {
   [ "$(grep -c $'\tastd\t' "$W/truths/verify-ledger.tsv")" = 1 ] || bad "A's committed row did not survive — the live lock was stolen"
   [ "$(grep -c $'\tseed\t' "$W/truths/verify-ledger.tsv")" = 1 ] || bad "the seed row is gone"
   [ ! -d "$W/truths/verify-ledger.tsv.lock" ] || bad "the lock was not released"
+  mirror_verified m001
   vrun validate; expect_pass
 }
 acct_attest_ledger_accumulates_in_order() {
@@ -2378,6 +2389,7 @@ acct_attest_ledger_accumulates_in_order() {
   [ "$(grep -n '	third	' "$f" | cut -d: -f1)" -gt "$(grep -n '	first	' "$f" | cut -d: -f1)" ] \
     || bad "the newer m001 row is not after the older one — 'last row per id wins' would pick the wrong one"
   vrun scope; expect_has "1 verified (digest-bound)"
+  mirror_verified m001
   vrun validate; expect_pass
 }
 block_attest_bad_target() {
@@ -4220,6 +4232,7 @@ acct_scope_ghost_material_named() {
   # SHOWN-never-absorbed discipline. validate does not check row-id existence (a ledger may
   # legitimately outlive a removed unit), so scope's line is the one place this surfaces.
   vrun attest verified 1 std m001
+  mirror_verified m001
   printf 'm999\t-\tlegacy-unbound\t-\tv1-material-frontmatter\t2026-07-01\n' >> "$W/truths/verify-ledger.tsv"
   vrun scope
   expect_has "no material on disk"
@@ -4278,6 +4291,106 @@ block_ledger_unreadable_is_not_absent() {
   # (the `upgrade --check` leg retired with the v1→v2 migrator — the slice-1 stub reads no
   # ledger; the v2→v3 migrator's own refusal cases arrive with it in slice 2)
 }
+block_mat_status_ledger_mirror_never_advanced() {
+  # THE MEASURED SHAPE (v0.6.9). On a real mine two materials carried a winning `verified` row while
+  # their frontmatter sat at `converted` for nearly three weeks, validate green throughout — because
+  # nothing compared the two words. `attest` writes the ledger and never touches the frontmatter, so
+  # this is what the tool LEAVES when the skill's other half is skipped.
+  mkmat2
+  vrun attest verified 1 std m002
+  vrun validate
+  expect_block "[MAT-STATUS-LEDGER]"
+  expect_has "materials/m002/"
+  expect_hasnt "materials/m001/converted.md  status"   # only the lagging material is named
+}
+block_mat_status_ledger_frontmatter_claims_refuted() {
+  # The other direction, and the worse one: the mirror claims what the evidence REFUTES. A reader
+  # consulting status alone would trust a conversion the last recorded round rejected.
+  vrun attest failed 1 std m001
+  sed -i 's/^status: converted$/status: verified/' "$W/materials/m001/converted.md"
+  vrun validate
+  expect_block "[MAT-STATUS-LEDGER]"
+  expect_has "records 'failed'"
+}
+pass_mat_status_ledger_v1_history_is_silent() {
+  # A material's own `status: verified` with NO ledger row is preserved v1 history (legacy-unbound),
+  # not a lagging mirror — scope already reports it as such, and blocking it here would redden every
+  # pre-ledger mine at once. The ledger EXISTS (a t-row), so this is not the stand-down path.
+  vrun attest verified 1 std t001
+  sed -i 's/^status: converted$/status: verified/' "$W/materials/m001/converted.md"
+  vrun validate; expect_pass
+  expect_hasnt "MAT-STATUS-LEDGER"
+}
+pass_mat_status_ledger_used_overwrites() {
+  # `used` is LIFECYCLE, not a verdict (FORMATS §material status): refine stamps it at consecration
+  # and it legitimately overwrites `verified`. Reading it as a lagging mirror would re-fuse the two
+  # axes WD-COR-001 split, and would fire on every consecrated mine.
+  mkmat2
+  vrun attest verified 1 std m002
+  sed -i 's/^status: converted$/status: used/' "$W/materials/m002/converted.md"
+  vrun validate; expect_pass
+  expect_hasnt "MAT-STATUS-LEDGER"
+}
+pass_mat_status_ledger_retracted_overwrites() {
+  # Same reasoning at the other end of the lifecycle: a retracted material grounds nothing from then
+  # on, and its earlier verification is history rather than a mirror that fell behind.
+  mkmat2
+  vrun attest verified 1 std m002
+  sed -i 's/^status: converted$/status: retracted/' "$W/materials/m002/converted.md"
+  vrun validate; expect_pass
+  expect_hasnt "MAT-STATUS-LEDGER"
+}
+pass_mat_status_ledger_legacy_unbound_is_silent() {
+  # `legacy-unbound` binds no bytes and judges nothing — it is migration-minted history. A mirror
+  # cannot lag evidence that makes no claim.
+  mkmat2
+  printf 'm002\t-\tlegacy-unbound\t-\tv1-material-frontmatter\t2026-07-01\n' >> "$W/truths/verify-ledger.tsv"
+  vrun validate; expect_pass
+  expect_hasnt "MAT-STATUS-LEDGER"
+}
+acct_mat_status_ledger_stands_down_when_unreadable() {
+  # Unknown evidence is not absent evidence, and it is not a lagging mirror either. The damage is
+  # named ONCE above; per-material accusations stacked on an unreadable ledger are the
+  # false-accusation-at-scale shape MAT-INTAKE-LEDGER already refuses to make.
+  mkmat2
+  vrun attest verified 1 std m002
+  rm -f "$W/truths/verify-ledger.tsv"; mkdir "$W/truths/verify-ledger.tsv"
+  vrun validate
+  expect_block "[LEDGER-UNREADABLE]"
+  expect_hasnt "MAT-STATUS-LEDGER"
+}
+acct_mat_status_ledger_quarantined_id_is_silent() {
+  # An id whose LAST row is malformed is QUARANTINED by the shared index — no evidence at all, not
+  # even the earlier valid row — so it never reaches `win` and this check never sees it. Pinned
+  # because that silence is inherited from a reader this file does not own: if the index ever
+  # started letting a quarantined id win, this case is what says so.
+  mkmat2
+  vrun attest verified 1 std m002
+  printf 'm002\tbroken\n' >> "$W/truths/verify-ledger.tsv"
+  vrun validate
+  expect_block "[LEDGER-MALFORMED]"
+  expect_hasnt "MAT-STATUS-LEDGER"
+}
+acct_mat_status_ledger_stands_down_on_headless() {
+  # The second file-level kill switch: a row with an EMPTY id column could be ANY material's, so no
+  # fallback opens anywhere. Same stand-down as unreadable, different cause — and it is a separate
+  # case because `state` is still 'ok' here, so only the headless counter closes the gate.
+  mkmat2
+  vrun attest verified 1 std m002
+  printf '\t\n' >> "$W/truths/verify-ledger.tsv"
+  vrun validate
+  expect_block "row has an EMPTY id column"
+  expect_hasnt "MAT-STATUS-LEDGER"
+}
+acct_json_mat_status_ledger_is_a_problem() {
+  # The machine surface: this rides `diagnostics` and fails the run, not `warnings`. The two lists
+  # are the contract automation matches on, and a code in the wrong one inverts its meaning.
+  mkmat2
+  vrun attest verified 1 std m002
+  vrun validate --json
+  expect_has '"result":"fail"'
+  expect_has '"code":"MAT-STATUS-LEDGER"'
+}
 acct_ledger_crlf_reads_as_verified() {
   # ONE READER (§11 2026-08-05). A git checkout with core.autocrlf=true — the Windows default —
   # turns the ledger CRLF, and the two readers then disagreed about the same file: `scope` stripped
@@ -4285,6 +4398,7 @@ acct_ledger_crlf_reads_as_verified() {
   # `2026-07-01\r`) and blocked every row as LEDGER-MALFORMED. A verdict that depends on which
   # command asked is not a verdict. Now a trailing CRLF is a line ending, in both.
   vrun attest verified 2 standard m001
+  mirror_verified m001
   # Rewritten in bash, not sed/awk: those are the tools whose CR handling differs by platform, so
   # building the fixture with them would make the case prove nothing on one of them.
   { while IFS= read -r l || [ -n "$l" ]; do printf '%s\r\n' "${l%$'\r'}"; done < "$W/truths/verify-ledger.tsv"; } > "$W/l.crlf"
@@ -7074,6 +7188,218 @@ acct_json_claude_block_is_a_warning() {
   expect_has '"result":"pass"'
   expect_has '"diagnostics":[]'
   expect_has '"code":"CLAUDE-BLOCK-STALE"'
+}
+
+# ---------------------------------------------------------------- the planted hook pair (v0.6.9)
+#
+# The hook SCRIPTS are bundle files, so these cases run them directly rather than through the
+# entrypoint — `vrun`/`WDRUN` would be testing the wrong program. `mkpristine` copies the whole
+# repo `.weavedoc/` into each fixture, so `$W/.weavedoc/bin/hooks/*.mjs` are the shipped bytes and
+# their __dirname-derived root is `$W` itself.
+#
+# TWO PORTABILITY TRAPS, both measured on this harness:
+#   1. MSYS rewrites POSIX paths in ARGUMENTS but not in STDIN. A payload built from `$W` would
+#      carry `/d/...` while node's realpath root is `D:\...`, and every containment test would
+#      misclassify — the cases would pass while measuring nothing. `pwd -W` gives the native path
+#      with forward slashes, which also embeds safely in JSON.
+#   2. `has()` is a literal whole-output substring test, so needles stay on one line. JSON.stringify
+#      emits one line and preserves insertion order, which is what makes the protocol needle stable.
+# WEAVEDOC_LEASE_DIR keeps every case off the shared temp directory — without it a lease from one
+# case would answer another's gate.
+hookenv() { # sets NROOT + LDIR for the helpers below
+  NROOT=$( cd "$W" && pwd -W )
+  LDIR="$W/.leasedir"; mkdir -p "$LDIR"
+}
+hlease() { # $1=session $2=skill
+  hookenv
+  OUT=$(printf '{"session_id":"%s","cwd":"%s","hook_event_name":"PostToolUse","tool_name":"Skill","tool_input":{"skill":"%s","args":""}}' "$1" "$NROOT" "$2" \
+    | WEAVEDOC_LEASE_DIR="$LDIR" node "$W/.weavedoc/bin/hooks/lease.mjs" 2>&1); RC=$?
+}
+hgate() { # $1=session $2=repo-relative path $3=tool (default Write)
+  hookenv
+  local ti
+  if [ "${3:-Write}" = "Edit" ]; then ti=$(printf '{"file_path":"%s/%s","old_string":"a","new_string":"b"}' "$NROOT" "$2")
+  else ti=$(printf '{"file_path":"%s/%s","content":"x"}' "$NROOT" "$2"); fi
+  OUT=$(printf '{"session_id":"%s","cwd":"%s","hook_event_name":"PreToolUse","tool_name":"%s","tool_input":%s}' "$1" "$NROOT" "${3:-Write}" "$ti" \
+    | WEAVEDOC_LEASE_DIR="$LDIR" node "$W/.weavedoc/bin/hooks/gate.mjs" 2>&1); RC=$?
+}
+DENY='"permissionDecision":"deny"'
+
+acct_hook_lease_records_weavedoc_skill() {
+  hlease s1 weavedoc-gather
+  expect_pass
+  OUT=$(cat "$W/.leasedir"/*.json 2>&1); RC=0
+  expect_has '"skill":"weavedoc-gather"'
+  expect_has '"s1"'
+}
+acct_hook_lease_ignores_foreign_skill() {
+  # The gate answers weavedoc paths only, so a lease for someone else's skill would be a fact with
+  # no consumer — and one that could silently REPLACE a live weavedoc lease if it were recorded.
+  hlease s1 weavedoc-gather
+  hlease s1 frontend-design
+  OUT=$(cat "$W/.leasedir"/*.json 2>&1); RC=0
+  expect_has 'weavedoc-gather'
+  expect_hasnt 'frontend-design'
+}
+acct_hook_lease_prunes_stale_sessions() {
+  # A lease file that only grows is a list of sessions that ended. Pruning is the writer's job
+  # because the writer is the only side allowed to rewrite the file.
+  hookenv
+  printf '{"sessions":{"old":{"skill":"weavedoc-map","ts":0}}}' > "$LDIR/seed.json"
+  # the real path is hashed from the root, so seed through the writer instead of guessing the name
+  hlease s1 weavedoc-gather
+  OUT=$(cat "$W/.leasedir"/weavedoc-lease-*.json 2>&1); RC=0
+  expect_has '"s1"'
+  expect_hasnt '"old"'
+}
+acct_hook_lease_never_fails_on_garbage() {
+  # It observes a Skill call it must never break: rc 0 even on bytes it cannot parse.
+  hookenv
+  OUT=$(printf 'not json' | WEAVEDOC_LEASE_DIR="$LDIR" node "$W/.weavedoc/bin/hooks/lease.mjs" 2>&1); RC=$?
+  expect_pass
+}
+acct_hook_gate_allows_ungated_path() {
+  # inbox/, output/, docs/, anything else: not the gate's to police. Silence is "no opinion".
+  hgate s1 output/notes.md
+  expect_pass
+  expect_hasnt "$DENY"
+}
+acct_hook_gate_denies_materials_without_lease() {
+  # THE MEASURED SHAPE: a session writing mine files with the owning skill never loaded. The deny
+  # REASON is the product — it is the moment the rule enters the session.
+  hgate s1 materials/m001/converted.md
+  expect_pass                       # a deny is rc 0 + JSON; a non-zero rc would be a broken hook
+  expect_has "$DENY"
+  expect_has 'weavedoc-gather'
+  expect_has 'Skill(weavedoc-gather)'
+}
+acct_hook_gate_allows_with_owning_lease() {
+  hlease s1 weavedoc-gather
+  hgate s1 materials/m001/converted.md
+  expect_pass; expect_hasnt "$DENY"
+  # …and the Edit shape reaches the same decision: the gate reads file_path, never the content keys.
+  hgate s1 materials/m001/converted.md Edit
+  expect_pass; expect_hasnt "$DENY"
+}
+acct_hook_gate_denies_wrong_skill_lease() {
+  # A lease is not a skeleton key: it names one skill, and the deny says which one is held.
+  hlease s2 weavedoc-plan
+  hgate s2 materials/m001/converted.md
+  expect_has "$DENY"
+  expect_has 'its current lease is weavedoc-plan'
+}
+acct_hook_gate_denies_state_dir_even_with_lease() {
+  # Machine-owned state has no skill owner at all — the CLI keeps invariants a hand edit breaks.
+  hlease s1 weavedoc-gather
+  hgate s1 .weavedoc-state/conflicts.json
+  expect_has "$DENY"
+  expect_has 'conflict add|remove'
+}
+acct_hook_gate_denies_bundle_but_allows_config_for_init() {
+  # The bundle is replaced wholesale; config.yaml inside it is the project's and init writes it.
+  hlease s1 weavedoc-init
+  hgate s1 .weavedoc/bin/lib/core.mjs
+  expect_has "$DENY"
+  hgate s1 .weavedoc/config.yaml
+  expect_hasnt "$DENY"
+}
+acct_hook_gate_fail_open_on_garbage_stdin() {
+  # A crashed gate must not brick every write in the mine: it allows, and it says why on stderr.
+  hookenv
+  OUT=$(printf '{broken' | WEAVEDOC_LEASE_DIR="$LDIR" node "$W/.weavedoc/bin/hooks/gate.mjs" 2>&1); RC=$?
+  expect_pass
+  expect_hasnt "$DENY"
+  expect_has 'fails open'
+}
+acct_hook_gate_outside_mine_allows() {
+  # Classification is target-vs-root: a path outside this mine is another mine's business (or none).
+  hgate s1 ../elsewhere.md
+  expect_pass; expect_hasnt "$DENY"
+}
+acct_hook_deny_is_the_pretooluse_contract() {
+  # The wire format itself. If this drifts the harness stops honouring the deny and the gate becomes
+  # decoration that still reports success — the vacuity class this suite keeps a name for.
+  hgate s1 materials/m001/converted.md
+  expect_has '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"'
+}
+
+plant_hooks() { # the shipped entries, composed FROM the template so a case cannot drift from it
+  mkdir -p "$W/.claude"
+  node -e '
+    const fs = require("fs")
+    const t = JSON.parse(fs.readFileSync(process.argv[1], "utf8"))
+    fs.writeFileSync(process.argv[2], JSON.stringify(t, null, 2) + "\n")
+  ' "$W/.weavedoc/templates/hooks.json" "$W/.claude/settings.json"
+}
+pass_hooks_absent_is_silent() {
+  # No settings.json: nothing planted, nothing to be stale, and validate does not lecture.
+  vrun validate; expect_pass; expect_hasnt "HOOKS-"
+}
+pass_hooks_current_is_silent() {
+  plant_hooks
+  vrun validate; expect_pass; expect_hasnt "HOOKS-"
+}
+pass_hooks_foreign_hooks_only_is_silent() {
+  # A project's own hooks carry no marker, so the check never engages. Planting is what opts in.
+  mkdir -p "$W/.claude"
+  printf '{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"node other.mjs"}]}]}}\n' > "$W/.claude/settings.json"
+  vrun validate; expect_pass; expect_hasnt "HOOKS-"
+}
+pass_hooks_stale_warns_without_blocking() {
+  plant_hooks
+  sed -i 's/"Write|Edit"/"Write"/' "$W/.claude/settings.json"
+  vrun validate; expect_pass          # a WARNING: stale wiring is not a mine-integrity failure
+  expect_has "HOOKS-STALE"
+}
+pass_hooks_half_planted_is_stale() {
+  # Half a pair is the worse shape: the lease records nothing, so the gate denies every mine write
+  # forever — or the gate is absent and the lease is a file nobody reads.
+  plant_hooks
+  node -e '
+    const fs = require("fs"); const p = process.argv[1]
+    const s = JSON.parse(fs.readFileSync(p, "utf8")); delete s.hooks.PreToolUse
+    fs.writeFileSync(p, JSON.stringify(s, null, 2) + "\n")
+  ' "$W/.claude/settings.json"
+  vrun validate; expect_pass
+  expect_has "HOOKS-STALE"
+}
+pass_hooks_absolute_command_prefix_is_not_stale() {
+  # The command PREFIX is environment, not wiring — an install that had to spell an absolute path
+  # runs the same script. A tripwire that fired on this would cry wolf until nobody read it.
+  plant_hooks
+  sed -i 's#"node \.weavedoc/bin/hooks/#"node /opt/proj/.weavedoc/bin/hooks/#g' "$W/.claude/settings.json"
+  vrun validate; expect_pass; expect_hasnt "HOOKS-"
+}
+pass_hooks_trailing_argument_is_stale() {
+  # …but what comes AFTER the script is not environment: it changes what runs.
+  plant_hooks
+  sed -i 's#hooks/gate\.mjs"#hooks/gate.mjs --off"#' "$W/.claude/settings.json"
+  vrun validate; expect_pass
+  expect_has "HOOKS-STALE"
+}
+pass_hooks_missing_template_says_so() {
+  # An un-run comparison must never read as a pass.
+  plant_hooks
+  rm -f "$W/.weavedoc/templates/hooks.json"
+  vrun validate; expect_pass
+  expect_has "HOOKS-NOTEMPLATE"
+}
+acct_hooks_unparseable_settings_with_marker_warns() {
+  # The marker is there, so the gate was planted; the file no longer parses, so whatever state the
+  # entries are in, it is not the planted one — and the harness may be loading no hooks at all.
+  mkdir -p "$W/.claude"
+  printf '{"hooks": broken .weavedoc/bin/hooks/gate.mjs\n' > "$W/.claude/settings.json"
+  vrun validate; expect_pass
+  expect_has "HOOKS-STALE"
+}
+acct_json_hooks_stale_is_a_warning() {
+  plant_hooks
+  sed -i 's/"Write|Edit"/"Write"/' "$W/.claude/settings.json"
+  vrun validate --json
+  expect_pass
+  expect_has '"result":"pass"'
+  expect_has '"diagnostics":[]'
+  expect_has '"code":"HOOKS-STALE"'
 }
 
 # ---------------------------------------------------------------- driver
