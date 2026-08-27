@@ -3,7 +3,7 @@
 //
 //   validate          format + truth coherence (exit non-zero on any problem)
 //   pull <term>       protocol-correct mine lookup for consumers outside the pipeline (see READ.md)
-//   impact <mID>      which truths were extracted from a material + which documents cite it (blast radius)
+//   impact <mID>      blast radius: which materials CORRECT it, which truths came out of it, which documents cite them
 //   status [--open]   each document's status + the next step (--open: every item waiting on the user, one line each)
 //   scope             what a verify round still owes — unverified materials + truths, computed
 //   intake [--no-source] <material-id> <note>   declare how a material entered: digest-bound intake row

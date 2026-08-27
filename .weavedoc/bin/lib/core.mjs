@@ -129,6 +129,24 @@ export function listField (s) {
   return bare.split(',').map(x => x.replace(/^[ \t]+/, '').replace(/[ \t]+$/, '')).filter(x => x !== '')
 }
 
+// `corrects:` — ONE reading of the field, for both directions. `validate` walks it forward (do the
+// named materials exist, does one correct itself) and `impact` walks it backward (who corrects THIS
+// material). Each list entry may name several materials and usually carries the part it displaces
+// (`m003 §4.4`), so three facts travel together: the `entry` a reader needs to see, the `ref` word a
+// diagnostic quotes, and the `id` the machine resolves. Splitting the field twice — a word split
+// here, another there — is how one rule ends up with two spellings, which is the class this runtime
+// keeps deleting. ASCII-only splitting and matching, so the byte-domain and utf8 callers agree.
+export function correctsRefs (s) {
+  const refs = []
+  for (const entry of listField(s)) {
+    for (const word of entry.split(/[ \t\n]+/).filter(x => x !== '')) {
+      const m = /^(m[0-9]+)/.exec(word)
+      if (m !== null) refs.push({ entry, ref: word, id: m[1] })
+    }
+  }
+  return refs
+}
+
 // Pipe-separated schema lists. The splitting is bash word splitting with IFS='|', which is NOT the
 // same as "split and drop empties" (the differential caught this): with a NON-whitespace IFS every
 // delimiter delimits, so interior and leading empty fields SURVIVE — `a||b` is three fields, `|a|`
