@@ -1,3 +1,3 @@
-0.6.9
-fingerprint: 58b2155e6c80  (bin+schema — compare this, not just the version)
+0.6.10
+fingerprint: f3a6c757465f  (bin+schema — compare this, not just the version)
 schema: 3 (v3-only; a v2 mine migrates via 'upgrade', a v1 mine via the v0.5.21 bridge first)

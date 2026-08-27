@@ -1285,7 +1285,20 @@ export function cmdValidate (m, out, json = false, consecOk = '') {
             for (const h of (Array.isArray(group?.hooks) ? group.hooks : [])) {
               const cmd = typeof h?.command === 'string' ? h.command : ''
               const at = cmd.indexOf(MARK)
-              if (at >= 0) out.push(JSON.stringify([event, group?.matcher ?? '', cmd.slice(at)]))
+              // The tail runs from the marker to the end of the command — arguments after the
+              // script are NOT environment and must still count. But a QUOTE opened before the
+              // marker closes inside that tail, and a path holding a space has no other way to be
+              // spelled: `node "C:/my mine/.weavedoc/bin/hooks/gate.mjs"` would carry a stray `"`
+              // into the tuple and read as stale forever — the prefix-is-environment rule failing
+              // on the one absolute form that actually works. If the quoting is still open at the
+              // marker, its closer is dropped.
+              if (at >= 0) {
+                let tail = cmd.slice(at)
+                for (const q of ['"', "'"]) {
+                  if ((cmd.slice(0, at).split(q).length - 1) % 2 === 1) tail = tail.replace(q, '')
+                }
+                out.push(JSON.stringify([event, group?.matcher ?? '', tail]))
+              }
             }
           }
         }
@@ -1303,7 +1316,11 @@ export function cmdValidate (m, out, json = false, consecOk = '') {
         if (have === null) {
           warn('HOOKS-STALE', M`${settingsRel} holds the weavedoc hook marker but the file does not parse as JSON — whatever state the entries are in, it is not the planted one, and a harness reading this file may be loading no hooks at all. Re-run weavedoc-init (reconfigure) to replant them from ${tplRel}`)
         } else if (have.length !== want.length || have.some((t, i) => t !== want[i])) {
-          const shown = have.length === 0 ? '(none readable)' : have.join(' · ')
+          // U() on the SEPARATOR too: `M` passes interpolated values through untouched, so a raw
+          // `·` joined in here leaves as a lone 0xB7 through the latin1 path while the literal half
+          // of the same sentence encodes correctly — one message, two encodings (the class this
+          // file names at its own reader boundary).
+          const shown = have.length === 0 ? '(none readable)' : have.join(U(' · '))
           warn('HOOKS-STALE', M`${settingsRel}'s weavedoc hook entries differ from ${tplRel} — found: ${shown}. The gate and the lease are how a session learns which skill owns a path, so a stale or half-planted pair enforces the previous release's rules, or none at all. Re-run weavedoc-init (reconfigure); entries without the marker are the project's own and are never compared`)
         }
       }

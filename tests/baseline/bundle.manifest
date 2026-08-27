@@ -1,6 +1,6 @@
 3c2e64f62905214881c710615562e3cadaac702502dea83e8b3cdbe396e798f3  .claude/skills/weavedoc-gaps/SKILL.md
 c2499622d09117aa08cd044cd795aa21a075dc6136cdedaaacbff9abf2db7bc4  .claude/skills/weavedoc-gather/SKILL.md
-64fb30afa74c62bfea51a6cfdeb1aeae7f3e47618146faa0320000e85142c12c  .claude/skills/weavedoc-init/SKILL.md
+11512a2ed0f3ae54c309dfc68075a9c3fd690b69186ae3029b18548b110e7f66  .claude/skills/weavedoc-init/SKILL.md
 0a8e6ee635eea1faa9314933da3c174a25466b4073aa03bc537163acc8621306  .claude/skills/weavedoc-map/SKILL.md
 7e859e895a4823cd1e9f0885083c3ba2704b8dfd8f38f6117cb95469be58045f  .claude/skills/weavedoc-plan/SKILL.md
 1a2a9e03949af6d1acf1589830e3898bc95d869285a469f9be7cb0475f50f68c  .claude/skills/weavedoc-refine/SKILL.md
@@ -12,8 +12,8 @@ c2499622d09117aa08cd044cd795aa21a075dc6136cdedaaacbff9abf2db7bc4  .claude/skills
 c1967146cfee318e0f31fb801032a5f4450df3d684d1511df1e18803583c4b6a  .weavedoc/FORMATS.md
 ec8c206b0985cfcd3786d8ada5ada3661b9ed2e5d4524ac9c5bcf5df073bb871  .weavedoc/PARSER-MODEL.md
 073b9612e810deb702d1e762584d6b9caa5de5f487d6ecc57f34584681a8dadf  .weavedoc/READ.md
-13eb74b44be6e3a85a0efa0dedf56aec05e9e50140e1c8bbc0d0fbd8097b0717  .weavedoc/VERSION
-a0acc99b2a8adad587263d2a437e1b0a1835601936757b3ccc4699b6fbf3c41f  .weavedoc/bin/hooks/gate.mjs
+bed2b130eec69d461c5f69ba218c386c442ccf2319f3c3476e4faff1d76147e8  .weavedoc/VERSION
+d02e7090d337fcb339abfcddfe1a9d2fe4a68eeae4e754898c9df9aa409e84b2  .weavedoc/bin/hooks/gate.mjs
 98b6959b1c2e93a42d9ddd5c7fc9024b5acfe35c7b963da22cc0bbf73161e72b  .weavedoc/bin/hooks/lease.mjs
 d84c7e74d36aec1a04a0b12dd2c0f09ff664963a692a90956224a368d1cf20b5  .weavedoc/bin/lib/artifact-contracts.mjs
 02d4f236a69c6f1709f5ea24a613e3200af40694fb5dc68816d0bfd366e3e5de  .weavedoc/bin/lib/cmd-attest.mjs
@@ -30,7 +30,7 @@ db6e9d60e95c8e1b000a79e1ef43ecb65220b7dad8ef279abbf3a4b83d20e1db  .weavedoc/bin/
 5b9436ca39a481e7489f01c7af65cacf5bb2ce2fbe8fec3637cd80d23d87c9c1  .weavedoc/bin/lib/cmd-state.mjs
 3b15ed114bf619bc8907284d2f807af90885bd30d3d66d2e00c1233825e9f656  .weavedoc/bin/lib/cmd-status.mjs
 0578864e63fd647a40ca4cefd617468d9a570a7e3a290c47c783be0e50587830  .weavedoc/bin/lib/cmd-upgrade.mjs
-9cf7b3fc8213c6a736d01b933772c1643acbf3abeca1b0a56442c71aaceeea91  .weavedoc/bin/lib/cmd-validate.mjs
+8e1b1d4acf9b1263aac0b456b77d7cabb29a787dc1f4d32eae20b9e573228c75  .weavedoc/bin/lib/cmd-validate.mjs
 cc932ba4aa321119aa9239b052b3428d5394704cf75287fb1aac2a1d2d7dc190  .weavedoc/bin/lib/conflict-store.mjs
 37fe849ebf46033134053c62467dddf645e8bee14e4d434bc63b1b061e55e5ee  .weavedoc/bin/lib/core.mjs
 8e605056a1ddb59a06722f36f4ea76d360adfae0d805ce0f6f40d472eeb0cce9  .weavedoc/bin/lib/coverage-model.mjs

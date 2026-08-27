@@ -21,6 +21,10 @@ import { basename, dirname, join, resolve, relative, isAbsolute } from 'node:pat
 import { tmpdir } from 'node:os'
 import { createHash } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
+// The runtime's ONE reader for `paths:` values — see CFG_DIRS below. Importing it rather than
+// re-scanning the config here is what keeps the gate and validate from resolving one mine's
+// materials folder to two different places.
+import { cfgPath } from '../lib/read.mjs'
 
 const TTL_MS = 24 * 60 * 60 * 1000
 
@@ -72,9 +76,6 @@ const RULES = [
   ['.weavedoc-state/', null],            // machine-owned: the CLI owns these invariants
   ['.weavedoc/config.yaml', ['weavedoc-init']],
   ['.weavedoc/', null],                  // bundle bytes: replaced wholesale, never edited in place
-  ['materials/', ['weavedoc-gather', 'weavedoc-verify', 'weavedoc-refine']],
-  ['truths/', ['weavedoc-map', 'weavedoc-verify']],
-  ['documents/', ['weavedoc-plan', 'weavedoc-write', 'weavedoc-review', 'weavedoc-refine', 'weavedoc-map']],
   ['catalog.md', ['weavedoc-gather', 'weavedoc-refine']],
   ['gaps.md', ['weavedoc-gaps']],
   ['questions.md', ['weavedoc-gather', 'weavedoc-map', 'weavedoc-gaps', 'weavedoc-plan', 'weavedoc-write', 'weavedoc-refine']],
@@ -82,6 +83,20 @@ const RULES = [
   ['CLAUDE.md', ['weavedoc-init']],
   ['.ignore', ['weavedoc-init']],
   ['.claude/settings.json', ['weavedoc-init']]
+]
+
+// THE THREE DIRECTORIES A PROJECT MAY MOVE. `materials`, `truths` and `documents` are config
+// `paths:` values, so naming them by literal above would have guarded three names a relocated mine
+// does not use while the real tree went unwatched — this file's own measured-nothing class, in the
+// one direction it cannot see (allow is silent). Resolution goes through `cfgPath`, the runtime's
+// single reader for these values, so the gate and validate cannot disagree about where a mine keeps
+// its materials; an unreadable config falls back to the defaults, which is what cfgPath already
+// does. Matched by ABSOLUTE containment rather than a root-relative prefix, because a `paths:` value
+// is allowed to point outside the mine root and a rel-string test cannot express that.
+const CFG_DIRS = [
+  ['materials', ['weavedoc-gather', 'weavedoc-verify', 'weavedoc-refine']],
+  ['truths', ['weavedoc-map', 'weavedoc-verify']],
+  ['documents', ['weavedoc-plan', 'weavedoc-write', 'weavedoc-review', 'weavedoc-refine', 'weavedoc-map']]
 ]
 
 // No output at all is "no opinion" — the permission system proceeds as if this hook were absent.
@@ -105,18 +120,33 @@ try {
   if (typeof fp !== 'string' || fp === '') allow()
 
   const root = mineRoot(import.meta.url)
+  const cfgFile = join(root, '.weavedoc', 'config.yaml')
   // A bundle sitting outside a mine (a fresh copy, a template checkout) defends nothing.
-  try { statSync(join(root, '.weavedoc', 'config.yaml')) } catch { allow() }
+  try { statSync(cfgFile) } catch { allow() }
 
   // Classification is TARGET-vs-ROOT, never cwd-vs-root: a session working elsewhere that writes
   // into this mine is still gated, and a write into a DIFFERENT mine is allowed here because that
   // mine's own planted gate is what defends it.
   const target = canonTarget(isAbsolute(fp) ? fp : resolve(payload?.cwd ?? process.cwd(), fp))
   const rel = relative(root, target).split('\\').join('/')
-  if (rel === '' || rel.startsWith('..') || isAbsolute(rel)) allow()
+  const inRoot = rel !== '' && !rel.startsWith('..') && !isAbsolute(rel)
 
-  const hit = RULES.find(([prefix]) => (prefix.endsWith('/') ? rel.startsWith(prefix) : rel === prefix))
-  if (hit === undefined) allow()   // inbox/, output/, docs/, anything else: not ours to police
+  // The literal rules first, so a mine that redirects a folder INTO `.weavedoc/` still meets the
+  // bundle refusal rather than a write permit. Then the configurable three, which are matched by
+  // containment and therefore work whether or not they sit under the root.
+  let hit = inRoot
+    ? RULES.find(([prefix]) => (prefix.endsWith('/') ? rel.startsWith(prefix) : rel === prefix))
+    : undefined
+  if (hit === undefined) {
+    hit = CFG_DIRS
+      .map(([key, owners]) => [canonTarget(cfgPath(cfgFile, key, key, root)), owners])
+      .find(([dir]) => {
+        const r = relative(dir, target)
+        return r !== '' && !r.startsWith('..') && !isAbsolute(r)
+      })
+  }
+  // inbox/, output/, docs/, anything else — and anything outside this mine: not ours to police.
+  if (hit === undefined) allow()
 
   const [prefix, owners] = hit
   if (owners === null) {
