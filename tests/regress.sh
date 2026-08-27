@@ -7326,6 +7326,24 @@ acct_hook_gate_fail_open_on_garbage_stdin() {
   expect_hasnt "$DENY"
   expect_has 'fails open'
 }
+acct_hook_gate_follows_config_paths() {
+  # A cold review measured this one (v0.6.10): the rule table named `materials/` by literal while
+  # that folder is a config `paths:` value, so a mine that had moved it was left with the gate
+  # guarding an empty name and the real tree walking straight through — silent, because the failure
+  # direction of a gate is ALLOW. Both halves are asserted: the relocated tree denies, and the
+  # vacated literal no longer does (or the fix would be "guard both names", which guards a name the
+  # mine does not use).
+  sed -i 's|^  materials: materials$|  materials: data/materials|' "$W/.weavedoc/config.yaml"
+  mkdir -p "$W/data/materials/m001"
+  hgate s1 data/materials/m001/converted.md
+  expect_has "$DENY"
+  expect_has 'weavedoc-gather'
+  hgate s1 materials/m001/converted.md
+  expect_hasnt "$DENY"
+  # …and a path the config did NOT move is still gated, so the resolution did not simply fail open.
+  hgate s1 truths/t001.md
+  expect_has "$DENY"
+}
 acct_hook_gate_outside_mine_allows() {
   # Classification is target-vs-root: a path outside this mine is another mine's business (or none).
   hgate s1 ../elsewhere.md
@@ -7383,6 +7401,15 @@ pass_hooks_absolute_command_prefix_is_not_stale() {
   # runs the same script. A tripwire that fired on this would cry wolf until nobody read it.
   plant_hooks
   sed -i 's#"node \.weavedoc/bin/hooks/#"node /opt/proj/.weavedoc/bin/hooks/#g' "$W/.claude/settings.json"
+  vrun validate; expect_pass; expect_hasnt "HOOKS-"
+}
+pass_hooks_quoted_command_is_not_stale() {
+  # A cold review measured this (v0.6.10): a path holding a space has to be quoted, and the closing
+  # quote landed inside the compared tail — so the ONE absolute spelling that actually runs read as
+  # stale forever, which is exactly the cry-wolf the prefix-is-environment rule exists to prevent.
+  plant_hooks
+  sed -i 's#"node \.weavedoc/bin/hooks/\([a-z]*\)\.mjs"#"node \\"/opt/my mine/.weavedoc/bin/hooks/\1.mjs\\""#g' "$W/.claude/settings.json"
+  grep -q 'my mine' "$W/.claude/settings.json" || { bad "fixture no-op: the command was not rewritten to a quoted absolute path"; return; }
   vrun validate; expect_pass; expect_hasnt "HOOKS-"
 }
 pass_hooks_trailing_argument_is_stale() {
