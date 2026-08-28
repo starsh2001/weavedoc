@@ -13,9 +13,10 @@
 // removal is the price of never destroying a live neighbour's committed write.
 //
 // The lock is a DIRECTORY beside the ledger: mkdir is atomic on every platform this runs on, and
-// a directory cannot be half-created. EVERY writer that touches the ledger file — attest, and
-// the retired migrator's transaction did too — every ledger writer acquires THIS lock through THIS module; a second
-// spelling of the protocol would be the two-writers drift class in its locking clothes.
+// a directory cannot be half-created. EVERY writer that touches the ledger file — attest and
+// intake (and the retired migrator's transaction did too) — acquires THIS lock through THIS
+// module; a second spelling of the protocol would be the two-writers drift class in its locking
+// clothes.
 import { mkdirSync, rmdirSync, writeFileSync, readFileSync, unlinkSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import { join } from 'node:path'

@@ -6,6 +6,20 @@
 
 ---
 
+## 0.6.17
+
+**2차 콜드 리뷰(수리 재검 방식 — 0.6.12가 규격에 실은 그 사이클대로): 아홉 수리는 지적된 자리에서 전부 성립, 그러나 세 수리의 옆자리에서 should-fix 3·nice-to-have 3.** critical 0. 발견 여섯 전부 재측정으로 확정됐고(핵심 주장인 "레벨 낱말 아홉 동시 sed가 green"은 worktree 실측으로), 이 번들이 닫는다. 셋의 공통 형태는 **수리 규약 위반의 자기 사례**다 — 0.6.16의 수리가 주석·훅·로스터에서 "문장 전체 재독·수정 후 전체 대조"를 안 지킨 자리들이다.
+
+**① 검사 14 앵커에 세 레벨 낱말 포함.** 0.6.16의 앵커는 키 이름만 고정했고 그 주석은 "enum 루프가 낱말을 같은 방식으로 앵커한다"고 주장했는데 둘 다 반쪽이었다 — 그 루프는 schema를 doccheck 자신의 목록에 앵커할 뿐 스킬 문면은 어느 방향도 안 본다. 실측: 아홉 사본 `delegated`→`autonomous` 동시 sed가 doccheck green으로 통과했다(1차 4번과 같은, 가드의 주석이 코드보다 넓게 주장하는 클래스). 핀을 'Read `authority` … `strict` | `standard` | `delegated`' 전체로 늘려 키와 낱말을 함께 앵커했고, 같은 sed가 이제 아홉 줄 red다(실측). 주석은 실측대로 다시 썼다.
+
+**② reviewers.md의 훅 위 무자격 문장.** §Findings format의 "the defender may finalize on its own"(형식 강등)이 레벨 한정 없이 훅의 범위("Everything below") **위**에 남아, strict 광산의 판정자가 strict가 금지한 드랍을 이 문장으로 수행할 수 있었다 — 1차 3번과 같은 클래스가 같은 파일의 다른 절에 남은, 정확히 "지적된 자리 옆의 반 문장". standard·delegated 한정을 달고 strict의 전건 상신을 명시했다.
+
+**③ reader lock 로스터에 소비자 최전선 셋.** "read-only commands must run untouched"를 선언하는 로스터에 `pull`·`impact`·`conflict list`가 없었다 — 조건부 writer 셋 중 둘만 read-only 모드가 방어받는 비대칭 포함. `MUTATES.conflict`가 `() => true`로 단순화되는 류의 회귀에서 `conflict list`가 gate에 잡혀도 스위트 전체가 green이었다. 세 leg 추가.
+
+**나머지 셋(nice).** schema의 `intake.ledger.declarations`가 intake의 세 낱말 중 둘만 싣고 있었다 → `anchored` 추가 + **서술 키임을 명시**(소비자 0건 실측 — "wire it or say it is descriptive"라는 schema 헤더 자신의 규칙 위반이었다). validate·census의 `--anchor-existing` 안내가 인자 없는 철자라 그대로 실행하면 usage 거절이었다 → scope의 완전형(`"<what you are vouching for>"`)으로 통일. lock.mjs 헤더의 이중 주어 흉터와 intake 누락 → 문장 복원("attest and intake (and the retired migrator's transaction did too)").
+
+**사이클 회계.** 1차 수집 9 → 수리(0.6.16) → 재검이 수리 옆자리에서 6을 냈으므로 카운터는 0으로 돌아갔고, 이 수리 뒤의 다음 콜드 라운드가 첫 클린 후보다. 626/626.
+
 ## 0.6.16
 
 **미발행 다섯 번들(0.6.11~15)에 대한 콜드 리뷰가 should-fix 8건·nice-to-have 1건을 냈고, 9건 전부 재현으로 확정됐다(1건은 세부 정정: "anchored ≠ verified" 핀은 실제로는 대문자 영문으로 2건 살아 있었다).** critical 0. 측정 주장(케이스 산술·fingerprint 체인·red 실측·"회귀 케이스 0건" 주장)은 전부 리뷰어의 재현으로 성립했고, 발견은 골격이 아니라 가장자리 — **은퇴·개명의 스크럽이 놓친 표면과, 삭제·주석이 만든 감시 공백** — 에 몰렸다. 이 번들이 그 9건을 닫는다.

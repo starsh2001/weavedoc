@@ -299,11 +299,13 @@ for s in $skills; do
   # nothing more: a rename applied to all nine at once — this axis was renamed once already inside
   # one week — sails through nine agreeing copies while every skill starts reading a key the schema
   # does not define, and absence-means-standard then silently downgrades a strict mine's protection
-  # under an all-green board (cold review, 0.6.16: measured green after seding all nine). So one
-  # copy of the READ sentence is pinned to the schema's own key name; the enum loop below anchors
-  # the three level words the same way.
-  printf '%s\n' "$g14blk" | grep -qF 'Read `authority` from `.weavedoc/config.yaml`' \
-    || say "$(basename "$s")'s Authority opening does not read the schema's key ('authority') — nine copies agreeing on a key validate rejects is nine copies of one defect, and every skill would fall back to standard"
+  # under an all-green board (cold review, 0.6.16: measured green after seding all nine). So the
+  # READ sentence is pinned INCLUDING the three level words: the 0.6.16 repair pinned the key alone
+  # and its comment claimed the enum loop covered the words — false both ways, and a second cold
+  # review measured a nine-way `delegated`→`autonomous` sed passing green. That loop anchors the
+  # SCHEMA to this file's own list; only this pin ties the skills' text to either.
+  printf '%s\n' "$g14blk" | grep -qF 'Read `authority` from `.weavedoc/config.yaml`: `strict` | `standard` | `delegated`' \
+    || say "$(basename "$s")'s Authority opening does not read the schema's key and its three level words — nine copies agreeing on vocabulary validate rejects is nine copies of one defect, and every skill would teach a level that has no row anywhere"
   if [ -z "$g14ref" ]; then g14ref="$g14blk"; g14refname=$(basename "$s")
   elif [ "$g14blk" != "$g14ref" ]; then
     say "$(basename "$s")'s Authority opening differs from $g14refname's — nine byte-identical copies is the contract (which key, absence = standard, the override's scope, the fallback), and this copy has drifted"

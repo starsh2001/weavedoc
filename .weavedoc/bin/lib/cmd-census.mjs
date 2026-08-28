@@ -30,7 +30,7 @@ function intakeLines (m) {
   // the two-readers split on the display axis, caught by this project's own record-floor step.
   const lines = [`  intake  ${cls.declared.length} declared · ${cls.anchored.length} anchored · ${cls.noSource.length} no-source · ${cls.legacy.length} legacy-unbound · ${cls.undeclared.length} undeclared  of ${live} live material(s)  (row presence only — 'weavedoc scope' compares the digests)`]
   if (cls.undeclared.length > 0) {
-    lines.push(`    → undeclared: ${cls.undeclared.join(' ')} — no record of how they arrived; declare with 'weavedoc intake' (one per material, riskiest first), or bind the whole backlog with 'weavedoc intake --anchor-existing'`)
+    lines.push(`    → undeclared: ${cls.undeclared.join(' ')} — no record of how they arrived; declare with 'weavedoc intake' (one per material, riskiest first), or bind the whole backlog with 'weavedoc intake --anchor-existing "<what you are vouching for>"'`)
   }
   if (idx.state === 'unreadable') {
     lines.push(`  ⚠ ${rel} exists but cannot be read (${idx.code}) — declarations are unknown, not absent; validate names this [MAT-INTAKE-LEDGER]`)

@@ -3635,11 +3635,15 @@ acct_mine_lock_never_gates_readers() {
   # plainly: it is the guard that keeps the gate from spreading, not evidence for it.
   # (The retired migrator's --check/--dry-run legs left with it in 0.6.16: an unknown command is
   # refused at usage before the gate can matter, so those two legs were green over zero meaningful
-  # executions — the class this suite keeps as its first lesson.)
+  # executions — the class this suite keeps as its first lesson. The consumer-frontline readers —
+  # pull, impact, conflict list — joined in 0.6.17: a second cold review found the roster stating
+  # "read-only commands must run untouched" while watching neither the commands a consumer actually
+  # runs first nor the read-only mode of the third conditional writer, so a MUTATES.conflict
+  # simplified to `() => true` would have gated `conflict list` under a fully green suite.)
   mkdir -p "$W/.weavedoc/mine.lock"
   printf 'someone-else' > "$W/.weavedoc/mine.lock/owner"
   local c
-  for c in validate scope status census gaps "reindex --check"; do
+  for c in validate "pull 위약" "impact m001" "conflict list" scope status census gaps "reindex --check"; do
     # shellcheck disable=SC2086
     vrun $c
     printf '%s\n' "$OUT" | grep -qF 'mine lock' && bad "[$c] was gated by the mine lock"

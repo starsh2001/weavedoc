@@ -109,10 +109,14 @@ verify.ledger.origin.truths: v1-truths-ledger
 # with no row is `MAT-UNDECLARED`, a WARNING and never a block — every mine that predates this
 # ledger has none, and a check that reddens every existing project is a check nobody reads.
 intake.ledger.file: intake-ledger.tsv
-# Declarations `weavedoc intake` writes. `no-source` is the ruled exception: a material with no
-# original to bind to (a value the user stated with nothing to compare against). The retired
-# migrator additionally wrote `legacy-unbound` rows, exactly as it did for the verify sidecar.
-intake.ledger.declarations: declared|no-source
+# Declarations `weavedoc intake` writes — `declared` (handed over, digest-bound), `anchored`
+# (--anchor-existing: a person vouching for bytes already in place), `no-source` (the ruled
+# exception: a material with no original to bind to). The retired migrator additionally wrote
+# `legacy-unbound` rows, exactly as it did for the verify sidecar. DESCRIPTIVE per the header
+# rule — nothing reads this key (measured, 0.6.17); the row filter carries the full four-word
+# enum where it reads (FORMATS `declaration`). A cold review caught this list naming two of
+# intake's three words, which is exactly the look-enforced-while-unread hazard the header names.
+intake.ledger.declarations: declared|anchored|no-source
 # The token the retired migrator wrote into a backfilled row's `note` column — the intake twin of
 # verify.ledger.origin.*: it records that the row was minted by migration, not by a declaration.
 intake.ledger.origin.backfill: pre-intake-ledger
