@@ -22,6 +22,10 @@ export const SUPPORTED_ARTIFACT_VERSIONS = [3]
 // The one v1 runtime a below-floor mine is sent to. Pinned as a commit, not a moving branch: a
 // bridge whose bytes drift is not a bridge.
 export const V1_BRIDGE = { tag: 'v0.5.21', commit: '0257167' }
+// The v2→v3 migrator retired in 0.6.15, the same way the v1 path did before it: pinned to the last
+// bundle that carried it. Two bridges, one pattern — a mine below the floor is refused toward a
+// checkout, never toward a command this runtime no longer has.
+export const V2_BRIDGE = { tag: 'v0.6.14', commit: '924e97e' }
 
 // EXPLICIT TABLES, never `version === ARTIFACT_FLOOR`. Deriving "is this v2" from the floor means
 // the day the floor rises to 3, v3 mines quietly start being read by the v2 adapter — the format
@@ -60,11 +64,11 @@ export function resolveArtifactVersion (projectVersion, configVersion) {
   if (v < ARTIFACT_FLOOR) {
     // Below the floor is NOT the same event as above the ceiling, and merging them would tell a v1
     // user to upgrade the runtime when what they need is to migrate the mine. The two hops below
-    // the floor are themselves different events: a v2 mine takes THIS runtime's v2→v3 migrator,
-    // a v1 mine takes the pinned bridge runtime to v2 first.
+    // the floor are themselves different events: a v2 mine takes the pinned v2→v3 bridge, a v1
+    // mine takes the older bridge runtime to v2 first.
     const detail = v === 2
-      ? `this mine declares artifact version 2; this runtime reads only ${ARTIFACT_MAX}. Run this runtime's 'weavedoc upgrade' (the v2→v3 migrator) first`
-      : `this mine declares artifact version ${v}; this runtime reads only ${ARTIFACT_MAX}. Migrate it to 2 first with the pinned bridge runtime ${V1_BRIDGE.tag} (${V1_BRIDGE.commit}), then run 'weavedoc upgrade' here`
+      ? `this mine declares artifact version 2; this runtime reads only ${ARTIFACT_MAX}. Migrate with the pinned bridge runtime ${V2_BRIDGE.tag} (${V2_BRIDGE.commit}) — the last bundle carrying the v2→v3 migrator`
+      : `this mine declares artifact version ${v}; this runtime reads only ${ARTIFACT_MAX}. Migrate it to 2 first with the pinned bridge runtime ${V1_BRIDGE.tag} (${V1_BRIDGE.commit}), then to 3 with ${V2_BRIDGE.tag} (${V2_BRIDGE.commit})`
     return { ok: false, code: 'VERSION-BELOW-FLOOR', reason: 'below-floor', detail, version: null }
   }
   if (v > ARTIFACT_MAX) {

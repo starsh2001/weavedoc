@@ -110,18 +110,18 @@ verify.ledger.origin.truths: v1-truths-ledger
 # ledger has none, and a check that reddens every existing project is a check nobody reads.
 intake.ledger.file: intake-ledger.tsv
 # Declarations `weavedoc intake` writes. `no-source` is the ruled exception: a material with no
-# original to bind to (a value the user stated with nothing to compare against). Migration
-# additionally writes `legacy-unbound` rows, exactly as it does for the verify sidecar.
+# original to bind to (a value the user stated with nothing to compare against). The retired
+# migrator additionally wrote `legacy-unbound` rows, exactly as it did for the verify sidecar.
 intake.ledger.declarations: declared|no-source
-# The token `upgrade` writes into a backfilled row's `note` column — the intake twin of
+# The token the retired migrator wrote into a backfilled row's `note` column — the intake twin of
 # verify.ledger.origin.*: it records that the row was minted by migration, not by a declaration.
 intake.ledger.origin.backfill: pre-intake-ledger
 # Artifact schema version this runtime reads and writes (WD-MIG-002). A project declares its own
 # in project.md AND config.yaml `version:` — two records of one fact, checked for agreement. A
 # project NEWER than this is fail-closed (guessing at a future format is how corruption ships).
-# OLDER is fail-closed too — this runtime is v3-only (approved plan: no dual-version consumers,
-# the one known mine migrates once): a v2 mine is refused toward `weavedoc upgrade` (the v2→v3
-# migrator), a v1 mine toward the pinned bridge runtime v0.5.21 (commit 0257167) for v1→v2 first.
+# OLDER is fail-closed too — this runtime is v3-only and carries no migrator (retired 0.6.15; the
+# one known mine migrated once): a v2 mine is refused toward the pinned bridge runtime v0.6.14
+# (commit 924e97e), a v1 mine toward the v0.5.21 bridge (commit 0257167) for v1→v2 first.
 schema.version: 3
 # Config contract (WD-CFG-001) — every knob has a type/range; verify/review are section-aware
 # (a flat first-match reader can never see review.strength behind verify.strength). Unknown

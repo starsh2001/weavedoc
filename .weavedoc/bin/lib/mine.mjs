@@ -66,9 +66,10 @@ export function openMine (scriptDir, cwd = process.cwd()) {
 // green in miniature (a v2 card satisfies every v3 required key while its whole state machinery
 // stays invisible), so a non-v3 mine gets ONE answer — which migration path — and no verdict about
 // anything else. `validate` carries its own richer copy of this gate (stable prob codes, JSON);
-// `upgrade`/`version`/`lang`/`locale`/`interview` are exempt by design: the migrator must be able
-// to look at the mine it migrates, and the identity commands read no mine at all (`interview`
-// prints init's questionnaire, which is asked BEFORE a mine exists to declare a version).
+// `version`/`lang`/`locale`/`interview` are exempt by design: the identity commands read no mine
+// at all (`interview` prints init's questionnaire, which is asked BEFORE a mine exists to declare
+// a version). `upgrade` used to be exempt too — the migrator had to look at the mine it migrates —
+// and retired with the migrator in 0.6.15 (pinned: v0.6.14, commit 924e97e).
 // Returns 0 to proceed, or the exit code to return after the printed refusal.
 export function versionGate (m, errln) {
   const pv = (fmLoad(m.project).get('version') ?? '').trim()
@@ -78,7 +79,7 @@ export function versionGate (m, errln) {
     return refuse([`weavedoc: mine schema version unreadable (project.md '${pv}' · config.yaml '${cv}') — the version field is the negotiation handle; run 'node .weavedoc/bin/weavedoc.mjs validate' for the full diagnostic`])
   }
   if (pv !== cv) {
-    return refuse([`weavedoc: project.md (v${pv}) and config.yaml (v${cv}) disagree about the mine's schema version — two records of one fact must agree; upgrade stamps both`])
+    return refuse([`weavedoc: project.md (v${pv}) and config.yaml (v${cv}) disagree about the mine's schema version — two records of one fact must agree; set both to the version the mine's artifacts actually are`])
   }
   const sv = Number(m.schemaVer())
   if (Number(pv) > sv) {
@@ -88,13 +89,13 @@ export function versionGate (m, errln) {
     return refuse([
       'weavedoc: this mine is schema v1 and this runtime carries no v1 reader.',
       "  migrate with the pinned bridge runtime v0.5.21 (commit 0257167): run its 'weavedoc upgrade' to reach v2,",
-      "  then this runtime's 'weavedoc upgrade' to reach v3."
+      '  then the pinned v0.6.14 bridge (commit 924e97e) — the last bundle carrying the v2→v3 migrator — to reach v3.'
     ])
   }
   if (pv === '2') {
     return refuse([
       'weavedoc: this mine is schema v2 and this runtime is v3-only.',
-      "  run 'node .weavedoc/bin/weavedoc.mjs upgrade' (the v2→v3 migrator) first — nothing here has judged the v2 contents."
+      '  migrate with the pinned bridge runtime v0.6.14 (commit 924e97e) — the last bundle carrying the v2→v3 migrator — first; nothing here has judged the v2 contents.'
     ])
   }
   return 0

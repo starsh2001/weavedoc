@@ -10,7 +10,6 @@
 //   attest <verdict> <round> <standard> <id...>   record a verification: digest-bound sidecar row
 //   seal-review <doc-id> [draft|final]   pin the clean review to the reviewed bytes + context
 //   consecrate <doc-id>   stage candidate → verify seals → ONE full validation → atomic promote
-//   upgrade [--check|--dry-run|--apply]   v2 mine → schema 3 (backup = clean git; blocked items stop before the first write; verify = conservation + exact validate)
 //   conflict list|add <entry.json>|remove <cNNN>   the open-disagreement ledger (id granted by the allocator; resolution IS removal)
 //   alloc <conflict|material|truth>   grant the next id from the monotonic allocator (never max+1 scanning)
 //   gaps              mine census + declared-marker scan (non-blocking floor for the weavedoc-gaps skill)
@@ -148,7 +147,7 @@ function cmdVersion (json) {
   }
   out(body)
   if (fp) outln(`fingerprint: ${fp.slice(0, 12)}  (bin+schema — compare this, not just the version)`)
-  outln(`schema: ${schemaVer()} (v3-only; a v2 mine migrates via 'upgrade', a v1 mine via the v0.5.21 bridge first)`)
+  outln(`schema: ${schemaVer()} (v3-only; a v2 mine migrates via the pinned v0.6.14 bridge, a v1 mine via the v0.5.21 bridge first)`)
   return 0
 }
 
@@ -327,7 +326,7 @@ function cmdInterview () {
 const USAGE = 'weavedoc — validate | pull <term> | impact <material-id> | status [--open] | scope | ' +
   'intake [--no-source] <material-id> <note> | ' +
   'attest <verdict> <round> <standard> <id...> | seal-review <doc-id> [draft|final] | ' +
-  'consecrate <doc-id> | upgrade [--check|--dry-run|--apply] | conflict list|add|remove | ' +
+  'consecrate <doc-id> | conflict list|add|remove | ' +
   'alloc <ns> | gaps | census | reindex [--check] | retag <old> <new> [--dry] | version | lang | ' +
   'locale | interview'
 
@@ -370,7 +369,6 @@ const MUTATES = {
   conflict: a => a[0] === 'add' || a[0] === 'remove',
   consecrate: () => true,
   'seal-review': () => true,
-  upgrade: a => a.includes('--apply'),
   retag: a => !a.includes('--dry'),
   reindex: a => !a.includes('--check')
 }
@@ -403,19 +401,9 @@ switch (cmd) {
     // Top-level await (ESM): keeps node:child_process off the startup path — it is loaded only on
     // the Windows-registry fallback, which most runs never reach.
     rc = await cmdLocale(); break
-  case 'upgrade': {
-    const { openMine } = await import('./lib/mine.mjs')
-    const { cmdUpgrade } = await import('./lib/cmd-upgrade.mjs')
-    const { cmdReindex } = await import('./lib/cmd-reindex.mjs')
-    const { cmdValidate } = await import('./lib/cmd-validate.mjs')
-    const mine = openMine(SCRIPT_DIR)
-    // reindex output is swallowed; validate is CAPTURED — the migrator's verify layer compares
-    // the collected problem lines against its exact expectation instead of printing them raw.
-    rc = cmdUpgrade(mine, outln, rest,
-      () => cmdReindex(mine, () => {}, () => {}, []),
-      collect => cmdValidate(mine, collect, false))
-    break
-  }
+  // ('upgrade' — the v2→v3 migrator — was retired in 0.6.15. The last bundle carrying it is
+  // pinned, exactly as the v1→v2 bridge is: v0.6.14, commit 924e97e. A v2 mine is refused toward
+  // that checkout by the version gate in mine.mjs; this runtime migrates nothing.)
   case 'consecrate': {
     if (rest.length !== 1) usage2('weavedoc consecrate <doc-id>')
     const { openMine, versionGate } = await import('./lib/mine.mjs')

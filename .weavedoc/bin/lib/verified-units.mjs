@@ -1,4 +1,4 @@
-// One `truths/verify.md` Verified-units model for scope, upgrade and attest.
+// One `truths/verify.md` Verified-units model for scope and attest (and the retired migrator).
 //
 // The model owns the readable heading, section boundaries, row candidates, verdict/pass facts and
 // source offsets. Readers select facts; writers splice at those offsets. A commented/fenced fake

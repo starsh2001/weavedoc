@@ -333,11 +333,11 @@ export function cmdValidate (m, out, json = false, consecOk = '') {
     const refuse = () => { out(`✗ validate: ${problems} problem(s)`); return 1 }
     if (pv === '' || /[^0-9]/.test(pv)) { prob('VER-NOT-INT', M`project.md version '${pv}' is not an integer — the schema version field is the negotiation handle, and without it no verdict about the rest is safe`); return refuse() }
     if (cv === '' || /[^0-9]/.test(cv)) { prob('VER-NOT-INT', M`config version '${cv}' is not an integer`); return refuse() }
-    if (pv !== cv) { prob('VER-DISAGREE', M`project.md version (${pv}) and config.yaml version (${cv}) disagree — two records of one fact must agree; upgrade stamps both`); return refuse() }
+    if (pv !== cv) { prob('VER-DISAGREE', M`project.md version (${pv}) and config.yaml version (${cv}) disagree — two records of one fact must agree; set both to what the mine's artifacts actually are`); return refuse() }
     const sv = Number(sch('schema.version') || '3')
     if (Number(pv) > sv) { prob('VER-FUTURE', M`project.md declares schema version ${pv}, newer than this runtime supports (≤${sv}) — upgrade the runtime bundle, never guess at a future format`); return refuse() }
-    if (pv === '1') { prob('VER-V1-BRIDGE', M`this mine is schema v1 and this runtime carries no v1 reader — migrate with the pinned bridge runtime v0.5.21 (commit 0257167): run its 'weavedoc upgrade' to reach v2, then this runtime's 'weavedoc upgrade' to reach v3`); return refuse() }
-    if (pv === '2') { prob('VER-V2-UPGRADE', M`this mine is schema v2 and this runtime is v3-only — run 'node .weavedoc/bin/weavedoc.mjs upgrade' (the v2→v3 migrator) before any other command; nothing here has judged the v2 contents`); return refuse() }
+    if (pv === '1') { prob('VER-V1-BRIDGE', M`this mine is schema v1 and this runtime carries no v1 reader — migrate with the pinned bridge runtime v0.5.21 (commit 0257167): run its 'weavedoc upgrade' to reach v2, then the pinned v0.6.14 bridge (commit 924e97e) to reach v3`); return refuse() }
+    if (pv === '2') { prob('VER-V2-UPGRADE', M`this mine is schema v2 and this runtime is v3-only — migrate with the pinned bridge runtime v0.6.14 (commit 924e97e), the last bundle carrying the v2→v3 migrator; nothing here has judged the v2 contents`); return refuse() }
   }
 
   let stateConf = null
@@ -351,7 +351,7 @@ export function cmdValidate (m, out, json = false, consecOk = '') {
       const p = join(m.root, relPath)
       let text = null
       try { text = readFileSync(p, 'utf8') } catch { text = null }
-      if (text === null) { prob('STATE-MISSING', M`${relPath} is missing or unreadable — a v3 mine carries it from init/upgrade; ${missingWhat}`); return null }
+      if (text === null) { prob('STATE-MISSING', M`${relPath} is missing or unreadable — a v3 mine carries it from init (or the pinned migration bridge); ${missingWhat}`); return null }
       const r = parse(text)
       if (!r.ok) {
         // ONE literal code for the surface (the ratchet and the diagnostic table see codes, not
@@ -491,8 +491,8 @@ export function cmdValidate (m, out, json = false, consecOk = '') {
   // version would redden every project at once and be switched off or ignored within a day, which
   // is the same outcome as not shipping it, minus the trust. (The same judgment CLAUDE-BLOCK-STALE
   // was shipped under one bundle ago: a warning, never a problem, and it must not block a ship.)
-  // `upgrade --apply` fills the legacy rows; after that a warning here means a material that
-  // arrived after the ledger existed and was never declared.
+  // The retired migrator backfilled pre-ledger mines' legacy rows; on any mine born since, a warning
+  // here means a material that arrived after the ledger existed and was never declared.
   {
     const idx = intakeIndex(intakeLedgerPath(m))
     const cls = classifyIntake(m, idx)

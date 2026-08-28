@@ -15,6 +15,7 @@ import {
   CONTRACT_FILE,
   SUPPORTED_ARTIFACT_VERSIONS,
   V1_BRIDGE,
+  V2_BRIDGE,
   contractFileFor,
   loadArtifactContracts,
   resolveArtifactVersion
@@ -56,12 +57,13 @@ groups++
       `version negotiation misclassified project='${p}' config='${c}'`, r)
     check(r.version === null, 'a failed negotiation still produced a version', r)
   }
-  // Below the floor is not one event but two: a v2 mine takes THIS runtime's migrator, a v1 mine
-  // takes the pinned bridge first. Sending a v2 user to the bridge (or a v1 user to the migrator)
-  // is directions to the wrong door, so the details are pinned apart.
+  // Below the floor is not one event but two: a v2 mine takes the pinned v2→v3 bridge (0.6.15
+  // retired the in-runtime migrator toward it), a v1 mine takes the older bridge FIRST. Sending a
+  // v2 user to the v1 bridge (or a v1 user straight to the v2 one) is directions to the wrong
+  // door, so the details are pinned apart: the v2 detail names ONLY the v2 bridge.
   const v2 = resolveArtifactVersion('2', '2')
-  check(!v2.ok && v2.code === 'VERSION-BELOW-FLOOR' && v2.detail.includes("'weavedoc upgrade'") && !v2.detail.includes(V1_BRIDGE.commit),
-    'a v2 mine was not routed to the v2→v3 migrator', v2)
+  check(!v2.ok && v2.code === 'VERSION-BELOW-FLOOR' && v2.detail.includes(V2_BRIDGE.commit) && !v2.detail.includes(V1_BRIDGE.commit),
+    'a v2 mine was not routed to the pinned v2→v3 bridge', v2)
   for (const [p, c] of [['1', '1'], ['0', '0']]) {
     const r = resolveArtifactVersion(p, c)
     check(!r.ok && r.code === 'VERSION-BELOW-FLOOR' && r.detail.includes(V1_BRIDGE.commit),

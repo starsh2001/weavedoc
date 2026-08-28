@@ -55,7 +55,7 @@ export const BINDS_COPY = new Set(['declared', 'anchored', 'no-source'])
 //                    ledger. It binds bytes exactly as `declared` does and claims nothing else —
 //                    no one handed anything over at that moment and the note cannot pretend one did
 //   no-source      — the ruled exception: no original exists to bind. Still binds the copy
-//   legacy-unbound — minted only by `upgrade`, exactly as the verify sidecar's own legacy rows are:
+//   legacy-unbound — minted only by the retired v2→v3 migrator (rows persist; nothing mints new ones):
 //                    preserved history that binds no bytes and never counts as a declaration
 //
 // `anchored` IS A SEPARATE WORD ON PURPOSE. Collapsing it into `declared` would let a mine that
