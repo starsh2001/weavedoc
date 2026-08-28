@@ -205,9 +205,14 @@ async function cmdLocale () {
 // as a word, so it has no fixed spelling to hand out; both measured corruptions were in the fixed
 // questions. If Q1 is ever seen to corrupt, it joins them — not before.
 //
-// TWO CALLS, not one. AskUserQuestion takes at most 4 questions, the interview asks 5, and the split
-// follows the grouping the skill already documents (Q2 fidelity · Q3 intensity) rather than an
-// arbitrary 4+1. SKILL.md said "you may batch Q2-Q3 in one call", which was never possible.
+// TWO CALLS, not one. AskUserQuestion takes at most 4 questions, the interview asks 6, and the split
+// follows the grouping the skill already documents (Q2 authority & fidelity · Q3 intensity) rather
+// than an arbitrary 4+2. SKILL.md said "you may batch Q2-Q3 in one call", which was never possible.
+//
+// `authority_level` opens the first call because it is the framing question — WHO decides, as
+// against the `how hard do we check` axis every other question here sets. It stayed a third call for
+// exactly as long as it took to notice that a third AskUserQuestion round-trip buys nothing: the cap
+// is four questions and this group holds three.
 //
 // A LABEL IS A CONFIG VALUE, with no exception. Writing the answer into config.yaml is therefore a
 // copy, not a translation — one more place a spelling could drift, removed. The recommendation mark
@@ -215,7 +220,17 @@ async function cmdLocale () {
 // a "strip the suffix first" clause, and a rule with a strip step is a rule someone skips. Caught in
 // review — the doc said "the label is the value" while five of ten labels were not.
 const INTERVIEW = [
-  ['1 of 2 - fidelity & conflicts (Q2)', [
+  ['1 of 2 - authority, fidelity & conflicts (Q2)', [
+    {
+      question: '기계와 사용자가 각각 어디까지 결정합니까?',
+      header: 'Authority',
+      multiSelect: false,
+      options: [
+        { label: 'standard', description: '(추천) 값과 판정은 사용자, 표현과 정리는 기계입니다. 사용자가 고른 값은 적용하는 그 자리에서 보여 드리고, 나중에 다시 묻지 않습니다.' },
+        { label: 'strict', description: '토씨 하나가 값인 문서 — 계약서·규격·법무. 문면까지 사용자가 승인하고, 기계는 스스로 아무것도 닫지 않습니다.' },
+        { label: 'delegated', description: '흐름이 값인 문서 — 브레인스토밍·일지. 기계가 정리까지 하고 사용자는 요약으로 봅니다.' }
+      ]
+    },
     {
       question: '누락이 그 자체로 위반인 프로젝트입니까?',
       header: 'Completeness',

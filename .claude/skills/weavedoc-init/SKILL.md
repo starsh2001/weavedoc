@@ -17,6 +17,12 @@ Setup of a WeaveDoc data mine — the persistent, growing truth-source that docu
 
 > **The work's owner is the skill, not the session.** When a run spawns work another skill owns — a ruling mid-verify that needs a material (gather), a card correction (map), a document edit (write) — invoke that skill before doing the work; never imitate its output shape from memory. Imitation carries the visible conventions and drops the invisible duties. Measured (a real run): a verify walkthrough produced 8 materials and 23 cards inline with gather/map never loaded — all seven of the round's blocking findings clustered in that unloaded work, while the loaded skill's own procedure ran clean. Rule distance, not context volume, corrodes.
 
+## Authority — who decides, at this mine's level
+
+Read `authority_level` from `.weavedoc/config.yaml`: `strict` | `standard` | `delegated`, and **absent means `standard`** (this axis is younger than every mine that exists, so absence is the normal state, not a gap). For work that belongs to a document, that document's `plan.md` frontmatter may override the mine's level; the override governs the document's own steps and leaves mine-side work at the mine's level, because nothing has ruled yet whether a strict document reaches back over the materials it draws on. **A decision the level's text does not name goes to the user.** Same fail-safe direction the Human queue's ownership tag takes, for the same reason: a decision the machine takes unasked is invisible, while one it surfaces costs a question. And the level says who decides, never what is true — the mirror rule, the quote seal, the intake declaration, conflict blocking and the fidelity gate hold identically at all three.
+
+**This skill's row.** Init is where the level is **chosen** rather than exercised: the interview's Authority question (§2) writes `authority_level` into `config.yaml`, and a reconfigure re-asks it like every other answer. One thing follows that looks like a gap and is not — **init never back-fills the key into a config that lacks it.** A mine with no `authority_level` line predates the axis and reads as `standard` everywhere, and writing that default in would erase the one distinction that matters here: whether anyone chose it. Beyond the interview, init falls under the rule above, which is what it already does: it asks.
+
 ## Flow
 
 ### 1. Figure out what you have
@@ -33,12 +39,12 @@ Ask **exactly** these questions, in order. Don't improvise, skip, or silently de
 node .weavedoc/bin/weavedoc.mjs interview
 ```
 
-It prints **two JSON arrays** — Q2 (`completeness`, `conflicts.detection`) and Q3 (`verify.strength`, `review.strength`, `scale`). **Paste each array verbatim as `AskUserQuestion`'s `questions` argument**, one call per array. Two calls, not one: the tool takes at most four questions and the interview asks five.
+It prints **two JSON arrays** — Q2 (`authority_level`, `completeness`, `conflicts.detection`) and Q3 (`verify.strength`, `review.strength`, `scale`). **Paste each array verbatim as `AskUserQuestion`'s `questions` argument**, one call per array. Two calls, not one: the tool takes at most four questions and the interview asks six. `authority_level` opens the first call because it is the framing question — **who decides**, as against the *how hard do we check* axis every other question sets; the two are orthogonal, and a project can want either combination.
 
 - **Copy, never retype.** The output is entirely ASCII with every Korean character pre-escaped, precisely so that no one has to encode Hangul by hand — the step where the sibling project GroveSpec measured two corruptions (`나뉩니다` printed as `나뉜니다`) that reached the user's screen. Re-typing or re-encoding the payload puts that step back.
 - **Explain before you ask.** The arrays carry the questions and the options; the one- or two-sentence framing of what each group decides is yours to say in the report's opening.
 - **If `config.language` is not Korean, translate the decoded text.** Translating is a different act from transcribing, and it is the agent's job.
-- **A label IS a config value** (`off`, `required`, `deep`, `standard`, `1`, `2`, `3`, `light`, `full`, `skip`) — with no exception and no suffix to strip: write the chosen label into `config.yaml` exactly as it came back. The recommendation is marked at the **start of the option's description** (`(추천) …`), and the recommended option is listed first. A regression case compares the labels against `.weavedoc/schema` **verbatim, both directions**, so the questionnaire can neither offer a value `validate` would reject nor withhold a legal one.
+- **A label IS a config value** (`strict`, `standard`, `delegated`, `off`, `required`, `deep`, `1`, `2`, `3`, `light`, `full`, `skip`) — with no exception and no suffix to strip: write the chosen label into `config.yaml` exactly as it came back. The recommendation is marked at the **start of the option's description** (`(추천) …`), and the recommended option is listed first. A regression case compares the labels against `.weavedoc/schema` **verbatim, both directions**, so the questionnaire can neither offer a value `validate` would reject nor withhold a legal one.
 
 (There is no attribution question: every conflict ruling is the user's, per-entry — 병기 is the 분리·병합 ruling, whose record is the split cards themselves. A migrated v2 config may still carry `conflicts.attribution`; it is legal and unread.)
 

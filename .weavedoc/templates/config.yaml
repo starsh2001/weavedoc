@@ -7,6 +7,13 @@ paths:
   materials: materials
   truths: truths
   documents: documents
+authority_level: standard  # strict | standard | delegated — WHO decides, set at init.
+                           # ORTHOGONAL to the verify/review knobs below: those set how hard we CHECK,
+                           # this sets who signs. Every combination is legal and some are the point
+                           # (a contract wants strict+full; a log wants delegated+light; "check lightly
+                           # but the user signs everything" is strict+light).
+                           # A document may override this in its plan.md frontmatter.
+                           # Absent = standard: mines older than this axis are not misconfigured.
 fidelity:                # the mandatory gate — weavedoc's warranty; never skipped, never downgraded
   # contradiction + grounding (every claim traces to a material; nothing contradicts the source) is ALWAYS on.
   completeness: off      # off | required — a missing *required* element is a violation (contracts, SOWs)

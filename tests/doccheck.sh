@@ -279,5 +279,45 @@ done
 grep -qF 'repair-proof phase' "$REPO/.weavedoc/FORMATS.md" \
   || say "FORMATS no longer says repeat is counted in the repair-proof phase — the field contract would describe the retired alternating loop"
 
+# 14. The authority axis has NINE owners and one shared opening, byte-identical — the shape check 11
+# uses for the skill-handoff block, for the same reason: a drifted copy teaches a different rule AND
+# can be cited to prove it. What must not drift is the READ rule (which key, which file, absence =
+# standard, the document override's scope) and the FALLBACK (an unnamed decision goes to the user);
+# each skill's own ROW is per-skill by design and is not compared. A skill missing the section
+# entirely would silently run at whatever level its author assumed, which is the state this axis
+# exists to end. TEXT, never obedience — the honesty checks 5-7 state about themselves.
+# VACUITY GUARD: $skills and its >=9 floor already ran in check 10; g14ref empty fails the last line,
+# so an extraction that found nothing cannot read as nine agreeing copies.
+g14ref=""; g14refname=""
+for s in $skills; do
+  g14blk=$(awk '/^## Authority — who decides, at this mine.s level$/{f=1;next} f{ if ($0 ~ /^\*\*This skill.s row/) exit; if ($0 != "") print }' "$s/SKILL.md")
+  if [ -z "$g14blk" ]; then
+    say "$(basename "$s") has no '## Authority' section (or no shared opening before its row) — the axis has nine owners and this one would run at whatever level its reader assumes"
+    continue
+  fi
+  if [ -z "$g14ref" ]; then g14ref="$g14blk"; g14refname=$(basename "$s")
+  elif [ "$g14blk" != "$g14ref" ]; then
+    say "$(basename "$s")'s Authority opening differs from $g14refname's — nine byte-identical copies is the contract (which key, absence = standard, the override's scope, the fallback), and this copy has drifted"
+  fi
+done
+[ -n "$g14ref" ] || say "no skill carries the Authority opening at all — nine missing copies must not read as nine agreeing ones"
+# The three level words are the axis's vocabulary and must be the schema's own, in every direction:
+# a skill offering a level `validate` rejects, or a schema value no skill has a row for, is the same
+# split this repo keeps closing between a questionnaire and its validator.
+for lv in strict standard delegated; do
+  grep -qE "^config\.enum\.authority_level:.*\b$lv\b" "$REPO/.weavedoc/schema" \
+    || say "the schema's config.enum.authority_level does not offer '$lv' — the skills carry a row for a level validate would reject"
+done
+grep -qF 'authority_level' "$REPO/.weavedoc/templates/config.yaml" \
+  || say "the shipped config template no longer carries authority_level — a fresh mine would be born without the axis while every skill reads it"
+grep -qF 'authority_level' "$REPO/.weavedoc/templates/plan.md" \
+  || say "the shipped plan template no longer carries the authority_level override — plan is told to elicit a field the template never shows"
+# The id ruling (2026-08-28) and the audit-layer reading rule, one pin each: both are output/lookup
+# disciplines with no mechanical enforcement anywhere, so the sentence IS the whole artifact.
+grep -qF 'an id is a machine handle' "$gat" \
+  || say "the 'surface it in words, not by id' rule is gone from gather — a handoff keyed by ids is a list the user must open files to read"
+grep -qF 'The audit layer is wider than the raw one' "$REPO/.weavedoc/READ.md" \
+  || say "READ.md no longer widens the audit layer past the raw one — changelog and the ledgers would read as ordinary lookup surface, which is how a thousand-line record floods a judgment"
+
 [ "$fail" -eq 0 ] && echo "doccheck: docs and code agree"
 exit "$fail"

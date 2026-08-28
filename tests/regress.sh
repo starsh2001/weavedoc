@@ -2683,6 +2683,38 @@ block_config_bad_repeat() {
   sed -i '/^verify:/,/^review:/ s/^    full:     2/    full:     -1/' "$W/.weavedoc/config.yaml"
   vrun validate; expect_block "verify.repeat"
 }
+block_config_authority_level_unfamiliar() {
+  # WHO decides is a level every skill reads a row out of, so an unrecognised word would leave each
+  # of them to invent its own reading. That blocks. ABSENCE does not — the pass case below is the
+  # other half, and the two halves are why this axis needed a check at all. REPLACED, not appended:
+  # the template ships the key, and a second line would leave the verdict resting on which of two
+  # spellings the reader picks up rather than on the check under test.
+  sed -i 's/^authority_level: .*/authority_level: paranoid/' "$W/.weavedoc/config.yaml"
+  grep -qx 'authority_level: paranoid' "$W/.weavedoc/config.yaml" || { bad "fixture no-op: the config carries no authority_level line to corrupt"; return; }
+  vrun validate; expect_block "authority_level"
+}
+pass_config_authority_level_absent_then_declared() {
+  # Both halves of the absence contract in one case, because they ARE one contract. Absent: green
+  # and SILENT — the state of every mine that predates this axis, which is all of them. Declared:
+  # green and NOT announced as an unknown key. That second assertion is the one a forgotten
+  # `config.toplevel` entry breaks, and it breaks it in the worst direction: the value would
+  # validate against its enum while the same run tells the user the key is not a knob.
+  sed -i '/^authority_level:/d' "$W/.weavedoc/config.yaml"
+  vrun validate
+  expect_pass
+  expect_hasnt "authority_level"
+  printf 'authority_level: strict\n' >> "$W/.weavedoc/config.yaml"
+  vrun validate
+  expect_pass
+  expect_hasnt "unknown config key"
+}
+block_plan_authority_level_unfamiliar() {
+  # The per-document override takes the same three words, and a document naming a fourth is the
+  # same defect one level down. It must not read as "no override": an unread level silently means
+  # the mine's, which is precisely the level the document was trying not to be.
+  sed -i 's/^doc_id: /authority_level: paranoid\ndoc_id: /' "$W/documents/d1/plan.md"
+  vrun validate; expect_block "authority_level"
+}
 acct_config_unknown_key_warned() {
   # Unknown top-level keys are a named warning, not a failure (decided: a user extension or a
   # typo both deserve a line; only a typo deserves a red build, and the machine cannot tell).
@@ -4650,13 +4682,13 @@ acct_interview_output_is_pure_ascii() {
   local nonascii
   nonascii=$(printf '%s\n' "$OUT" | LC_ALL=C grep -n '[^ -~]' | head -3)
   [ -z "$nonascii" ] || { bad "interview printed non-ASCII, so the payload is not copy-safe: $nonascii"; return; }
-  # Two arrays, five questions: AskUserQuestion takes at most four questions per call and the
-  # interview asks five, so a single-array payload is unusable no matter how correct its bytes are.
+  # Two arrays, six questions: AskUserQuestion takes at most four questions per call and the
+  # interview asks six, so a single-array payload is unusable no matter how correct its bytes are.
   local na nq
   na=$(printf '%s\n' "$OUT" | grep -c '^\[')
   nq=$(printf '%s\n' "$OUT" | grep -o '"question":"' | grep -c .)
-  [ "$na" = "2" ] || { bad "interview printed $na array(s), not 2 (AskUserQuestion caps a call at 4 questions; the interview asks 5)"; return; }
-  [ "$nq" = "5" ] || { bad "interview printed $nq question(s), not 5"; return; }
+  [ "$na" = "2" ] || { bad "interview printed $na array(s), not 2 (AskUserQuestion caps a call at 4 questions; the interview asks 6)"; return; }
+  [ "$nq" = "6" ] || { bad "interview printed $nq question(s), not 6"; return; }
   ok
 }
 acct_interview_labels_are_the_schemas_own_values() {
@@ -4682,6 +4714,7 @@ acct_interview_labels_are_the_schemas_own_values() {
     n=$((n + 1))
     hdr=$(printf '%s' "$line" | sed -n 's/.*"header":"\([^"]*\)".*/\1/p')
     case "$hdr" in
+      Authority)     key=config.enum.authority_level ;;
       Completeness)  key=config.enum.completeness ;;
       Conflicts)     key=config.enum.detection ;;
       Verify|Review) key=config.strength.range ;;
@@ -4698,7 +4731,7 @@ $chunks
 EOF
   # VACUITY GUARD: a broken split would leave the loop with nothing to disagree with and this case
   # would pass over an unread payload — the failure mode every extraction in this suite refuses.
-  [ "$n" = "5" ] || { bad "the payload split found $n question(s), not 5 — the parse is broken, so nothing was compared"; return; }
+  [ "$n" = "6" ] || { bad "the payload split found $n question(s), not 6 — the parse is broken, so nothing was compared"; return; }
   [ -z "$wrong" ] || { bad "interview offers values the schema does not agree with:$wrong"; return; }
   ok
 }

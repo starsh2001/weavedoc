@@ -46,7 +46,7 @@ const rp = p => { try { return statSync(p).isDirectory() ? realpathSync(p) : '' 
 // moment the file was renamed or made read-only. Four keys once stood here while twenty-two were
 // being read, so a schema missing any of the other eighteen switched those checks off under a clean
 // tick. Its SIZE is asserted out loud below, because a truncated constant fails quietly.
-const SCH_KEYS = `config.enum.attribution config.enum.completeness config.enum.detection config.enum.scale
+const SCH_KEYS = `config.enum.attribution config.enum.authority_level config.enum.completeness config.enum.detection config.enum.scale
 config.repeat.scales config.strength.range config.toplevel fm.placeholder humanqueue.enum.ownership
 humanqueue.enum.state material.fm.enum.origin material.fm.enum.stage material.fm.enum.status
 material.fm.required material.fm.required_when.research plan.fm.enum.status plan.fm.required
@@ -836,6 +836,13 @@ export function cmdValidate (m, out, json = false, consecOk = '') {
           prob('PLAN-CITED-NOT-ID', M`${U(p)}  cited_truths '${c}' is not a truth id (expected tNNN)`)
         }
       }
+      // A document may override the mine's authority level. Same enum, same absence rule (absent =
+      // inherit the mine's), and named here for the same reason the config key is: a level nothing
+      // defines is one each skill reads its own way.
+      const pauth = fmv(p, 'authority_level')
+      if (pauth !== '' && !inList(pauth, sch('config.enum.authority_level'))) {
+        prob('PLAN-AUTHORITY-LEVEL', M`${U(p)}  authority_level '${pauth}' invalid → one of ${sch('config.enum.authority_level')} (absent = inherit the mine's)`)
+      }
       // audience: external requires publication labels — an external document ships with its labels
       // or not at all.
       const aud = fmv(p, 'audience')
@@ -1169,6 +1176,19 @@ export function cmdValidate (m, out, json = false, consecOk = '') {
     ['attribution', 'config.enum.attribution', 'conflicts.attribution']]) {
     const v = cfl(k)
     if (v !== '' && !inList(v, sch(sk))) prob('CFG-ENUM', M`config ${label} '${v}' invalid`)
+  }
+
+  // authority_level — WHO decides, not how hard we check. ONLY an unfamiliar value is named; ABSENCE
+  // IS LEGAL and reads as `standard`, because every mine in existence predates this axis and a
+  // required key would redden all of them at once (the judgment MAT-UNDECLARED and
+  // CLAUDE-BLOCK-STALE already carry). Blocking rather than warning on a wrong value is the other
+  // half of the same reasoning: an unrecognised level is not a mine that skipped a knob, it is a
+  // mine whose skills would each pick their own reading of a word nothing defines.
+  {
+    const v = cfl('authority_level')
+    if (v !== '' && !inList(v, sch('config.enum.authority_level'))) {
+      prob('CFG-ENUM', M`config authority_level '${v}' invalid → one of ${sch('config.enum.authority_level')} (absent = standard)`)
+    }
   }
 
   // --- full config contract (WD-CFG-001) ---
