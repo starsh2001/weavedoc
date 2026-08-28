@@ -208,5 +208,116 @@ for s in $skills; do
 done
 [ -n "$g4ref" ] || say "no skill carries the skill-handoff block at all — nine missing copies must not read as nine agreeing ones"
 
+# 12. The ratified-summary principle is ONE rule with THREE owners — gather writes the
+# `[기계 제안값]` mark into the ratified original, map reads it back as `adopted`, FORMATS defines it
+# in the body contract (ruled 2026-08-28: the owner replaced raw-exchange snapshots with
+# user-ratified summaries as gather's base behavior for conversation sources). A rule taught to one
+# consumer is the defect class this repo keeps re-erasing ("two spellings of one question" —
+# 0.6.8's correctsRefs), and the mark is exactly the vocabulary that drifts: it lives in prose,
+# nothing executes it, and a copy that loses it silently re-teaches the old behavior. Same honesty
+# as checks 5-7: a TEXT check — it proves the sentence a follower would read is present, never that
+# it is followed. The tokens are the rules' own vocabulary; rewording the principle legitimately
+# moves this list too. No extraction step, so no separate vacuity guard: a missing file fails grep
+# the same as a missing sentence.
+gat="$REPO/.claude/skills/weavedoc-gather/SKILL.md"
+for f in "$gat" "$map" "$REPO/.weavedoc/FORMATS.md"; do
+  grep -qF '[기계 제안값]' "$f" \
+    || say "$(basename "$(dirname "$f")")/$(basename "$f") lost the '[기계 제안값]' mark — the ratified-summary rule has three owners (gather writes it, map reads it, FORMATS defines it) and this copy dropped the shared vocabulary"
+done
+for s in \
+  "never register the user's utterances as they arrive" \
+  "the ratified summary IS the original" \
+  "이대로 원본으로 올려도 됩니까" \
+  "so the user signs it knowingly" \
+  'ratification makes every sentence `stated`' \
+  "the intake note is where the approving utterance becomes a record" \
+  "This section governs new registrations only"; do
+  grep -qF "$s" "$gat" \
+    || say "gather's ratified-summary rule lost a spine sentence: '$s' — conversation intake's base behavior (ruled 2026-08-28) is carried by these sentences and nothing else"
+done
+grep -qF 'the marked value reads as `adopted`' "$map" \
+  || say "map no longer reads the ratified mark as adopted — the reading half of the rule is gone, so a marked machine proposal would land as stated"
+grep -qF 'provenance annotation, not content' "$REPO/.weavedoc/FORMATS.md" \
+  || say "FORMATS no longer says the mark is annotation-not-content — a claim could carry the mark as if it were part of the fact"
+
+# 13. The verify cycle (collect → triage → repair → prove) is ONE redesign carried by three files —
+# the cycle itself in weavedoc-verify, the defender's closing/priority rules in reviewers.md, and
+# the relocated counter semantics in FORMATS' field contract. The redesign moved the consecutive-
+# clean gate to the repair-proof phase because a real cycle measured 11 of 19 blocking findings
+# born in repairs; a copy that silently reverts to the alternating loop re-opens exactly that. The
+# repair protocol's fourth clause is pinned INCLUDING its unmeasured-option admission — the spec
+# marking its own inference as unmeasured is content, and losing the mark quietly upgrades an
+# inference to doctrine. Same honesty as checks 5-7: a TEXT check — it proves the sentence a
+# follower would read is present, never that a cycle obeyed it. The tokens are the rules' own
+# vocabulary; rewording the redesign legitimately moves this list too. No extraction step, so no
+# separate vacuity guard: a missing file fails grep the same as a missing sentence.
+vfy="$REPO/.claude/skills/weavedoc-verify/SKILL.md"
+rev="$REPO/.claude/skills/weavedoc-review/references/reviewers.md"
+for s in \
+  "then prove the repair" \
+  "Collect — no fixes" \
+  "nothing new twice in a row" \
+  "Triage once, with the full set" \
+  "Repair once per class" \
+  'Prove the repair — `repeat` lives here' \
+  "never where to stop reading" \
+  "Subtract first" \
+  "an unmeasured option, and stated as one" \
+  "meaning relocated" \
+  "about the TAG, not about the entry"; do
+  grep -qF "$s" "$vfy" \
+    || say "verify's One cycle lost a spine sentence: '$s' — the collect→triage→repair→prove order and its gates (owner-initiated 2026-08-28) are carried by these sentences and nothing else"
+done
+for s in \
+  "closable — but only when the showing is complete" \
+  "with its non-zero count" \
+  "never outranks a spec rule that leaves no discretion" \
+  "hands off a found-list, not classifications"; do
+  grep -qF "$s" "$rev" \
+    || say "reviewers.md lost a triage-authority sentence: '$s' — the evidence-bar closes and the collection hand-off exception are the engine's half of the cycle redesign"
+done
+grep -qF 'repair-proof phase' "$REPO/.weavedoc/FORMATS.md" \
+  || say "FORMATS no longer says repeat is counted in the repair-proof phase — the field contract would describe the retired alternating loop"
+
+# 14. The authority axis has NINE owners and one shared opening, byte-identical — the shape check 11
+# uses for the skill-handoff block, for the same reason: a drifted copy teaches a different rule AND
+# can be cited to prove it. What must not drift is the READ rule (which key, which file, absence =
+# standard, the document override's scope) and the FALLBACK (an unnamed decision goes to the user);
+# each skill's own ROW is per-skill by design and is not compared. A skill missing the section
+# entirely would silently run at whatever level its author assumed, which is the state this axis
+# exists to end. TEXT, never obedience — the honesty checks 5-7 state about themselves.
+# VACUITY GUARD: $skills and its >=9 floor already ran in check 10; g14ref empty fails the last line,
+# so an extraction that found nothing cannot read as nine agreeing copies.
+g14ref=""; g14refname=""
+for s in $skills; do
+  g14blk=$(awk '/^## Authority — who decides, at this mine.s level$/{f=1;next} f{ if ($0 ~ /^\*\*This skill.s row/) exit; if ($0 != "") print }' "$s/SKILL.md")
+  if [ -z "$g14blk" ]; then
+    say "$(basename "$s") has no '## Authority' section (or no shared opening before its row) — the axis has nine owners and this one would run at whatever level its reader assumes"
+    continue
+  fi
+  if [ -z "$g14ref" ]; then g14ref="$g14blk"; g14refname=$(basename "$s")
+  elif [ "$g14blk" != "$g14ref" ]; then
+    say "$(basename "$s")'s Authority opening differs from $g14refname's — nine byte-identical copies is the contract (which key, absence = standard, the override's scope, the fallback), and this copy has drifted"
+  fi
+done
+[ -n "$g14ref" ] || say "no skill carries the Authority opening at all — nine missing copies must not read as nine agreeing ones"
+# The three level words are the axis's vocabulary and must be the schema's own, in every direction:
+# a skill offering a level `validate` rejects, or a schema value no skill has a row for, is the same
+# split this repo keeps closing between a questionnaire and its validator.
+for lv in strict standard delegated; do
+  grep -qE "^config\.enum\.authority:.*\b$lv\b" "$REPO/.weavedoc/schema" \
+    || say "the schema's config.enum.authority does not offer '$lv' — the skills carry a row for a level validate would reject"
+done
+grep -qE '^authority:' "$REPO/.weavedoc/templates/config.yaml" \
+  || say "the shipped config template no longer carries the authority key — a fresh mine would be born without the axis while every skill reads it"
+grep -qE '^# authority:' "$REPO/.weavedoc/templates/plan.md" \
+  || say "the shipped plan template no longer carries the authority override — plan is told to elicit a field the template never shows"
+# The id ruling (2026-08-28) and the audit-layer reading rule, one pin each: both are output/lookup
+# disciplines with no mechanical enforcement anywhere, so the sentence IS the whole artifact.
+grep -qF 'an id is a machine handle' "$gat" \
+  || say "the 'surface it in words, not by id' rule is gone from gather — a handoff keyed by ids is a list the user must open files to read"
+grep -qF 'The audit layer is wider than the raw one' "$REPO/.weavedoc/READ.md" \
+  || say "READ.md no longer widens the audit layer past the raw one — changelog and the ledgers would read as ordinary lookup surface, which is how a thousand-line record floods a judgment"
+
 [ "$fail" -eq 0 ] && echo "doccheck: docs and code agree"
 exit "$fail"
