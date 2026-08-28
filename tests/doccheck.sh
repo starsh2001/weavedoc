@@ -208,5 +208,37 @@ for s in $skills; do
 done
 [ -n "$g4ref" ] || say "no skill carries the skill-handoff block at all — nine missing copies must not read as nine agreeing ones"
 
+# 12. The ratified-summary principle is ONE rule with THREE owners — gather writes the
+# `[기계 제안값]` mark into the ratified original, map reads it back as `adopted`, FORMATS defines it
+# in the body contract (ruled 2026-08-28: the owner replaced raw-exchange snapshots with
+# user-ratified summaries as gather's base behavior for conversation sources). A rule taught to one
+# consumer is the defect class this repo keeps re-erasing ("two spellings of one question" —
+# 0.6.8's correctsRefs), and the mark is exactly the vocabulary that drifts: it lives in prose,
+# nothing executes it, and a copy that loses it silently re-teaches the old behavior. Same honesty
+# as checks 5-7: a TEXT check — it proves the sentence a follower would read is present, never that
+# it is followed. The tokens are the rules' own vocabulary; rewording the principle legitimately
+# moves this list too. No extraction step, so no separate vacuity guard: a missing file fails grep
+# the same as a missing sentence.
+gat="$REPO/.claude/skills/weavedoc-gather/SKILL.md"
+for f in "$gat" "$map" "$REPO/.weavedoc/FORMATS.md"; do
+  grep -qF '[기계 제안값]' "$f" \
+    || say "$(basename "$(dirname "$f")")/$(basename "$f") lost the '[기계 제안값]' mark — the ratified-summary rule has three owners (gather writes it, map reads it, FORMATS defines it) and this copy dropped the shared vocabulary"
+done
+for s in \
+  "never register the user's utterances as they arrive" \
+  "the ratified summary IS the original" \
+  "이대로 원본으로 올려도 됩니까" \
+  "so the user signs it knowingly" \
+  'ratification makes every sentence `stated`' \
+  "the intake note is where the approving utterance becomes a record" \
+  "This section governs new registrations only"; do
+  grep -qF "$s" "$gat" \
+    || say "gather's ratified-summary rule lost a spine sentence: '$s' — conversation intake's base behavior (ruled 2026-08-28) is carried by these sentences and nothing else"
+done
+grep -qF 'the marked value reads as `adopted`' "$map" \
+  || say "map no longer reads the ratified mark as adopted — the reading half of the rule is gone, so a marked machine proposal would land as stated"
+grep -qF 'provenance annotation, not content' "$REPO/.weavedoc/FORMATS.md" \
+  || say "FORMATS no longer says the mark is annotation-not-content — a claim could carry the mark as if it were part of the fact"
+
 [ "$fail" -eq 0 ] && echo "doccheck: docs and code agree"
 exit "$fail"
