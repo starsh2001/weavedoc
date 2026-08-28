@@ -240,5 +240,44 @@ grep -qF 'the marked value reads as `adopted`' "$map" \
 grep -qF 'provenance annotation, not content' "$REPO/.weavedoc/FORMATS.md" \
   || say "FORMATS no longer says the mark is annotation-not-content — a claim could carry the mark as if it were part of the fact"
 
+# 13. The verify cycle (collect → triage → repair → prove) is ONE redesign carried by three files —
+# the cycle itself in weavedoc-verify, the defender's closing/priority rules in reviewers.md, and
+# the relocated counter semantics in FORMATS' field contract. The redesign moved the consecutive-
+# clean gate to the repair-proof phase because a real cycle measured 11 of 19 blocking findings
+# born in repairs; a copy that silently reverts to the alternating loop re-opens exactly that. The
+# repair protocol's fourth clause is pinned INCLUDING its unmeasured-option admission — the spec
+# marking its own inference as unmeasured is content, and losing the mark quietly upgrades an
+# inference to doctrine. Same honesty as checks 5-7: a TEXT check — it proves the sentence a
+# follower would read is present, never that a cycle obeyed it. The tokens are the rules' own
+# vocabulary; rewording the redesign legitimately moves this list too. No extraction step, so no
+# separate vacuity guard: a missing file fails grep the same as a missing sentence.
+vfy="$REPO/.claude/skills/weavedoc-verify/SKILL.md"
+rev="$REPO/.claude/skills/weavedoc-review/references/reviewers.md"
+for s in \
+  "then prove the repair" \
+  "Collect — no fixes" \
+  "nothing new twice in a row" \
+  "Triage once, with the full set" \
+  "Repair once per class" \
+  'Prove the repair — `repeat` lives here' \
+  "never where to stop reading" \
+  "Subtract first" \
+  "an unmeasured option, and stated as one" \
+  "meaning relocated" \
+  "about the TAG, not about the entry"; do
+  grep -qF "$s" "$vfy" \
+    || say "verify's One cycle lost a spine sentence: '$s' — the collect→triage→repair→prove order and its gates (owner-initiated 2026-08-28) are carried by these sentences and nothing else"
+done
+for s in \
+  "closable — but only when the showing is complete" \
+  "with its non-zero count" \
+  "never outranks a spec rule that leaves no discretion" \
+  "hands off a found-list, not classifications"; do
+  grep -qF "$s" "$rev" \
+    || say "reviewers.md lost a triage-authority sentence: '$s' — the evidence-bar closes and the collection hand-off exception are the engine's half of the cycle redesign"
+done
+grep -qF 'repair-proof phase' "$REPO/.weavedoc/FORMATS.md" \
+  || say "FORMATS no longer says repeat is counted in the repair-proof phase — the field contract would describe the retired alternating loop"
+
 [ "$fail" -eq 0 ] && echo "doccheck: docs and code agree"
 exit "$fail"
