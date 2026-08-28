@@ -295,6 +295,15 @@ for s in $skills; do
     say "$(basename "$s") has no '## Authority' section (or no shared opening before its row) — the axis has nine owners and this one would run at whatever level its reader assumes"
     continue
   fi
+  # THE ANCHOR, not only the mirror. Mutual byte-compare proves the nine agree WITH EACH OTHER and
+  # nothing more: a rename applied to all nine at once — this axis was renamed once already inside
+  # one week — sails through nine agreeing copies while every skill starts reading a key the schema
+  # does not define, and absence-means-standard then silently downgrades a strict mine's protection
+  # under an all-green board (cold review, 0.6.16: measured green after seding all nine). So one
+  # copy of the READ sentence is pinned to the schema's own key name; the enum loop below anchors
+  # the three level words the same way.
+  printf '%s\n' "$g14blk" | grep -qF 'Read `authority` from `.weavedoc/config.yaml`' \
+    || say "$(basename "$s")'s Authority opening does not read the schema's key ('authority') — nine copies agreeing on a key validate rejects is nine copies of one defect, and every skill would fall back to standard"
   if [ -z "$g14ref" ]; then g14ref="$g14blk"; g14refname=$(basename "$s")
   elif [ "$g14blk" != "$g14ref" ]; then
     say "$(basename "$s")'s Authority opening differs from $g14refname's — nine byte-identical copies is the contract (which key, absence = standard, the override's scope, the fallback), and this copy has drifted"

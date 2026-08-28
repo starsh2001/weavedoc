@@ -2,17 +2,17 @@ e502e3062ffa4d2ff07914fb6bd48640dc1f9103d0dc65451220ef2dfbf57f11  .claude/skills
 73299c53e9b9fcd1caf7774b918bd38596da8d08d4450b4d730c46cf33009f60  .claude/skills/weavedoc-gather/SKILL.md
 d5ae5fb69865787a40518d62e651957f90e0df2e33a4034bd35a9dc366143516  .claude/skills/weavedoc-init/SKILL.md
 4fb89c8a2c3688824cb22aabc1125244f715b46f8f983bcc755054a848d5f491  .claude/skills/weavedoc-map/SKILL.md
-d696d19a7b22748e8d7d4ed8e19017bfb90319f374ea2af30dfe918d194e3df0  .claude/skills/weavedoc-plan/SKILL.md
+c5c449578b021ca352b0d854da2cd741adb76933e2ed0c56956407aa4497b16a  .claude/skills/weavedoc-plan/SKILL.md
 f814f065baa6018a7384936ecb4fe6883040c39153ebf34efff03b5d306422d7  .claude/skills/weavedoc-refine/SKILL.md
 4fece851d703c473d3ad29d908cd36d7a1f61e2a6f3722d919dca62aad690eb0  .claude/skills/weavedoc-review/SKILL.md
-6e4e906dce02a269b8090133ac605df45488cec1e8b96999692de218bae58fde  .claude/skills/weavedoc-review/references/reviewers.md
+09e0834be256697cd989eef1a3ebae9d4b5574a80e116cb90148f928f381cbaa  .claude/skills/weavedoc-review/references/reviewers.md
 c424b0a4d1714643ee718aef173c35e455c09e8d71e41650ba94c0f9e3c825cb  .claude/skills/weavedoc-verify/SKILL.md
 89fa987ef9575b21e6a9e438182771834e8bc1b7e70ad27c2bdfc2c5773f0d8c  .claude/skills/weavedoc-write/SKILL.md
 2438369832e8c12313d34e451966bbe7dd15f19b8310850789f38290b007798a  .weavedoc/.gitattributes
 73449f8edc5c64f28c1fce927bd9d0a617b709858c737ffc4bcd81e924e2d6b2  .weavedoc/FORMATS.md
 ec8c206b0985cfcd3786d8ada5ada3661b9ed2e5d4524ac9c5bcf5df073bb871  .weavedoc/PARSER-MODEL.md
 28f0eeaadf3b65c21058684368846da8c98e29d9a447439ad2810c75944ea217  .weavedoc/READ.md
-4d0a1fd8ea16a8dcca2637e31bc1fdee7d68961772593dd20545b54d8a1ef487  .weavedoc/VERSION
+e94a7f87af28a51ae948939b0fc6f3d7b9853add0d06a4ffb6df7c67c68ffcc5  .weavedoc/VERSION
 d02e7090d337fcb339abfcddfe1a9d2fe4a68eeae4e754898c9df9aa409e84b2  .weavedoc/bin/hooks/gate.mjs
 98b6959b1c2e93a42d9ddd5c7fc9024b5acfe35c7b963da22cc0bbf73161e72b  .weavedoc/bin/hooks/lease.mjs
 de78c4f31d56dac0d509577086b5cc4424afa7fd0e8cfad160b53aaf37710785  .weavedoc/bin/lib/artifact-contracts.mjs
@@ -21,7 +21,7 @@ de78c4f31d56dac0d509577086b5cc4424afa7fd0e8cfad160b53aaf37710785  .weavedoc/bin/
 de08795b1a49535978c16daa15bf11eeb93778f0d0d9fbbf974e6e92c6a60284  .weavedoc/bin/lib/cmd-consecrate.mjs
 53e083a4afa318f0311d84374fc5f50afc1efb01f777cf4bf80c21a89b7ab775  .weavedoc/bin/lib/cmd-gaps.mjs
 a6980c22beebceec2679a929ccd3868f23bd5c7448889ebe100ab4f5663f9fa4  .weavedoc/bin/lib/cmd-impact.mjs
-045850bc6623dc54231efd06e14263b0876eb3597410bb3134382d3f4f14c8f4  .weavedoc/bin/lib/cmd-intake.mjs
+298d32781bf3d4e714f3baa0d8e9d3a59504aa8b89bbf55d0c61065ab9e2d704  .weavedoc/bin/lib/cmd-intake.mjs
 8706aef84b4f3f8e3178a9c9c618ce893b49bca6a76961ccbcb239355c3ddbc1  .weavedoc/bin/lib/cmd-pull.mjs
 dbc7879a75727c6d311a88fe8a8652883b04771be239d993339f1e84849b5580  .weavedoc/bin/lib/cmd-reindex.mjs
 9c756f5d44252ba1d53fe8e4c941ffc7bce282c4f67165fb503e4501075ada5c  .weavedoc/bin/lib/cmd-retag.mjs
@@ -29,7 +29,7 @@ dbc7879a75727c6d311a88fe8a8652883b04771be239d993339f1e84849b5580  .weavedoc/bin/
 db6e9d60e95c8e1b000a79e1ef43ecb65220b7dad8ef279abbf3a4b83d20e1db  .weavedoc/bin/lib/cmd-seal-review.mjs
 42fd0893888536703475000bf2d2caa6a0a06ddd6867bde6fa4faca61400387d  .weavedoc/bin/lib/cmd-state.mjs
 3b15ed114bf619bc8907284d2f807af90885bd30d3d66d2e00c1233825e9f656  .weavedoc/bin/lib/cmd-status.mjs
-b99c55475c2a0e8562f0902f6cde1d86b4dafd636f8100d385980c87df3b336b  .weavedoc/bin/lib/cmd-validate.mjs
+325022211a1cfa860e2281f2553b14ca85af17987b102b8b3dc700a48ec26cf8  .weavedoc/bin/lib/cmd-validate.mjs
 cc932ba4aa321119aa9239b052b3428d5394704cf75287fb1aac2a1d2d7dc190  .weavedoc/bin/lib/conflict-store.mjs
 37fe849ebf46033134053c62467dddf645e8bee14e4d434bc63b1b061e55e5ee  .weavedoc/bin/lib/core.mjs
 8e605056a1ddb59a06722f36f4ea76d360adfae0d805ce0f6f40d472eeb0cce9  .weavedoc/bin/lib/coverage-model.mjs
@@ -40,7 +40,7 @@ cd1881703c6b5c58045469417de6a23f6068169e1a80d240e158cc580c2da1fc  .weavedoc/bin/
 13c5cae9daa7a79bdfc8efe07e6a3fe5e1c905a78515e4a00fbf064279bb6667  .weavedoc/bin/lib/intake-ledger.mjs
 6bf9ee36258da19746d6ed67d2f5789fab5e78210fe406b327cf74bdb06ba293  .weavedoc/bin/lib/ledger-model.mjs
 9ae64057fd0d1253f4a58c81e4705b494b9d3fa55eccf958a0b835568aa26712  .weavedoc/bin/lib/ledger-structure.mjs
-5d944569f2177d2e479ef5db5841e77b4cc40a09fceac73fed25b4afd08c6de6  .weavedoc/bin/lib/lock.mjs
+0381fdd4dc50ad2cfc30a9b1e57e0ef710bd443e14ceee2da0bbcd3b4d0335e9  .weavedoc/bin/lib/lock.mjs
 2a818f4ac4c7da8d4a0dfe4b43144e3a8fd63b13cba9232a3a12741f247dd371  .weavedoc/bin/lib/markdown-scan.mjs
 52a1eb03ab80f51447cad0bdb20b51978f610dad21f0ebe3a3db7d804aa8ce9e  .weavedoc/bin/lib/mine.mjs
 38e4c2a504db0bba0d13cad52fa69385efc14f707c5bad0816e779a38e0ae121  .weavedoc/bin/lib/questions-ledger.mjs
@@ -48,7 +48,7 @@ f600e00c1d9544906d9b01147b0b42a872d10234a9aa92255cb7d7192e80eb8c  .weavedoc/bin/
 5750e4431b6e4b1774b0a5db544678f22505065508c4a568291c0548255f5208  .weavedoc/bin/lib/raw-source-model.mjs
 163976424a2848b0229d09b87bbca22fbca26b01f7006b6b133f515720f1a048  .weavedoc/bin/lib/read.mjs
 96e9fc897941bcf8955fe228591d0e71fdff7a6183687b6997073e19e16f5e70  .weavedoc/bin/lib/review-model.mjs
-d77253d0b44f50ca0d92769127417723766af3c4e7c74444610107403de31581  .weavedoc/bin/lib/validate-truths.mjs
+3f4673b3d858900ac0cf19182548f58747f59138a3be905549f01cba4e003c11  .weavedoc/bin/lib/validate-truths.mjs
 2a7e6aadc8990afb3b6e2dfa0002c131c7dc42a4f8512e47928c982ed1cc8829  .weavedoc/bin/lib/verified-units.mjs
 abbd8ec3f23c3065e08e4c6846c8f5845b3d0e010a5408521ea762e1c77b704b  .weavedoc/bin/lib/verify.mjs
 61a4439a43de63b2e7b2b668cdcd696b71fc31fa29550bee8d2f91a436b655ec  .weavedoc/bin/lib/write.mjs

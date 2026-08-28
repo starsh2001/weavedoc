@@ -3600,11 +3600,13 @@ acct_mine_lock_admits_one_writer() {
   local before after
   before=$(cd "$W" && find . -path ./.weavedoc/mine.lock -prune -o -type f -print | LC_ALL=C sort | xargs sha256sum 2>/dev/null | sha256sum | awk '{print $1}')
   local c t0 t1
-  # ALL writers, not a sample (review #10: consecrate and retag were missing, so the two
-  # commands most likely to gain a pre-gate read had no case watching them; the migrator left the
-  # roster when it retired in 0.6.15, and the intake writer joined so the roster stays the full
-  # MUTATES table rather than a remembered subset).
-  for c in "attest verified 1 std m001" "seal-review d1" "reindex" "intake m001 lockprobe" "consecrate d1" "retag onetag twotag"; do
+  # ALL EIGHT writers — the full MUTATES table, and this time actually all of it (review #10:
+  # consecrate and retag were missing; the 0.6.15 repair swapped the retired migrator for intake
+  # while its comment claimed "full" over six of eight — alloc and conflict had no case watching
+  # them, which a cold review caught by counting the table). The lock is taken at the dispatcher
+  # BEFORE the switch, so a held lock refuses even a command whose arguments would later fail
+  # their own validation — which is why the conflict leg may name an entry that does not exist.
+  for c in "attest verified 1 std m001" "seal-review d1" "reindex" "intake m001 lockprobe" "alloc truth" "conflict remove c001" "consecrate d1" "retag onetag twotag"; do
     t0=$(date +%s)
     # shellcheck disable=SC2086
     vrun $c
@@ -3627,14 +3629,17 @@ acct_mine_lock_admits_one_writer() {
 }
 acct_mine_lock_never_gates_readers() {
   # The gate is for WRITERS. Read-only commands, and the read-only MODES of writing commands,
-  # must run untouched while a mine lock is held — a report queueing behind a migration would be
-  # a worse tool, and --check/--dry-run/--dry promise to write nothing.
+  # must run untouched while a mine lock is held — a report queueing behind another writer would
+  # be a worse tool, and --check/--dry promise to write nothing.
   # Passes on the pre-gate runtime (4121109) too — no gate there, so nothing to be gated by; said
   # plainly: it is the guard that keeps the gate from spreading, not evidence for it.
+  # (The retired migrator's --check/--dry-run legs left with it in 0.6.16: an unknown command is
+  # refused at usage before the gate can matter, so those two legs were green over zero meaningful
+  # executions — the class this suite keeps as its first lesson.)
   mkdir -p "$W/.weavedoc/mine.lock"
   printf 'someone-else' > "$W/.weavedoc/mine.lock/owner"
   local c
-  for c in validate scope status census gaps "upgrade --check" "upgrade --dry-run" "reindex --check"; do
+  for c in validate scope status census gaps "reindex --check"; do
     # shellcheck disable=SC2086
     vrun $c
     printf '%s\n' "$OUT" | grep -qF 'mine lock' && bad "[$c] was gated by the mine lock"
@@ -7401,6 +7406,14 @@ acct_intake_census_counts_anchored() {
   # holds one. The first real mine did (31 anchored), and census described 32 materials with four
   # buckets summing to 1. Caught by the record-floor step of a live verify round, not by CI.
   mkmat2
+  # Before any row exists, m002 is UNDECLARED — and census's guidance line (reworded in 0.6.15 to
+  # point at intake's two paths instead of the retired migrator) prints only on that bucket. Pin
+  # its sentences here, where the bucket is non-zero, for the same reason this case exists at all:
+  # a guidance line with no watcher reads as covered until the day someone deletes it.
+  vrun census
+  expect_has "1 undeclared"
+  expect_has "riskiest first"
+  expect_has "bind the whole backlog"
   printf 'm002\t-\tlegacy-unbound\t-\t-\tpre-intake-ledger\t2026-08-14\n' >> "$W/materials/intake-ledger.tsv"
   vrun intake --anchor-existing '닻'
   expect_pass
@@ -7425,6 +7438,13 @@ acct_anchor_existing_binds_the_unbound_backlog() {
   mkmat2
   printf 'm002\t-\tlegacy-unbound\t-\t-\tpre-intake-ledger\t2026-08-14\n' >> "$W/materials/intake-ledger.tsv"
   vrun scope; expect_has "1 legacy-unbound"
+  # THE COST SENTENCES, pinned. 0.6.15 moved the report duty here ("that report duty now lives
+  # where the rows are counted" — FORMATS) and then pinned only the counts: the sentences an
+  # unbound backlog owes its owner — nothing will notice an edit, and an anchor adopts rather
+  # than verifies — had zero watchers, so deleting either would redden nothing (cold review,
+  # 0.6.16). These are the .28-era incident's warnings; the count line cannot carry them.
+  expect_has "leaves no trace"
+  expect_has "An anchor ADOPTS whatever is on disk"
   vrun intake --anchor-existing '이주 후 현재 트리를 기준선으로 확정 (소유자)'
   expect_pass
   expect_has "1 material(s) anchored"

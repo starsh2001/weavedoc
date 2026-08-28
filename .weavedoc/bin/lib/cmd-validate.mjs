@@ -515,7 +515,7 @@ export function cmdValidate (m, out, json = false, consecOk = '') {
       warn('MAT-INTAKE-LEDGER', M`${rel}  names ${cls.ghost.length} id(s) with no live material: ${cls.ghost.join(' ')} — they declare nothing (shown rather than absorbed, so a renamed or deleted material does not look like a covered one)`)
     }
     for (const id of cls.undeclared) {
-      warn('MAT-UNDECLARED', M`${U(m.materials)}/${U(id)}/  has no row in ${rel} — nothing on this mine records how it arrived, so a source the user handed over and a folder an agent wrote read identically here. Declare it: 'node .weavedoc/bin/weavedoc.mjs intake ${id} "<how it arrived>"' (or '--no-source' with the ruling, when there is no original to bind to). A mine that predates the ledger fills its rows once with 'weavedoc upgrade --apply'`)
+      warn('MAT-UNDECLARED', M`${U(m.materials)}/${U(id)}/  has no row in ${rel} — nothing on this mine records how it arrived, so a source the user handed over and a folder an agent wrote read identically here. Declare it: 'node .weavedoc/bin/weavedoc.mjs intake ${id} "<how it arrived>"' (or '--no-source' with the ruling, when there is no original to bind to). A pre-ledger backlog is bound in place with 'weavedoc intake --anchor-existing' — one deliberate act, by a person`)
     }
   }
 

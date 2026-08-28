@@ -47,6 +47,7 @@ Read `authority` from `.weavedoc/config.yaml`: `strict` | `standard` | `delegate
    | **Format convention** — is there an existing format to follow? (e.g. namuwiki style, RFC, legal template) | If yes, research it (web search) before proposing structure. If the user names a reference, learn it first. |
    | **Root unit** — what is the top-level organizing entity? | A wiki about a project ≠ a wiki about a single character. |
    | **Audience** — who reads this? Internal or external? | Tone, depth, jargon level all depend on this. **If external**, also settle the citation labels: material `title`s are internal names ("Support Runbook (excerpt)", literally "user answer"), and the visible half of a citation would otherwise ship them. Record it in `plan.md` frontmatter: `audience: external` plus `publication_labels: {m001: "…"}` so `write`/`refine` use it — see FORMATS, citation markers. The `<!-- t:<id> -->` marker never changes; only what the reader sees does. |
+   | **Authority** — this document's own level: "이 문서는 토씨 하나가 얼마나 무겁습니까?" | Who signs what, for this document (§Authority above has the question's three options and the recording rule). The mine's level is the recommendation; **omit the frontmatter field when the answer is "same as the mine"** — a written value stops following a later change to the mine's level. Without this row the field exists only for a user who already knows it does — the ask was promised in three places and asked in none (cold review, 0.6.16). |
 
    **Multi-file specific (when output shape = multi-file):**
 

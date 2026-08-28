@@ -79,7 +79,7 @@ function acquire (lockPath, rel, waitMs, msg) {
 
 const LEDGER_MSG = {
   create: (rel, code) => `the ledger lock cannot be created at ${rel} (${code}) — fix the path (permissions, or a missing truths/ directory)`,
-  held: rel => `the ledger lock at ${rel} is held and was not released within ${WAIT_MS / 1000}s — another ledger writer (attest, upgrade --apply) may be running; if none is, the lock is a leftover from a crash (or a stray file wearing its name) and will NEVER be reclaimed automatically: check for a running writer, then delete that path AND ITS CONTENTS yourself (it holds an owner marker, so an empty-directory removal will not do it) and re-run`,
+  held: rel => `the ledger lock at ${rel} is held and was not released within ${WAIT_MS / 1000}s — another ledger writer (attest, intake) may be running; if none is, the lock is a leftover from a crash (or a stray file wearing its name) and will NEVER be reclaimed automatically: check for a running writer, then delete that path AND ITS CONTENTS yourself (it holds an owner marker, so an empty-directory removal will not do it) and re-run`,
   unmarked: (rel, code) => `the ledger lock at ${rel} was created but could not be marked (${code}) — fix the path (permissions), then re-run`
 }
 

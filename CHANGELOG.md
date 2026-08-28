@@ -6,6 +6,20 @@
 
 ---
 
+## 0.6.16
+
+**미발행 다섯 번들(0.6.11~15)에 대한 콜드 리뷰가 should-fix 8건·nice-to-have 1건을 냈고, 9건 전부 재현으로 확정됐다(1건은 세부 정정: "anchored ≠ verified" 핀은 실제로는 대문자 영문으로 2건 살아 있었다).** critical 0. 측정 주장(케이스 산술·fingerprint 체인·red 실측·"회귀 케이스 0건" 주장)은 전부 리뷰어의 재현으로 성립했고, 발견은 골격이 아니라 가장자리 — **은퇴·개명의 스크럽이 놓친 표면과, 삭제·주석이 만든 감시 공백** — 에 몰렸다. 이 번들이 그 9건을 닫는다.
+
+**스크럽 잔재 넷.** ① 살아 있는 출력 셋이 은퇴한 명령을 지시하고 있었다: `MAT-UNDECLARED`의 backlog 안내(→ `--anchor-existing`), `TRUTH-V2-FIELD`의 "run weavedoc upgrade"(→ v0.6.14 브리지 핀), ledger lock held 메시지의 writer 목록(→ attest·intake). census의 쌍둥이인 validate 쪽을 0.6.15의 소해가 놓친, 이 저장소가 이름 붙인 "쌍둥이가 받은 방어를 안 받은 장부" 클래스다. cmd-intake의 현재형 이주기 주석도 과거형으로 옮겼다. ② METHODOLOGY의 knob 목록이 은퇴한 `conflicts.attribution`과 `authority`의 **옛 뜻(role precedence)** 을 가르치고 있었다 — "One word, one meaning"을 선언한 번들이 낱말의 옛 뜻을 산 문서 한 장에 남긴 것. 새 뜻(누가 결정하나)으로 교체. ③ reader lock 로스터의 `upgrade --check`·`--dry-run` 두 leg는 usage 거절 출력에 'mine lock'이 없어 **0회 의미 실행으로 green**이었다 — 이 스위트의 1번 교훈 클래스. 제거. ④ plan의 "ask until all answered" resolve 표에 authority 질문이 없었다 — 세 곳이 "plan이 묻는다"고 약속하고 표는 안 묻는, 축을 실은 번들 안의 한쪽 소비자. 행 추가.
+
+**engine이 안 배운 열째 소비자.** 0.6.13이 아홉 스킬에 Authority 절을 실으면서 공유 engine(reviewers.md)을 빠뜨렸고, 그 결과 판정자의 recorded-elsewhere 닫기가 engine 문면상 레벨 무관이었다 — strict 광산에서 engine대로 도는 판정자는 strict가 금지한 닫기를 수행한다(two-documents-two-answers). §Over-strictness triage 서두에 레벨 훅을 실었다: 본문 서술 = standard, `strict`는 아무것도 finalize하지 않고(권고는 쓰되 전 항목 사용자 목록으로), `delegated`는 기각 포함 전권. 레벨이 옮기는 것은 finalize 권한뿐, 사실은 어느 레벨에서도 사실이다.
+
+**감시 공백 셋.** ① 검사 14는 아홉 사본을 서로만 대조해서, **아홉 전부의 동시 키 개명이 green으로 통과했다**(리뷰어 실측 — 이 축은 한 주 안에 실제로 한 번 개명됐다). 서두의 READ 문장을 schema의 키 이름에 앵커하는 핀을 추가했고, 아홉 동시 sed가 이제 아홉 줄의 red를 낸다(실측). 상호 대조는 "서로 같음"만 증명한다 — 앵커 없는 거울 아홉은 한 결함의 아홉 사본이 될 수 있다. ② 0.6.15가 "report 의무는 scope·census에 산다"고 선언하고 카운트만 핀했다: scope의 비용 문장("leaves no trace"·"An anchor ADOPTS whatever is on disk")과 census의 신설 안내("riskiest first"·"bind the whole backlog")를 그 버킷이 0이 아닌 케이스에 핀으로 실었다. ③ writer lock 로스터가 "full MUTATES table"을 주장하며 8 중 6만 돌리고 있었다(0.6.15의 수선이 만든 허위 주석) — alloc·conflict leg를 추가해 여덟 전부가 됐다. lock이 dispatcher에서 switch보다 먼저 잡히므로 존재하지 않는 entry를 지목하는 conflict leg도 합법이다.
+
+**브리지 커밋의 CI 공백(nice-to-have)** — v2 광산이 정본으로 안내받는 체크아웃 `924e97e`(v0.6.14)는 로컬 Windows 650/650만 있고 3-OS 기록이 없었다. 임시 ref로 dispatch를 한 번 돌려 닫았다(run 기록은 ref 삭제 후에도 남는다).
+
+**회귀: 신설 핀 7(비용 문장 2·안내 문장 2·undeclared 버킷 1·검사 14 앵커 1·로스터 2 leg), 제거 2 leg, 수선 로스터 8/8.** 626/626.
+
 ## 0.6.15
 
 **소유자 재정: "호환이나 마이그레이션 툴킷이 있는 것도 지금 레벨에서는 의미가 있나 싶어."** 실측이 재정을 지지한다. v2→v3 이주기의 수요자는 "아직 v2인 광산"인데, 유일한 실광산은 이미 이 도구로 이주를 마쳤고, 미래의 사용자는 현행 스키마에서 시작하므로 v2 광산을 가질 수가 없다. 영원히 손님이 없는 코드였다 — 전용 776줄(이주기 611 · fault-injection 85 · UPGRADING 80)과 그것만 지키는 회귀 케이스들.
