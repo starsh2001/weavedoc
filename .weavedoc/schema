@@ -50,9 +50,9 @@ humanqueue.enum.state: open|ruled
 humanqueue.enum.ownership: user-only|recommended|machine
 coverage.section.optional: legacy
 changelog.line.kinds: added|superseded|edited|removed|confirmed
-project.fm.optional: authority|required_tags|tone|gap_density
+project.fm.optional: required_tags|tone|gap_density
 plan.fm.required: doc_id|doc_type|tone|status
-plan.fm.optional: authority_level|continues|cited_truths|scope_tags|audience|publication_labels
+plan.fm.optional: authority|continues|cited_truths|scope_tags|audience|publication_labels
 plan.fm.enum.status: planned|drafting|reviewing|done|stale
 # `audience: external` requires publication_labels (WD-CFG-001): an external document ships with
 # its labels or not at all.
@@ -73,15 +73,15 @@ review.enum.kind: contradiction|unsupported|missing-required
 review.sections: Fidelity violations|Findings|Adjudications|Human queue
 config.enum.completeness: off|required
 config.enum.detection: standard|deep
-config.enum.attribution: ask|allow
 # WHO decides, as opposed to how hard we check — orthogonal to verify.strength/scale, which are the
-# `how hard` axis. NOT the same word as project.md's `authority`: that one is a list of ROLES, a v2
-# rank corpse kept legal and unread, and every mine planted from the template already carries it.
-# The names differ so a reader who greps one never lands in the other. ABSENCE IS LEGAL and means
-# `standard`: every mine predates this axis, so a required key would redden all of them at once —
-# the same judgment MAT-UNDECLARED and CLAUDE-BLOCK-STALE already carry. A document may override
-# the mine's level in its plan.md frontmatter (plan.fm.optional above), same three values.
-config.enum.authority_level: strict|standard|delegated
+# `how hard` axis. The word used to have a second meaning: project.md carried `authority` as a v2
+# role-rank list, legacy-inert since schema v3. That corpse was retired in the same bundle that
+# named this axis `authority` (0.6.14) — one user, one mine, and that mine's frontmatter never
+# carried the line, so there was nobody left to stay compatible for. One word, one meaning.
+# ABSENCE IS LEGAL and means `standard`: the axis is younger than the mine, and a written value
+# differs from an absent one in the way that matters — whether anyone chose it. A document may
+# override the mine's level in its plan.md frontmatter (plan.fm.optional above), same three values.
+config.enum.authority: strict|standard|delegated
 gaps.sections: Open|Accepted
 gaps.enum.kind: declared|reference|enumeration|symmetry
 # Machine-owned verification sidecar (WD-COR-003). Append-only TSV in truths/: one row per unit
@@ -126,7 +126,7 @@ schema.version: 3
 # Config contract (WD-CFG-001) — every knob has a type/range; verify/review are section-aware
 # (a flat first-match reader can never see review.strength behind verify.strength). Unknown
 # top-level keys are a NAMED WARNING, never a failure: extension vs typo is not machine-decidable.
-config.toplevel: version|language|paths|fidelity|conflicts|verify|review|gaps|authority_level
+config.toplevel: version|language|paths|fidelity|conflicts|verify|review|gaps|authority
 config.enum.scale: skip|light|standard|full
 config.strength.range: 1|2|3
 config.repeat.scales: skip|light|standard|full

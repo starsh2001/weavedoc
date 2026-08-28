@@ -46,7 +46,7 @@ const rp = p => { try { return statSync(p).isDirectory() ? realpathSync(p) : '' 
 // moment the file was renamed or made read-only. Four keys once stood here while twenty-two were
 // being read, so a schema missing any of the other eighteen switched those checks off under a clean
 // tick. Its SIZE is asserted out loud below, because a truncated constant fails quietly.
-const SCH_KEYS = `config.enum.attribution config.enum.authority_level config.enum.completeness config.enum.detection config.enum.scale
+const SCH_KEYS = `config.enum.authority config.enum.completeness config.enum.detection config.enum.scale
 config.repeat.scales config.strength.range config.toplevel fm.placeholder humanqueue.enum.ownership
 humanqueue.enum.state material.fm.enum.origin material.fm.enum.stage material.fm.enum.status
 material.fm.required material.fm.required_when.research plan.fm.enum.status plan.fm.required
@@ -403,18 +403,14 @@ export function cmdValidate (m, out, json = false, consecOk = '') {
   }
 
   // --- project.md ---
+  // (project.md `authority` — the v2 role-rank list — was retired in 0.6.14 along with its
+  // PROJ-AUTHORITY check: no mine carries the line, and the word now names the WHO-decides axis
+  // in config/plan. A leftover line in some hand-made frontmatter is an unread extra, which is
+  // what every other undeclared optional key already is.)
   let roles = ''
   if (isFileAt(m.project)) {
     for (const k of pipes(sch('project.fm.required'))) reqValue(m.project, k)
-    // `for a in $REPLY` — listfield has already split on commas, and then bash re-splits the
-    // newline-joined result on WHITESPACE. An authority entry holding a space therefore becomes two
-    // names on that side, and the port makes the same two rather than the tidier one.
     roles = listField(fmv(m.project, 'roles')).join('\n')
-    for (const a of words(listField(fmv(m.project, 'authority')).join('\n'))) {
-      if (!`\n${roles}`.includes(`\n${a}\n`) && !`\n${roles}`.endsWith(`\n${a}`)) {
-        prob('PROJ-AUTHORITY', M`${U(m.project)}  authority '${a}' is not a declared role`)
-      }
-    }
   } else {
     prob('PROJ-MISSING', M`${U(m.project)}  missing (run 'weavedoc init')`)
   }
@@ -839,9 +835,9 @@ export function cmdValidate (m, out, json = false, consecOk = '') {
       // A document may override the mine's authority level. Same enum, same absence rule (absent =
       // inherit the mine's), and named here for the same reason the config key is: a level nothing
       // defines is one each skill reads its own way.
-      const pauth = fmv(p, 'authority_level')
-      if (pauth !== '' && !inList(pauth, sch('config.enum.authority_level'))) {
-        prob('PLAN-AUTHORITY-LEVEL', M`${U(p)}  authority_level '${pauth}' invalid → one of ${sch('config.enum.authority_level')} (absent = inherit the mine's)`)
+      const pauth = fmv(p, 'authority')
+      if (pauth !== '' && !inList(pauth, sch('config.enum.authority'))) {
+        prob('PLAN-AUTHORITY', M`${U(p)}  authority '${pauth}' invalid → one of ${sch('config.enum.authority')} (absent = inherit the mine's)`)
       }
       // audience: external requires publication labels — an external document ships with its labels
       // or not at all.
@@ -1172,22 +1168,21 @@ export function cmdValidate (m, out, json = false, consecOk = '') {
   const cfl = k => cfgB.flat.get(k) ?? ''
   const cse = k => cfgB.sect.get(k) ?? ''
   for (const [k, sk, label] of [['completeness', 'config.enum.completeness', 'fidelity.completeness'],
-    ['detection', 'config.enum.detection', 'conflicts.detection'],
-    ['attribution', 'config.enum.attribution', 'conflicts.attribution']]) {
+    ['detection', 'config.enum.detection', 'conflicts.detection']]) {
     const v = cfl(k)
     if (v !== '' && !inList(v, sch(sk))) prob('CFG-ENUM', M`config ${label} '${v}' invalid`)
   }
 
-  // authority_level — WHO decides, not how hard we check. ONLY an unfamiliar value is named; ABSENCE
-  // IS LEGAL and reads as `standard`, because every mine in existence predates this axis and a
-  // required key would redden all of them at once (the judgment MAT-UNDECLARED and
-  // CLAUDE-BLOCK-STALE already carry). Blocking rather than warning on a wrong value is the other
-  // half of the same reasoning: an unrecognised level is not a mine that skipped a knob, it is a
-  // mine whose skills would each pick their own reading of a word nothing defines.
+  // authority — WHO decides, not how hard we check. ONLY an unfamiliar value is named; ABSENCE IS
+  // LEGAL and reads as `standard` — the axis is younger than the mine, and a written value differs
+  // from an absent one in the way that matters here: whether anyone chose it. Blocking rather than
+  // warning on a wrong value is the other half of the same reasoning: an unrecognised level is not
+  // a mine that skipped a knob, it is a mine whose skills would each pick their own reading of a
+  // word nothing defines.
   {
-    const v = cfl('authority_level')
-    if (v !== '' && !inList(v, sch('config.enum.authority_level'))) {
-      prob('CFG-ENUM', M`config authority_level '${v}' invalid → one of ${sch('config.enum.authority_level')} (absent = standard)`)
+    const v = cfl('authority')
+    if (v !== '' && !inList(v, sch('config.enum.authority'))) {
+      prob('CFG-ENUM', M`config authority '${v}' invalid → one of ${sch('config.enum.authority')} (absent = standard)`)
     }
   }
 

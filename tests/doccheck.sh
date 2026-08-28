@@ -305,13 +305,13 @@ done
 # a skill offering a level `validate` rejects, or a schema value no skill has a row for, is the same
 # split this repo keeps closing between a questionnaire and its validator.
 for lv in strict standard delegated; do
-  grep -qE "^config\.enum\.authority_level:.*\b$lv\b" "$REPO/.weavedoc/schema" \
-    || say "the schema's config.enum.authority_level does not offer '$lv' — the skills carry a row for a level validate would reject"
+  grep -qE "^config\.enum\.authority:.*\b$lv\b" "$REPO/.weavedoc/schema" \
+    || say "the schema's config.enum.authority does not offer '$lv' — the skills carry a row for a level validate would reject"
 done
-grep -qF 'authority_level' "$REPO/.weavedoc/templates/config.yaml" \
-  || say "the shipped config template no longer carries authority_level — a fresh mine would be born without the axis while every skill reads it"
-grep -qF 'authority_level' "$REPO/.weavedoc/templates/plan.md" \
-  || say "the shipped plan template no longer carries the authority_level override — plan is told to elicit a field the template never shows"
+grep -qE '^authority:' "$REPO/.weavedoc/templates/config.yaml" \
+  || say "the shipped config template no longer carries the authority key — a fresh mine would be born without the axis while every skill reads it"
+grep -qE '^# authority:' "$REPO/.weavedoc/templates/plan.md" \
+  || say "the shipped plan template no longer carries the authority override — plan is told to elicit a field the template never shows"
 # The id ruling (2026-08-28) and the audit-layer reading rule, one pin each: both are output/lookup
 # disciplines with no mechanical enforcement anywhere, so the sentence IS the whole artifact.
 grep -qF 'an id is a machine handle' "$gat" \

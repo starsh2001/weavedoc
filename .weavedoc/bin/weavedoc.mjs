@@ -209,7 +209,7 @@ async function cmdLocale () {
 // follows the grouping the skill already documents (Q2 authority & fidelity · Q3 intensity) rather
 // than an arbitrary 4+2. SKILL.md said "you may batch Q2-Q3 in one call", which was never possible.
 //
-// `authority_level` opens the first call because it is the framing question — WHO decides, as
+// `authority` opens the first call because it is the framing question — WHO decides, as
 // against the `how hard do we check` axis every other question here sets. It stayed a third call for
 // exactly as long as it took to notice that a third AskUserQuestion round-trip buys nothing: the cap
 // is four questions and this group holds three.
