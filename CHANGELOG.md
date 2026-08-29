@@ -6,6 +6,20 @@
 
 ---
 
+## 0.6.18
+
+**3차 콜드 리뷰(2차 수리의 재검): ⑩~⑮ 여섯 수리는 전부 성립, 신규 should-fix 4·nice 1.** critical 0. 다섯 전부 재측정으로 확정됐고 이 번들이 닫는다. 넷은 두 라운드가 못 본 것, 하나는 ⑪ 수리의 옆 문장 — 세 라운드 연속으로 같은 형태다: **결함은 수리가 만진 축의 나머지에서 난다.**
+
+**① 열 번째 소유자.** 권한 축의 소유자는 아홉 스킬이 아니라 열이었다 — 판정자의 finalize 권한을 지배하는 reviewers.md의 레벨 훅은 자기 문면을 갖고 있어 아홉 사본의 상호 대조가 한 번도 덮지 않았다. 실측: reviewers.md만 `authority`→`authority_level`로 바꿔도, 레벨 낱말을 바꿔도 전부 green이었고 regress에 reviewers.md를 읽는 케이스도 0건이었다. 검사 14에 **엔진 훅의 요소 핀 여섯**(FINALIZE 문장·키 읽기·absent=standard·strict의 finalize 0·delegated 전권·43행 한정)을 직접 실었고, 단독 개명이 이제 red다(실측). 주석의 "NINE owners"도 열로 고쳤다.
+
+**② 핀 밖 계약 요소.** 검사 14의 핀은 키+세 낱말만 잡아서, 아홉 사본 동시 `absent means standard`→`strict` 치환이 green이었다(실측 — 거울은 유지되고 핀 문장은 안 건드리므로). 그 fallback은 **키 없는 광산 전부의 실효 레벨**을 정하는 문장이다. 공유 서두에 **요소 핀 셋**(absence fallback·override 범위·무명결정 fallback)을 실었다 — 거울이 아홉에 전파하므로 서두 한 번이면 된다. 같은 치환이 이제 red다(실측).
+
+**③ schemas/v3 삭제 — 소유자 재정 (a).** "v3 계약"으로 동결·번들되던 파일이 폐기된 모델을 계약으로 선언하고 있었다: `truth.fm.required`에 v3가 구조 오류로 막는 `status`, v2 시체 필드 셋이 optional, role-rank 뜻의 `authority`, 은퇴한 `attribution` — 라이브 schema가 네 축 움직이는 동안 이 표면만 스크럽에서 빠졌고, manifest에 실려 배포되고 있었다. Phase 2는 오지 않았고 유일한 실행자는 자기 property 테스트였다 — **이주기와 같은 판단으로 은퇴**: 파일과 함께 Phase-1 role-계약 장치 전체(CONTRACT_FILE·ADAPTER·contractFileFor·role 조립·loadArtifactContracts)를 artifact-contracts.mjs에서 절제하고, property 파일은 살아 있는 절반(버전 협상·브리지 핀·지원 집합)만 남겨 groups=9 cases=212 → **groups=2 cases=25**. fingerprint의 versioned-contract 걷기도 걷어냈다(라벨 그대로 bin+schema). manifest 경로·필수 가드, CI ctlscan 로스터, control-char 케이스(이제 `.weavedoc/schema`만, 존재 가드 유지), resume 키 probe(사건 특정 파일 → schema 옆의 새 파일로 일반화), seal-check 사본 둘이 따라 움직였다. 실광산에는 배포된 사본이 남아 있다 — **다음 배포 때 `.weavedoc/schemas/` 삭제**(fingerprint 걷기가 사라져 잔존 사본이 지문을 오염시키지는 않는다).
+
+**④ FORMATS의 override 열거에 review 추가.** "plan, write, refine, its consecration"이 판정자 권한이 override를 읽는 단계(review)를 빠뜨려, reviewers.md 훅과 계약 문서가 다른 답을 주고 있었다. **⑤ ⑪ 수리의 옆 문장** "Nothing is routed to the human"에 레벨 한정 — strict에서는 강등 자체가 이미 상신됐다는 절을 달았다.
+
+**회귀: 검사 14에 핀 아홉 신설(서두 요소 3 + 엔진 요소 6), red 실측 2방향(엔진 단독 개명·아홉 사본 fallback 치환). 케이스 수 불변(626), property 총계 재핀.** 삭제의 소해에서 스위트가 이 세션을 두 번 잡았다: resume 키 probe의 첫 재작성이 배포되지도 키에 덮이지도 않는 파일(`.weavedoc/` 최상위 stray)에 대한 커버리지를 단언해 **probe 자신의 주장이 거짓으로 red**가 났고(수정: 키가 계속 걷는 schemas 나무를 사본 안에 부활시켜 원래 교훈 그대로 재다), scratch repo의 mkdir에서 schemas 경로를 지우면서 `.weavedoc` 생성까지 딸려 나가 staging이 깨졌다(수정: 명시 생성). 사이클 회계: 재검이 신규를 냈으므로 카운터는 여전히 0이다.
+
 ## 0.6.17
 
 **2차 콜드 리뷰(수리 재검 방식 — 0.6.12가 규격에 실은 그 사이클대로): 아홉 수리는 지적된 자리에서 전부 성립, 그러나 세 수리의 옆자리에서 should-fix 3·nice-to-have 3.** critical 0. 발견 여섯 전부 재측정으로 확정됐고(핵심 주장인 "레벨 낱말 아홉 동시 sed가 green"은 worktree 실측으로), 이 번들이 닫는다. 셋의 공통 형태는 **수리 규약 위반의 자기 사례**다 — 0.6.16의 수리가 주석·훅·로스터에서 "문장 전체 재독·수정 후 전체 대조"를 안 지킨 자리들이다.

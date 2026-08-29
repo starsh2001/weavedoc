@@ -1,16 +1,7 @@
-// One place that turns a schema into ROLES, for every artifact and every supported version.
-//
-// PARSER-MODEL.md section 5 records the limit this closes: the schema decided which words a reader
-// RECOGNISES while what each word MEANT stayed hardcoded in the consumers. `open` waits, `ruled` is
-// closed, the queue is the literal `Human queue` heading — five consumers each knowing that
-// separately is five chances to disagree about one token. Here a role names its token once and
-// every consumer selects from the returned object.
-//
-// READ-ONLY AND UNWIRED ON PURPOSE (Phase 1). No production consumer reads this yet; the v2 suite
-// must stay green against the old spellings, and switching consumers is Phase 2's completion
-// condition. What this file has to earn now is that its v2 answer is the SAME answer production
-// already gives, so the switch is a deletion rather than a behaviour change.
-import { pipes } from './core.mjs'
+// Artifact version negotiation, and the two bridge pins a below-floor mine is refused toward.
+// This is the half of the old "artifact contracts" module production actually reads — the version
+// gate (mine.mjs, validate) resolves through here. The other half, the Phase-1 role-contract
+// apparatus, retired in 0.6.18; the note below records what left and why.
 
 // The runtime's own supported range — deliberately NOT `schema.version` from the mine's schema.
 // Conflating "what this runtime can read" with "what this mine declares" is how a mine's own file
@@ -27,20 +18,13 @@ export const V1_BRIDGE = { tag: 'v0.5.21', commit: '0257167' }
 // checkout, never toward a command this runtime no longer has.
 export const V2_BRIDGE = { tag: 'v0.6.14', commit: '924e97e' }
 
-// EXPLICIT TABLES, never `version === ARTIFACT_FLOOR`. Deriving "is this v2" from the floor means
-// the day the floor rises to 3, v3 mines quietly start being read by the v2 adapter — the format
-// equivalent of a positional shift. A version that is not in the table is not readable, full stop.
-// The v2 row left with the v2 reader (schema v3, slice 1): `.weavedoc/schema` declares version 3
-// now, and no artifact version reads it as a ROLE contract — the positional keys it still holds
-// are the LIVE production vocabulary, owned by the production builders until the consumer flip
-// the approved plan discarded. One version, one file, still a table and never a comparison.
-export const CONTRACT_FILE = { 3: 'v3' }
-// Exported so a property can pin the TABLE itself. At today's floor of 2 the table and the old
-// `version === ARTIFACT_FLOOR` test are behaviourally identical, so no fixture can tell them apart
-// — the failure it guards against is the day the floor rises, which is exactly when nobody is
-// looking. What a test CAN hold is that the mapping exists and covers every supported version, so
-// simplifying it back into a comparison against the floor goes red.
-export const ADAPTER = { 3: 'v3' }
+// (The Phase-1 role-contract apparatus — CONTRACT_FILE/ADAPTER tables, contractFileFor, the role
+// assembly, loadArtifactContracts — retired in 0.6.18 together with `.weavedoc/schemas/v3`, the
+// frozen draft it loaded. Phase 2 never arrived, its only executor was its own property test, and
+// the draft had drifted four axes behind the live schema — a bundled file declaring a retired
+// model as "the contract" is the cite-a-file-to-prove-a-wrong-rule hazard. Same judgment as the
+// migrator: no constituency, pinned in git, deleted from the live tree. What this file KEEPS is
+// what production actually reads: version negotiation and the two bridge pins above.)
 
 const isInt = s => typeof s === 'string' && s !== '' && /^[0-9]+$/.test(s)
 
@@ -77,185 +61,3 @@ export function resolveArtifactVersion (projectVersion, configVersion) {
   return { ok: true, code: null, reason: null, detail: null, version: v }
 }
 
-// Which bundled contract file a version reads. v2 is the runtime's existing `.weavedoc/schema` —
-// there is exactly one copy of the v2 contract and this is it, because a second copy is a second
-// answer waiting to drift. v3 gets its own file beside it.
-// The first spelling here stripped the trailing component with `replace(/\/[^/]*$/, '')`, which
-// finds no `/` in `D:\mine\.weavedoc\schema` and glued `schemas/v3` onto the whole path — every
-// Windows install would have read the wrong file the moment a consumer was wired to this. Output is
-// forward-slash, the one separator every other path in this runtime is compared against.
-const fwd = p => p.replace(/\\/g, '/')
-
-// OWN PROPERTIES ONLY, and an integer. A plain object inherits `toString`, `constructor` and the
-// rest, so `CONTRACT_FILE[version]` answered for `'toString'` and produced a path ending in the
-// function's source text. No dispatcher passes that today; the point is that a lookup table used as
-// a membership test has to be asked the membership question, or "total" is a claim and not a fact.
-const supported = version => Number.isInteger(version) && Object.hasOwn(CONTRACT_FILE, version)
-
-export function contractFileFor (version, schemaPath) {
-  if (!supported(version)) throw new Error(`unsupported artifact version ${JSON.stringify(version)} — this runtime reads ${SUPPORTED_ARTIFACT_VERSIONS.join(', ')}`)
-  const file = CONTRACT_FILE[version]
-  if (file === null) return schemaPath
-  // BOTH SEPARATORS, EXPLICITLY — not node:path. `path.dirname` is platform-dependent by design:
-  // on POSIX a backslash is an ordinary character, so `D:\mine\.weavedoc\schema` has no directory
-  // at all there. That made the answer differ by host, which a contract resolver must never do and
-  // which no Windows-only test would have caught — CI's Linux and macOS legs did. Cutting at the
-  // last separator of either kind and emitting the forward slashes the rest of this runtime
-  // compares against gives one answer everywhere, and needs no import.
-  const cut = Math.max(schemaPath.lastIndexOf('/'), schemaPath.lastIndexOf('\\'))
-  const dir = cut < 0 ? '.' : schemaPath.slice(0, cut)
-  return `${fwd(dir)}/schemas/${file}`
-}
-
-// ---- role assembly ---------------------------------------------------------------------------
-// A model is valid as a WHOLE or not at all. Half a role set is the shape that lets a later member
-// slide into an earlier role, which is the failure `gaps.sections` already had to be hardened
-// against; the same rule is applied to every artifact here rather than to the one that got bitten.
-function roleSet (get, specs, artifact) {
-  const errors = []
-  const roles = {}
-  for (const [role, key] of specs) {
-    const raw = get(key)
-    if (typeof raw !== 'string' || raw === '') {
-      errors.push(`${artifact}: role '${role}' has no token (schema key '${key}')`)
-      continue
-    }
-    roles[role] = raw
-  }
-  return { roles, errors }
-}
-
-// THE ROLE NAMESPACE IS CLOSED. A key under a reserved prefix that names no role is the same event
-// this whole file exists to end: a token the schema recognises that no consumer can route. Left
-// open, `verify.section.notes` reads as a declared section forever and blocks nothing, which is the
-// v2 known limit rebuilt one release after removing it. Non-role schema keys are untouched — only
-// these prefixes are owned, and only in v3, where the role keys live.
-const ROLE_ROSTER = {
-  humanQueue: { 'humanqueue.state.': ['waiting', 'closed'], 'humanqueue.ownership.': ['user', 'recommended', 'machine'] },
-  questions: { 'questions.state.': ['waiting', 'proposed', 'closed'] },
-  verify: { 'verify.section.': ['units', 'human_queue', 'adjudications'], 'verify.verdict.': ['covered'] },
-  review: { 'review.section.': ['violations', 'findings', 'adjudications', 'human_queue'] },
-  gaps: { 'gaps.section.': ['open', 'accepted'] }
-}
-
-function rejectExtraRoles (schemaMap, artifact, errors) {
-  const roster = ROLE_ROSTER[artifact]
-  const keys = typeof schemaMap?.keys === 'function' ? [...schemaMap.keys()] : []
-  for (const key of keys) {
-    for (const [prefix, allowed] of Object.entries(roster)) {
-      if (!key.startsWith(prefix)) continue
-      const suffix = key.slice(prefix.length)
-      if (!allowed.includes(suffix)) {
-        errors.push(`${artifact}: '${key}' is not a role this runtime routes — the ${prefix}* namespace is exactly ${allowed.join(', ')}`)
-      }
-    }
-  }
-}
-
-function requireDistinct (roles, groups, artifact, errors) {
-  for (const [axis, members] of groups) {
-    const present = members.filter(role => roles[role] !== undefined).map(role => roles[role])
-    if (present.length !== members.length) continue
-    if (new Set(present).size !== present.length) {
-      errors.push(`${artifact}: ${axis} roles must be distinct tokens, got ${present.map(t => `'${t}'`).join(', ')}`)
-    }
-  }
-}
-
-// v2 keeps its vocabulary where it always was. The three shapes are genuinely different and the
-function v3Model (get) {
-  const errors = { humanQueue: [], questions: [], verify: [], review: [], gaps: [] }
-
-  const hqState = roleSet(get, [['waiting', 'humanqueue.state.waiting'], ['closed', 'humanqueue.state.closed']], 'humanQueue')
-  const hqOwn = roleSet(get, [['user', 'humanqueue.ownership.user'], ['recommended', 'humanqueue.ownership.recommended'], ['machine', 'humanqueue.ownership.machine']], 'humanQueue')
-  errors.humanQueue.push(...hqState.errors, ...hqOwn.errors)
-  requireDistinct(hqState.roles, [['state', ['waiting', 'closed']]], 'humanQueue', errors.humanQueue)
-  requireDistinct(hqOwn.roles, [['ownership', ['user', 'recommended', 'machine']]], 'humanQueue', errors.humanQueue)
-
-  const qState = roleSet(get, [['waiting', 'questions.state.waiting'], ['proposed', 'questions.state.proposed'], ['closed', 'questions.state.closed']], 'questions')
-  errors.questions.push(...qState.errors)
-  requireDistinct(qState.roles, [['state', ['waiting', 'proposed', 'closed']]], 'questions', errors.questions)
-
-  const vSection = roleSet(get, [['units', 'verify.section.units'], ['human_queue', 'verify.section.human_queue'], ['adjudications', 'verify.section.adjudications']], 'verify')
-  const vVerdict = roleSet(get, [['covered', 'verify.verdict.covered']], 'verify')
-  errors.verify.push(...vSection.errors, ...vVerdict.errors)
-  requireDistinct(vSection.roles, [['section', ['units', 'human_queue', 'adjudications']]], 'verify', errors.verify)
-  if (vVerdict.roles.covered !== undefined && vVerdict.roles.covered.includes('|')) {
-    errors.verify.push('verify: verdict role \'covered\' must be one scalar marker, not a list')
-  }
-
-  const rSection = roleSet(get, [['violations', 'review.section.violations'], ['findings', 'review.section.findings'], ['adjudications', 'review.section.adjudications'], ['human_queue', 'review.section.human_queue']], 'review')
-  errors.review.push(...rSection.errors)
-  requireDistinct(rSection.roles, [['section', ['violations', 'findings', 'adjudications', 'human_queue']]], 'review', errors.review)
-
-  const gSection = roleSet(get, [['open', 'gaps.section.open'], ['accepted', 'gaps.section.accepted']], 'gaps')
-  errors.gaps.push(...gSection.errors)
-  requireDistinct(gSection.roles, [['section', ['open', 'accepted']]], 'gaps', errors.gaps)
-  // The kind vocabulary stays a distinct membership SET in v3 — it assigns no role by position, so
-  // making it positional would invent an ordering contract the format does not have.
-  const gapsKinds = pipes(get('gaps.enum.kind'))
-  let kinds = new Set()
-  if (gapsKinds.length === 0 || gapsKinds.some(n => n === '') || new Set(gapsKinds).size !== gapsKinds.length) {
-    errors.gaps.push('gaps: gaps.enum.kind must contain one or more distinct non-empty kind names')
-  } else kinds = new Set(gapsKinds)
-
-  return {
-    humanQueue: { state: hqState.roles, ownership: hqOwn.roles },
-    questions: { state: qState.roles },
-    verify: { section: vSection.roles, verdict: vVerdict.roles },
-    review: { section: rSection.roles },
-    gaps: { section: gSection.roles, kinds },
-    errors
-  }
-}
-
-// THE SCHEMA DOMAIN IS DECLARED, NOT GUESSED. Ledger files are read as latin1 and some schema
-// values are non-ASCII, so a token compared against the wrong domain matches nothing while the
-// other surface enforces on the same entry. The two existing contract builders each solved this
-// their own way — one takes the utf8 map and re-encodes, the other takes the latin1 map and does
-// not — and having both conventions is a trap for the next edit. Here the caller states the domain
-// of the map it passes, the loader transcodes nothing, and the answer carries the domain so a
-// consumer can assert it matches the bytes it is about to compare.
-const DOMAINS = new Set(['utf8', 'latin1'])
-
-export function loadArtifactContracts (version, schemaMap, { domain } = {}) {
-  if (!DOMAINS.has(domain)) throw new Error(`artifact contracts need an explicit schema domain (utf8|latin1), got ${JSON.stringify(domain)}`)
-  if (!SUPPORTED_ARTIFACT_VERSIONS.includes(version)) {
-    throw new Error(`unsupported artifact version ${version} — this runtime reads ${SUPPORTED_ARTIFACT_VERSIONS.join(', ')}`)
-  }
-  const get = key => schemaMap?.get?.(key)
-  // THE FILE MUST BE THE VERSION IT WAS ASKED FOR. Without this, handing the v3 contract to the v2
-  // adapter answered `valid: true` — a dispatcher that resolved the wrong path would have produced
-  // a fully-formed contract for a file nobody asked for, and every downstream role would be right
-  // about the wrong document. The declaration in the file is the only evidence of what it is.
-  const declared = get('schema.version')
-  const artifacts = ['humanQueue', 'questions', 'verify', 'review', 'gaps']
-  const out = { version, domain, valid: true, errors: [] }
-  if (declared !== String(version)) {
-    const why = `artifact contract file declares schema.version '${declared ?? ''}' but version ${version} was requested — the wrong contract was loaded; no role is exposed`
-    out.valid = false
-    out.errors.push(why)
-    out.versionMismatch = true
-    for (const name of artifacts) out[name] = { valid: false, errors: [why] }
-    return out
-  }
-  out.versionMismatch = false
-  const model = v3Model(get)
-  // v3 owns the `*.state.*`/`*.section.*` namespaces: a key under them that names no role is the
-  // event this file exists to end, so it fails closed rather than riding as an unknown key.
-  for (const name of artifacts) rejectExtraRoles(schemaMap, name, model.errors[name])
-  for (const name of artifacts) {
-    const errs = model.errors[name]
-    const ok = errs.length === 0
-    // Fail-closed as a UNIT: an invalid model exposes no roles at all rather than the subset that
-    // happened to parse, so no consumer can read a half-contract and act on the half it got.
-    out[name] = ok
-      ? { valid: true, errors: [], ...model[name] }
-      : { valid: false, errors: errs }
-    if (!ok) {
-      out.valid = false
-      out.errors.push(...errs)
-    }
-  }
-  return out
-}

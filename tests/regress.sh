@@ -1335,30 +1335,31 @@ meta_conflict_store_properties() {
   expect_has "groups=9 cases=138"
 }
 meta_bundled_contracts_have_no_control_chars() {
-  # CI had this for runtime modules only, so four 0x14 bytes rode into `.weavedoc/schemas/v3` and
-  # shipped green (2026-08-08.6): a comment rewrite wrote U+2014 through a latin1 writer, which
-  # keeps the low byte. They were in comments, so the parser never noticed — but these files ARE
-  # the format. The check belongs in the local sweep as well as in CI: a bundled contract edited
-  # here should go red HERE, not one push later.
+  # CI had this for runtime modules only, so four 0x14 bytes rode into a bundled contract file and
+  # shipped green (2026-08-08.6, in the since-retired `.weavedoc/schemas/v3`): a comment rewrite
+  # wrote U+2014 through a latin1 writer, which keeps the low byte. Comments, so the parser never
+  # noticed — but these files ARE the format. The check belongs in the local sweep as well as in
+  # CI: a contract edited here should go red HERE, not one push later. The versioned-contract
+  # directory retired in 0.6.18; the live contract stays on the roster.
   local f bad="" n
-  for f in "$REPO/.weavedoc/schema" "$REPO/.weavedoc/schemas"/*; do
-    [ -f "$f" ] || continue
+  for f in "$REPO/.weavedoc/schema"; do
+    # VACUITY GUARD: a roster entry that is not a file would make this pass while checking nothing.
+    [ -f "$f" ] || { bad "no bundled contract to scan at ${f#$REPO/} — the check would be vacuous"; return; }
     n=$(node "$REPO/tests/ctlscan.mjs" "$f" | tail -1 | sed 's/[^0-9]//g')
     [ "${n:-1}" = 0 ] || bad="$bad ${f#$REPO/}($n)"
   done
-  # VACUITY GUARD: a glob that matched nothing would make this pass while checking zero files.
-  [ -f "$REPO/.weavedoc/schemas/v3" ] || { bad "no bundled versioned contract to scan — the check would be vacuous"; return; }
   OUT="control-chars:${bad:- none}"; RC=0
   if [ -n "$bad" ]; then bad "bundled contract holds literal control characters:$bad"; else ok; fi
 }
 meta_artifact_contract_properties() {
-  # The versioned role contract (schema v3, Phase 1). Same vacuity guard as above: the exact total
-  # is asserted, so deleting an axis is a failure even when every remaining assertion is green.
-  # Nothing in the runtime consumes this model yet — switching production consumers is Phase 2 —
-  # so this case is the ONLY thing executing it, which is precisely why the count is pinned.
+  # Version negotiation and the two bridge pins — the half of artifact-contracts.mjs the version
+  # gate actually reads. The Phase-1 role-contract half retired in 0.6.18 with `.weavedoc/schemas/v3`
+  # (this driver was its only executor), so the totals dropped from groups=9 cases=212. The exact
+  # total stays pinned for the reason it always was: deleting an axis is a failure even when every
+  # remaining assertion is green.
   OUT=$(node "$REPO/tests/artifact-contract-properties.mjs" 2>&1); RC=$?
   expect_pass
-  expect_has "groups=9 cases=212"
+  expect_has "groups=2 cases=25"
 }
 pass_hq_kind_mention() {
   # a Human-queue entry whose prose mentions a kind — first slot is [open], not a kind (kind-bearing filter)
@@ -4815,13 +4816,18 @@ meta_key_covers_every_live_input() {
   }
   # bin/ top level (not the entrypoint, not under lib/) — the v0.5.15 hole
   printf 'export const x = 1\n' > "$copy/.weavedoc/bin/extra.mjs"; probe_moves bin-toplevel "$copy/.weavedoc/bin/extra.mjs"
-  # the VERSIONED CONTRACTS beside the schema (bundle 2026-08-08.6). `.weavedoc/schema` was keyed by
-  # name and `schemas/` not at all, so a dirty `schemas/v3` edit was invisible to `--resume`, which
-  # replayed the previous PASS while a fresh key failed — the v0.5.14/.15 hole one directory over.
+  # the VERSIONED-CONTRACT TREE beside the schema (bundle 2026-08-08.6). Its only file retired in
+  # 0.6.18, but the key keeps walking the tree for the reason it was added — "a contract added
+  # later must not be able to ship unkeyed" — so the probe RESURRECTS it in the isolated copy: a
+  # file appearing there must move the key, exactly as the original `schemas/v3` edit had to.
+  # (A stray file at `.weavedoc/` top level is deliberately NOT probed: it neither ships in the
+  # manifest nor feeds any case, and the first respelling of this probe asserted key coverage for
+  # exactly such a file — measured red, the probe's own claim was false, 0.6.18.)
   # It belongs HERE, in the isolated copy: the first spelling of this probe edited $REPO itself and
   # restored it, which a SIGKILL in the window leaves dirty, lets a concurrent edit be clobbered by
   # the restore, and hides from the final seal anyway because A→B→A is no net change.
-  probe_moves schemas-v3 "$copy/.weavedoc/schemas/v3"
+  mkdir -p "$copy/.weavedoc/schemas" && printf 'schema.version: 4\n' > "$copy/.weavedoc/schemas/v4"
+  probe_moves schemas-tree "$copy/.weavedoc/schemas/v4"
   # a nested lib module, and a tests/ helper below the top level — the recursive halves
   mkdir -p "$copy/.weavedoc/bin/lib/sub" && printf 'export const y = 1\n' > "$copy/.weavedoc/bin/lib/sub/m.mjs"
   probe_moves bin-nested "$copy/.weavedoc/bin/lib/sub/m.mjs"
@@ -4958,11 +4964,10 @@ meta_git_env_ignored_by_key_and_manifest() {
   # there without adding it here makes the generator refuse this scratch repo, which is what the
   # vacuity guard below then reports (measured when `.weavedoc/schemas/v3` was added). The guard
   # catching it loudly is the design; keeping the two lists in step is the maintenance.
-  mkdir -p "$sc/.weavedoc/schemas" "$sc/tests" "$sc/.claude/skills/weavedoc-x"
+  mkdir -p "$sc/.weavedoc" "$sc/tests" "$sc/.claude/skills/weavedoc-x"
   cp "$REPO/.weavedoc/VERSION" "$REPO/.weavedoc/schema" "$REPO/.weavedoc/READ.md" \
      "$REPO/.weavedoc/FORMATS.md" "$REPO/.weavedoc/PARSER-MODEL.md" \
      "$REPO/.weavedoc/.gitattributes" "$sc/.weavedoc"/ 2>/dev/null
-  cp "$REPO/.weavedoc/schemas/v3" "$sc/.weavedoc/schemas"/ 2>/dev/null
   mkdir -p "$sc/.weavedoc/bin" && cp "$REPO/.weavedoc/bin/weavedoc.mjs" "$sc/.weavedoc/bin"/ 2>/dev/null
   printf 'skill
 ' > "$sc/.claude/skills/weavedoc-x/SKILL.md"
@@ -5019,13 +5024,12 @@ meta_manifest_generator_fails_closed() {
   # as though it were the file's digest, and the script exited 0. Built by staging the required
   # paths and then deleting one loose object out from under the index.
   local sc2="$W/mmfc2" obj
-  mkdir -p "$sc2/tests" "$sc2/.weavedoc/bin" "$sc2/.weavedoc/schemas"
+  mkdir -p "$sc2/tests" "$sc2/.weavedoc/bin"
   cp "$REPO/tests/make-manifest.sh" "$REPO/tests/git-env.sh" "$sc2/tests"/ 2>/dev/null
   # Same coupling to make-manifest.sh's required-path guard as the case above.
   cp "$REPO/.weavedoc/VERSION" "$REPO/.weavedoc/schema" "$REPO/.weavedoc/READ.md" \
      "$REPO/.weavedoc/FORMATS.md" "$REPO/.weavedoc/PARSER-MODEL.md" \
      "$REPO/.weavedoc/.gitattributes" "$sc2/.weavedoc"/ 2>/dev/null
-  cp "$REPO/.weavedoc/schemas/v3" "$sc2/.weavedoc/schemas"/ 2>/dev/null
   cp "$REPO/.weavedoc/bin/weavedoc.mjs" "$sc2/.weavedoc/bin"/ 2>/dev/null
   ( cd "$sc2" && git init -q . && git add -A >/dev/null 2>&1 ) || { bad "could not build the second scratch repo"; return; }
   out=$( cd "$sc2" && bash tests/make-manifest.sh 2>/dev/null ); rc=$?

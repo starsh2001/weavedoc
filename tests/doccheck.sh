@@ -279,14 +279,17 @@ done
 grep -qF 'repair-proof phase' "$REPO/.weavedoc/FORMATS.md" \
   || say "FORMATS no longer says repeat is counted in the repair-proof phase — the field contract would describe the retired alternating loop"
 
-# 14. The authority axis has NINE owners and one shared opening, byte-identical — the shape check 11
-# uses for the skill-handoff block, for the same reason: a drifted copy teaches a different rule AND
-# can be cited to prove it. What must not drift is the READ rule (which key, which file, absence =
-# standard, the document override's scope) and the FALLBACK (an unnamed decision goes to the user);
-# each skill's own ROW is per-skill by design and is not compared. A skill missing the section
-# entirely would silently run at whatever level its author assumed, which is the state this axis
-# exists to end. TEXT, never obedience — the honesty checks 5-7 state about themselves.
-# VACUITY GUARD: $skills and its >=9 floor already ran in check 10; g14ref empty fails the last line,
+# 14. The authority axis has TEN owners — nine skills sharing one byte-identical opening (the shape
+# check 11 uses for the skill-handoff block, for the same reason: a drifted copy teaches a different
+# rule AND can be cited to prove it), plus the shared engine reviewers.md, whose level hook carries
+# its own wording and was the axis's unwatched tenth consumer until a cold review renamed the key in
+# it alone and everything stayed green (0.6.18). What must not drift is the READ rule (which key,
+# which file, which three words, absence = standard, the document override's scope) and the FALLBACK
+# (an unnamed decision goes to the user); each skill's own ROW is per-skill by design and is not
+# compared. Mutual byte-compare proves agreement only, so the contract elements are ALSO pinned —
+# on the shared opening once (the mirror carries the pin to all nine) and on the engine's hook
+# directly. TEXT, never obedience — the honesty checks 5-7 state about themselves.
+# VACUITY GUARD: $skills and its >=9 floor already ran in check 10; g14ref empty fails its own line,
 # so an extraction that found nothing cannot read as nine agreeing copies.
 g14ref=""; g14refname=""
 for s in $skills; do
@@ -312,6 +315,34 @@ for s in $skills; do
   fi
 done
 [ -n "$g14ref" ] || say "no skill carries the Authority opening at all — nine missing copies must not read as nine agreeing ones"
+# The contract elements beyond the pinned READ sentence, pinned on the shared opening once — the
+# byte-compare above carries them to all nine. Measured need (cold review, 0.6.18): a nine-way
+# `absent means standard`→`strict` sed kept the mirror intact and every pin green, flipping the
+# effective level of every keyless mine — which is all of them — under an all-green board.
+if [ -n "$g14ref" ]; then
+  for s in \
+    'absent means `standard`' \
+    "the override governs the document's own steps and leaves mine-side work at the mine's level" \
+    "A decision the level's text does not name goes to the user"; do
+    printf '%s\n' "$g14ref" | grep -qF "$s" \
+      || say "the shared Authority opening lost a contract element: '$s' — nine byte-identical copies of an opening missing it are nine copies of the loss"
+  done
+fi
+# The TENTH owner. reviewers.md's level hook governs the defender's finalize authority and carries
+# its own wording, so the mirror never covered it: a rename applied to it alone — or a sweep that
+# covers the nine red surfaces and forgets it — leaves the engine reading a dead key, falling back
+# to standard, and finalizing drops a strict mine forbade. Its elements are pinned directly.
+rev14="$REPO/.claude/skills/weavedoc-review/references/reviewers.md"
+for s in \
+  "The defender's authority to FINALIZE follows the mine's authority level" \
+  'read `authority` from `.weavedoc/config.yaml`' \
+  'absent = `standard`' \
+  'the defender finalizes **nothing**' \
+  'full triage authority including rejection' \
+  'finalize on its own at `standard` and `delegated`'; do
+  grep -qF "$s" "$rev14" \
+    || say "reviewers.md — the authority axis's tenth owner — lost a hook element: '$s' — the engine that governs the defender's finalize authority would fall back to standard at every level"
+done
 # The three level words are the axis's vocabulary and must be the schema's own, in every direction:
 # a skill offering a level `validate` rejects, or a schema value no skill has a row for, is the same
 # split this repo keeps closing between a questionnaire and its validator.
