@@ -360,6 +360,43 @@ grep -qF 'an id is a machine handle' "$gat" \
   || say "the 'surface it in words, not by id' rule is gone from gather — a handoff keyed by ids is a list the user must open files to read"
 grep -qF 'The audit layer is wider than the raw one' "$REPO/.weavedoc/READ.md" \
   || say "READ.md no longer widens the audit layer past the raw one — changelog and the ledgers would read as ordinary lookup surface, which is how a thousand-line record floods a judgment"
+# 14b. The axis's PROSE owners beyond the ten checked above — the fourth site of the class three
+# cold reviews found in a row (skills → engine → these): FORMATS' own contract paragraph and plan
+# stanza, and the two template comments init copies into every fresh mine. Measured (cold review,
+# 0.6.19): flipping the absence fallback in all four while renaming the key in FORMATS stayed
+# green — the contract document and every newborn config teaching absent=strict under a green
+# board. Same TEXT-check honesty as everything above.
+fmts="$REPO/.weavedoc/FORMATS.md"
+for s in \
+  '- `authority` — optional enum: `strict` | `standard` | `delegated`' \
+  'Absent means `standard`' \
+  "a decision no level's text names goes to the user" \
+  'Omitted = inherit `config.authority`'; do
+  grep -qF -- "$s" "$fmts" \
+    || say "FORMATS lost an authority-axis element: '$s' — the most-cited contract document would teach a different axis than the ten checked owners"
+done
+grep -qF 'Absent = standard' "$REPO/.weavedoc/templates/config.yaml" \
+  || say "the config template's comment lost its absence fallback — every fresh mine would be born being taught something other than absent=standard"
+grep -qF 'Absent from config too ⇒ standard' "$REPO/.weavedoc/templates/plan.md" \
+  || say "the plan template's comment lost its absence fallback — the per-document override would teach a different inheritance than the axis defines"
+
+# 15. The bridge pins are DOUBLE-SPELLED and the two spellings must agree. artifact-contracts.mjs
+# holds V1_BRIDGE/V2_BRIDGE as an executable spec, but no production module imports it (measured,
+# 0.6.19) — the live gates carry their own strings, seven sites for the v2 pin alone. A maintainer
+# who edits the constant and trusts the old header ("production resolves through here") ships
+# surfaces still naming the old commit; a maintainer who edits one surface leaves six. Four tokens,
+# five owners, all verbatim — the check is symmetric, so either direction of the drift goes red.
+for f in \
+  "$REPO/.weavedoc/bin/lib/artifact-contracts.mjs" \
+  "$REPO/.weavedoc/bin/lib/mine.mjs" \
+  "$REPO/.weavedoc/bin/lib/cmd-validate.mjs" \
+  "$REPO/UPGRADING.md" \
+  "$REPO/README.md"; do
+  for tok in 'v0.5.21' '0257167' 'v0.6.14' '924e97e'; do
+    grep -qF -- "$tok" "$f" \
+      || say "$(basename "$f") does not carry the bridge pin token '$tok' — the two spellings of the migration doors (the spec constants and the live gate strings) have drifted apart"
+  done
+done
 
 [ "$fail" -eq 0 ] && echo "doccheck: docs and code agree"
 exit "$fail"

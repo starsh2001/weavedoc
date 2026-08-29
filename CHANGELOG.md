@@ -6,6 +6,20 @@
 
 ---
 
+## 0.6.19
+
+**4차 콜드 리뷰(3차 수리의 재검): ⑯⑰⑲⑳ 성립, ⑱은 집행 성립에 잔해 넷 — should-fix 4·nice 2, critical 0.** 여섯 전부 재측정으로 확정됐고 이 번들이 닫는다. 네 라운드째 같은 패턴이다: 결함은 수리가 만진 축의 나머지, 특히 수리가 쓴 산문에서 났다.
+
+**① "살아 있는 절반"의 정체 — 정직한 헤더 + 브리지 핀 동기 검사(doccheck 15).** 0.6.18의 artifact-contracts 헤더는 "production actually reads — the version gate resolves through here"라고 썼지만 실측 importer는 **0개**였다. 라이브 게이트(mine.mjs·validate)는 자체 문자열로 돌고, `924e97e`는 라이브 메시지 일곱 곳에 이중 스펠링로 흩어져 있으며 일치 검사가 없었다 — 헤더를 믿고 상수만 고친 유지보수자는 프로덕션이 따라온다고 믿게 되는, cite-a-file-to-prove-a-wrong-rule 위험이 그 규칙을 쓴 파일 자신에게 있었다. 헤더는 사실대로 다시 썼다: 이 모듈은 **게이트 규칙의 실행 가능한 명세**이고 property 드라이버가 유일한 실행자다. 그리고 검사 15가 두 스펠링을 묶는다 — 네 토큰(`v0.5.21`·`0257167`·`v0.6.14`·`924e97e`) × 다섯 소유자(spec·mine.mjs·validate·UPGRADING·README, README에는 v1 commit을 채워 균일하게), 어느 방향의 드리프트든 red(실측). 게이트를 모듈로 재배선하는 구조적 해법은 별도 번들감으로 남긴다.
+
+**② 같은 클래스의 네 번째 자리 — 검사 14b.** 스킬(1차) → 엔진(3차) → 그리고 이번엔 FORMATS의 축 계약 문단·plan stanza와 **init이 모든 새 광산에 복사하는 템플릿 주석 둘**. 실측: 네 곳의 absence fallback을 뒤집고 FORMATS의 키를 개명해도 판 전체 green이었다. 핀 여섯 신설(FORMATS 넷: 키+세 낱말·fallback·무명결정·상속 / 템플릿 둘: fallback), 뒤집기 red(실측). 부수 사건 하나 기록: 새 핀 하나가 `- `로 시작해 grep이 **옵션으로 파싱**했고(gnu grep "unknown option"), 그 오류의 rc가 `|| say`를 태워 **가짜 red**를 냈다 — red/green 실측 단계가 잡았고 `--`(옵션 종료)로 수리. 핀 문자열은 파일 문면에서 오므로 대시로 시작할 수 있다는 것, 이 하네스의 다음 핀 작성자를 위한 교훈이다.
+
+**③ fingerprint가 라벨과 같아졌다.** 걷기가 entrypoint+`lib/`뿐이라 **`bin/hooks/`(enforcement 게이트)가 0.6.9부터 지문 밖**이었다 — hooks만 다른 두 설치가 같은 지문을 찍고, "compare this, not just the version"이 그 지점에서 거짓 보증이었다. 0.6.18 주석은 그 위에 "라벨과 정확히 일치"를 새로 주장했다. 걷기를 `bin/` 전체로 넓혀 라벨이 참이 됐고, fingerprint가 이동했다(golden 갱신).
+
+**④~⑥ 산문 셋.** tests/README의 두 문단 재작성 — property 드라이버 서술을 은퇴 사실대로, manifest 행은 고정 수치 관행을 끝내고 파일을 정본으로("21개"와 "64개"가 각각 다른 시점의 스냅샷인 채 낡아 있었다). NEXT_IMPLEMENTATION_PLAN의 처분 표에 은퇴 시점 한 줄. probe 주석에 반쪽 교훈 명시 — 키는 schemas 나무를 계속 걷지만 manifest는 더 안 실으므로, 계약 재추가 시 manifest glob 복원이 함께다.
+
+**케이스 수 불변(626), doccheck 검사 15 신설 + 14b 확장(핀 여섯), red 실측 2방향.** 사이클 회계: 재검이 신규를 냈으므로 카운터는 여전히 0이다.
+
 ## 0.6.18
 
 **3차 콜드 리뷰(2차 수리의 재검): ⑩~⑮ 여섯 수리는 전부 성립, 신규 should-fix 4·nice 1.** critical 0. 다섯 전부 재측정으로 확정됐고 이 번들이 닫는다. 넷은 두 라운드가 못 본 것, 하나는 ⑪ 수리의 옆 문장 — 세 라운드 연속으로 같은 형태다: **결함은 수리가 만진 축의 나머지에서 난다.**

@@ -109,9 +109,12 @@ function cmdVersion (json) {
   let fp = ''
   try {
     const h = createHash('sha1')
-    h.update(readFileSync(join(SCRIPT_DIR, 'weavedoc.mjs')))
-    // RECURSIVE, relative-path-keyed (v0.5.1): a flat listing skipped any future lib/subdir/ — the
-    // manifest globs the whole directory, so the fingerprint has to see exactly what ships.
+    // RECURSIVE over bin/ WHOLE, relative-path-keyed (v0.5.1 made lib/ recursive; 0.6.19 widened
+    // the walk to the directory the label names). The walk covered entrypoint + lib/ only, so
+    // bin/hooks/ — the enforcement gate, shipped in the manifest since 0.6.9 — was outside the
+    // fingerprint: two installs differing only in enforcement code printed the same value under a
+    // label that says "compare this". Caught by a cold review after a 0.6.18 comment claimed the
+    // label was exact. The manifest globs the whole directory; the fingerprint now sees the same.
     const walk = (dir, pre) => {
       for (const n of readdirSync(dir).sort()) {
         const p = join(dir, n)
@@ -121,10 +124,8 @@ function cmdVersion (json) {
         h.update(readFileSync(p))
       }
     }
-    walk(join(SCRIPT_DIR, 'lib'), '')
+    walk(SCRIPT_DIR, '')
     h.update(readFileSync(SCHEMA))
-    // (The versioned-contract directory beside the schema retired in 0.6.18 with its only file;
-    // the fingerprint returns to exactly what its label says: bin + schema.)
     fp = h.digest('hex')
   } catch { /* a runtime that cannot read itself still reports its label */ }
   if (json) {

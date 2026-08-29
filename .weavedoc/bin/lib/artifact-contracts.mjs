@@ -1,7 +1,12 @@
-// Artifact version negotiation, and the two bridge pins a below-floor mine is refused toward.
-// This is the half of the old "artifact contracts" module production actually reads — the version
-// gate (mine.mjs, validate) resolves through here. The other half, the Phase-1 role-contract
-// apparatus, retired in 0.6.18; the note below records what left and why.
+// Artifact version negotiation, and the two bridge pins a below-floor mine is refused toward —
+// as an EXECUTABLE SPEC, not as production code. No production module imports this file (measured,
+// 0.6.19 — a cold review caught the previous header claiming the version gate "resolves through
+// here"): the live gates in mine.mjs and cmd-validate carry their own per-surface strings, and the
+// property driver is this module's only executor. What keeps the two spellings honest is doccheck's
+// bridge-pin sync check: the pin values below must appear verbatim in every live surface, so
+// editing a constant here without moving the surfaces — or a surface without this spec — goes red.
+// The other half of the old module, the Phase-1 role-contract apparatus, retired in 0.6.18; the
+// note below records what left and why.
 
 // The runtime's own supported range — deliberately NOT `schema.version` from the mine's schema.
 // Conflating "what this runtime can read" with "what this mine declares" is how a mine's own file

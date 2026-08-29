@@ -47,7 +47,7 @@ bash tests/in-container.sh sh '<셸 명령>'    # 그 외, /work가 트리
 
 `node tests/quote-marker-properties.mjs` covers the v3 quote marker — grammar (fail-closed on unknown, duplicate, empty and truth-sourced attributes), marker↔quote-block association, the unmarked-blockquote population rule, fence precedence through the shared scanner, resolution through the raw-source model, byte-domain comparison, and the binary / not-checkable boundary. It was written **before** the module, as the plan requires, and every assertion first failed with "Cannot find module".
 
-`node tests/artifact-contract-properties.mjs` does the same for the versioned artifact-role contract (schema v3 Phase 1) — version negotiation, v2↔production equivalence, fail-closed role sets, positional shift, and the declared schema domain. **Nothing in the runtime consumes that model yet** (production consumers switch in Phase 2), so its meta case is the only thing executing it and the exact assertion total is pinned for that reason.
+`node tests/artifact-contract-properties.mjs` covers artifact **version negotiation** and the two bridge pins — the executable spec of the gate rules mine.mjs and validate hand-carry (no production module imports it; doccheck's bridge-pin sync check ties the two spellings). It used to also execute the Phase-1 role-contract model against `.weavedoc/schemas/v3`; that whole apparatus retired in 0.6.18 (Phase 2 never arrived, this driver was its only executor, and the frozen draft had drifted behind the live schema), taking the totals from groups=9 cases=212 to groups=2 cases=25. The exact total stays pinned so deleting an axis is a failure even when every remaining assertion is green.
 
 ## CI
 
@@ -65,7 +65,7 @@ bash tests/in-container.sh sh '<셸 명령>'    # 그 외, /work가 트리
 | 파일 | 내용 |
 |---|---|
 | `case-manifest.txt` | Phase 0 시점 182개 케이스 ID (기준선 — 이후 케이스는 suite가 자체 열거) |
-| `bundle.manifest` (+`.sha256`) | Phase 0 시점 21개 동작 결정 파일의 SHA-256 (git blob 기준). 재생성: `bash tests/make-manifest.sh` (현재 64개 — VERSION·`.weavedoc/.gitattributes`·공유 scanner/state adapters·`PARSER-MODEL.md`·versioned `schemas/`·templates 포함). 생성기는 **fail-closed**: 저장소가 없거나 필수 경로가 빠지면 빈 매니페스트에 rc 0이 아니라 **rc 2로 거부**한다(v0.5.18) |
+| `bundle.manifest` (+`.sha256`) | 동작 결정 파일 전부의 SHA-256 (git blob 기준). 재생성: `bash tests/make-manifest.sh` — 행 수는 파일 자체가 정본이다(고정 수치를 여기 적던 관행은 두 번 낡은 채 발견돼 끝냈다: "21개"는 Phase 0의, "64개"는 그 다음의 스냅샷이었다). 포함 범위는 make-manifest.sh의 pathspec이 정본(VERSION·`.gitattributes`·bin 전체·schema·계약 문서·templates·skills; versioned `schemas/`는 0.6.18에서 은퇴). 생성기는 **fail-closed**: 저장소가 없거나 필수 경로가 빠지면 빈 매니페스트에 rc 0이 아니라 **rc 2로 거부**한다(v0.5.18) |
 | `parity-final-2026-08-05.md` | **bash 판 삭제 직전의 마지막 대조** — 회귀·코퍼스·쓰기 명령 전수·실광산·장애 주입. 삭제하면 다시 잴 수단이 없으므로 이력에 고정했다 |
 | `fidtest-inventory.md` | 구 fidtest.sh 11개 실험의 판정 기록 — Phase 2에서 흡수 3 · 폐기 8로 완결, 파일 자체 제거 |
 | `golden/` | 최소 정상 fixture에 대한 각 명령의 human output 스냅샷 (동작 변경 시 커밋 단위로 갱신) |

@@ -4823,6 +4823,9 @@ meta_key_covers_every_live_input() {
   # 0.6.18, but the key keeps walking the tree for the reason it was added — "a contract added
   # later must not be able to ship unkeyed" — so the probe RESURRECTS it in the isolated copy: a
   # file appearing there must move the key, exactly as the original `schemas/v3` edit had to.
+  # HALF the original lesson now: the manifest no longer globs this tree (0.6.18), so a re-added
+  # contract would be KEYED here yet silently unshipped — restoring the make-manifest glob (and
+  # its required-path guard) is part of re-adding one (cold review, 0.6.19).
   # (A stray file at `.weavedoc/` top level is deliberately NOT probed: it neither ships in the
   # manifest nor feeds any case, and the first respelling of this probe asserted key coverage for
   # exactly such a file — measured red, the probe's own claim was false, 0.6.18.)

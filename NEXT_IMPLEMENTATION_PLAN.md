@@ -121,7 +121,7 @@ v2 truth 계약에서 네 필드를 제거한다. 실측한 현행 스키마 기
 | 자산 (번들) | 처리 |
 |---|---|
 | parser/state 리팩터링 (`e524511`·`bcf804d`) | 유지 — 이 계획의 기준선. |
-| artifact-contracts 로더 + `schemas/v3` (`.3`~`.7`) | 커밋 유지·**휴면**. 소비자 전환 안 함 — v2 positional 계약이 계속 정본. truth 계약 변경은 기존 `.weavedoc/schema` **한 장**을 v3로 고친다(정본은 언제나 한 장). |
+| artifact-contracts 로더 + `schemas/v3` (`.3`~`.7`) | 커밋 유지·**휴면** *(→ 0.6.18에서 은퇴·삭제 — Phase 2 미도래·유일 실행자가 자기 테스트; 버전 협상 절반만 존치, 브리지 핀 `924e97e`에 보존)*. 소비자 전환 안 함 — v2 positional 계약이 계속 정본. truth 계약 변경은 기존 `.weavedoc/schema` **한 장**을 v3로 고친다(정본은 언제나 한 장). |
 | raw-source-model (`.8`~`.9`) | 커밋 유지·**휴면**. 게이트 연결 안 함. |
 | quote-marker-model (`.10`~`.14`) | 커밋 유지·**휴면**. 인용 보증은 v2 substring 인계철선(`SEAL-QUOTE-MISSING`)이 계속 담당하고, 정교한 의미 왜곡은 cold review(AI) 몫. |
 | 회귀 584 케이스 · 3-OS 하네스 | 그대로. 새 케이스는 여기에 얹는다. |
