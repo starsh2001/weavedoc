@@ -1344,8 +1344,10 @@ meta_bundled_contracts_have_no_control_chars() {
   local f bad="" n
   f="$REPO/.weavedoc/schema"
   # VACUITY GUARD: a roster that is not a file would make this pass while checking nothing. (The
-  # roster shrank to one file when the versioned contract retired, and the loop went with it —
-  # shellcheck SC2066 blocks a one-element quoted for, caught by CI's lint leg.)
+  # roster shrank to one file when the versioned contract retired, and the loop went with it — a
+  # one-element quoted for is SC2066, an error to CI's lint leg. And this comment's first spelling
+  # opened a line with the linter's own name, which parses as a DIRECTIVE and is SC1073 — the
+  # sentence about the linter has to dodge the linter's grammar.)
   [ -f "$f" ] || { bad "no bundled contract to scan at ${f#$REPO/} — the check would be vacuous"; return; }
   n=$(node "$REPO/tests/ctlscan.mjs" "$f" | tail -1 | sed 's/[^0-9]//g')
   [ "${n:-1}" = 0 ] || bad="$bad ${f#$REPO/}($n)"
