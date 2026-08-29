@@ -1342,12 +1342,13 @@ meta_bundled_contracts_have_no_control_chars() {
   # CI: a contract edited here should go red HERE, not one push later. The versioned-contract
   # directory retired in 0.6.18; the live contract stays on the roster.
   local f bad="" n
-  for f in "$REPO/.weavedoc/schema"; do
-    # VACUITY GUARD: a roster entry that is not a file would make this pass while checking nothing.
-    [ -f "$f" ] || { bad "no bundled contract to scan at ${f#$REPO/} — the check would be vacuous"; return; }
-    n=$(node "$REPO/tests/ctlscan.mjs" "$f" | tail -1 | sed 's/[^0-9]//g')
-    [ "${n:-1}" = 0 ] || bad="$bad ${f#$REPO/}($n)"
-  done
+  f="$REPO/.weavedoc/schema"
+  # VACUITY GUARD: a roster that is not a file would make this pass while checking nothing. (The
+  # roster shrank to one file when the versioned contract retired, and the loop went with it —
+  # shellcheck SC2066 blocks a one-element quoted for, caught by CI's lint leg.)
+  [ -f "$f" ] || { bad "no bundled contract to scan at ${f#$REPO/} — the check would be vacuous"; return; }
+  n=$(node "$REPO/tests/ctlscan.mjs" "$f" | tail -1 | sed 's/[^0-9]//g')
+  [ "${n:-1}" = 0 ] || bad="$bad ${f#$REPO/}($n)"
   OUT="control-chars:${bad:- none}"; RC=0
   if [ -n "$bad" ]; then bad "bundled contract holds literal control characters:$bad"; else ok; fi
 }
