@@ -3,8 +3,10 @@
 // 0.6.19 — a cold review caught the previous header claiming the version gate "resolves through
 // here"): the live gates in mine.mjs and cmd-validate carry their own per-surface strings, and the
 // property driver is this module's only executor. What keeps the two spellings honest is doccheck's
-// bridge-pin sync check: the pin values below must appear verbatim in every live surface, so
-// editing a constant here without moving the surfaces — or a surface without this spec — goes red.
+// bridge-pin sync check: the pin values below must appear verbatim in every surface on ITS ROSTER
+// (each owner with the token set it actually carries — the roster, not this sentence, is the
+// census), so editing a constant here without moving the surfaces — or a surface without this
+// spec — goes red.
 // The other half of the old module, the Phase-1 role-contract apparatus, retired in 0.6.18; the
 // note below records what left and why.
 
@@ -29,7 +31,8 @@ export const V2_BRIDGE = { tag: 'v0.6.14', commit: '924e97e' }
 // the draft had drifted four axes behind the live schema — a bundled file declaring a retired
 // model as "the contract" is the cite-a-file-to-prove-a-wrong-rule hazard. Same judgment as the
 // migrator: no constituency, pinned in git, deleted from the live tree. What this file KEEPS is
-// what production actually reads: version negotiation and the two bridge pins above.)
+// the negotiation spec and the two bridge pins above — the rules the production gates hand-carry,
+// stated once in executable form.)
 
 const isInt = s => typeof s === 'string' && s !== '' && /^[0-9]+$/.test(s)
 

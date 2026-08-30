@@ -1342,22 +1342,29 @@ meta_bundled_contracts_have_no_control_chars() {
   # CI: a contract edited here should go red HERE, not one push later. The versioned-contract
   # directory retired in 0.6.18; the live contract stays on the roster.
   local f bad="" n
-  f="$REPO/.weavedoc/schema"
-  # VACUITY GUARD: a roster that is not a file would make this pass while checking nothing. (The
-  # roster shrank to one file when the versioned contract retired, and the loop went with it — a
-  # one-element quoted for is SC2066, an error to CI's lint leg. And this comment's first spelling
-  # opened a line with the linter's own name, which parses as a DIRECTIVE and is SC1073 — the
-  # sentence about the linter has to dodge the linter's grammar.)
-  [ -f "$f" ] || { bad "no bundled contract to scan at ${f#$REPO/} — the check would be vacuous"; return; }
-  n=$(node "$REPO/tests/ctlscan.mjs" "$f" | tail -1 | sed 's/[^0-9]//g')
-  [ "${n:-1}" = 0 ] || bad="$bad ${f#$REPO/}($n)"
+  # The roster regrew in 0.6.20: a sixth-round review found the planted teaching surfaces —
+  # templates/ (init copies them into every mine; a contaminated claude-block plants its bytes
+  # downstream where validate's byte-compare passes both sides), FORMATS and READ — scanned by
+  # nothing, the 0.6.9 incident's mechanism intact for them. (History of this loop: it shrank to
+  # one file when the versioned contract retired, and a one-element quoted for is SC2066 to CI's
+  # lint leg; the comment about that opened with the linter's name and was SC1073 — the sentence
+  # about the linter has to dodge the linter's grammar.)
+  for f in "$REPO/.weavedoc/schema" "$REPO/.weavedoc/FORMATS.md" "$REPO/.weavedoc/READ.md" \
+           "$REPO/.weavedoc/templates"/*; do
+    # VACUITY GUARD: a roster entry that is not a file would make this pass while checking nothing.
+    [ -f "$f" ] || { bad "no bundled contract to scan at ${f#$REPO/} — the check would be vacuous"; return; }
+    n=$(node "$REPO/tests/ctlscan.mjs" "$f" | tail -1 | sed 's/[^0-9]//g')
+    [ "${n:-1}" = 0 ] || bad="$bad ${f#$REPO/}($n)"
+  done
   OUT="control-chars:${bad:- none}"; RC=0
   if [ -n "$bad" ]; then bad "bundled contract holds literal control characters:$bad"; else ok; fi
 }
 meta_artifact_contract_properties() {
-  # Version negotiation and the two bridge pins — the half of artifact-contracts.mjs the version
-  # gate actually reads. The Phase-1 role-contract half retired in 0.6.18 with `.weavedoc/schemas/v3`
-  # (this driver was its only executor), so the totals dropped from groups=9 cases=212. The exact
+  # Version negotiation and the two bridge pins — the EXECUTABLE SPEC in artifact-contracts.mjs,
+  # which no production module imports (the live gates hand-carry their strings; doccheck's
+  # bridge-pin sync ties the spellings). The Phase-1 role-contract half retired in 0.6.18 with
+  # `.weavedoc/schemas/v3` (this driver was its only executor), so the totals dropped from
+  # groups=9 cases=212. The exact
   # total stays pinned for the reason it always was: deleting an axis is a failure even when every
   # remaining assertion is green.
   OUT=$(node "$REPO/tests/artifact-contract-properties.mjs" 2>&1); RC=$?
@@ -2696,6 +2703,11 @@ block_config_authority_unfamiliar() {
   sed -i 's/^authority: .*/authority: paranoid/' "$W/.weavedoc/config.yaml"
   grep -qx 'authority: paranoid' "$W/.weavedoc/config.yaml" || { bad "fixture no-op: the config carries no authority line to corrupt"; return; }
   vrun validate; expect_block "authority"
+  # The refusal is also the fifth surface that TEACHES the axis (skills → engine → FORMATS →
+  # templates → this live message): the parenthesis is what a user reads at the exact moment they
+  # touch the key, and a cold review measured it flippable to "(absent = strict)" under a fully
+  # green board. Asserted here because runtime output is regress's layer, not doccheck's.
+  expect_has "(absent = standard)"
 }
 pass_config_authority_absent_then_declared() {
   # Both halves of the absence contract in one case, because they ARE one contract. Absent: green
@@ -2718,6 +2730,9 @@ block_plan_authority_unfamiliar() {
   # the mine's, which is precisely the level the document was trying not to be.
   sed -i 's/^doc_id: /authority: paranoid\ndoc_id: /' "$W/documents/d1/plan.md"
   vrun validate; expect_block "authority"
+  # Same fifth-surface rule as the config case above: the override's inheritance is taught by
+  # this parenthesis at the moment it matters.
+  expect_has "(absent = inherit the mine's)"
 }
 acct_config_unknown_key_warned() {
   # Unknown top-level keys are a named warning, not a failure (decided: a user extension or a
@@ -5246,9 +5261,10 @@ meta_manifest_baseline_current() {
     bad "bundle.manifest.sha256 is not the hash of bundle.manifest — the two artifacts drifted apart; regenerate both"
   else ok; fi
 }
-acct_fingerprint_covers_lib() {
+acct_fingerprint_covers_bin() {
   # The fingerprint is the ONE spelling of "are these two installs the same runtime", and the Node
-  # runtime is a dispatcher plus the modules under lib/ — an entrypoint-only hash reported
+  # runtime is everything under bin/ — dispatcher, lib/ modules, and the enforcement hooks — plus
+  # the schema, which is what the label says. An entrypoint-only hash reported
   # IDENTICAL for commit pairs differing solely in lib/ (v0.4.0 external review; f3b05f2 and
   # ef48366 are such commits). Proven on a COPY of the runtime: the shipped one must not be edited
   # by a test, and a copy is exactly what an install is. Runs the node runtime directly on both
@@ -5271,6 +5287,15 @@ acct_fingerprint_covers_lib() {
   printf '\n' >> "$W/.weavedoc/bin/weavedoc.mjs"
   f3=$( cd "$W" && node .weavedoc/bin/weavedoc.mjs version 2>/dev/null | grep -m1 'fingerprint:' )
   [ "$f2" != "$f3" ] || { bad "an entrypoint byte change did not change the fingerprint"; return; }
+  # ...and bin/hooks/ (0.6.20). The 0.6.19 walk-widening shipped with NO arm of its own, and a
+  # cold review measured the consequence: reverting the widening left this case and the whole
+  # suite green — the repaired blindness (enforcement code outside the print, under a label that
+  # says "compare this") could return without a single test noticing. This arm is that revert's
+  # tripwire: hooks bytes must move the fingerprint.
+  local f4
+  printf '\n' >> "$W/.weavedoc/bin/hooks/gate.mjs"
+  f4=$( cd "$W" && node .weavedoc/bin/weavedoc.mjs version 2>/dev/null | grep -m1 'fingerprint:' )
+  [ "$f3" != "$f4" ] || { bad "a bin/hooks byte change did not change the fingerprint — the walk does not cover the enforcement gate, and two installs differing only in hooks share a print"; return; }
   ok
 }
 acct_smoke_lang()    { vrun lang;    expect_pass; expect_has "ko"; }
@@ -6670,8 +6695,30 @@ block_gate_v2_mine_general_commands() {
   expect_block "v3-only"
   vrun census
   expect_block "v2→v3 migrator"
+  # THE COMMIT HASH IS THE CONTRACT — the v1 twin below has asserted its bridge hash since the
+  # gate shipped, while this side asserted prose only: a cold review measured both v2 refusal
+  # messages losing their pin (comments kept the token, so doccheck's file-level sync stayed
+  # green) with the whole board green. Message-level parity closes that: the hash a v2 user is
+  # actually sent to must be in the bytes they read.
+  expect_block "924e97e"
   vrun validate
   expect_block "VER-V2-UPGRADE"
+  expect_block "924e97e"
+  expect_hasnt "examined:"
+}
+block_gate_v0_mine_names_the_v1_bridge_first() {
+  # BELOW-FLOOR IS NUMERIC. The ladder used to enumerate '1' and '2', so a `version: 0` mine fell
+  # through both rungs into full v3 judgment — measured by a cold review: validate printed seven
+  # v3 problems and an `examined:` line about a v0 mine, and `pull` answered exit 0. The
+  # executable spec always routed below-floor-and-not-2 to the v1 bridge first; these asserts are
+  # what hold production to it.
+  sed -i 's/^version: 3$/version: 0/' "$W/project.md"
+  sed -i 's/^version: 3/version: 0/' "$W/.weavedoc/config.yaml"
+  vrun pull 위약
+  expect_block "v0.5.21"
+  vrun validate
+  expect_block "VER-V1-BRIDGE"
+  expect_block "0257167"
   expect_hasnt "examined:"
 }
 block_gate_v1_mine_names_the_bridge() {
@@ -6803,37 +6850,6 @@ block_conflict_store_dangling_references() {
   expect_has "m099"
 }
 
-# ---- schema v3 slice 2: the v2→v3 migrator ------------------------------------------------------
-mk_v2mine() { # rebuild $W as a REAL v2 mine under git — the migrator's whole input surface:
-  # an ok winner carrying resolution(decided_by: machine)+superseded, a discarded loser, a
-  # reciprocal conflict pair, a retracted card, ledger rows for a survivor and a casualty, a
-  # changelog id token ABOVE every card (the high-water evidence), and a document citing only
-  # survivors. The clean git worktree is the backup the migrator demands.
-  sed -i 's/^version: 3$/version: 2/' "$W/project.md"
-  sed -i 's/^version: 3/version: 2/' "$W/.weavedoc/config.yaml"
-  sed -i 's/^required_tags: \[\]$/required_tags: [위약]/' "$W/project.md"
-  rm -rf "$W/.weavedoc-state"
-  # A REAL v2 mine predates the intake ledger entirely — it inherits one from the v3 pristine, and
-  # a fixture carrying an artifact its own schema version never had would leave the migrator's
-  # backfill with nothing to do and the whole path untested (bundle 2026-08-08.28).
-  rm -f "$W/materials/intake-ledger.tsv"
-  rm -f "$W/truths"/t*.md
-  printf -- '---\nid: m001\ntitle: 용역 계약서\norigin: file\nrole: 계약서\ntopics: [대금, 위약]\nformat: md\nsource_path: inbox/contract.md\nadded: 2026-07-01\nstatus: converted\nsummary: 대금과 위약금을 정한 최소 계약서.\n---\n\n# 용역 계약서\n\n제3조 대금은 5천만원으로 한다.\n제7조 위약금은 계약금액의 10%%로 한다.\n제8조 위약금은 계약금액의 20%%로 한다.\n' > "$W/materials/m001/converted.md"
-  printf -- '---\nid: t001\nclaim: "위약금은 계약금액의 10%%다"\nsource: m001\nlocation: "제7조"\ntags: [위약]\nstatus: ok\nprovenance: stated\nresolution: {type: pick, winner: t001, decided_by: machine, reason: "v2 기계 선택"}\nsuperseded: [t002]\n---\n\n제7조 위약금은 계약금액의 10%%로 한다.\n' > "$W/truths/t001.md"
-  printf -- '---\nid: t002\nclaim: "위약금은 계약금액의 15%%다"\nsource: m001\ntags: [위약]\nstatus: discarded\nprovenance: stated\nresolution: {type: pick, winner: t001, decided_by: user, decision_kind: supplied}\n---\n\n제7조 위약금은 계약금액의 10%%로 한다.\n' > "$W/truths/t002.md"
-  printf -- '---\nid: t003\nclaim: "위약금은 계약금액의 10%%다 (7조)"\nsource: m001\nlocation: "제7조"\ntags: [위약]\nstatus: conflict\nconflict_with: [t004]\nprovenance: stated\n---\n\n제7조 위약금은 계약금액의 10%%로 한다.\n' > "$W/truths/t003.md"
-  printf -- '---\nid: t004\nclaim: "위약금은 계약금액의 20%%다 (8조)"\nsource: m001\nlocation: "제8조"\ntags: [위약]\nstatus: conflict\nconflict_with: [t003]\nprovenance: stated\n---\n\n제8조 위약금은 계약금액의 20%%로 한다.\n' > "$W/truths/t004.md"
-  printf -- '---\nid: t005\nclaim: "없는 조항"\nsource: m001\ntags: [해지]\nstatus: retracted\nprovenance: stated\n---\n\n제99조 없는 문장.\n' > "$W/truths/t005.md"
-  printf '# Coverage\n\n## m001\n\n- 위약: t001\n- 위약 15%%: t002\n' > "$W/truths/coverage.md"
-  printf '# 변경 로그\n\n- added: t001 (2026-07-30)\n- removed: t073 (v2 이력 토큰 — high-water 근거)\n' > "$W/truths/changelog.md"
-  UD=$(printf 'x' | sha256sum | cut -d' ' -f1)
-  printf 't001\t%s\tverified\t1\tstd\t2026-07-30\nt005\t%s\tverified\t1\tstd\t2026-07-30\n' "$UD" "$UD" > "$W/truths/verify-ledger.tsv"
-  printf -- '---\ndoc_id: d1\ndoc_type: report\ntone: 담백\nstatus: planned\ncontinues: []\ncited_truths: [t001]\nscope_tags: [위약]\n---\n\n# 개요\n' > "$W/documents/d1/plan.md"
-  printf '# 개요\n\n위약금은 계약금액의 10%%다. <!-- t:t001 -->\n' > "$W/documents/d1/draft.md"
-  rm -f "$W/documents/d1/final.md" "$W/documents/d1/review.md"
-  ( cd "$W" && git init -q && git add -A >/dev/null 2>&1 && git -c user.email=x@x -c user.name=x commit -qm base ) \
-    || bad "mk_v2mine: git setup failed — the migrator's backup precondition cannot be built"
-}
 
 # ---- the CLAUDE.md pointer block: planted by init, byte-checked by validate ----------------------
 # THE DEFECT THESE PIN (eclypse, 2026-08-13). init plants a fixed block in the project's CLAUDE.md

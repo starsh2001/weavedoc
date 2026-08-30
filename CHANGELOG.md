@@ -6,6 +6,16 @@
 
 ---
 
+## 0.6.20
+
+**프로세스 사건부터: 5차 리뷰의 수리 여섯(F1~F6)은 6차 리뷰가 돌 때까지 존재하지 않았다.** 세션이 수리 계획을 세우고 "진행할까요"를 물은 채 승인을 받지 못했고, 다음 요청(6차 프롬프트)을 수리 완료로 오독하지 않은 6차 리뷰가 **critical(프로세스)** 로 그것을 잡았다 — reflog·전 브랜치·stash 어디에도 v0.6.20이 없음을 실측하고, F1~F6이 현 트리에 실재함을 양방향(전진·되돌림)으로 재확정했다. 이 번들이 그 여섯과 6차의 신규 아홉을 함께 닫는다.
+
+**5차 F1~F6.** ① fingerprint 케이스에 **hooks 팔** 신설 + `acct_fingerprint_covers_bin`으로 개명 — 0.6.19의 걷기 확장(이 번들 유일의 런타임 수리)에 수정 공격 케이스가 없어, 걷기를 되돌려도 626/626 green이었다(6차 실측). 이제 되돌리면 그 팔이 정확히 red다(실측). ② 검사 15를 **소유자별 토큰 로스터**(9소유자)로 — 5차가 로스터 밖에서 핀 보유 표면 넷(validate-truths·schema·FORMATS·version 출력)을 찾았고, 균일 4토큰 강제는 두 토큰만 든 파일에 산문 왜곡을 강요한다. spec 헤더의 "every live surface" 과대 주장은 "로스터가 곧 census"로 정직화. ③ v2 게이트 케이스에 **해시 assert**(`924e97e`, 두 경로 다) — v1 쌍둥이는 처음부터 `0257167`을 물었는데 v2 쪽은 산문만 물어서, 메시지의 핀을 지워도 판 전체 green이었다(6차 실측 — 주석의 토큰이 파일 단위 grep을 차폐). 이제 지우면 red(실측). ④ 거짓 배선 산문 셋(property 헤더·regress meta 주석·artifact-contracts 완화형) 전부 실행-가능-명세 문면으로. ⑤ validate의 fallback 괄호 둘에 assert + interview standard 서술(0.6.13 소유자 교정을 나르는 유일한 런타임 문자열)에 doccheck 핀. ⑥ CI ctlscan을 bin 전체로.
+
+**6차 신규 아홉.** **①** `version: 0` 광산이 두 게이트('1'·'2' 열거)를 다 지나 **v3 규칙으로 판정**되고 있었다(6차 실측: validate가 v0 광산에 "✓ all checks passed") — 사다리를 수치식으로(v2는 v2 브리지, 2 미만 전부 v1 브리지 먼저), executable spec이 처음부터 선언하던 라우팅에 프로덕션을 맞췄다. 신설 케이스가 옛 사다리에서 정확히 red(실측). **②** delegated gather의 "미비준" 가드가 산문 한 줄뿐이라 승인 전 `map` 실행이 기계 초안을 `stated`로 세탁할 수 있었다 → **`status: collected`가 미비준의 가시적 운반자**가 된다: 등재는 collected로, 배치 승인이 converted로 바꾸며 재선언한다. map은 converted만 읽으므로 구조적으로 닫힌다(새 어휘 0 — 기존 enum·기존 게이트 재사용). FORMATS의 collected 뜻풀이에 실었다. **③** strict gather의 "원문 첨부"가 실행 불가능한 지시였다(형식·위치 무정의 + 자기 행의 note 금지와 충돌) → **`source.raw.md` 두 번째 원본**으로 구체화: intake tree digest가 이미 `source.*` 집합 전체를 묶고, 첨부가 기계 턴을 나르므로 note 금지와의 충돌도 해소된다. **④** ctlscan 로스터에 **templates·FORMATS·READ** 추가(CI·로컬 쌍둥이 둘 다) — 오염된 claude-block은 init이 다운스트림에 심고 validate의 byte 대조는 양쪽 다 오염이라 통과하는 자리다. **⑤** push 트리거에 `fix/**` — 아홉 번들이 수동 dispatch로만 CI를 받았고 lint 실패 둘이 정확히 dispatch 한 박자 늦게 발견됐다. **⑥** READ.md의 기계 리더 문장이 "넷 다 모든 장부"라는 과대 주장이었다 → 도구별 소유 축으로 정정 + "소유하지 않는 축에 대한 침묵을 clean으로 읽지 말라"를 명시. **⑦** README의 interview 요약에 authority 질문 보강. **⑧** 이주기 케이스 삭제가 남긴 고아 fixture `mk_v2mine`(~30줄)과 "the v2→v3 migrator" 섹션 헤더 삭제 — 호출처 0 실측. **⑨** CI 문법 검사도 bin 전체 find로(hooks가 빠른 lint 팔에서만 눈멀어 있었다).
+
+**케이스 +1(627), 검사 15 재구성·14b 핀 +1, 되돌림 red 3방향 실측(걷기·해시·사다리). 런타임 변경 셋**(게이트 사다리 둘·fingerprint 걷기는 0.6.19 유지) — fingerprint 이동(golden 갱신). 사이클 회계: 6차는 수리 부재를 잰 라운드이므로 카운터 논의 자체가 성립하지 않았고, 이 수리 뒤의 다음 콜드 라운드가 다시 첫 클린 후보다.
+
 ## 0.6.19
 
 **4차 콜드 리뷰(3차 수리의 재검): ⑯⑰⑲⑳ 성립, ⑱은 집행 성립에 잔해 넷 — should-fix 4·nice 2, critical 0.** 여섯 전부 재측정으로 확정됐고 이 번들이 닫는다. 네 라운드째 같은 패턴이다: 결함은 수리가 만진 축의 나머지, 특히 수리가 쓴 산문에서 났다.

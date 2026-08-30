@@ -1,5 +1,5 @@
 e502e3062ffa4d2ff07914fb6bd48640dc1f9103d0dc65451220ef2dfbf57f11  .claude/skills/weavedoc-gaps/SKILL.md
-73299c53e9b9fcd1caf7774b918bd38596da8d08d4450b4d730c46cf33009f60  .claude/skills/weavedoc-gather/SKILL.md
+9e71bde8ca497f2f4df92c47ea094b734243818ae2055689eb4a2ad53f317c87  .claude/skills/weavedoc-gather/SKILL.md
 d5ae5fb69865787a40518d62e651957f90e0df2e33a4034bd35a9dc366143516  .claude/skills/weavedoc-init/SKILL.md
 4fb89c8a2c3688824cb22aabc1125244f715b46f8f983bcc755054a848d5f491  .claude/skills/weavedoc-map/SKILL.md
 c5c449578b021ca352b0d854da2cd741adb76933e2ed0c56956407aa4497b16a  .claude/skills/weavedoc-plan/SKILL.md
@@ -9,13 +9,13 @@ f814f065baa6018a7384936ecb4fe6883040c39153ebf34efff03b5d306422d7  .claude/skills
 c424b0a4d1714643ee718aef173c35e455c09e8d71e41650ba94c0f9e3c825cb  .claude/skills/weavedoc-verify/SKILL.md
 89fa987ef9575b21e6a9e438182771834e8bc1b7e70ad27c2bdfc2c5773f0d8c  .claude/skills/weavedoc-write/SKILL.md
 2438369832e8c12313d34e451966bbe7dd15f19b8310850789f38290b007798a  .weavedoc/.gitattributes
-23d07cdd2826a2d51641795f03104c153fdd1bcda618b23fc348b21d7514891a  .weavedoc/FORMATS.md
+ad56d03a5251aec7cb85f0139a39bfc255933ceb94d623c506e1ac4765664112  .weavedoc/FORMATS.md
 ec8c206b0985cfcd3786d8ada5ada3661b9ed2e5d4524ac9c5bcf5df073bb871  .weavedoc/PARSER-MODEL.md
-28f0eeaadf3b65c21058684368846da8c98e29d9a447439ad2810c75944ea217  .weavedoc/READ.md
-df1c385e71a0552a2d3d8a712b490f0bd2ad341335a1bc6738a41b845d9aa07a  .weavedoc/VERSION
+6932ad9ea2b9dc145cb7b9d3e3eadb645df85fd364c6344c8e0c8facd67215a5  .weavedoc/READ.md
+0d15894a5cafcf725eff98dbe5cf1ae7d4ae3b378af8b6c44196ca71ce2eb2b0  .weavedoc/VERSION
 d02e7090d337fcb339abfcddfe1a9d2fe4a68eeae4e754898c9df9aa409e84b2  .weavedoc/bin/hooks/gate.mjs
 98b6959b1c2e93a42d9ddd5c7fc9024b5acfe35c7b963da22cc0bbf73161e72b  .weavedoc/bin/hooks/lease.mjs
-61e23dfa46ab1d7b71ea4097a1831a87034dcbb2f9556fae6b3fbf4a0fd0f7b6  .weavedoc/bin/lib/artifact-contracts.mjs
+4e7c9945fb128225faea215d0b56fca9a5714c6aa658e486c2ba07d508ce21bb  .weavedoc/bin/lib/artifact-contracts.mjs
 4afead09313f2e2a4156d8b74fc1d840c12b2906dd54f0c8efe6a38bcc684e9d  .weavedoc/bin/lib/cmd-attest.mjs
 82fd9ddada09890e20743f9aff3d32f9bc9ed9cf08f9e627e8f07a97172a87da  .weavedoc/bin/lib/cmd-census.mjs
 de08795b1a49535978c16daa15bf11eeb93778f0d0d9fbbf974e6e92c6a60284  .weavedoc/bin/lib/cmd-consecrate.mjs
@@ -29,7 +29,7 @@ dbc7879a75727c6d311a88fe8a8652883b04771be239d993339f1e84849b5580  .weavedoc/bin/
 db6e9d60e95c8e1b000a79e1ef43ecb65220b7dad8ef279abbf3a4b83d20e1db  .weavedoc/bin/lib/cmd-seal-review.mjs
 42fd0893888536703475000bf2d2caa6a0a06ddd6867bde6fa4faca61400387d  .weavedoc/bin/lib/cmd-state.mjs
 3b15ed114bf619bc8907284d2f807af90885bd30d3d66d2e00c1233825e9f656  .weavedoc/bin/lib/cmd-status.mjs
-affc13323a34c8f6f3c348a67d63c091f6b4e95054cf8073e69940ca1d6a2502  .weavedoc/bin/lib/cmd-validate.mjs
+2dc01289212ce65ff65ad65cf589312c78d262a8cc3a232bd9eeb2acf77a8539  .weavedoc/bin/lib/cmd-validate.mjs
 cc932ba4aa321119aa9239b052b3428d5394704cf75287fb1aac2a1d2d7dc190  .weavedoc/bin/lib/conflict-store.mjs
 37fe849ebf46033134053c62467dddf645e8bee14e4d434bc63b1b061e55e5ee  .weavedoc/bin/lib/core.mjs
 8e605056a1ddb59a06722f36f4ea76d360adfae0d805ce0f6f40d472eeb0cce9  .weavedoc/bin/lib/coverage-model.mjs
@@ -42,7 +42,7 @@ cd1881703c6b5c58045469417de6a23f6068169e1a80d240e158cc580c2da1fc  .weavedoc/bin/
 9ae64057fd0d1253f4a58c81e4705b494b9d3fa55eccf958a0b835568aa26712  .weavedoc/bin/lib/ledger-structure.mjs
 c0ddc2e8aede7e58a80e9bd8dc00c87bc3b0dc977d2414a79226a8fb1e03d52c  .weavedoc/bin/lib/lock.mjs
 2a818f4ac4c7da8d4a0dfe4b43144e3a8fd63b13cba9232a3a12741f247dd371  .weavedoc/bin/lib/markdown-scan.mjs
-52a1eb03ab80f51447cad0bdb20b51978f610dad21f0ebe3a3db7d804aa8ce9e  .weavedoc/bin/lib/mine.mjs
+c0c8430c789a2a7fb7a151d52e29834ef56ace2ec376958cd24c8745ad4b7b42  .weavedoc/bin/lib/mine.mjs
 38e4c2a504db0bba0d13cad52fa69385efc14f707c5bad0816e779a38e0ae121  .weavedoc/bin/lib/questions-ledger.mjs
 f600e00c1d9544906d9b01147b0b42a872d10234a9aa92255cb7d7192e80eb8c  .weavedoc/bin/lib/quote-marker-model.mjs
 5750e4431b6e4b1774b0a5db544678f22505065508c4a568291c0548255f5208  .weavedoc/bin/lib/raw-source-model.mjs

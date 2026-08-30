@@ -9,7 +9,12 @@ name: ci
 
 on:
   push:
-    branches: ["main", "improve/**"]
+    # fix/** joined in 0.6.20: nine unpublished bundles rode this line with CI only on manual
+    # dispatch, and two lint failures were found exactly one forgotten-dispatch late — a red
+    # commit on the development line must not depend on someone remembering to ask for the run.
+    # (Cost profile above still holds: pushes run the Ubuntu leg; Windows+macOS stay on tags
+    # and manual dispatch.)
+    branches: ["main", "improve/**", "fix/**"]
     tags: ["v*"]
   pull_request:
   workflow_dispatch:
@@ -27,9 +32,9 @@ jobs:
         # error there fails the publish after every other gate has gone green.
         run: |
           for f in tests/*.sh; do bash -n "$f"; done
-          node --check .weavedoc/bin/weavedoc.mjs
-          # find, not a flat glob: a future lib/subdir/ must not be able to ship unparsed
-          find .weavedoc/bin/lib -name '*.mjs' -print0 | xargs -0 -n1 node --check
+          # find over bin/ WHOLE, not entrypoint + lib: hooks joined bin in 0.6.9 and the fast
+          # lint arm never parsed them (a parse error there was caught only by the suite legs).
+          find .weavedoc/bin -name '*.mjs' -print0 | xargs -0 -n1 node --check
       - name: no literal control character in a runtime module
         # The bash runtime this replaced kept its reference-index separator as a raw U+0001, which
         # RENDERS AS NOTHING — reading it as text says "split on the empty string", and the port did
@@ -43,8 +48,13 @@ jobs:
           # writer, which keeps the low byte. Comments, so the parser never saw them — but these
           # files ARE the format, and a contract with control characters in it is not a contract
           # anyone should have to diff twice.
-          for f in .weavedoc/bin/weavedoc.mjs $(find .weavedoc/bin/lib -name '*.mjs') \
-                   .weavedoc/schema .github/workflows/ci.yml; do
+          # bin/ WHOLE (0.6.20 — a review found bin/hooks/, the enforcement gate, outside this
+          # roster: the 0x14 class could ship in gate code green), plus the planted teaching
+          # surfaces the same review named: templates/ (init copies them into every mine, and a
+          # contaminated claude-block plants its bytes downstream where validate's byte-compare
+          # passes both sides), FORMATS and READ (the contract prose).
+          for f in $(find .weavedoc/bin -name '*.mjs') $(find .weavedoc/templates -type f) \
+                   .weavedoc/schema .weavedoc/FORMATS.md .weavedoc/READ.md .github/workflows/ci.yml; do
             n=$(node tests/ctlscan.mjs "$f" | tail -1 | sed 's/[^0-9]//g')
             [ "$n" = 0 ] || { echo "$f holds $n line(s) with a literal control character"; exit 1; }
           done

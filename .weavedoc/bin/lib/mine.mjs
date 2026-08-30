@@ -85,17 +85,22 @@ export function versionGate (m, errln) {
   if (Number(pv) > sv) {
     return refuse([`weavedoc: this mine declares schema v${pv}, newer than this runtime reads (≤${sv}) — upgrade the runtime bundle, never guess at a future format`])
   }
-  if (pv === '1') {
-    return refuse([
-      'weavedoc: this mine is schema v1 and this runtime carries no v1 reader.',
-      "  migrate with the pinned bridge runtime v0.5.21 (commit 0257167): run its 'weavedoc upgrade' to reach v2,",
-      '  then the pinned v0.6.14 bridge (commit 924e97e) — the last bundle carrying the v2→v3 migrator — to reach v3.'
-    ])
-  }
+  // BELOW-FLOOR IS NUMERIC, not an enumeration. The ladder used to test pv === '1' and '2' only,
+  // so a `version: 0` mine fell through BOTH rungs into full v3 judgment — the false green in
+  // miniature this gate exists to prevent, measured by a cold review (v3 rules judged a v0 mine
+  // and printed verdicts about it). The executable spec (artifact-contracts.mjs) always said
+  // below-floor-and-not-2 routes to the v1 bridge first; production now matches it.
   if (pv === '2') {
     return refuse([
       'weavedoc: this mine is schema v2 and this runtime is v3-only.',
       '  migrate with the pinned bridge runtime v0.6.14 (commit 924e97e) — the last bundle carrying the v2→v3 migrator — first; nothing here has judged the v2 contents.'
+    ])
+  }
+  if (Number(pv) < 2) {
+    return refuse([
+      `weavedoc: this mine declares schema v${pv} and this runtime carries no reader below v3.`,
+      "  migrate with the pinned bridge runtime v0.5.21 (commit 0257167): run its 'weavedoc upgrade' to reach v2,",
+      '  then the pinned v0.6.14 bridge (commit 924e97e) — the last bundle carrying the v2→v3 migrator — to reach v3.'
     ])
   }
   return 0

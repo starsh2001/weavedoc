@@ -1,5 +1,7 @@
-// Combinatorial checks for artifact VERSION NEGOTIATION — the half of artifact-contracts.mjs
-// production actually reads (the version gate resolves through it).
+// Combinatorial checks for artifact VERSION NEGOTIATION — the executable spec in
+// artifact-contracts.mjs. No production module imports it (the live gates in mine.mjs and
+// cmd-validate hand-carry their strings); this driver is its only executor, and doccheck's
+// bridge-pin sync check is what ties the spec's constants to the live surfaces.
 //
 // The other half this file used to execute — the Phase-1 role-contract loader and the frozen
 // `.weavedoc/schemas/v3` draft it read — retired in 0.6.18: Phase 2 never arrived, this file was

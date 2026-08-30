@@ -379,24 +379,40 @@ grep -qF 'Absent = standard' "$REPO/.weavedoc/templates/config.yaml" \
   || say "the config template's comment lost its absence fallback — every fresh mine would be born being taught something other than absent=standard"
 grep -qF 'Absent from config too ⇒ standard' "$REPO/.weavedoc/templates/plan.md" \
   || say "the plan template's comment lost its absence fallback — the per-document override would teach a different inheritance than the axis defines"
+# The interview's standard-option description is the ONE runtime string carrying the 0.6.13 owner
+# correction ("show it where you apply it, don't re-ask") to the user at the moment they choose a
+# level — and it was unwatched (fifth-round review). The source holds raw Korean (the escaping
+# happens at print), so a source pin is safe; the printed payload is separately proven pure-ASCII
+# by its regress case.
+grep -qF '적용하는 그 자리에서 보여 드리고' "$REPO/.weavedoc/bin/weavedoc.mjs" \
+  || say "the interview's standard-level description lost the owner-correction sentence (confirm at application, never re-ask) — the one place a user hears it while choosing a level"
 
 # 15. The bridge pins are DOUBLE-SPELLED and the two spellings must agree. artifact-contracts.mjs
 # holds V1_BRIDGE/V2_BRIDGE as an executable spec, but no production module imports it (measured,
-# 0.6.19) — the live gates carry their own strings, seven sites for the v2 pin alone. A maintainer
-# who edits the constant and trusts the old header ("production resolves through here") ships
-# surfaces still naming the old commit; a maintainer who edits one surface leaves six. Four tokens,
-# five owners, all verbatim — the check is symmetric, so either direction of the drift goes red.
-for f in \
-  "$REPO/.weavedoc/bin/lib/artifact-contracts.mjs" \
-  "$REPO/.weavedoc/bin/lib/mine.mjs" \
-  "$REPO/.weavedoc/bin/lib/cmd-validate.mjs" \
-  "$REPO/UPGRADING.md" \
-  "$REPO/README.md"; do
-  for tok in 'v0.5.21' '0257167' 'v0.6.14' '924e97e'; do
-    grep -qF -- "$tok" "$f" \
-      || say "$(basename "$f") does not carry the bridge pin token '$tok' — the two spellings of the migration doors (the spec constants and the live gate strings) have drifted apart"
+# 0.6.19) — the live gates carry their own strings. A maintainer who edits the constant and trusts
+# a wiring that does not exist ships surfaces still naming the old commit; one who edits a surface
+# leaves the rest. PER-OWNER token sets, because the surfaces legitimately differ (a fifth-round
+# review found four pin-carrying surfaces OUTSIDE the first roster; forcing four tokens on a file
+# that carries two would either fail forever or force prose distortion): each owner is checked for
+# exactly what it carries today. Re-census when a surface changes: grep the four tokens repo-wide.
+# The check is symmetric over its roster — either direction of a drift goes red.
+while IFS='|' read -r f toks; do
+  [ -n "$f" ] || continue
+  for tok in $toks; do
+    grep -qF -- "$tok" "$REPO/$f" \
+      || say "$f does not carry the bridge pin token '$tok' — the two spellings of the migration doors (the spec constants and the live surface strings) have drifted apart"
   done
-done
+done <<'EOF15'
+.weavedoc/bin/lib/artifact-contracts.mjs|v0.5.21 0257167 v0.6.14 924e97e
+.weavedoc/bin/lib/mine.mjs|v0.5.21 0257167 v0.6.14 924e97e
+.weavedoc/bin/lib/cmd-validate.mjs|v0.5.21 0257167 v0.6.14 924e97e
+.weavedoc/bin/lib/validate-truths.mjs|v0.6.14 924e97e
+.weavedoc/bin/weavedoc.mjs|v0.5.21 v0.6.14 924e97e
+.weavedoc/schema|v0.5.21 0257167 v0.6.14 924e97e
+.weavedoc/FORMATS.md|v0.5.21 v0.6.14 924e97e
+UPGRADING.md|v0.5.21 0257167 v0.6.14 924e97e
+README.md|v0.5.21 0257167 v0.6.14 924e97e
+EOF15
 
 [ "$fail" -eq 0 ] && echo "doccheck: docs and code agree"
 exit "$fail"
