@@ -18,7 +18,9 @@
 
 **`.agents/`의 staging 경계.** Codex는 gitignore된 `.claude/commands/`를 자기 skill root로 mirror하므로 `.agents/skills/source-command-*/`가 untracked로 쌓인다. bundle이 싣는 것은 `.agents/skills/weavedoc-*`뿐이고 그것이 정확히 make-manifest.sh의 선택 범위이므로, 같은 경계를 `.gitignore`에도 실어 `git add -A`가 그 28개를 쓸어 담을 수 없게 했다.
 
-검증: Windows full regression **646/646 PASS** · 신규 Codex interview/activation/hook/apply-patch multi-target 및 AGENTS/Codex config warning case · 기존 Claude hook/pointer differential case · diagnostic table 양방향 · `doccheck` · Node/bash syntax · `git diff --check` · release manifest 77 rows, 2회 byte-identical, SHA-256 `d71ad4fa2d9dbc1f3d407e040d8c56dde49a54b4993a9b2251abc78c6e98666b`.
+**CI lint이 잡은 것 하나 — 이 번들의 Codex lease 케이스.** `[ ! -e "$W/.leasedir"/weavedoc-lease-*.json ]`으로 썼는데 `-e`는 피연산자를 하나만 받는다(SC2144): 여러 개가 맞으면 `test`가 오류로 끝나 가드가 엉뚱한 진단을 달고 발화하고, 하나도 안 맞으면 bash가 패턴을 문자 그대로 돌려주므로 그 경로는 존재하지 않고 — 이 케이스가 원하는 결과에 **아무것도 들여다보지 않은 채** 도달한다. loop으로 바꿔 match 수 전 구간에서 정확해졌고, 그 이름으로 lease 파일 하나를 심으면 red가 되는 것을 실측했다. 이 등급의 유일한 실행자는 CI다(shellcheck은 로컬에 없고 이 기계에는 컨테이너도 없다) — 번들이 push되기 전까지 그 게이트를 한 번도 받지 않았던 것이 이 결함이 남아 있던 이유다.
+
+검증: Windows full regression **646/646 PASS** · 신규 Codex interview/activation/hook/apply-patch multi-target 및 AGENTS/Codex config warning case · 기존 Claude hook/pointer differential case · diagnostic table 양방향 · `doccheck` · Node/bash syntax · `shellcheck --severity=error` · `git diff --check` · release manifest 77 rows, 2회 byte-identical, SHA-256 `d71ad4fa2d9dbc1f3d407e040d8c56dde49a54b4993a9b2251abc78c6e98666b`.
 
 ## 0.6.20
 

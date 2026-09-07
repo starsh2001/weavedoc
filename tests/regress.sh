@@ -7101,7 +7101,16 @@ acct_codex_hook_lease_ignores_unrelated_bash() {
   payload=$(node -e 'process.stdout.write(JSON.stringify({session_id:"c1",hook_event_name:"PostToolUse",tool_name:"Bash",tool_input:{command:"node .weavedoc/bin/weavedoc.mjs activate weavedoc-gather extra"}}))')
   OUT=$(printf '%s' "$payload" | WEAVEDOC_LEASE_DIR="$LDIR" node "$W/.weavedoc/bin/hooks/lease.mjs" 2>&1); RC=$?
   expect_pass
-  [ ! -e "$W/.leasedir"/weavedoc-lease-*.json ] || { bad "an unrelated Bash command minted a Codex lease"; return; }
+  # SC2144, and not only style: `-e` takes ONE operand. With several matches `test` errored out, so
+  # the guard fired carrying the wrong diagnosis; with none, bash hands back the literal pattern,
+  # which does not exist — the outcome this case wants, reached without inspecting anything. The
+  # loop is exact at every match count (hookenv mkdir -p's the directory, so a literal pattern back
+  # means zero leases). Measured: planting one lease file under that name turns this case red.
+  local f
+  for f in "$W/.leasedir"/weavedoc-lease-*.json; do
+    [ -e "$f" ] || continue
+    bad "an unrelated Bash command minted a Codex lease"; return
+  done
   ok
 }
 acct_hook_lease_ignores_foreign_skill() {
