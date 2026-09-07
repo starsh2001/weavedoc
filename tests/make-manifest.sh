@@ -38,15 +38,16 @@ files=$(git ls-files -- \
   '.weavedoc/PARSER-MODEL.md' \
   '.weavedoc/templates' \
   '.claude/skills' \
+  '.agents/skills' \
 | sort) || { echo "make-manifest: git ls-files failed — no manifest" >&2; exit 2; }
 
-# The skills half of that listing is everything under .claude/skills; only this project's skills
-# ship. Filtering HERE rather than in the pathspec is what removes the glob dependency above.
+# The skills half of that listing is everything under both harness skill roots; only this project's
+# skills ship. Filtering HERE rather than in the pathspec is what removes the glob dependency above.
 out=$(printf '%s\n' "$files" | while IFS= read -r p; do
   [ -n "$p" ] || continue
   case "$p" in
-    .claude/skills/weavedoc-*) ;;
-    .claude/skills/*) continue ;;
+    .claude/skills/weavedoc-*|.agents/skills/weavedoc-*) ;;
+    .claude/skills/*|.agents/skills/*) continue ;;
   esac
   h=$(git cat-file blob ":$p" | sha256sum | awk '{print $1}') || exit 3
   # A 64-hex digest or nothing: a silently empty read hashes to e3b0c442… and looks like a file.
@@ -65,6 +66,7 @@ done) || { echo "make-manifest: a staged blob could not be read — no manifest"
 # `weavedoc.mjs` passed the guard that exists to catch exactly that. The path is the second
 # whitespace-separated field of a row; compare it as a field.
 for r in .weavedoc/VERSION .weavedoc/bin/weavedoc.mjs .weavedoc/schema \
+         .claude/skills/weavedoc-init/SKILL.md .agents/skills/weavedoc-init/SKILL.md \
          .weavedoc/READ.md .weavedoc/FORMATS.md .weavedoc/PARSER-MODEL.md .weavedoc/.gitattributes; do
   printf '%s\n' "$out" | awk -v p="$r" 'NF == 2 && $2 == p { found = 1 } END { exit !found }' \
     || { echo "make-manifest: required path missing from the manifest: $r" >&2; exit 2; }

@@ -128,6 +128,13 @@ else
   grep -q 'status' "$blk" && say "the shipped CLAUDE.md block names 'status' — the block is a POINTER and may not restate READ.md's rules; a summary in CLAUDE.md is read before the file it summarises and wins against it"
 fi
 grep -qF 'claude-block.md' "$init" || say "weavedoc-init no longer points at .weavedoc/templates/claude-block.md — the block would be retyped from prose again, which is how it drifted out of the schema's vocabulary the first time"
+ablk="$REPO/.weavedoc/templates/agents-block.md"
+if [ ! -f "$ablk" ]; then
+  say "the shipped AGENTS.md block ($ablk) is missing — validate's AGENTS-BLOCK-STALE check has no other half"
+else
+  cmp -s "$blk" "$ablk" || say "claude-block.md and agents-block.md differ — the two harnesses would enter the same mine with different read rules"
+fi
+grep -qF 'agents-block.md' "$init" || say "weavedoc-init no longer points at .weavedoc/templates/agents-block.md — Codex would not receive the owned READ.md pointer"
 
 # 8b. The hooks template is the pointer block's twin — the second planted artifact the bundle checks.
 # Same three pins: the template FILE exists (HOOKS-STALE has no other half without it), init names it
@@ -143,6 +150,17 @@ else
 fi
 grep -qF 'hooks.json' "$init" \
   || say "weavedoc-init no longer points at .weavedoc/templates/hooks.json — the hook entries would be retyped from prose, which is the drift this pin exists to stop"
+chjson="$REPO/.weavedoc/templates/codex-hooks.json"
+if [ ! -f "$chjson" ]; then
+  say "the shipped Codex hooks template ($chjson) is missing — validate's CODEX-HOOKS-STALE check has no other half"
+else
+  grep -qF '.weavedoc/bin/hooks/' "$chjson" \
+    || say "the Codex hooks template carries no '.weavedoc/bin/hooks/' marker — init and validate could not recognize its entries"
+  grep -qF '"matcher": "Bash"' "$chjson" \
+    || say "the Codex hooks template does not observe Bash — the activation handshake could never mint a session lease"
+fi
+grep -qF 'codex-hooks.json' "$init" \
+  || say "weavedoc-init no longer points at .weavedoc/templates/codex-hooks.json — Codex hook wiring would drift from the bundle"
 
 # 9. No live surface spells the runtime as an executable that does not exist. The bash entrypoint
 # `.weavedoc/bin/weavedoc` was deleted in bundle 2026-08-05.3; every call is `node …weavedoc.mjs`.
@@ -151,7 +169,7 @@ grep -qF 'hooks.json' "$init" \
 # notes/ and CHANGELOG.md are excluded on purpose: they record runs that really did use bash, and
 # rewriting a measurement to satisfy a grep is falsifying the record.
 stale_cmd=$(grep -rnE '\.weavedoc/bin/weavedoc[[:space:]]' \
-  "$REPO/.weavedoc" "$REPO/.claude/skills" \
+  "$REPO/.weavedoc" "$REPO/.claude/skills" "$REPO/.agents/skills" \
   "$REPO/README.md" "$REPO/WORKFLOW.md" "$REPO/METHODOLOGY.md" "$REPO/UPGRADING.md" 2>/dev/null || true)
 [ -z "$stale_cmd" ] || say "a live surface invokes the deleted bash entrypoint (it is 'node .weavedoc/bin/weavedoc.mjs <cmd>'): $stale_cmd"
 
@@ -175,6 +193,21 @@ for s in $skills; do
     || say "$(basename "$s") does not point at the step report contract — its run would open and close in a shape of its own, which is the drift FORMATS' skeleton exists to end"
   grep -qE '\[weavedoc-[a-z]+( <[a-z-]+>| [a-z]+)?\] starting' "$s/SKILL.md" \
     || say "$(basename "$s") never spells its own '[weavedoc-… ] starting' anchor — the anchor is per-skill and cannot be inherited from the contract"
+done
+
+# 10b. Claude Code and Codex ship ONE WeaveDoc workflow in two discovery roots. The directory trees
+# are byte-identical by contract: harness-specific behavior belongs in the runtime adapter, never
+# in a forked instruction copy. This recursive compare includes shared reviewer references.
+cskills=$(ls -d "$REPO"/.agents/skills/weavedoc-*/ 2>/dev/null)
+ncs=$(printf '%s\n' "$cskills" | grep -c . || true)
+[ "${ncs:-0}" = "9" ] || say "Codex skill enumeration found ${ncs:-0} skill(s), not 9 — the release surface is incomplete"
+for s in $skills; do
+  name=$(basename "$s")
+  [ -d "$REPO/.agents/skills/$name" ] || { say "Codex is missing $name"; continue; }
+  diff -qr "$s" "$REPO/.agents/skills/$name" >/dev/null 2>&1 \
+    || say "$name differs between .claude/skills and .agents/skills — parity has forked"
+  grep -qF "activate $name" "$s/SKILL.md" \
+    || say "$name does not emit its Codex activation handshake — the write gate cannot associate its session with the skill"
 done
 
 # 3. VERSION and CHANGELOG's newest entry are one fact. VERSION is SemVer now and moves every

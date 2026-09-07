@@ -1,10 +1,24 @@
 # WeaveDoc — 변경 내역
 
-각 절의 제목이 버전입니다(`.weavedoc/VERSION`). 버전은 번들마다 patch가 올라가고, git 태그가 같은 값을 따릅니다. **설치본의 정체성은 버전이 아니라 fingerprint**(bin+schema 해시)로 비교하세요 — `weavedoc version`이 찍습니다.
+각 절의 제목이 버전입니다(`.weavedoc/VERSION`). 버전은 bundle마다 SemVer에 맞게 올라가고, git tag가 같은 값을 따릅니다. **설치본의 정체성은 버전이 아니라 fingerprint**(bin+schema hash)로 비교하세요 — `weavedoc version`이 찍습니다.
 
 > 0.6.5 이하의 절은 날짜 스탬프(예: `2026-08-08.37`)를 제목으로 씁니다. 당시 VERSION 파일이 날짜를 담았기 때문이고, 과거 기록이므로 고치지 않습니다.
 
 ---
+
+## 0.7.0
+
+**Codex가 Claude Code와 같은 WeaveDoc workflow를 실행하는 첫 dual-harness bundle.** 아홉 skill을 Codex의 project discovery root인 `.agents/skills/weavedoc-*`에 추가하고, `.claude` copy와 shared reference까지 byte-identical하게 고정했다. Release manifest와 `doccheck`가 두 tree를 함께 싣고 recursive compare하므로 한쪽만 바뀐 release는 green이 될 수 없다. Workflow의 판단·artifact·fidelity gate는 하나이고, harness 차이는 runtime adapter에만 남는다.
+
+**Native surface adapter.** `interview [claude|codex]`가 같은 여섯 질문을 각 harness의 schema(`AskUserQuestion` / `request_user_input`)로 출력하며, Codex payload는 stable `id`와 UI가 요구하는 exact ` (Recommended)` suffix를 사용한다. `activate <weavedoc-skill>`은 side-effect-free Codex session handshake다. `.codex/hooks.json`의 `PostToolUse(Bash)`가 session id와 handshake를 결합해 lease를 기록하고, `PreToolUse(Write|Edit)`가 Codex `apply_patch`의 모든 Add/Update/Delete/Move target을 검사한다. 한 patch의 첫 target이 ungated여도 뒤의 guarded target은 숨지 않는다.
+
+**Init·validation·upgrade.** `weavedoc-init`은 `CLAUDE.md`와 `AGENTS.md`에 byte-identical READ pointer를 심고, `.claude/settings.json`과 `.codex/hooks.json`에 각각의 hook pair를 merge한다. `validate`가 `AGENTS-BLOCK-*`와 `CODEX-HOOKS-*` warning을 기존 Claude Code diagnostic과 같은 방식으로 emit한다. Codex에서는 trusted project와 `/hooks` one-time review가 필요하며, 이 platform requirement를 README·FORMATS·WORKFLOW·UPGRADING에 명시했다. 기존 mine schema는 그대로 v3라 data migration은 없다.
+
+**Container 자료의 대조 출발점 — gather의 규칙 둘.** `docx`/`xlsx`/`pptx`/`odt`/`epub`/`zip`은 파일이 아니라 directory다: 본문은 한 part에 있고 embedded media·hyperlink 대상(`_rels/`)·주석·header·변경 이력은 형제 part에 있다. 3단계 Convert는 이제 archive listing을 먼저 돌리고 **끝까지 읽어서** 모든 entry를 처리하거나 `> [note]`에 남기는 이유를 적는다(embedded media는 image와 같게 다루고 본문에서의 위치를 표시한다). 7단계 **Nothing lost**에는 대조의 출발점을 명시했다 — **walk는 원본에서 시작하고 자기 추출 결과에서 시작하지 않는다.** parser 출력을 원본으로 삼으면 parser를 parser 자신으로 검사하는 셈이라 언제나 통과한다: 열지 않은 part는 애초에 비교 집합에 없기 때문이다. 실측(2026-09-07): 한 docx 변환이 `word/document.xml`만 parsing하고 clean으로 끝났는데, 본문 네 지점에 놓인 embedded image 둘을 떨어뜨렸고 같은 파일의 `> [machine-note]`는 인용된 의학 출처에 URL이 없다고 단언했다 — 둘 다 그 run이 이미 출력한 listing 안에 있었다(`word/media/`는 스무 번째 줄 뒤, URL은 `word/_rels/document.xml.rels`). audit line은 문단·표 계수 일치를 근거로 `빠뜨린 절은 없고`를 주장했고, 그 두 계수는 media part를 건너뛴 바로 그 parser가 낸 것이다.
+
+**`.agents/`의 staging 경계.** Codex는 gitignore된 `.claude/commands/`를 자기 skill root로 mirror하므로 `.agents/skills/source-command-*/`가 untracked로 쌓인다. bundle이 싣는 것은 `.agents/skills/weavedoc-*`뿐이고 그것이 정확히 make-manifest.sh의 선택 범위이므로, 같은 경계를 `.gitignore`에도 실어 `git add -A`가 그 28개를 쓸어 담을 수 없게 했다.
+
+검증: Windows full regression **646/646 PASS** · 신규 Codex interview/activation/hook/apply-patch multi-target 및 AGENTS/Codex config warning case · 기존 Claude hook/pointer differential case · diagnostic table 양방향 · `doccheck` · Node/bash syntax · `git diff --check` · release manifest 77 rows, 2회 byte-identical, SHA-256 `d71ad4fa2d9dbc1f3d407e040d8c56dde49a54b4993a9b2251abc78c6e98666b`.
 
 ## 0.6.20
 

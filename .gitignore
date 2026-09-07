@@ -2,6 +2,9 @@
 .bmad-core/
 .claude/commands/
 .claude/settings.local.json
+# Codex mirrors .claude/commands/ (ignored above) into its own skill root; the bundle
+# ships only .agents/skills/weavedoc-*, which is exactly what make-manifest.sh selects.
+.agents/skills/source-command-*/
 notes/
 weavedoc-for-hammoc.md
 dashboard-prototype.html

@@ -1214,53 +1214,62 @@ export function cmdValidate (m, out, json = false, consecOk = '') {
     if (!inList(ck, sch('config.toplevel'))) warn('CFG-UNKNOWN-KEY', M`unknown config key '${ck}' in .weavedoc/config.yaml — known top-level keys: ${sch('config.toplevel')}`)
   }
 
-  // --- the CLAUDE.md pointer block: OWNED, not merely planted ----------------------------------
-  // init writes the shipped block into the project's CLAUDE.md and, until this check, NOTHING ever
+  // --- harness instruction pointer blocks: OWNED, not merely planted ----------------------------
+  // init writes the shipped blocks into CLAUDE.md and AGENTS.md and, until this check, NOTHING ever
   // read it back. Measured on a real mine (eclypse, 2026-08-13): `upgrade --apply` moved the
   // schema, the validator, READ.md and 271 cards to v3 while the block kept its v2 parenthetical
-  // ("status filtering, as_of, provenance"). That is not a typo, because CLAUDE.md is injected into
-  // EVERY session BEFORE any file is opened: the stale line PRIMES. One session read READ.md first
+  // ("status filtering, as_of, provenance"). Harness instruction files are injected into EVERY
+  // session BEFORE any file is opened: the stale line PRIMES. One session read READ.md first
   // as instructed, reported the v2 protocol as though quoting it, cited a `status:` field the mine
   // does not have, and offered the user options built on that model — which is how a wrong model
   // stops being wrong-and-harmless and becomes a decision the user appears to have authorised.
   //
-  // So the block has an owner: the BUNDLE. `.weavedoc/templates/claude-block.md` is the one copy,
-  // this is the tripwire, and the repair is re-running weavedoc-init (its reconfigure path
-  // re-ensures the block). A WARNING and never a problem — a stale pointer is not a mine-integrity
+  // So each block has an owner: the BUNDLE. The two templates are byte-identical by contract, this
+  // is the tripwire, and the repair is re-running weavedoc-init (its reconfigure path re-ensures
+  // both blocks). A WARNING and never a problem — a stale pointer is not a mine-integrity
   // failure and must not block a ship — and it fires ONLY when a marker is actually present: a
-  // project that never planted the block has no block to be stale, and validate does not lecture it.
+  // project that never planted a block has no block to be stale, and validate does not lecture it.
   // CRLF-NORMALISED on both sides. A consumer project is usually its own git repository, and on
-  // Windows `core.autocrlf=true` hands CLAUDE.md back with CRLF while the template checks out LF
+  // Windows `core.autocrlf=true` hands the instruction file back with CRLF while the template is LF
   // (.weavedoc/.gitattributes pins it) — a byte tripwire that fires on the line ending would cry
   // wolf on every Windows clone until nobody read it any more.
   {
     const BEGIN = '<!-- weavedoc:begin -->'
     const END = '<!-- weavedoc:end -->'
     const lf = s => s.split('\r\n').join('\n').replace(/\n+$/, '')
-    const doc = readOr(`${m.root}/CLAUDE.md`)
-    const b = doc.indexOf(BEGIN)
-    const e = doc.indexOf(END)
-    if (b >= 0 || e >= 0) {
-      const tplRel = '.weavedoc/templates/claude-block.md'
-      const tpl = lf(readOr(join(m.root, tplRel)))
-      if (tpl === '') {
-        // The comparison's other half is missing, so the comparison did not happen. Said out loud:
-        // a check that runs zero times and prints nothing is indistinguishable from one that passed.
-        warn('CLAUDE-BLOCK-NOTEMPLATE', M`CLAUDE.md carries the weavedoc marker block but ${tplRel} is missing or empty — the block could NOT be compared against the bundle's, so nothing here says it is current. Restore the runtime bundle`)
-      } else if (b < 0 || e < b) {
-        // Three shapes, named apart: a begin with no end leaves the region UNBOUNDED, which reads
-        // nothing like "the end marker is early" — and a repair starts from what is actually wrong.
-        const why = b < 0 ? 'no begin marker' : (e < 0 ? 'no end marker' : 'end marker before begin')
-        warn('CLAUDE-BLOCK-STALE', M`CLAUDE.md's weavedoc marker pair is broken (${why}) — the marked region cannot be read, so it is not the block the bundle ships. Re-run weavedoc-init (reconfigure) to rewrite it from ${tplRel}`)
-      } else if (doc.indexOf(BEGIN, b + 1) >= 0) {
-        // A SECOND block is the same hole this check exists to close, one level down: init rewrites
-        // the FIRST marked region, so a duplicate below it is a pointer no repair reaches and no
-        // comparison sees — the first copy matching would report green over a stale one that is
-        // still injected into every session. Named before the content compare because it is the
-        // state a rewrite cannot fix: the extra copies have to be deleted by hand.
-        warn('CLAUDE-BLOCK-STALE', M`CLAUDE.md carries more than one weavedoc marker block — the block is idempotent and must appear exactly once. A rewrite reaches only the first, so a second copy is a pointer nothing updates: delete the extras, then re-run weavedoc-init (reconfigure)`)
-      } else if (lf(doc.slice(b, e + END.length)) !== tpl) {
-        warn('CLAUDE-BLOCK-STALE', M`CLAUDE.md's weavedoc block differs from ${tplRel} — this pointer is injected into every session before any file is read, so an out-of-date one primes readers against the mine's current rules. Re-run weavedoc-init (reconfigure) to rewrite it; project-specific text belongs outside the markers`)
+    // Keep literal warn call sites for the diagnostic-table census: dynamic code construction
+    // would make a live diagnostic look orphaned even though the runtime can emit it.
+    const pointerWarn = (code, message) => {
+      if (code === 'CLAUDE-BLOCK-NOTEMPLATE') warn('CLAUDE-BLOCK-NOTEMPLATE', message)
+      else if (code === 'CLAUDE-BLOCK-STALE') warn('CLAUDE-BLOCK-STALE', message)
+      else if (code === 'AGENTS-BLOCK-NOTEMPLATE') warn('AGENTS-BLOCK-NOTEMPLATE', message)
+      else if (code === 'AGENTS-BLOCK-STALE') warn('AGENTS-BLOCK-STALE', message)
+    }
+    for (const { docRel, tplRel, code } of [
+      { docRel: 'CLAUDE.md', tplRel: '.weavedoc/templates/claude-block.md', code: 'CLAUDE-BLOCK' },
+      { docRel: 'AGENTS.md', tplRel: '.weavedoc/templates/agents-block.md', code: 'AGENTS-BLOCK' }
+    ]) {
+      const doc = readOr(join(m.root, docRel))
+      const b = doc.indexOf(BEGIN)
+      const e = doc.indexOf(END)
+      if (b >= 0 || e >= 0) {
+        const tpl = lf(readOr(join(m.root, tplRel)))
+        if (tpl === '') {
+          // The comparison's other half is missing, so the comparison did not happen. Said out
+          // loud: zero checks and no output is indistinguishable from a pass.
+          pointerWarn(`${code}-NOTEMPLATE`, M`${docRel} carries the weavedoc marker block but ${tplRel} is missing or empty — the block could NOT be compared against the bundle's, so nothing here says it is current. Restore the runtime bundle`)
+        } else if (b < 0 || e < b) {
+          // Three shapes, named apart: a begin with no end leaves the region UNBOUNDED, which reads
+          // nothing like "the end marker is early" — and a repair starts from what is actually wrong.
+          const why = b < 0 ? 'no begin marker' : (e < 0 ? 'no end marker' : 'end marker before begin')
+          pointerWarn(`${code}-STALE`, M`${docRel}'s weavedoc marker pair is broken (${why}) — the marked region cannot be read, so it is not the block the bundle ships. Re-run weavedoc-init (reconfigure) to rewrite it from ${tplRel}`)
+        } else if (doc.indexOf(BEGIN, b + 1) >= 0) {
+          // A SECOND block is the same hole this check exists to close, one level down: init rewrites
+          // the FIRST marked region, so a duplicate below it is a pointer no repair reaches.
+          pointerWarn(`${code}-STALE`, M`${docRel} carries more than one weavedoc marker block — the block is idempotent and must appear exactly once. A rewrite reaches only the first, so a second copy is a pointer nothing updates: delete the extras, then re-run weavedoc-init (reconfigure)`)
+        } else if (lf(doc.slice(b, e + END.length)) !== tpl) {
+          pointerWarn(`${code}-STALE`, M`${docRel}'s weavedoc block differs from ${tplRel} — this pointer is injected into every session before any file is read, so an out-of-date one primes readers against the mine's current rules. Re-run weavedoc-init (reconfigure) to rewrite it; project-specific text belongs outside the markers`)
+        }
       }
     }
   }
@@ -1285,61 +1294,58 @@ export function cmdValidate (m, out, json = false, consecOk = '') {
   // until nobody read it. This is the CRLF-normalisation judgment above, transposed.
   {
     const MARK = '.weavedoc/bin/hooks/'
-    const tplRel = '.weavedoc/templates/hooks.json'
-    const settingsRel = '.claude/settings.json'
-    const raw = readOr(join(m.root, settingsRel))
-    if (raw.includes(MARK)) {
-      // Marker-bearing tuples out of one settings-shaped object. A tail is taken from the marker on,
-      // so `node X/.weavedoc/bin/hooks/gate.mjs` and `node .weavedoc/bin/hooks/gate.mjs` are one
-      // wiring — while trailing arguments after the script are NOT dropped, because those change
-      // what runs.
-      const tuples = text => {
-        const hooks = JSON.parse(text)?.hooks
-        if (hooks === null || typeof hooks !== 'object') return []
-        const out = []
-        for (const [event, arr] of Object.entries(hooks)) {
-          if (!Array.isArray(arr)) continue
-          for (const group of arr) {
-            for (const h of (Array.isArray(group?.hooks) ? group.hooks : [])) {
-              const cmd = typeof h?.command === 'string' ? h.command : ''
-              const at = cmd.indexOf(MARK)
-              // The tail runs from the marker to the end of the command — arguments after the
-              // script are NOT environment and must still count. But a QUOTE opened before the
-              // marker closes inside that tail, and a path holding a space has no other way to be
-              // spelled: `node "C:/my mine/.weavedoc/bin/hooks/gate.mjs"` would carry a stray `"`
-              // into the tuple and read as stale forever — the prefix-is-environment rule failing
-              // on the one absolute form that actually works. If the quoting is still open at the
-              // marker, its closer is dropped.
-              if (at >= 0) {
-                let tail = cmd.slice(at)
-                for (const q of ['"', "'"]) {
-                  if ((cmd.slice(0, at).split(q).length - 1) % 2 === 1) tail = tail.replace(q, '')
-                }
-                out.push(JSON.stringify([event, group?.matcher ?? '', tail]))
+    const hookWarn = (code, message) => {
+      if (code === 'HOOKS-NOTEMPLATE') warn('HOOKS-NOTEMPLATE', message)
+      else if (code === 'HOOKS-STALE') warn('HOOKS-STALE', message)
+      else if (code === 'CODEX-HOOKS-NOTEMPLATE') warn('CODEX-HOOKS-NOTEMPLATE', message)
+      else if (code === 'CODEX-HOOKS-STALE') warn('CODEX-HOOKS-STALE', message)
+    }
+    // Marker-bearing tuples out of one settings-shaped object. A tail is taken from the marker on,
+    // so an absolute and a project-relative prefix are the same wiring; trailing arguments remain.
+    const tuples = text => {
+      const hooks = JSON.parse(text)?.hooks
+      if (hooks === null || typeof hooks !== 'object') return []
+      const out = []
+      for (const [event, arr] of Object.entries(hooks)) {
+        if (!Array.isArray(arr)) continue
+        for (const group of arr) {
+          for (const h of (Array.isArray(group?.hooks) ? group.hooks : [])) {
+            const cmd = typeof h?.command === 'string' ? h.command : ''
+            const at = cmd.indexOf(MARK)
+            if (at >= 0) {
+              let tail = cmd.slice(at)
+              for (const q of ['"', "'"]) {
+                if ((cmd.slice(0, at).split(q).length - 1) % 2 === 1) tail = tail.replace(q, '')
               }
+              out.push(JSON.stringify([event, group?.matcher ?? '', tail]))
             }
           }
         }
-        return out.sort()
       }
-      let want = null
-      try { want = tuples(readOr(join(m.root, tplRel))) } catch { want = null }
-      if (want === null || want.length === 0) {
-        // A check that could not run must never read as a pass — the same rule the pointer block's
-        // NOTEMPLATE branch states one section up.
-        warn('HOOKS-NOTEMPLATE', M`${settingsRel} carries weavedoc hook entries (marker '${MARK}') but ${tplRel} is missing, unreadable, or names none — the planted entries could NOT be compared against the bundle's, so nothing here says they are current. Restore the runtime bundle`)
-      } else {
-        let have = null
-        try { have = tuples(raw) } catch { have = null }
-        if (have === null) {
-          warn('HOOKS-STALE', M`${settingsRel} holds the weavedoc hook marker but the file does not parse as JSON — whatever state the entries are in, it is not the planted one, and a harness reading this file may be loading no hooks at all. Re-run weavedoc-init (reconfigure) to replant them from ${tplRel}`)
-        } else if (have.length !== want.length || have.some((t, i) => t !== want[i])) {
-          // U() on the SEPARATOR too: `M` passes interpolated values through untouched, so a raw
-          // `·` joined in here leaves as a lone 0xB7 through the latin1 path while the literal half
-          // of the same sentence encodes correctly — one message, two encodings (the class this
-          // file names at its own reader boundary).
-          const shown = have.length === 0 ? '(none readable)' : have.join(U(' · '))
-          warn('HOOKS-STALE', M`${settingsRel}'s weavedoc hook entries differ from ${tplRel} — found: ${shown}. The gate and the lease are how a session learns which skill owns a path, so a stale or half-planted pair enforces the previous release's rules, or none at all. Re-run weavedoc-init (reconfigure); entries without the marker are the project's own and are never compared`)
+      return out.sort()
+    }
+    for (const { settingsRel, tplRel, missingCode, staleCode } of [
+      { settingsRel: '.claude/settings.json', tplRel: '.weavedoc/templates/hooks.json', missingCode: 'HOOKS-NOTEMPLATE', staleCode: 'HOOKS-STALE' },
+      { settingsRel: '.codex/hooks.json', tplRel: '.weavedoc/templates/codex-hooks.json', missingCode: 'CODEX-HOOKS-NOTEMPLATE', staleCode: 'CODEX-HOOKS-STALE' }
+    ]) {
+      const raw = readOr(join(m.root, settingsRel))
+      if (raw.includes(MARK)) {
+        let want = null
+        try { want = tuples(readOr(join(m.root, tplRel))) } catch { want = null }
+        if (want === null || want.length === 0) {
+          // A check that could not run must never read as a pass — the same rule the pointer block's
+          // NOTEMPLATE branch states one section up.
+          hookWarn(missingCode, M`${settingsRel} carries weavedoc hook entries (marker '${MARK}') but ${tplRel} is missing, unreadable, or names none — the planted entries could NOT be compared against the bundle's, so nothing here says they are current. Restore the runtime bundle`)
+        } else {
+          let have = null
+          try { have = tuples(raw) } catch { have = null }
+          if (have === null) {
+            hookWarn(staleCode, M`${settingsRel} holds the weavedoc hook marker but the file does not parse as JSON — whatever state the entries are in, it is not the planted one, and a harness reading this file may be loading no hooks at all. Re-run weavedoc-init (reconfigure) to replant them from ${tplRel}`)
+          } else if (have.length !== want.length || have.some((t, i) => t !== want[i])) {
+            // U() on the separator too: M passes interpolated values through untouched.
+            const shown = have.length === 0 ? '(none readable)' : have.join(U(' · '))
+            hookWarn(staleCode, M`${settingsRel}'s weavedoc hook entries differ from ${tplRel} — found: ${shown}. The gate and the lease are how a session learns which skill owns a path, so a stale or half-planted pair enforces the previous release's rules, or none at all. Re-run weavedoc-init (reconfigure); entries without the marker are the project's own and are never compared`)
+          }
         }
       }
     }

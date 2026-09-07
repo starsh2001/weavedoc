@@ -19,7 +19,8 @@
 //   version           the installed runtime version (.weavedoc/VERSION), fingerprint and schema
 //   lang              the project's reply/artifact language (config.language)
 //   locale            detect the OS language (for init); prints nothing if undetectable
-//   interview         init's fixed questionnaire as AskUserQuestion payloads, non-ASCII pre-escaped
+//   interview [claude|codex]   init's fixed questionnaire in the active harness's question schema
+//   activate <weavedoc-skill>  Codex hook handshake (records nothing by itself)
 //
 // THE SPECIFICATION IS tests/regress.sh — every case is a CLI black box (build a mine, run a
 // command, assert stdout and the exit code), which is what let this runtime be graded against the
@@ -210,6 +211,7 @@ async function cmdLocale () {
 const INTERVIEW = [
   ['1 of 2 - authority, fidelity & conflicts (Q2)', [
     {
+      id: 'authority',
       question: '기계와 사용자가 각각 어디까지 결정합니까?',
       header: 'Authority',
       multiSelect: false,
@@ -220,6 +222,7 @@ const INTERVIEW = [
       ]
     },
     {
+      id: 'completeness',
       question: '누락이 그 자체로 위반인 프로젝트입니까?',
       header: 'Completeness',
       multiSelect: false,
@@ -229,6 +232,7 @@ const INTERVIEW = [
       ]
     },
     {
+      id: 'conflicts_detection',
       question: '자료끼리 어긋나는 곳을 얼마나 깊이 찾을까요?',
       header: 'Conflicts',
       multiSelect: false,
@@ -240,6 +244,7 @@ const INTERVIEW = [
   ]],
   ['2 of 2 - verify & review intensity (Q3)', [
     {
+      id: 'verify_strength',
       question: '자료에서 진실을 뽑아낸 변환을 어느 강도로 검증할까요?',
       header: 'Verify',
       multiSelect: false,
@@ -250,6 +255,7 @@ const INTERVIEW = [
       ]
     },
     {
+      id: 'review_strength',
       question: '완성된 문서를 어느 강도로 리뷰할까요?',
       header: 'Review',
       multiSelect: false,
@@ -260,6 +266,7 @@ const INTERVIEW = [
       ]
     },
     {
+      id: 'scale',
       question: '검증과 리뷰를 어느 규모로 돌릴까요?',
       header: 'Scale',
       multiSelect: false,
@@ -290,22 +297,46 @@ const uniEsc = s => {
   return o
 }
 
-function cmdInterview () {
-  const q = x => `{"question":"${uniEsc(x.question)}","header":"${uniEsc(x.header)}","multiSelect":${x.multiSelect},` +
+function cmdInterview (surface = 'claude') {
+  const claudeQuestion = x => `{"question":"${uniEsc(x.question)}","header":"${uniEsc(x.header)}","multiSelect":${x.multiSelect},` +
     `"options":[${x.options.map(o => `{"label":"${uniEsc(o.label)}","description":"${uniEsc(o.description)}"}`).join(',')}]}`
+  const codexQuestion = x => `{"id":"${x.id}","question":"${uniEsc(x.question)}","header":"${uniEsc(x.header)}",` +
+    `"options":[${x.options.map((o, i) => {
+      const label = i === 0 ? `${o.label} (Recommended)` : o.label
+      const description = o.description.replace(/^\(추천\)\s*/, '')
+      return `{"label":"${uniEsc(label)}","description":"${uniEsc(description)}"}`
+    }).join(',')}]}`
+  const question = surface === 'codex' ? codexQuestion : claudeQuestion
   // THE WHOLE OUTPUT is ASCII, comments included — not just the arrays. One property is testable
   // ("no byte above 0x7e leaves this command"); "the payload is ASCII but the prose around it is
   // not" is a rule with an exception, and an exception is what a copier has to judge.
-  outln("# weavedoc interview - paste each array as AskUserQuestion's `questions` argument, VERBATIM.")
+  outln(surface === 'codex'
+    ? "# weavedoc interview (Codex) - pass each array as request_user_input's `questions` argument, VERBATIM."
+    : "# weavedoc interview (Claude) - paste each array as AskUserQuestion's `questions` argument, VERBATIM.")
   outln('# It is already escaped: copy it. Do not retype it, and do not re-encode the Korean yourself.')
   outln('# If config.language is not Korean, TRANSLATE the decoded text - translating is not transcribing.')
+  if (surface === 'codex') outln("# Strip the exact ' (Recommended)' suffix from the selected label before writing the config value.")
   for (const [label, qs] of INTERVIEW) {
     outln('')
     outln(`# call ${label}`)
     // ONE line per array, so a copy is one action. A payload split across lines is a payload the
     // copier has to reassemble, and reassembly is the class of step this command exists to delete.
-    outln(`[${qs.map(q).join(',')}]`)
+    outln(`[${qs.map(question).join(',')}]`)
   }
+  return 0
+}
+
+const WEAVEDOC_SKILLS = new Set([
+  'weavedoc-init', 'weavedoc-gather', 'weavedoc-map', 'weavedoc-verify', 'weavedoc-gaps',
+  'weavedoc-plan', 'weavedoc-write', 'weavedoc-review', 'weavedoc-refine'
+])
+
+function cmdActivate (skill) {
+  if (!WEAVEDOC_SKILLS.has(skill)) return 2
+  // This process has no trustworthy session id, so it deliberately writes no lease. Codex's
+  // PostToolUse hook sees the Bash command together with the session id and lease.mjs records it.
+  // Keeping the command side-effect-free also makes it harmless on Claude Code and without hooks.
+  outln(`weavedoc activation handshake: ${skill}`)
   return 0
 }
 
@@ -317,7 +348,7 @@ const USAGE = 'weavedoc — validate | pull <term> | impact <material-id> | stat
   'attest <verdict> <round> <standard> <id...> | seal-review <doc-id> [draft|final] | ' +
   'consecrate <doc-id> | conflict list|add|remove | ' +
   'alloc <ns> | gaps | census | reindex [--check] | retag <old> <new> [--dry] | version | lang | ' +
-  'locale | interview'
+  'locale | interview [claude|codex] | activate <weavedoc-skill>'
 
 const usage2 = u => { errln(`usage: ${u}`); process.exit(2) }
 
@@ -383,8 +414,13 @@ switch (cmd) {
   case 'interview':
     // No mine is opened and no version gate is taken: like `version`/`lang`/`locale` this command
     // answers about the RUNTIME, and init runs it before a mine exists to have a version.
-    if (rest.length !== 0) usage2('weavedoc interview')
-    rc = cmdInterview(); break
+    if (rest.length > 1 || (rest.length === 1 && !['claude', 'codex'].includes(rest[0]))) usage2('weavedoc interview [claude|codex]')
+    rc = cmdInterview(rest[0] ?? 'claude'); break
+  case 'activate':
+    // The PostToolUse hook owns the write because only it receives the Codex session id. This
+    // command is the explicit, inspectable handshake that the hook recognizes in Bash input.
+    if (rest.length !== 1 || !WEAVEDOC_SKILLS.has(rest[0])) usage2('weavedoc activate <weavedoc-skill>')
+    rc = cmdActivate(rest[0]); break
   case 'locale':
     if (rest.length !== 0) usage2('weavedoc locale')
     // Top-level await (ESM): keeps node:child_process off the startup path — it is loaded only on

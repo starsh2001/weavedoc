@@ -139,6 +139,9 @@ compute_key() { { git -C "$REPO" rev-parse HEAD 2>/dev/null
            # case with no refusal at all.
            sha256sum "$REPO/.weavedoc/READ.md" "$REPO/tests/baseline/bundle.manifest" "$REPO/tests/baseline/bundle.manifest.sha256"
            find "$REPO/.claude/skills" -type f -print0 | sort -z | xargs -0 sha256sum
+           # Codex ships only the WeaveDoc skill family. A developer may keep unrelated converted
+           # skills in `.agents/skills`; they are neither bundle input nor regression input.
+           find "$REPO/.agents/skills" -type f -path "$REPO/.agents/skills/weavedoc-*/*" -print0 2>/dev/null | sort -z | xargs -0 -r sha256sum
            : ; } 2>/dev/null | awk '{print $1}'
          # …and the INDEX, hashed WHOLE and OUTSIDE that awk (external review, v0.5.14). It was
          # inside, where `awk '{print $1}'` keeps only the first field — for `git ls-files -s` that
@@ -4710,10 +4713,67 @@ EOF
   [ -z "$wrong" ] || { bad "interview offers values the schema does not agree with:$wrong"; return; }
   ok
 }
+acct_codex_interview_matches_request_user_input_and_schema() {
+  # Codex has a different question contract: stable `id`, no `multiSelect`, and its UI marks the
+  # recommended option in the LABEL. The selected value becomes config only after stripping that
+  # exact suffix. Parse the black-box output as JSON and compare both directions with the schema.
+  vrun interview codex
+  expect_pass
+  local nonascii
+  nonascii=$(printf '%s\n' "$OUT" | LC_ALL=C grep -n '[^ -~]' | head -3)
+  [ -z "$nonascii" ] || { bad "Codex interview printed non-ASCII: $nonascii"; return; }
+  printf '%s\n' "$OUT" > "$W/codex-interview.out"
+  OUT=$(node - "$W/codex-interview.out" "$REPO/.weavedoc/schema" <<'NODE'
+const fs = require('fs')
+const lines = fs.readFileSync(process.argv[2], 'utf8').split(/\r?\n/).filter(x => x.startsWith('['))
+if (lines.length !== 2) throw new Error(`arrays=${lines.length}, want 2`)
+const qs = lines.flatMap(JSON.parse)
+if (qs.length !== 6) throw new Error(`questions=${qs.length}, want 6`)
+const ids = ['authority', 'completeness', 'conflicts_detection', 'verify_strength', 'review_strength', 'scale']
+if (JSON.stringify(qs.map(q => q.id)) !== JSON.stringify(ids)) throw new Error(`ids=${qs.map(q => q.id).join(',')}`)
+if (qs.some(q => Object.hasOwn(q, 'multiSelect'))) throw new Error('Codex payload carries Claude-only multiSelect')
+const schema = Object.fromEntries(fs.readFileSync(process.argv[3], 'utf8').split(/\r?\n/)
+  .map(line => /^([^#][^:]*):\s*(.*)$/.exec(line)).filter(Boolean).map(m => [m[1], m[2]]))
+const keys = {
+  Authority: 'config.enum.authority', Completeness: 'config.enum.completeness',
+  Conflicts: 'config.enum.detection', Verify: 'config.strength.range',
+  Review: 'config.strength.range', Scale: 'config.enum.scale'
+}
+let recommended = 0
+for (const q of qs) {
+  if (!keys[q.header]) throw new Error(`unmapped header ${q.header}`)
+  const want = schema[keys[q.header]].split('|').sort()
+  const got = q.options.map((o, i) => {
+    const marked = o.label.endsWith(' (Recommended)')
+    if (i === 0 && !marked) throw new Error(`${q.header}: first option is not recommended`)
+    if (i !== 0 && marked) throw new Error(`${q.header}: non-first option is recommended`)
+    if (marked) recommended++
+    return o.label.replace(/ \(Recommended\)$/, '')
+  }).sort()
+  if (JSON.stringify(got) !== JSON.stringify(want)) throw new Error(`${q.header}: schema=${want} asked=${got}`)
+}
+if (recommended !== 6) throw new Error(`recommended=${recommended}, want 6`)
+process.stdout.write('Codex interview: 2 arrays, 6 ids, schema labels agree')
+NODE
+  ); RC=$?
+  expect_pass
+  expect_has "schema labels agree"
+}
 block_interview_extra_arg() {
-  # WD-CLI-001, on a command that takes none: a typo'd intention is refused, never ignored.
-  vrun interview ko
-  expect_block "usage: weavedoc interview"
+  # WD-CLI-001: only the two named harness surfaces are accepted.
+  vrun interview cursor
+  expect_block "usage: weavedoc interview [claude|codex]"
+}
+acct_activate_prints_codex_hook_handshake() {
+  # The CLI cannot know the harness session id and must not write a global lease. It prints the
+  # explicit command result; Codex PostToolUse supplies the missing session id to lease.mjs.
+  vrun activate weavedoc-gather
+  expect_pass
+  expect_has "weavedoc activation handshake: weavedoc-gather"
+}
+block_activate_rejects_non_weavedoc_skill() {
+  vrun activate frontend-design
+  expect_block "usage: weavedoc activate <weavedoc-skill>"
 }
 acct_golden_outputs_current() {
   # tests/baseline/golden/ is the record of what each command PRINTS on a clean minimal mine, and
@@ -4820,6 +4880,7 @@ meta_key_covers_every_live_input() {
   local copy="$W/keyrepo" k0 k1 fails=""
   mkdir -p "$copy" && cp -r "$REPO/tests" "$REPO/.weavedoc" "$copy"/ 2>/dev/null
   mkdir -p "$copy/.claude" && cp -r "$REPO/.claude/skills" "$copy/.claude"/ 2>/dev/null
+  mkdir -p "$copy/.agents" && cp -r "$REPO/.agents/skills" "$copy/.agents"/ 2>/dev/null
   cp "$REPO/README.md" "$REPO/CHANGELOG.md" "$copy"/ 2>/dev/null
   # WD_REG_RES/WD_REG_KEY CLEARED — inside a --batch worker they are exported and --seal-check
   # refuses in that branch, so this returned no key and the case failed only under the real
@@ -4854,6 +4915,7 @@ meta_key_covers_every_live_input() {
   probe_moves bin-nested "$copy/.weavedoc/bin/lib/sub/m.mjs"
   mkdir -p "$copy/tests/helpers" && printf '#!/usr/bin/env bash\n' > "$copy/tests/helpers/h.sh"
   probe_moves tests-nested "$copy/tests/helpers/h.sh"
+  probe_moves codex-skill "$copy/.agents/skills/weavedoc-gather/SKILL.md"
   # the entrypoint under a WD_BIN that lives OUTSIDE bin/ — the v0.5.16 hole
   cp "$copy/.weavedoc/bin/weavedoc.mjs" "$copy/.weavedoc/alt-entry.mjs"
   k0=$( cd "$copy" && WD_REG_RES= WD_REG_KEY= TMPDIR="$W" WD_BIN="node .weavedoc/alt-entry.mjs" bash tests/regress.sh --seal-check zzzzzzzzzzzz 2>&1 | sed -n 's/.*, \([0-9a-f]*\) now\..*/\1/p' )
@@ -4870,6 +4932,7 @@ meta_key_covers_the_git_index() {
   local repo="$W/gitrepo" before after
   mkdir -p "$repo" && cp -r "$REPO/tests" "$REPO/.weavedoc" "$repo"/ 2>/dev/null
   mkdir -p "$repo/.claude" && cp -r "$REPO/.claude/skills" "$repo/.claude"/ 2>/dev/null
+  mkdir -p "$repo/.agents" && cp -r "$REPO/.agents/skills" "$repo/.agents"/ 2>/dev/null
   cp "$REPO/README.md" "$REPO/CHANGELOG.md" "$repo"/ 2>/dev/null
   # `git init` HONOURS an inherited GIT_DIR — it re-initialises THAT dir instead of making
   # one here, and the `git add -A` then stages this scratch tree into the REAL repository's index,
@@ -4985,13 +5048,17 @@ meta_git_env_ignored_by_key_and_manifest() {
   # there without adding it here makes the generator refuse this scratch repo, which is what the
   # vacuity guard below then reports (measured when `.weavedoc/schemas/v3` was added). The guard
   # catching it loudly is the design; keeping the two lists in step is the maintenance.
-  mkdir -p "$sc/.weavedoc" "$sc/tests" "$sc/.claude/skills/weavedoc-x"
+  mkdir -p "$sc/.weavedoc" "$sc/tests" \
+    "$sc/.claude/skills/weavedoc-init" "$sc/.claude/skills/weavedoc-x" \
+    "$sc/.agents/skills/weavedoc-init"
   cp "$REPO/.weavedoc/VERSION" "$REPO/.weavedoc/schema" "$REPO/.weavedoc/READ.md" \
      "$REPO/.weavedoc/FORMATS.md" "$REPO/.weavedoc/PARSER-MODEL.md" \
      "$REPO/.weavedoc/.gitattributes" "$sc/.weavedoc"/ 2>/dev/null
   mkdir -p "$sc/.weavedoc/bin" && cp "$REPO/.weavedoc/bin/weavedoc.mjs" "$sc/.weavedoc/bin"/ 2>/dev/null
+  printf 'skill\n' > "$sc/.claude/skills/weavedoc-init/SKILL.md"
   printf 'skill
 ' > "$sc/.claude/skills/weavedoc-x/SKILL.md"
+  printf 'skill\n' > "$sc/.agents/skills/weavedoc-init/SKILL.md"
   printf 'other
 ' > "$sc/.claude/skills/not-ours.md"
   cp "$REPO/tests/make-manifest.sh" "$REPO/tests/git-env.sh" "$sc/tests"/ 2>/dev/null
@@ -5004,6 +5071,7 @@ meta_git_env_ignored_by_key_and_manifest() {
   m1=$( cd "$sc" && GIT_INDEX_FILE="$alt" bash tests/make-manifest.sh 2>/dev/null )
   case "$m0" in *.weavedoc/VERSION*) ;; *) bad "the scratch manifest is empty — the comparison would be vacuous"; return ;; esac
   case "$m0" in *weavedoc-x/SKILL.md*) ;; *) bad "the scratch manifest has no skill row — the pathspec half would be vacuous"; return ;; esac
+  case "$m0" in *.agents/skills/weavedoc-init/SKILL.md*) ;; *) bad "the scratch manifest has no Codex skill row — the dual-surface pathspec half would be vacuous"; return ;; esac
   case "$m0" in *not-ours.md*) bad "the manifest picked up a skill that is not ours"; return ;; esac
   [ "$m0" = "$m1" ] || fails="$fails manifest"
   # (3) THE PATHSPEC FAMILY, which `git rev-parse --local-env-vars` does not name (external review,
@@ -5045,13 +5113,16 @@ meta_manifest_generator_fails_closed() {
   # as though it were the file's digest, and the script exited 0. Built by staging the required
   # paths and then deleting one loose object out from under the index.
   local sc2="$W/mmfc2" obj
-  mkdir -p "$sc2/tests" "$sc2/.weavedoc/bin"
+  mkdir -p "$sc2/tests" "$sc2/.weavedoc/bin" \
+    "$sc2/.claude/skills/weavedoc-init" "$sc2/.agents/skills/weavedoc-init"
   cp "$REPO/tests/make-manifest.sh" "$REPO/tests/git-env.sh" "$sc2/tests"/ 2>/dev/null
   # Same coupling to make-manifest.sh's required-path guard as the case above.
   cp "$REPO/.weavedoc/VERSION" "$REPO/.weavedoc/schema" "$REPO/.weavedoc/READ.md" \
      "$REPO/.weavedoc/FORMATS.md" "$REPO/.weavedoc/PARSER-MODEL.md" \
      "$REPO/.weavedoc/.gitattributes" "$sc2/.weavedoc"/ 2>/dev/null
   cp "$REPO/.weavedoc/bin/weavedoc.mjs" "$sc2/.weavedoc/bin"/ 2>/dev/null
+  printf 'skill\n' > "$sc2/.claude/skills/weavedoc-init/SKILL.md"
+  printf 'skill\n' > "$sc2/.agents/skills/weavedoc-init/SKILL.md"
   ( cd "$sc2" && git init -q . && git add -A >/dev/null 2>&1 ) || { bad "could not build the second scratch repo"; return; }
   out=$( cd "$sc2" && bash tests/make-manifest.sh 2>/dev/null ); rc=$?
   [ "$rc" = 0 ] || { OUT="the intact scratch repo already failed: rc=$rc"; bad "the unreadable-blob probe would be vacuous"; return; }
@@ -5098,9 +5169,10 @@ meta_git_env_writes_stay_inside() {
   # so that part of this case passes before and after — it is here so a future cleanup cannot be
   # narrowed back to "the object dir only" without going red.
   local copy="$W/gitwrite" vic="$W/gitwrite-victim" before after vidx0 vidx1 out
-  mkdir -p "$copy/.claude" "$vic"
+  mkdir -p "$copy/.claude" "$copy/.agents" "$vic"
   cp -r "$REPO/tests" "$REPO/.weavedoc" "$copy"/ 2>/dev/null
   cp -r "$REPO/.claude/skills" "$copy/.claude"/ 2>/dev/null
+  cp -r "$REPO/.agents/skills" "$copy/.agents"/ 2>/dev/null
   cp "$REPO/README.md" "$REPO/CHANGELOG.md" "$copy"/ 2>/dev/null
   ( cd "$vic" && git init -q . && printf 'victim\n' > v.txt && git add v.txt >/dev/null 2>&1 ) \
     || { bad "could not build the victim repo"; return; }
@@ -5133,6 +5205,8 @@ meta_key_seal_covers_one_and_worker_branch() {
   cp -r "$REPO/tests" "$REPO/.weavedoc" "$copy"/ 2>/dev/null
   mkdir -p "$copy/.claude"
   cp -r "$REPO/.claude/skills" "$copy/.claude"/ 2>/dev/null
+  mkdir -p "$copy/.agents"
+  cp -r "$REPO/.agents/skills" "$copy/.agents"/ 2>/dev/null
   cp "$REPO/README.md" "$REPO/CHANGELOG.md" "$copy"/ 2>/dev/null
   out=$( cd "$copy" && WD_REG_RES= WD_REG_KEY= TMPDIR="$W" bash tests/regress.sh --one sealprobe_writes_keyed_file 2>&1 ); rc=$?
   OUT="one: rc=$rc :: $out"
@@ -6859,6 +6933,7 @@ block_conflict_store_dangling_references() {
 # v2 protocol as though quoting it — then built the user's options on that model. A pointer with a
 # marker pair and no owner is worse than no marker at all, because the markers imply an owner.
 plant_block() { cat "$W/.weavedoc/templates/claude-block.md" > "$W/CLAUDE.md"; }
+plant_agents_block() { cat "$W/.weavedoc/templates/agents-block.md" > "$W/AGENTS.md"; }
 
 pass_claude_block_absent_is_silent() {
   # No CLAUDE.md: nothing to be stale. A mine is readable outside Claude Code, and validate does not
@@ -6915,6 +6990,31 @@ acct_json_claude_block_is_a_warning() {
   expect_has '"diagnostics":[]'
   expect_has '"code":"CLAUDE-BLOCK-STALE"'
 }
+pass_agents_block_absent_is_silent() {
+  vrun validate; expect_pass; expect_hasnt "AGENTS-BLOCK"
+}
+pass_agents_block_current_is_silent() {
+  plant_agents_block
+  printf '\n## Project instructions\n\nText outside the markers belongs to the project.\n' >> "$W/AGENTS.md"
+  vrun validate; expect_pass; expect_hasnt "AGENTS-BLOCK"
+}
+pass_agents_block_stale_warns_without_blocking() {
+  printf '<!-- weavedoc:begin -->\nRead a stale protocol summary.\n<!-- weavedoc:end -->\n' > "$W/AGENTS.md"
+  vrun validate; expect_pass; expect_has "AGENTS-BLOCK-STALE"
+}
+pass_agents_block_missing_template_says_so() {
+  plant_agents_block
+  rm -f "$W/.weavedoc/templates/agents-block.md"
+  vrun validate; expect_pass; expect_has "AGENTS-BLOCK-NOTEMPLATE"
+}
+acct_json_agents_block_is_a_warning() {
+  printf '<!-- weavedoc:begin -->\nstale pointer\n<!-- weavedoc:end -->\n' > "$W/AGENTS.md"
+  vrun validate --json
+  expect_pass
+  expect_has '"result":"pass"'
+  expect_has '"diagnostics":[]'
+  expect_has '"code":"AGENTS-BLOCK-STALE"'
+}
 
 # ---------------------------------------------------------------- the planted hook pair (v0.6.9)
 #
@@ -6947,6 +7047,15 @@ hlease() { # $1=session $2=skill
   OUT=$(printf '{"session_id":"%s","cwd":"%s","hook_event_name":"PostToolUse","tool_name":"Skill","tool_input":{"skill":"%s","args":""}}' "$1" "$NROOT" "$2" \
     | WEAVEDOC_LEASE_DIR="$LDIR" node "$W/.weavedoc/bin/hooks/lease.mjs" 2>&1); RC=$?
 }
+hlease_codex() { # $1=session $2=skill; Codex PostToolUse(Bash) shape
+  hookenv
+  local payload
+  payload=$(node -e '
+    const [sid, cwd, skill] = process.argv.slice(1)
+    process.stdout.write(JSON.stringify({session_id:sid,cwd,hook_event_name:"PostToolUse",tool_name:"Bash",tool_input:{command:`node .weavedoc/bin/weavedoc.mjs activate ${skill}`}}))
+  ' "$1" "$NROOT" "$2")
+  OUT=$(printf '%s' "$payload" | WEAVEDOC_LEASE_DIR="$LDIR" node "$W/.weavedoc/bin/hooks/lease.mjs" 2>&1); RC=$?
+}
 hgate() { # $1=session $2=repo-relative path $3=tool (default Write)
   hookenv
   local ti
@@ -6954,6 +7063,18 @@ hgate() { # $1=session $2=repo-relative path $3=tool (default Write)
   else ti=$(printf '{"file_path":"%s/%s","content":"x"}' "$NROOT" "$2"); fi
   OUT=$(printf '{"session_id":"%s","cwd":"%s","hook_event_name":"PreToolUse","tool_name":"%s","tool_input":%s}' "$1" "$NROOT" "${3:-Write}" "$ti" \
     | WEAVEDOC_LEASE_DIR="$LDIR" node "$W/.weavedoc/bin/hooks/gate.mjs" 2>&1); RC=$?
+}
+hgate_codex() { # $1=session $2...=repo-relative paths in one Codex apply_patch
+  local sid="$1" p patch='*** Begin Patch'; shift
+  hookenv
+  for p in "$@"; do patch="$patch"$'\n'"*** Update File: $NROOT/$p"; done
+  patch="$patch"$'\n''*** End Patch'
+  local payload
+  payload=$(node -e '
+    const [sid, cwd, command] = process.argv.slice(1)
+    process.stdout.write(JSON.stringify({session_id:sid,cwd,hook_event_name:"PreToolUse",tool_name:"apply_patch",tool_input:{command}}))
+  ' "$sid" "$NROOT" "$patch")
+  OUT=$(printf '%s' "$payload" | WEAVEDOC_LEASE_DIR="$LDIR" node "$W/.weavedoc/bin/hooks/gate.mjs" 2>&1); RC=$?
 }
 DENY='"permissionDecision":"deny"'
 
@@ -6963,6 +7084,25 @@ acct_hook_lease_records_weavedoc_skill() {
   OUT=$(cat "$W/.leasedir"/*.json 2>&1); RC=0
   expect_has '"skill":"weavedoc-gather"'
   expect_has '"s1"'
+}
+acct_codex_hook_lease_records_activation_handshake() {
+  hlease_codex c1 weavedoc-gather
+  expect_pass
+  OUT=$(cat "$W/.leasedir"/*.json 2>&1); RC=0
+  expect_has '"skill":"weavedoc-gather"'
+  expect_has '"c1"'
+}
+acct_codex_hook_lease_ignores_unrelated_bash() {
+  hookenv
+  local payload
+  payload=$(node -e 'process.stdout.write(JSON.stringify({session_id:"c1",hook_event_name:"PostToolUse",tool_name:"Bash",tool_input:{command:"echo activate weavedoc-gather"}}))')
+  OUT=$(printf '%s' "$payload" | WEAVEDOC_LEASE_DIR="$LDIR" node "$W/.weavedoc/bin/hooks/lease.mjs" 2>&1); RC=$?
+  expect_pass
+  payload=$(node -e 'process.stdout.write(JSON.stringify({session_id:"c1",hook_event_name:"PostToolUse",tool_name:"Bash",tool_input:{command:"node .weavedoc/bin/weavedoc.mjs activate weavedoc-gather extra"}}))')
+  OUT=$(printf '%s' "$payload" | WEAVEDOC_LEASE_DIR="$LDIR" node "$W/.weavedoc/bin/hooks/lease.mjs" 2>&1); RC=$?
+  expect_pass
+  [ ! -e "$W/.leasedir"/weavedoc-lease-*.json ] || { bad "an unrelated Bash command minted a Codex lease"; return; }
+  ok
 }
 acct_hook_lease_ignores_foreign_skill() {
   # The gate answers weavedoc paths only, so a lease for someone else's skill would be a fact with
@@ -7021,6 +7161,26 @@ acct_hook_gate_allows_with_owning_lease() {
   # …and the Edit shape reaches the same decision: the gate reads file_path, never the content keys.
   hgate s1 materials/m001/converted.md Edit
   expect_pass; expect_hasnt "$DENY"
+}
+acct_codex_hook_gate_denies_apply_patch_without_lease() {
+  hgate_codex c1 materials/m001/converted.md
+  expect_pass
+  expect_has "$DENY"
+  expect_has 'activate weavedoc-gather'
+}
+acct_codex_hook_gate_allows_apply_patch_with_owning_lease() {
+  hgate_codex c1 materials/m001/converted.md
+  expect_has "$DENY"
+  hlease_codex c1 weavedoc-gather
+  hgate_codex c1 materials/m001/converted.md
+  expect_pass; expect_hasnt "$DENY"
+}
+acct_codex_hook_gate_checks_every_apply_patch_target() {
+  # An ungated first target must not hide a guarded later target in the same patch.
+  hgate_codex c1 output/notes.md materials/m001/converted.md
+  expect_pass
+  expect_has "$DENY"
+  expect_has 'materials/m001/converted.md'
 }
 acct_hook_gate_denies_wrong_skill_lease() {
   # A lease is not a skeleton key: it names one skill, and the deny says which one is held.
@@ -7089,6 +7249,14 @@ plant_hooks() { # the shipped entries, composed FROM the template so a case cann
     const t = JSON.parse(fs.readFileSync(process.argv[1], "utf8"))
     fs.writeFileSync(process.argv[2], JSON.stringify(t, null, 2) + "\n")
   ' "$W/.weavedoc/templates/hooks.json" "$W/.claude/settings.json"
+}
+plant_codex_hooks() {
+  mkdir -p "$W/.codex"
+  node -e '
+    const fs = require("fs")
+    const t = JSON.parse(fs.readFileSync(process.argv[1], "utf8"))
+    fs.writeFileSync(process.argv[2], JSON.stringify(t, null, 2) + "\n")
+  ' "$W/.weavedoc/templates/codex-hooks.json" "$W/.codex/hooks.json"
 }
 pass_hooks_absent_is_silent() {
   # No settings.json: nothing planted, nothing to be stale, and validate does not lecture.
@@ -7168,6 +7336,40 @@ acct_json_hooks_stale_is_a_warning() {
   expect_has '"result":"pass"'
   expect_has '"diagnostics":[]'
   expect_has '"code":"HOOKS-STALE"'
+}
+pass_codex_hooks_absent_is_silent() {
+  vrun validate; expect_pass; expect_hasnt "CODEX-HOOKS-"
+}
+pass_codex_hooks_current_is_silent() {
+  plant_codex_hooks
+  vrun validate; expect_pass; expect_hasnt "CODEX-HOOKS-"
+}
+pass_codex_hooks_stale_warns_without_blocking() {
+  plant_codex_hooks
+  sed -i 's/"Write|Edit"/"Edit"/' "$W/.codex/hooks.json"
+  vrun validate; expect_pass
+  expect_has "CODEX-HOOKS-STALE"
+}
+pass_codex_hooks_missing_template_says_so() {
+  plant_codex_hooks
+  rm -f "$W/.weavedoc/templates/codex-hooks.json"
+  vrun validate; expect_pass
+  expect_has "CODEX-HOOKS-NOTEMPLATE"
+}
+acct_codex_hooks_unparseable_with_marker_warns() {
+  mkdir -p "$W/.codex"
+  printf '{"hooks": broken .weavedoc/bin/hooks/gate.mjs\n' > "$W/.codex/hooks.json"
+  vrun validate; expect_pass
+  expect_has "CODEX-HOOKS-STALE"
+}
+acct_json_codex_hooks_stale_is_a_warning() {
+  plant_codex_hooks
+  sed -i 's/"Write|Edit"/"Edit"/' "$W/.codex/hooks.json"
+  vrun validate --json
+  expect_pass
+  expect_has '"result":"pass"'
+  expect_has '"diagnostics":[]'
+  expect_has '"code":"CODEX-HOOKS-STALE"'
 }
 
 # ---------------------------------------------------------------- driver

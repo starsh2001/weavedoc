@@ -81,8 +81,10 @@ const RULES = [
   ['questions.md', ['weavedoc-gather', 'weavedoc-map', 'weavedoc-gaps', 'weavedoc-plan', 'weavedoc-write', 'weavedoc-refine']],
   ['project.md', ['weavedoc-init', 'weavedoc-gather', 'weavedoc-gaps']],
   ['CLAUDE.md', ['weavedoc-init']],
+  ['AGENTS.md', ['weavedoc-init']],
   ['.ignore', ['weavedoc-init']],
-  ['.claude/settings.json', ['weavedoc-init']]
+  ['.claude/settings.json', ['weavedoc-init']],
+  ['.codex/hooks.json', ['weavedoc-init']]
 ]
 
 // THE THREE DIRECTORIES A PROJECT MAY MOVE. `materials`, `truths` and `documents` are config
@@ -114,55 +116,70 @@ const deny = reason => {
 
 try {
   const payload = JSON.parse(await readStdin())
-  // Write carries {file_path, content}; Edit carries {file_path, old_string, new_string}. Only the
-  // path is read, so both shapes work and neither content is inspected.
+  // Claude Write/Edit carries one `file_path`. Codex apply_patch carries the whole patch in
+  // `tool_input.command`, possibly with several Add/Update/Delete/Move targets. Extract every path:
+  // allowing because the FIRST one was ungated would leave a guarded sibling in the same patch
+  // unseen. Content is otherwise never inspected.
+  const paths = []
   const fp = payload?.tool_input?.file_path
-  if (typeof fp !== 'string' || fp === '') allow()
+  if (typeof fp === 'string' && fp !== '') paths.push(fp)
+  const patch = payload?.tool_input?.command
+  if (typeof patch === 'string') {
+    for (const line of patch.split(/\r?\n/)) {
+      const m = /^\*\*\* (?:Add|Update|Delete) File: (.+)$/.exec(line) || /^\*\*\* Move to: (.+)$/.exec(line)
+      if (m && m[1].trim() !== '') paths.push(m[1].trim())
+    }
+  }
+  if (paths.length === 0) allow()
 
   const root = mineRoot(import.meta.url)
   const cfgFile = join(root, '.weavedoc', 'config.yaml')
   // A bundle sitting outside a mine (a fresh copy, a template checkout) defends nothing.
   try { statSync(cfgFile) } catch { allow() }
 
-  // Classification is TARGET-vs-ROOT, never cwd-vs-root: a session working elsewhere that writes
-  // into this mine is still gated, and a write into a DIFFERENT mine is allowed here because that
-  // mine's own planted gate is what defends it.
-  const target = canonTarget(isAbsolute(fp) ? fp : resolve(payload?.cwd ?? process.cwd(), fp))
-  const rel = relative(root, target).split('\\').join('/')
-  const inRoot = rel !== '' && !rel.startsWith('..') && !isAbsolute(rel)
-
-  // The literal rules first, so a mine that redirects a folder INTO `.weavedoc/` still meets the
-  // bundle refusal rather than a write permit. Then the configurable three, which are matched by
-  // containment and therefore work whether or not they sit under the root.
-  let hit = inRoot
-    ? RULES.find(([prefix]) => (prefix.endsWith('/') ? rel.startsWith(prefix) : rel === prefix))
-    : undefined
-  if (hit === undefined) {
-    hit = CFG_DIRS
-      .map(([key, owners]) => [canonTarget(cfgPath(cfgFile, key, key, root)), owners])
-      .find(([dir]) => {
-        const r = relative(dir, target)
-        return r !== '' && !r.startsWith('..') && !isAbsolute(r)
-      })
-  }
-  // inbox/, output/, docs/, anything else — and anything outside this mine: not ours to police.
-  if (hit === undefined) allow()
-
-  const [prefix, owners] = hit
-  if (owners === null) {
-    deny(prefix === '.weavedoc-state/'
-      ? `${rel} is machine-owned mine state and no skill writes it by hand — the CLI is what keeps these ledgers well-formed. Use 'node .weavedoc/bin/weavedoc.mjs conflict add|remove …' or 'alloc …' instead.`
-      : `${rel} is a runtime-bundle file. The bundle is replaced wholesale by an upgrade or a re-copy, so an in-place edit is silently reverted on the next one — and until then this mine runs a runtime that matches no release. Project settings live in .weavedoc/config.yaml (weavedoc-init writes it).`)
-  }
-
   const lf = leasePath(root)
   let entry = null
   try {
     entry = JSON.parse(readFileSync(lf, 'utf8'))?.sessions?.[payload?.session_id ?? ''] ?? null
   } catch { entry = null }
-  if (entry && typeof entry.ts === 'number' && Date.now() - entry.ts <= TTL_MS && owners.includes(entry.skill)) allow()
 
-  deny(`${rel} is written by ${owners.join(' / ')}, and this session holds no lease from ${owners.length > 1 ? 'any of them' : 'it'}${entry ? ` (its current lease is ${entry.skill})` : ''}. Invoke the owning skill first — Skill(${owners[0]}) — and then retry: that skill carries the write rules for this path, and the lease it leaves behind is what this gate reads.`)
+  for (const rawPath of [...new Set(paths)]) {
+    // Classification is TARGET-vs-ROOT, never cwd-vs-root: a session working elsewhere that writes
+    // into this mine is still gated, and a write into a DIFFERENT mine is allowed here because that
+    // mine's own planted gate is what defends it.
+    const target = canonTarget(isAbsolute(rawPath) ? rawPath : resolve(payload?.cwd ?? process.cwd(), rawPath))
+    const rel = relative(root, target).split('\\').join('/')
+    const inRoot = rel !== '' && !rel.startsWith('..') && !isAbsolute(rel)
+
+    // The literal rules first, so a mine that redirects a folder INTO `.weavedoc/` still meets the
+    // bundle refusal rather than a write permit. Then the configurable three, which are matched by
+    // containment and therefore work whether or not they sit under the root.
+    let hit = inRoot
+      ? RULES.find(([prefix]) => (prefix.endsWith('/') ? rel.startsWith(prefix) : rel === prefix))
+      : undefined
+    if (hit === undefined) {
+      hit = CFG_DIRS
+        .map(([key, owners]) => [canonTarget(cfgPath(cfgFile, key, key, root)), owners])
+        .find(([dir]) => {
+          const r = relative(dir, target)
+          return r !== '' && !r.startsWith('..') && !isAbsolute(r)
+        })
+    }
+    // inbox/, output/, docs/, anything else — and anything outside this mine: not ours to police.
+    if (hit === undefined) continue
+
+    const [prefix, owners] = hit
+    if (owners === null) {
+      deny(prefix === '.weavedoc-state/'
+        ? `${rel} is machine-owned mine state and no skill writes it by hand — the CLI is what keeps these ledgers well-formed. Use 'node .weavedoc/bin/weavedoc.mjs conflict add|remove …' or 'alloc …' instead.`
+        : `${rel} is a runtime-bundle file. The bundle is replaced wholesale by an upgrade or a re-copy, so an in-place edit is silently reverted on the next one — and until then this mine runs a runtime that matches no release. Project settings live in .weavedoc/config.yaml (weavedoc-init writes it).`)
+    }
+
+    if (entry && typeof entry.ts === 'number' && Date.now() - entry.ts <= TTL_MS && owners.includes(entry.skill)) continue
+
+    deny(`${rel} is written by ${owners.join(' / ')}, and this session holds no lease from ${owners.length > 1 ? 'any of them' : 'it'}${entry ? ` (its current lease is ${entry.skill})` : ''}. Activate the owning skill first — Claude: Skill(${owners[0]}); Codex: node .weavedoc/bin/weavedoc.mjs activate ${owners[0]} — and then retry: that skill carries the write rules for this path, and the lease it leaves behind is what this gate reads.`)
+  }
+  allow()
 } catch (e) {
   process.stderr.write(`weavedoc gate: internal error (${e?.message ?? e}) — allowing the write; this gate fails open by design\n`)
   process.exit(0)
