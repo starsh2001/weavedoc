@@ -29,7 +29,7 @@ import {
 const readState = (m, rel, parse, out, what) => {
   let text = null
   try { text = readFileSync(join(m.root, rel), 'utf8') } catch { text = null }
-  if (text === null) { out(`${what}: ${rel} is missing or unreadable — a v3 mine carries it from init/upgrade; run 'weavedoc validate'`); return null }
+  if (text === null) { out(`${what}: ${rel} is missing or unreadable — a v3 mine carries it from init (or the pinned migration bridge); run 'weavedoc validate'`); return null }
   const r = parse(text)
   if (!r.ok) { out(`${what}: ${rel} does not parse as its contract — run 'weavedoc validate' for the diagnostics; nothing written`); return null }
   return r

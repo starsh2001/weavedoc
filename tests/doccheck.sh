@@ -128,6 +128,13 @@ else
   grep -q 'status' "$blk" && say "the shipped CLAUDE.md block names 'status' — the block is a POINTER and may not restate READ.md's rules; a summary in CLAUDE.md is read before the file it summarises and wins against it"
 fi
 grep -qF 'claude-block.md' "$init" || say "weavedoc-init no longer points at .weavedoc/templates/claude-block.md — the block would be retyped from prose again, which is how it drifted out of the schema's vocabulary the first time"
+ablk="$REPO/.weavedoc/templates/agents-block.md"
+if [ ! -f "$ablk" ]; then
+  say "the shipped AGENTS.md block ($ablk) is missing — validate's AGENTS-BLOCK-STALE check has no other half"
+else
+  cmp -s "$blk" "$ablk" || say "claude-block.md and agents-block.md differ — the two harnesses would enter the same mine with different read rules"
+fi
+grep -qF 'agents-block.md' "$init" || say "weavedoc-init no longer points at .weavedoc/templates/agents-block.md — Codex would not receive the owned READ.md pointer"
 
 # 8b. The hooks template is the pointer block's twin — the second planted artifact the bundle checks.
 # Same three pins: the template FILE exists (HOOKS-STALE has no other half without it), init names it
@@ -143,6 +150,17 @@ else
 fi
 grep -qF 'hooks.json' "$init" \
   || say "weavedoc-init no longer points at .weavedoc/templates/hooks.json — the hook entries would be retyped from prose, which is the drift this pin exists to stop"
+chjson="$REPO/.weavedoc/templates/codex-hooks.json"
+if [ ! -f "$chjson" ]; then
+  say "the shipped Codex hooks template ($chjson) is missing — validate's CODEX-HOOKS-STALE check has no other half"
+else
+  grep -qF '.weavedoc/bin/hooks/' "$chjson" \
+    || say "the Codex hooks template carries no '.weavedoc/bin/hooks/' marker — init and validate could not recognize its entries"
+  grep -qF '"matcher": "Bash"' "$chjson" \
+    || say "the Codex hooks template does not observe Bash — the activation handshake could never mint a session lease"
+fi
+grep -qF 'codex-hooks.json' "$init" \
+  || say "weavedoc-init no longer points at .weavedoc/templates/codex-hooks.json — Codex hook wiring would drift from the bundle"
 
 # 9. No live surface spells the runtime as an executable that does not exist. The bash entrypoint
 # `.weavedoc/bin/weavedoc` was deleted in bundle 2026-08-05.3; every call is `node …weavedoc.mjs`.
@@ -151,7 +169,7 @@ grep -qF 'hooks.json' "$init" \
 # notes/ and CHANGELOG.md are excluded on purpose: they record runs that really did use bash, and
 # rewriting a measurement to satisfy a grep is falsifying the record.
 stale_cmd=$(grep -rnE '\.weavedoc/bin/weavedoc[[:space:]]' \
-  "$REPO/.weavedoc" "$REPO/.claude/skills" \
+  "$REPO/.weavedoc" "$REPO/.claude/skills" "$REPO/.agents/skills" \
   "$REPO/README.md" "$REPO/WORKFLOW.md" "$REPO/METHODOLOGY.md" "$REPO/UPGRADING.md" 2>/dev/null || true)
 [ -z "$stale_cmd" ] || say "a live surface invokes the deleted bash entrypoint (it is 'node .weavedoc/bin/weavedoc.mjs <cmd>'): $stale_cmd"
 
@@ -175,6 +193,21 @@ for s in $skills; do
     || say "$(basename "$s") does not point at the step report contract — its run would open and close in a shape of its own, which is the drift FORMATS' skeleton exists to end"
   grep -qE '\[weavedoc-[a-z]+( <[a-z-]+>| [a-z]+)?\] starting' "$s/SKILL.md" \
     || say "$(basename "$s") never spells its own '[weavedoc-… ] starting' anchor — the anchor is per-skill and cannot be inherited from the contract"
+done
+
+# 10b. Claude Code and Codex ship ONE WeaveDoc workflow in two discovery roots. The directory trees
+# are byte-identical by contract: harness-specific behavior belongs in the runtime adapter, never
+# in a forked instruction copy. This recursive compare includes shared reviewer references.
+cskills=$(ls -d "$REPO"/.agents/skills/weavedoc-*/ 2>/dev/null)
+ncs=$(printf '%s\n' "$cskills" | grep -c . || true)
+[ "${ncs:-0}" = "9" ] || say "Codex skill enumeration found ${ncs:-0} skill(s), not 9 — the release surface is incomplete"
+for s in $skills; do
+  name=$(basename "$s")
+  [ -d "$REPO/.agents/skills/$name" ] || { say "Codex is missing $name"; continue; }
+  diff -qr "$s" "$REPO/.agents/skills/$name" >/dev/null 2>&1 \
+    || say "$name differs between .claude/skills and .agents/skills — parity has forked"
+  grep -qF "activate $name" "$s/SKILL.md" \
+    || say "$name does not emit its Codex activation handshake — the write gate cannot associate its session with the skill"
 done
 
 # 3. VERSION and CHANGELOG's newest entry are one fact. VERSION is SemVer now and moves every
@@ -279,14 +312,17 @@ done
 grep -qF 'repair-proof phase' "$REPO/.weavedoc/FORMATS.md" \
   || say "FORMATS no longer says repeat is counted in the repair-proof phase — the field contract would describe the retired alternating loop"
 
-# 14. The authority axis has NINE owners and one shared opening, byte-identical — the shape check 11
-# uses for the skill-handoff block, for the same reason: a drifted copy teaches a different rule AND
-# can be cited to prove it. What must not drift is the READ rule (which key, which file, absence =
-# standard, the document override's scope) and the FALLBACK (an unnamed decision goes to the user);
-# each skill's own ROW is per-skill by design and is not compared. A skill missing the section
-# entirely would silently run at whatever level its author assumed, which is the state this axis
-# exists to end. TEXT, never obedience — the honesty checks 5-7 state about themselves.
-# VACUITY GUARD: $skills and its >=9 floor already ran in check 10; g14ref empty fails the last line,
+# 14. The authority axis has TEN owners — nine skills sharing one byte-identical opening (the shape
+# check 11 uses for the skill-handoff block, for the same reason: a drifted copy teaches a different
+# rule AND can be cited to prove it), plus the shared engine reviewers.md, whose level hook carries
+# its own wording and was the axis's unwatched tenth consumer until a cold review renamed the key in
+# it alone and everything stayed green (0.6.18). What must not drift is the READ rule (which key,
+# which file, which three words, absence = standard, the document override's scope) and the FALLBACK
+# (an unnamed decision goes to the user); each skill's own ROW is per-skill by design and is not
+# compared. Mutual byte-compare proves agreement only, so the contract elements are ALSO pinned —
+# on the shared opening once (the mirror carries the pin to all nine) and on the engine's hook
+# directly. TEXT, never obedience — the honesty checks 5-7 state about themselves.
+# VACUITY GUARD: $skills and its >=9 floor already ran in check 10; g14ref empty fails its own line,
 # so an extraction that found nothing cannot read as nine agreeing copies.
 g14ref=""; g14refname=""
 for s in $skills; do
@@ -295,12 +331,51 @@ for s in $skills; do
     say "$(basename "$s") has no '## Authority' section (or no shared opening before its row) — the axis has nine owners and this one would run at whatever level its reader assumes"
     continue
   fi
+  # THE ANCHOR, not only the mirror. Mutual byte-compare proves the nine agree WITH EACH OTHER and
+  # nothing more: a rename applied to all nine at once — this axis was renamed once already inside
+  # one week — sails through nine agreeing copies while every skill starts reading a key the schema
+  # does not define, and absence-means-standard then silently downgrades a strict mine's protection
+  # under an all-green board (cold review, 0.6.16: measured green after seding all nine). So the
+  # READ sentence is pinned INCLUDING the three level words: the 0.6.16 repair pinned the key alone
+  # and its comment claimed the enum loop covered the words — false both ways, and a second cold
+  # review measured a nine-way `delegated`→`autonomous` sed passing green. That loop anchors the
+  # SCHEMA to this file's own list; only this pin ties the skills' text to either.
+  printf '%s\n' "$g14blk" | grep -qF 'Read `authority` from `.weavedoc/config.yaml`: `strict` | `standard` | `delegated`' \
+    || say "$(basename "$s")'s Authority opening does not read the schema's key and its three level words — nine copies agreeing on vocabulary validate rejects is nine copies of one defect, and every skill would teach a level that has no row anywhere"
   if [ -z "$g14ref" ]; then g14ref="$g14blk"; g14refname=$(basename "$s")
   elif [ "$g14blk" != "$g14ref" ]; then
     say "$(basename "$s")'s Authority opening differs from $g14refname's — nine byte-identical copies is the contract (which key, absence = standard, the override's scope, the fallback), and this copy has drifted"
   fi
 done
 [ -n "$g14ref" ] || say "no skill carries the Authority opening at all — nine missing copies must not read as nine agreeing ones"
+# The contract elements beyond the pinned READ sentence, pinned on the shared opening once — the
+# byte-compare above carries them to all nine. Measured need (cold review, 0.6.18): a nine-way
+# `absent means standard`→`strict` sed kept the mirror intact and every pin green, flipping the
+# effective level of every keyless mine — which is all of them — under an all-green board.
+if [ -n "$g14ref" ]; then
+  for s in \
+    'absent means `standard`' \
+    "the override governs the document's own steps and leaves mine-side work at the mine's level" \
+    "A decision the level's text does not name goes to the user"; do
+    printf '%s\n' "$g14ref" | grep -qF "$s" \
+      || say "the shared Authority opening lost a contract element: '$s' — nine byte-identical copies of an opening missing it are nine copies of the loss"
+  done
+fi
+# The TENTH owner. reviewers.md's level hook governs the defender's finalize authority and carries
+# its own wording, so the mirror never covered it: a rename applied to it alone — or a sweep that
+# covers the nine red surfaces and forgets it — leaves the engine reading a dead key, falling back
+# to standard, and finalizing drops a strict mine forbade. Its elements are pinned directly.
+rev14="$REPO/.claude/skills/weavedoc-review/references/reviewers.md"
+for s in \
+  "The defender's authority to FINALIZE follows the mine's authority level" \
+  'read `authority` from `.weavedoc/config.yaml`' \
+  'absent = `standard`' \
+  'the defender finalizes **nothing**' \
+  'full triage authority including rejection' \
+  'finalize on its own at `standard` and `delegated`'; do
+  grep -qF "$s" "$rev14" \
+    || say "reviewers.md — the authority axis's tenth owner — lost a hook element: '$s' — the engine that governs the defender's finalize authority would fall back to standard at every level"
+done
 # The three level words are the axis's vocabulary and must be the schema's own, in every direction:
 # a skill offering a level `validate` rejects, or a schema value no skill has a row for, is the same
 # split this repo keeps closing between a questionnaire and its validator.
@@ -318,6 +393,59 @@ grep -qF 'an id is a machine handle' "$gat" \
   || say "the 'surface it in words, not by id' rule is gone from gather — a handoff keyed by ids is a list the user must open files to read"
 grep -qF 'The audit layer is wider than the raw one' "$REPO/.weavedoc/READ.md" \
   || say "READ.md no longer widens the audit layer past the raw one — changelog and the ledgers would read as ordinary lookup surface, which is how a thousand-line record floods a judgment"
+# 14b. The axis's PROSE owners beyond the ten checked above — the fourth site of the class three
+# cold reviews found in a row (skills → engine → these): FORMATS' own contract paragraph and plan
+# stanza, and the two template comments init copies into every fresh mine. Measured (cold review,
+# 0.6.19): flipping the absence fallback in all four while renaming the key in FORMATS stayed
+# green — the contract document and every newborn config teaching absent=strict under a green
+# board. Same TEXT-check honesty as everything above.
+fmts="$REPO/.weavedoc/FORMATS.md"
+for s in \
+  '- `authority` — optional enum: `strict` | `standard` | `delegated`' \
+  'Absent means `standard`' \
+  "a decision no level's text names goes to the user" \
+  'Omitted = inherit `config.authority`'; do
+  grep -qF -- "$s" "$fmts" \
+    || say "FORMATS lost an authority-axis element: '$s' — the most-cited contract document would teach a different axis than the ten checked owners"
+done
+grep -qF 'Absent = standard' "$REPO/.weavedoc/templates/config.yaml" \
+  || say "the config template's comment lost its absence fallback — every fresh mine would be born being taught something other than absent=standard"
+grep -qF 'Absent from config too ⇒ standard' "$REPO/.weavedoc/templates/plan.md" \
+  || say "the plan template's comment lost its absence fallback — the per-document override would teach a different inheritance than the axis defines"
+# The interview's standard-option description is the ONE runtime string carrying the 0.6.13 owner
+# correction ("show it where you apply it, don't re-ask") to the user at the moment they choose a
+# level — and it was unwatched (fifth-round review). The source holds raw Korean (the escaping
+# happens at print), so a source pin is safe; the printed payload is separately proven pure-ASCII
+# by its regress case.
+grep -qF '적용하는 그 자리에서 보여 드리고' "$REPO/.weavedoc/bin/weavedoc.mjs" \
+  || say "the interview's standard-level description lost the owner-correction sentence (confirm at application, never re-ask) — the one place a user hears it while choosing a level"
+
+# 15. The bridge pins are DOUBLE-SPELLED and the two spellings must agree. artifact-contracts.mjs
+# holds V1_BRIDGE/V2_BRIDGE as an executable spec, but no production module imports it (measured,
+# 0.6.19) — the live gates carry their own strings. A maintainer who edits the constant and trusts
+# a wiring that does not exist ships surfaces still naming the old commit; one who edits a surface
+# leaves the rest. PER-OWNER token sets, because the surfaces legitimately differ (a fifth-round
+# review found four pin-carrying surfaces OUTSIDE the first roster; forcing four tokens on a file
+# that carries two would either fail forever or force prose distortion): each owner is checked for
+# exactly what it carries today. Re-census when a surface changes: grep the four tokens repo-wide.
+# The check is symmetric over its roster — either direction of a drift goes red.
+while IFS='|' read -r f toks; do
+  [ -n "$f" ] || continue
+  for tok in $toks; do
+    grep -qF -- "$tok" "$REPO/$f" \
+      || say "$f does not carry the bridge pin token '$tok' — the two spellings of the migration doors (the spec constants and the live surface strings) have drifted apart"
+  done
+done <<'EOF15'
+.weavedoc/bin/lib/artifact-contracts.mjs|v0.5.21 0257167 v0.6.14 924e97e
+.weavedoc/bin/lib/mine.mjs|v0.5.21 0257167 v0.6.14 924e97e
+.weavedoc/bin/lib/cmd-validate.mjs|v0.5.21 0257167 v0.6.14 924e97e
+.weavedoc/bin/lib/validate-truths.mjs|v0.6.14 924e97e
+.weavedoc/bin/weavedoc.mjs|v0.5.21 v0.6.14 924e97e
+.weavedoc/schema|v0.5.21 0257167 v0.6.14 924e97e
+.weavedoc/FORMATS.md|v0.5.21 v0.6.14 924e97e
+UPGRADING.md|v0.5.21 0257167 v0.6.14 924e97e
+README.md|v0.5.21 0257167 v0.6.14 924e97e
+EOF15
 
 [ "$fail" -eq 0 ] && echo "doccheck: docs and code agree"
 exit "$fail"

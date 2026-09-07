@@ -129,15 +129,16 @@ export function cmdIntake (m, out, argv, ops = realOps) {
     return 0
   }
 
-  // --anchor-existing — THE MIGRATION ANSWER, and the reason it is a command instead of something
-  // `upgrade` does on its way past.
+  // --anchor-existing — THE MIGRATION ANSWER, and the reason it was a command instead of something
+  // the (since retired) migrator did on its way past.
   //
   // A mine that predates this ledger carries a backlog of materials bound to nothing: editable, in
-  // either direction, with no trace. `upgrade` mints them `legacy-unbound` because that is the only
-  // honest thing it can say — nobody witnessed those bytes — and then the backlog just sits there.
-  // The way out cannot be for `upgrade` to hash them itself: a digest minted by a migration would
-  // read as evidence and would in fact record whatever happened to be on disk at the moment a tool
-  // ran, INCLUDING an edit made ten minutes earlier. That is how a falsified copy becomes canon.
+  // either direction, with no trace. The migrator minted them `legacy-unbound` because that is the
+  // only honest thing it could say — nobody witnessed those bytes — and then the backlog just sat
+  // there. The way out could not be for the migrator to hash them itself: a digest minted by a
+  // migration would read as evidence and would in fact record whatever happened to be on disk at
+  // the moment a tool ran, INCLUDING an edit made ten minutes earlier. That is how a falsified
+  // copy becomes canon.
   //
   // So the bytes are bound by a separate act, by a person, who is vouching that the tree is the one
   // they mean. The word it writes is `anchored` and not `declared`, because nothing was handed over

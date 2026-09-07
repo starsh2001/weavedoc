@@ -6,12 +6,12 @@
 // truth card that exists is attestable; the material lifecycle is the one surviving status axis.)
 import { statSync } from 'node:fs'
 
-// The append, injectable (the consecrate/retag/upgrade precedent): node:fs cannot be reached by a
+// The append, injectable (the consecrate/retag precedent, and the retired migrator's): node:fs cannot be reached by a
 // PATH shim, so the fault-injection driver is the only caller that ever passes anything else.
 export const realOps = realAppendOps
 
-// THE LEDGER LOCK lives in lock.mjs since review #6: upgrade --apply writes this ledger too, and a
-// protocol only attest spoke was measured being walked straight through by upgrade. The WHY of the
+// THE LEDGER LOCK lives in lock.mjs since review #6: the (since retired) migrator wrote this ledger too, and a
+// protocol only attest spoke was measured being walked straight through by it. The WHY of the
 // lock — one critical section around create → tail-check → append → rollback → mirror, because a
 // compensating rollback without mutual exclusion erases a neighbour's rc-0 row — and why a lock is
 // NEVER auto-reclaimed both live there.

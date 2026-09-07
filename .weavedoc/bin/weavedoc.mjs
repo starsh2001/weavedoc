@@ -10,7 +10,6 @@
 //   attest <verdict> <round> <standard> <id...>   record a verification: digest-bound sidecar row
 //   seal-review <doc-id> [draft|final]   pin the clean review to the reviewed bytes + context
 //   consecrate <doc-id>   stage candidate → verify seals → ONE full validation → atomic promote
-//   upgrade [--check|--dry-run|--apply]   v2 mine → schema 3 (backup = clean git; blocked items stop before the first write; verify = conservation + exact validate)
 //   conflict list|add <entry.json>|remove <cNNN>   the open-disagreement ledger (id granted by the allocator; resolution IS removal)
 //   alloc <conflict|material|truth>   grant the next id from the monotonic allocator (never max+1 scanning)
 //   gaps              mine census + declared-marker scan (non-blocking floor for the weavedoc-gaps skill)
@@ -20,7 +19,8 @@
 //   version           the installed runtime version (.weavedoc/VERSION), fingerprint and schema
 //   lang              the project's reply/artifact language (config.language)
 //   locale            detect the OS language (for init); prints nothing if undetectable
-//   interview         init's fixed questionnaire as AskUserQuestion payloads, non-ASCII pre-escaped
+//   interview [claude|codex]   init's fixed questionnaire in the active harness's question schema
+//   activate <weavedoc-skill>  Codex hook handshake (records nothing by itself)
 //
 // THE SPECIFICATION IS tests/regress.sh — every case is a CLI black box (build a mine, run a
 // command, assert stdout and the exit code), which is what let this runtime be graded against the
@@ -110,9 +110,12 @@ function cmdVersion (json) {
   let fp = ''
   try {
     const h = createHash('sha1')
-    h.update(readFileSync(join(SCRIPT_DIR, 'weavedoc.mjs')))
-    // RECURSIVE, relative-path-keyed (v0.5.1): a flat listing skipped any future lib/subdir/ — the
-    // manifest globs the whole directory, so the fingerprint has to see exactly what ships.
+    // RECURSIVE over bin/ WHOLE, relative-path-keyed (v0.5.1 made lib/ recursive; 0.6.19 widened
+    // the walk to the directory the label names). The walk covered entrypoint + lib/ only, so
+    // bin/hooks/ — the enforcement gate, shipped in the manifest since 0.6.9 — was outside the
+    // fingerprint: two installs differing only in enforcement code printed the same value under a
+    // label that says "compare this". Caught by a cold review after a 0.6.18 comment claimed the
+    // label was exact. The manifest globs the whole directory; the fingerprint now sees the same.
     const walk = (dir, pre) => {
       for (const n of readdirSync(dir).sort()) {
         const p = join(dir, n)
@@ -122,22 +125,8 @@ function cmdVersion (json) {
         h.update(readFileSync(p))
       }
     }
-    walk(join(SCRIPT_DIR, 'lib'), '')
+    walk(SCRIPT_DIR, '')
     h.update(readFileSync(SCHEMA))
-    // The VERSIONED contracts beside it, for the same reason lib/ is walked whole: from schema v3
-    // the runtime bundles more than one artifact contract, and a file that decides how a mine is
-    // read must not be able to differ between two installs that report the same fingerprint. The
-    // label says "bin+schema" and this is what keeps that true. Absent (an install from before the
-    // directory existed) contributes nothing rather than throwing the whole fingerprint away.
-    const versioned = join(SCHEMA, '..', 'schemas')
-    let versionedNames = []
-    try { versionedNames = readdirSync(versioned).sort() } catch { versionedNames = [] }
-    for (const n of versionedNames) {
-      const p = join(versioned, n)
-      if (statSync(p).isDirectory()) continue
-      h.update(`schemas/${n}`)
-      h.update(readFileSync(p))
-    }
     fp = h.digest('hex')
   } catch { /* a runtime that cannot read itself still reports its label */ }
   if (json) {
@@ -148,7 +137,7 @@ function cmdVersion (json) {
   }
   out(body)
   if (fp) outln(`fingerprint: ${fp.slice(0, 12)}  (bin+schema — compare this, not just the version)`)
-  outln(`schema: ${schemaVer()} (v3-only; a v2 mine migrates via 'upgrade', a v1 mine via the v0.5.21 bridge first)`)
+  outln(`schema: ${schemaVer()} (v3-only; a v2 mine migrates via the pinned v0.6.14 bridge, a v1 mine via the v0.5.21 bridge first)`)
   return 0
 }
 
@@ -222,6 +211,7 @@ async function cmdLocale () {
 const INTERVIEW = [
   ['1 of 2 - authority, fidelity & conflicts (Q2)', [
     {
+      id: 'authority',
       question: '기계와 사용자가 각각 어디까지 결정합니까?',
       header: 'Authority',
       multiSelect: false,
@@ -232,6 +222,7 @@ const INTERVIEW = [
       ]
     },
     {
+      id: 'completeness',
       question: '누락이 그 자체로 위반인 프로젝트입니까?',
       header: 'Completeness',
       multiSelect: false,
@@ -241,6 +232,7 @@ const INTERVIEW = [
       ]
     },
     {
+      id: 'conflicts_detection',
       question: '자료끼리 어긋나는 곳을 얼마나 깊이 찾을까요?',
       header: 'Conflicts',
       multiSelect: false,
@@ -252,6 +244,7 @@ const INTERVIEW = [
   ]],
   ['2 of 2 - verify & review intensity (Q3)', [
     {
+      id: 'verify_strength',
       question: '자료에서 진실을 뽑아낸 변환을 어느 강도로 검증할까요?',
       header: 'Verify',
       multiSelect: false,
@@ -262,6 +255,7 @@ const INTERVIEW = [
       ]
     },
     {
+      id: 'review_strength',
       question: '완성된 문서를 어느 강도로 리뷰할까요?',
       header: 'Review',
       multiSelect: false,
@@ -272,6 +266,7 @@ const INTERVIEW = [
       ]
     },
     {
+      id: 'scale',
       question: '검증과 리뷰를 어느 규모로 돌릴까요?',
       header: 'Scale',
       multiSelect: false,
@@ -302,22 +297,46 @@ const uniEsc = s => {
   return o
 }
 
-function cmdInterview () {
-  const q = x => `{"question":"${uniEsc(x.question)}","header":"${uniEsc(x.header)}","multiSelect":${x.multiSelect},` +
+function cmdInterview (surface = 'claude') {
+  const claudeQuestion = x => `{"question":"${uniEsc(x.question)}","header":"${uniEsc(x.header)}","multiSelect":${x.multiSelect},` +
     `"options":[${x.options.map(o => `{"label":"${uniEsc(o.label)}","description":"${uniEsc(o.description)}"}`).join(',')}]}`
+  const codexQuestion = x => `{"id":"${x.id}","question":"${uniEsc(x.question)}","header":"${uniEsc(x.header)}",` +
+    `"options":[${x.options.map((o, i) => {
+      const label = i === 0 ? `${o.label} (Recommended)` : o.label
+      const description = o.description.replace(/^\(추천\)\s*/, '')
+      return `{"label":"${uniEsc(label)}","description":"${uniEsc(description)}"}`
+    }).join(',')}]}`
+  const question = surface === 'codex' ? codexQuestion : claudeQuestion
   // THE WHOLE OUTPUT is ASCII, comments included — not just the arrays. One property is testable
   // ("no byte above 0x7e leaves this command"); "the payload is ASCII but the prose around it is
   // not" is a rule with an exception, and an exception is what a copier has to judge.
-  outln("# weavedoc interview - paste each array as AskUserQuestion's `questions` argument, VERBATIM.")
+  outln(surface === 'codex'
+    ? "# weavedoc interview (Codex) - pass each array as request_user_input's `questions` argument, VERBATIM."
+    : "# weavedoc interview (Claude) - paste each array as AskUserQuestion's `questions` argument, VERBATIM.")
   outln('# It is already escaped: copy it. Do not retype it, and do not re-encode the Korean yourself.')
   outln('# If config.language is not Korean, TRANSLATE the decoded text - translating is not transcribing.')
+  if (surface === 'codex') outln("# Strip the exact ' (Recommended)' suffix from the selected label before writing the config value.")
   for (const [label, qs] of INTERVIEW) {
     outln('')
     outln(`# call ${label}`)
     // ONE line per array, so a copy is one action. A payload split across lines is a payload the
     // copier has to reassemble, and reassembly is the class of step this command exists to delete.
-    outln(`[${qs.map(q).join(',')}]`)
+    outln(`[${qs.map(question).join(',')}]`)
   }
+  return 0
+}
+
+const WEAVEDOC_SKILLS = new Set([
+  'weavedoc-init', 'weavedoc-gather', 'weavedoc-map', 'weavedoc-verify', 'weavedoc-gaps',
+  'weavedoc-plan', 'weavedoc-write', 'weavedoc-review', 'weavedoc-refine'
+])
+
+function cmdActivate (skill) {
+  if (!WEAVEDOC_SKILLS.has(skill)) return 2
+  // This process has no trustworthy session id, so it deliberately writes no lease. Codex's
+  // PostToolUse hook sees the Bash command together with the session id and lease.mjs records it.
+  // Keeping the command side-effect-free also makes it harmless on Claude Code and without hooks.
+  outln(`weavedoc activation handshake: ${skill}`)
   return 0
 }
 
@@ -327,9 +346,9 @@ function cmdInterview () {
 const USAGE = 'weavedoc — validate | pull <term> | impact <material-id> | status [--open] | scope | ' +
   'intake [--no-source] <material-id> <note> | ' +
   'attest <verdict> <round> <standard> <id...> | seal-review <doc-id> [draft|final] | ' +
-  'consecrate <doc-id> | upgrade [--check|--dry-run|--apply] | conflict list|add|remove | ' +
+  'consecrate <doc-id> | conflict list|add|remove | ' +
   'alloc <ns> | gaps | census | reindex [--check] | retag <old> <new> [--dry] | version | lang | ' +
-  'locale | interview'
+  'locale | interview [claude|codex] | activate <weavedoc-skill>'
 
 const usage2 = u => { errln(`usage: ${u}`); process.exit(2) }
 
@@ -370,7 +389,6 @@ const MUTATES = {
   conflict: a => a[0] === 'add' || a[0] === 'remove',
   consecrate: () => true,
   'seal-review': () => true,
-  upgrade: a => a.includes('--apply'),
   retag: a => !a.includes('--dry'),
   reindex: a => !a.includes('--check')
 }
@@ -396,26 +414,21 @@ switch (cmd) {
   case 'interview':
     // No mine is opened and no version gate is taken: like `version`/`lang`/`locale` this command
     // answers about the RUNTIME, and init runs it before a mine exists to have a version.
-    if (rest.length !== 0) usage2('weavedoc interview')
-    rc = cmdInterview(); break
+    if (rest.length > 1 || (rest.length === 1 && !['claude', 'codex'].includes(rest[0]))) usage2('weavedoc interview [claude|codex]')
+    rc = cmdInterview(rest[0] ?? 'claude'); break
+  case 'activate':
+    // The PostToolUse hook owns the write because only it receives the Codex session id. This
+    // command is the explicit, inspectable handshake that the hook recognizes in Bash input.
+    if (rest.length !== 1 || !WEAVEDOC_SKILLS.has(rest[0])) usage2('weavedoc activate <weavedoc-skill>')
+    rc = cmdActivate(rest[0]); break
   case 'locale':
     if (rest.length !== 0) usage2('weavedoc locale')
     // Top-level await (ESM): keeps node:child_process off the startup path — it is loaded only on
     // the Windows-registry fallback, which most runs never reach.
     rc = await cmdLocale(); break
-  case 'upgrade': {
-    const { openMine } = await import('./lib/mine.mjs')
-    const { cmdUpgrade } = await import('./lib/cmd-upgrade.mjs')
-    const { cmdReindex } = await import('./lib/cmd-reindex.mjs')
-    const { cmdValidate } = await import('./lib/cmd-validate.mjs')
-    const mine = openMine(SCRIPT_DIR)
-    // reindex output is swallowed; validate is CAPTURED — the migrator's verify layer compares
-    // the collected problem lines against its exact expectation instead of printing them raw.
-    rc = cmdUpgrade(mine, outln, rest,
-      () => cmdReindex(mine, () => {}, () => {}, []),
-      collect => cmdValidate(mine, collect, false))
-    break
-  }
+  // ('upgrade' — the v2→v3 migrator — was retired in 0.6.15. The last bundle carrying it is
+  // pinned, exactly as the v1→v2 bridge is: v0.6.14, commit 924e97e. A v2 mine is refused toward
+  // that checkout by the version gate in mine.mjs; this runtime migrates nothing.)
   case 'consecrate': {
     if (rest.length !== 1) usage2('weavedoc consecrate <doc-id>')
     const { openMine, versionGate } = await import('./lib/mine.mjs')

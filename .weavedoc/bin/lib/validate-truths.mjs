@@ -276,7 +276,7 @@ export function validateTruths (m, ctx, truthPaths, matIds) {
     // lives in Git. The optional-key list is descriptive (header rule), so this is checked HERE.
     for (const dead of ['status', 'conflict_with', 'resolution', 'superseded'].sort(bytewise)) {
       if (kcount.has(`${relf}${SUBSEP}${dead}`)) {
-        prob('TRUTH-V2-FIELD', M`${relf}  frontmatter ${q(dead)} is a schema-2 field — a v3 card that exists is canonical, so card-borne state is gone (open disagreements: .weavedoc-state/conflicts.json; the past: Git). Remove the line; if this whole mine is still v2, run ${q('weavedoc upgrade')} instead of editing cards by hand`)
+        prob('TRUTH-V2-FIELD', M`${relf}  frontmatter ${q(dead)} is a schema-2 field — a v3 card that exists is canonical, so card-borne state is gone (open disagreements: .weavedoc-state/conflicts.json; the past: Git). Remove the line; if this whole mine is still v2, migrate it with the pinned bridge runtime v0.6.14 (commit 924e97e) instead of editing cards by hand`)
       }
     }
     if (t.hassource && t.tsrc !== '' && !mat.has(t.tsrc)) prob('TRUTH-SOURCE-DANGLING', M`${relf}  source ${q(t.tsrc)} → no material folder`)

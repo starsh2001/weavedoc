@@ -1,10 +1,104 @@
 # WeaveDoc — 변경 내역
 
-각 절의 제목이 버전입니다(`.weavedoc/VERSION`). 버전은 번들마다 patch가 올라가고, git 태그가 같은 값을 따릅니다. **설치본의 정체성은 버전이 아니라 fingerprint**(bin+schema 해시)로 비교하세요 — `weavedoc version`이 찍습니다.
+각 절의 제목이 버전입니다(`.weavedoc/VERSION`). 버전은 bundle마다 SemVer에 맞게 올라가고, git tag가 같은 값을 따릅니다. **설치본의 정체성은 버전이 아니라 fingerprint**(bin+schema hash)로 비교하세요 — `weavedoc version`이 찍습니다.
 
 > 0.6.5 이하의 절은 날짜 스탬프(예: `2026-08-08.37`)를 제목으로 씁니다. 당시 VERSION 파일이 날짜를 담았기 때문이고, 과거 기록이므로 고치지 않습니다.
 
 ---
+
+## 0.7.0
+
+**Codex가 Claude Code와 같은 WeaveDoc workflow를 실행하는 첫 dual-harness bundle.** 아홉 skill을 Codex의 project discovery root인 `.agents/skills/weavedoc-*`에 추가하고, `.claude` copy와 shared reference까지 byte-identical하게 고정했다. Release manifest와 `doccheck`가 두 tree를 함께 싣고 recursive compare하므로 한쪽만 바뀐 release는 green이 될 수 없다. Workflow의 판단·artifact·fidelity gate는 하나이고, harness 차이는 runtime adapter에만 남는다.
+
+**Native surface adapter.** `interview [claude|codex]`가 같은 여섯 질문을 각 harness의 schema(`AskUserQuestion` / `request_user_input`)로 출력하며, Codex payload는 stable `id`와 UI가 요구하는 exact ` (Recommended)` suffix를 사용한다. `activate <weavedoc-skill>`은 side-effect-free Codex session handshake다. `.codex/hooks.json`의 `PostToolUse(Bash)`가 session id와 handshake를 결합해 lease를 기록하고, `PreToolUse(Write|Edit)`가 Codex `apply_patch`의 모든 Add/Update/Delete/Move target을 검사한다. 한 patch의 첫 target이 ungated여도 뒤의 guarded target은 숨지 않는다.
+
+**Init·validation·upgrade.** `weavedoc-init`은 `CLAUDE.md`와 `AGENTS.md`에 byte-identical READ pointer를 심고, `.claude/settings.json`과 `.codex/hooks.json`에 각각의 hook pair를 merge한다. `validate`가 `AGENTS-BLOCK-*`와 `CODEX-HOOKS-*` warning을 기존 Claude Code diagnostic과 같은 방식으로 emit한다. Codex에서는 trusted project와 `/hooks` one-time review가 필요하며, 이 platform requirement를 README·FORMATS·WORKFLOW·UPGRADING에 명시했다. 기존 mine schema는 그대로 v3라 data migration은 없다.
+
+**Container 자료의 대조 출발점 — gather의 규칙 둘.** `docx`/`xlsx`/`pptx`/`odt`/`epub`/`zip`은 파일이 아니라 directory다: 본문은 한 part에 있고 embedded media·hyperlink 대상(`_rels/`)·주석·header·변경 이력은 형제 part에 있다. 3단계 Convert는 이제 archive listing을 먼저 돌리고 **끝까지 읽어서** 모든 entry를 처리하거나 `> [note]`에 남기는 이유를 적는다(embedded media는 image와 같게 다루고 본문에서의 위치를 표시한다). 7단계 **Nothing lost**에는 대조의 출발점을 명시했다 — **walk는 원본에서 시작하고 자기 추출 결과에서 시작하지 않는다.** parser 출력을 원본으로 삼으면 parser를 parser 자신으로 검사하는 셈이라 언제나 통과한다: 열지 않은 part는 애초에 비교 집합에 없기 때문이다. 실측(2026-09-07): 한 docx 변환이 `word/document.xml`만 parsing하고 clean으로 끝났는데, 본문 네 지점에 놓인 embedded image 둘을 떨어뜨렸고 같은 파일의 `> [machine-note]`는 인용된 의학 출처에 URL이 없다고 단언했다 — 둘 다 그 run이 이미 출력한 listing 안에 있었다(`word/media/`는 스무 번째 줄 뒤, URL은 `word/_rels/document.xml.rels`). audit line은 문단·표 계수 일치를 근거로 `빠뜨린 절은 없고`를 주장했고, 그 두 계수는 media part를 건너뛴 바로 그 parser가 낸 것이다.
+
+**`.agents/`의 staging 경계.** Codex는 gitignore된 `.claude/commands/`를 자기 skill root로 mirror하므로 `.agents/skills/source-command-*/`가 untracked로 쌓인다. bundle이 싣는 것은 `.agents/skills/weavedoc-*`뿐이고 그것이 정확히 make-manifest.sh의 선택 범위이므로, 같은 경계를 `.gitignore`에도 실어 `git add -A`가 그 28개를 쓸어 담을 수 없게 했다.
+
+**CI lint이 잡은 것 하나 — 이 번들의 Codex lease 케이스.** `[ ! -e "$W/.leasedir"/weavedoc-lease-*.json ]`으로 썼는데 `-e`는 피연산자를 하나만 받는다(SC2144): 여러 개가 맞으면 `test`가 오류로 끝나 가드가 엉뚱한 진단을 달고 발화하고, 하나도 안 맞으면 bash가 패턴을 문자 그대로 돌려주므로 그 경로는 존재하지 않고 — 이 케이스가 원하는 결과에 **아무것도 들여다보지 않은 채** 도달한다. loop으로 바꿔 match 수 전 구간에서 정확해졌고, 그 이름으로 lease 파일 하나를 심으면 red가 되는 것을 실측했다. 이 등급의 유일한 실행자는 CI다(shellcheck은 로컬에 없고 이 기계에는 컨테이너도 없다) — 번들이 push되기 전까지 그 게이트를 한 번도 받지 않았던 것이 이 결함이 남아 있던 이유다.
+
+검증: Windows full regression **646/646 PASS** · 신규 Codex interview/activation/hook/apply-patch multi-target 및 AGENTS/Codex config warning case · 기존 Claude hook/pointer differential case · diagnostic table 양방향 · `doccheck` · Node/bash syntax · `shellcheck --severity=error` · `git diff --check` · release manifest 77 rows, 2회 byte-identical, SHA-256 `d71ad4fa2d9dbc1f3d407e040d8c56dde49a54b4993a9b2251abc78c6e98666b`.
+
+## 0.6.20
+
+**프로세스 사건부터: 5차 리뷰의 수리 여섯(F1~F6)은 6차 리뷰가 돌 때까지 존재하지 않았다.** 세션이 수리 계획을 세우고 "진행할까요"를 물은 채 승인을 받지 못했고, 다음 요청(6차 프롬프트)을 수리 완료로 오독하지 않은 6차 리뷰가 **critical(프로세스)** 로 그것을 잡았다 — reflog·전 브랜치·stash 어디에도 v0.6.20이 없음을 실측하고, F1~F6이 현 트리에 실재함을 양방향(전진·되돌림)으로 재확정했다. 이 번들이 그 여섯과 6차의 신규 아홉을 함께 닫는다.
+
+**5차 F1~F6.** ① fingerprint 케이스에 **hooks 팔** 신설 + `acct_fingerprint_covers_bin`으로 개명 — 0.6.19의 걷기 확장(이 번들 유일의 런타임 수리)에 수정 공격 케이스가 없어, 걷기를 되돌려도 626/626 green이었다(6차 실측). 이제 되돌리면 그 팔이 정확히 red다(실측). ② 검사 15를 **소유자별 토큰 로스터**(9소유자)로 — 5차가 로스터 밖에서 핀 보유 표면 넷(validate-truths·schema·FORMATS·version 출력)을 찾았고, 균일 4토큰 강제는 두 토큰만 든 파일에 산문 왜곡을 강요한다. spec 헤더의 "every live surface" 과대 주장은 "로스터가 곧 census"로 정직화. ③ v2 게이트 케이스에 **해시 assert**(`924e97e`, 두 경로 다) — v1 쌍둥이는 처음부터 `0257167`을 물었는데 v2 쪽은 산문만 물어서, 메시지의 핀을 지워도 판 전체 green이었다(6차 실측 — 주석의 토큰이 파일 단위 grep을 차폐). 이제 지우면 red(실측). ④ 거짓 배선 산문 셋(property 헤더·regress meta 주석·artifact-contracts 완화형) 전부 실행-가능-명세 문면으로. ⑤ validate의 fallback 괄호 둘에 assert + interview standard 서술(0.6.13 소유자 교정을 나르는 유일한 런타임 문자열)에 doccheck 핀. ⑥ CI ctlscan을 bin 전체로.
+
+**6차 신규 아홉.** **①** `version: 0` 광산이 두 게이트('1'·'2' 열거)를 다 지나 **v3 규칙으로 판정**되고 있었다(6차 실측: validate가 v0 광산에 "✓ all checks passed") — 사다리를 수치식으로(v2는 v2 브리지, 2 미만 전부 v1 브리지 먼저), executable spec이 처음부터 선언하던 라우팅에 프로덕션을 맞췄다. 신설 케이스가 옛 사다리에서 정확히 red(실측). **②** delegated gather의 "미비준" 가드가 산문 한 줄뿐이라 승인 전 `map` 실행이 기계 초안을 `stated`로 세탁할 수 있었다 → **`status: collected`가 미비준의 가시적 운반자**가 된다: 등재는 collected로, 배치 승인이 converted로 바꾸며 재선언한다. map은 converted만 읽으므로 구조적으로 닫힌다(새 어휘 0 — 기존 enum·기존 게이트 재사용). FORMATS의 collected 뜻풀이에 실었다. **③** strict gather의 "원문 첨부"가 실행 불가능한 지시였다(형식·위치 무정의 + 자기 행의 note 금지와 충돌) → **`source.raw.md` 두 번째 원본**으로 구체화: intake tree digest가 이미 `source.*` 집합 전체를 묶고, 첨부가 기계 턴을 나르므로 note 금지와의 충돌도 해소된다. **④** ctlscan 로스터에 **templates·FORMATS·READ** 추가(CI·로컬 쌍둥이 둘 다) — 오염된 claude-block은 init이 다운스트림에 심고 validate의 byte 대조는 양쪽 다 오염이라 통과하는 자리다. **⑤** push 트리거에 `fix/**` — 아홉 번들이 수동 dispatch로만 CI를 받았고 lint 실패 둘이 정확히 dispatch 한 박자 늦게 발견됐다. **⑥** READ.md의 기계 리더 문장이 "넷 다 모든 장부"라는 과대 주장이었다 → 도구별 소유 축으로 정정 + "소유하지 않는 축에 대한 침묵을 clean으로 읽지 말라"를 명시. **⑦** README의 interview 요약에 authority 질문 보강. **⑧** 이주기 케이스 삭제가 남긴 고아 fixture `mk_v2mine`(~30줄)과 "the v2→v3 migrator" 섹션 헤더 삭제 — 호출처 0 실측. **⑨** CI 문법 검사도 bin 전체 find로(hooks가 빠른 lint 팔에서만 눈멀어 있었다).
+
+**케이스 +1(627), 검사 15 재구성·14b 핀 +1, 되돌림 red 3방향 실측(걷기·해시·사다리). 런타임 변경 셋**(게이트 사다리 둘·fingerprint 걷기는 0.6.19 유지) — fingerprint 이동(golden 갱신). 사이클 회계: 6차는 수리 부재를 잰 라운드이므로 카운터 논의 자체가 성립하지 않았고, 이 수리 뒤의 다음 콜드 라운드가 다시 첫 클린 후보다.
+
+## 0.6.19
+
+**4차 콜드 리뷰(3차 수리의 재검): ⑯⑰⑲⑳ 성립, ⑱은 집행 성립에 잔해 넷 — should-fix 4·nice 2, critical 0.** 여섯 전부 재측정으로 확정됐고 이 번들이 닫는다. 네 라운드째 같은 패턴이다: 결함은 수리가 만진 축의 나머지, 특히 수리가 쓴 산문에서 났다.
+
+**① "살아 있는 절반"의 정체 — 정직한 헤더 + 브리지 핀 동기 검사(doccheck 15).** 0.6.18의 artifact-contracts 헤더는 "production actually reads — the version gate resolves through here"라고 썼지만 실측 importer는 **0개**였다. 라이브 게이트(mine.mjs·validate)는 자체 문자열로 돌고, `924e97e`는 라이브 메시지 일곱 곳에 이중 스펠링로 흩어져 있으며 일치 검사가 없었다 — 헤더를 믿고 상수만 고친 유지보수자는 프로덕션이 따라온다고 믿게 되는, cite-a-file-to-prove-a-wrong-rule 위험이 그 규칙을 쓴 파일 자신에게 있었다. 헤더는 사실대로 다시 썼다: 이 모듈은 **게이트 규칙의 실행 가능한 명세**이고 property 드라이버가 유일한 실행자다. 그리고 검사 15가 두 스펠링을 묶는다 — 네 토큰(`v0.5.21`·`0257167`·`v0.6.14`·`924e97e`) × 다섯 소유자(spec·mine.mjs·validate·UPGRADING·README, README에는 v1 commit을 채워 균일하게), 어느 방향의 드리프트든 red(실측). 게이트를 모듈로 재배선하는 구조적 해법은 별도 번들감으로 남긴다.
+
+**② 같은 클래스의 네 번째 자리 — 검사 14b.** 스킬(1차) → 엔진(3차) → 그리고 이번엔 FORMATS의 축 계약 문단·plan stanza와 **init이 모든 새 광산에 복사하는 템플릿 주석 둘**. 실측: 네 곳의 absence fallback을 뒤집고 FORMATS의 키를 개명해도 판 전체 green이었다. 핀 여섯 신설(FORMATS 넷: 키+세 낱말·fallback·무명결정·상속 / 템플릿 둘: fallback), 뒤집기 red(실측). 부수 사건 하나 기록: 새 핀 하나가 `- `로 시작해 grep이 **옵션으로 파싱**했고(gnu grep "unknown option"), 그 오류의 rc가 `|| say`를 태워 **가짜 red**를 냈다 — red/green 실측 단계가 잡았고 `--`(옵션 종료)로 수리. 핀 문자열은 파일 문면에서 오므로 대시로 시작할 수 있다는 것, 이 하네스의 다음 핀 작성자를 위한 교훈이다.
+
+**③ fingerprint가 라벨과 같아졌다.** 걷기가 entrypoint+`lib/`뿐이라 **`bin/hooks/`(enforcement 게이트)가 0.6.9부터 지문 밖**이었다 — hooks만 다른 두 설치가 같은 지문을 찍고, "compare this, not just the version"이 그 지점에서 거짓 보증이었다. 0.6.18 주석은 그 위에 "라벨과 정확히 일치"를 새로 주장했다. 걷기를 `bin/` 전체로 넓혀 라벨이 참이 됐고, fingerprint가 이동했다(golden 갱신).
+
+**④~⑥ 산문 셋.** tests/README의 두 문단 재작성 — property 드라이버 서술을 은퇴 사실대로, manifest 행은 고정 수치 관행을 끝내고 파일을 정본으로("21개"와 "64개"가 각각 다른 시점의 스냅샷인 채 낡아 있었다). NEXT_IMPLEMENTATION_PLAN의 처분 표에 은퇴 시점 한 줄. probe 주석에 반쪽 교훈 명시 — 키는 schemas 나무를 계속 걷지만 manifest는 더 안 실으므로, 계약 재추가 시 manifest glob 복원이 함께다.
+
+**케이스 수 불변(626), doccheck 검사 15 신설 + 14b 확장(핀 여섯), red 실측 2방향.** 사이클 회계: 재검이 신규를 냈으므로 카운터는 여전히 0이다.
+
+## 0.6.18
+
+**3차 콜드 리뷰(2차 수리의 재검): ⑩~⑮ 여섯 수리는 전부 성립, 신규 should-fix 4·nice 1.** critical 0. 다섯 전부 재측정으로 확정됐고 이 번들이 닫는다. 넷은 두 라운드가 못 본 것, 하나는 ⑪ 수리의 옆 문장 — 세 라운드 연속으로 같은 형태다: **결함은 수리가 만진 축의 나머지에서 난다.**
+
+**① 열 번째 소유자.** 권한 축의 소유자는 아홉 스킬이 아니라 열이었다 — 판정자의 finalize 권한을 지배하는 reviewers.md의 레벨 훅은 자기 문면을 갖고 있어 아홉 사본의 상호 대조가 한 번도 덮지 않았다. 실측: reviewers.md만 `authority`→`authority_level`로 바꿔도, 레벨 낱말을 바꿔도 전부 green이었고 regress에 reviewers.md를 읽는 케이스도 0건이었다. 검사 14에 **엔진 훅의 요소 핀 여섯**(FINALIZE 문장·키 읽기·absent=standard·strict의 finalize 0·delegated 전권·43행 한정)을 직접 실었고, 단독 개명이 이제 red다(실측). 주석의 "NINE owners"도 열로 고쳤다.
+
+**② 핀 밖 계약 요소.** 검사 14의 핀은 키+세 낱말만 잡아서, 아홉 사본 동시 `absent means standard`→`strict` 치환이 green이었다(실측 — 거울은 유지되고 핀 문장은 안 건드리므로). 그 fallback은 **키 없는 광산 전부의 실효 레벨**을 정하는 문장이다. 공유 서두에 **요소 핀 셋**(absence fallback·override 범위·무명결정 fallback)을 실었다 — 거울이 아홉에 전파하므로 서두 한 번이면 된다. 같은 치환이 이제 red다(실측).
+
+**③ schemas/v3 삭제 — 소유자 재정 (a).** "v3 계약"으로 동결·번들되던 파일이 폐기된 모델을 계약으로 선언하고 있었다: `truth.fm.required`에 v3가 구조 오류로 막는 `status`, v2 시체 필드 셋이 optional, role-rank 뜻의 `authority`, 은퇴한 `attribution` — 라이브 schema가 네 축 움직이는 동안 이 표면만 스크럽에서 빠졌고, manifest에 실려 배포되고 있었다. Phase 2는 오지 않았고 유일한 실행자는 자기 property 테스트였다 — **이주기와 같은 판단으로 은퇴**: 파일과 함께 Phase-1 role-계약 장치 전체(CONTRACT_FILE·ADAPTER·contractFileFor·role 조립·loadArtifactContracts)를 artifact-contracts.mjs에서 절제하고, property 파일은 살아 있는 절반(버전 협상·브리지 핀·지원 집합)만 남겨 groups=9 cases=212 → **groups=2 cases=25**. fingerprint의 versioned-contract 걷기도 걷어냈다(라벨 그대로 bin+schema). manifest 경로·필수 가드, CI ctlscan 로스터, control-char 케이스(이제 `.weavedoc/schema`만, 존재 가드 유지), resume 키 probe(사건 특정 파일 → schema 옆의 새 파일로 일반화), seal-check 사본 둘이 따라 움직였다. 실광산에는 배포된 사본이 남아 있다 — **다음 배포 때 `.weavedoc/schemas/` 삭제**(fingerprint 걷기가 사라져 잔존 사본이 지문을 오염시키지는 않는다).
+
+**④ FORMATS의 override 열거에 review 추가.** "plan, write, refine, its consecration"이 판정자 권한이 override를 읽는 단계(review)를 빠뜨려, reviewers.md 훅과 계약 문서가 다른 답을 주고 있었다. **⑤ ⑪ 수리의 옆 문장** "Nothing is routed to the human"에 레벨 한정 — strict에서는 강등 자체가 이미 상신됐다는 절을 달았다.
+
+**회귀: 검사 14에 핀 아홉 신설(서두 요소 3 + 엔진 요소 6), red 실측 2방향(엔진 단독 개명·아홉 사본 fallback 치환). 케이스 수 불변(626), property 총계 재핀.** 삭제의 소해에서 스위트가 이 세션을 두 번 잡았다: resume 키 probe의 첫 재작성이 배포되지도 키에 덮이지도 않는 파일(`.weavedoc/` 최상위 stray)에 대한 커버리지를 단언해 **probe 자신의 주장이 거짓으로 red**가 났고(수정: 키가 계속 걷는 schemas 나무를 사본 안에 부활시켜 원래 교훈 그대로 재다), scratch repo의 mkdir에서 schemas 경로를 지우면서 `.weavedoc` 생성까지 딸려 나가 staging이 깨졌다(수정: 명시 생성). 사이클 회계: 재검이 신규를 냈으므로 카운터는 여전히 0이다.
+
+## 0.6.17
+
+**2차 콜드 리뷰(수리 재검 방식 — 0.6.12가 규격에 실은 그 사이클대로): 아홉 수리는 지적된 자리에서 전부 성립, 그러나 세 수리의 옆자리에서 should-fix 3·nice-to-have 3.** critical 0. 발견 여섯 전부 재측정으로 확정됐고(핵심 주장인 "레벨 낱말 아홉 동시 sed가 green"은 worktree 실측으로), 이 번들이 닫는다. 셋의 공통 형태는 **수리 규약 위반의 자기 사례**다 — 0.6.16의 수리가 주석·훅·로스터에서 "문장 전체 재독·수정 후 전체 대조"를 안 지킨 자리들이다.
+
+**① 검사 14 앵커에 세 레벨 낱말 포함.** 0.6.16의 앵커는 키 이름만 고정했고 그 주석은 "enum 루프가 낱말을 같은 방식으로 앵커한다"고 주장했는데 둘 다 반쪽이었다 — 그 루프는 schema를 doccheck 자신의 목록에 앵커할 뿐 스킬 문면은 어느 방향도 안 본다. 실측: 아홉 사본 `delegated`→`autonomous` 동시 sed가 doccheck green으로 통과했다(1차 4번과 같은, 가드의 주석이 코드보다 넓게 주장하는 클래스). 핀을 'Read `authority` … `strict` | `standard` | `delegated`' 전체로 늘려 키와 낱말을 함께 앵커했고, 같은 sed가 이제 아홉 줄 red다(실측). 주석은 실측대로 다시 썼다.
+
+**② reviewers.md의 훅 위 무자격 문장.** §Findings format의 "the defender may finalize on its own"(형식 강등)이 레벨 한정 없이 훅의 범위("Everything below") **위**에 남아, strict 광산의 판정자가 strict가 금지한 드랍을 이 문장으로 수행할 수 있었다 — 1차 3번과 같은 클래스가 같은 파일의 다른 절에 남은, 정확히 "지적된 자리 옆의 반 문장". standard·delegated 한정을 달고 strict의 전건 상신을 명시했다.
+
+**③ reader lock 로스터에 소비자 최전선 셋.** "read-only commands must run untouched"를 선언하는 로스터에 `pull`·`impact`·`conflict list`가 없었다 — 조건부 writer 셋 중 둘만 read-only 모드가 방어받는 비대칭 포함. `MUTATES.conflict`가 `() => true`로 단순화되는 류의 회귀에서 `conflict list`가 gate에 잡혀도 스위트 전체가 green이었다. 세 leg 추가.
+
+**나머지 셋(nice).** schema의 `intake.ledger.declarations`가 intake의 세 낱말 중 둘만 싣고 있었다 → `anchored` 추가 + **서술 키임을 명시**(소비자 0건 실측 — "wire it or say it is descriptive"라는 schema 헤더 자신의 규칙 위반이었다). validate·census의 `--anchor-existing` 안내가 인자 없는 철자라 그대로 실행하면 usage 거절이었다 → scope의 완전형(`"<what you are vouching for>"`)으로 통일. lock.mjs 헤더의 이중 주어 흉터와 intake 누락 → 문장 복원("attest and intake (and the retired migrator's transaction did too)").
+
+**사이클 회계.** 1차 수집 9 → 수리(0.6.16) → 재검이 수리 옆자리에서 6을 냈으므로 카운터는 0으로 돌아갔고, 이 수리 뒤의 다음 콜드 라운드가 첫 클린 후보다. 626/626.
+
+## 0.6.16
+
+**미발행 다섯 번들(0.6.11~15)에 대한 콜드 리뷰가 should-fix 8건·nice-to-have 1건을 냈고, 9건 전부 재현으로 확정됐다(1건은 세부 정정: "anchored ≠ verified" 핀은 실제로는 대문자 영문으로 2건 살아 있었다).** critical 0. 측정 주장(케이스 산술·fingerprint 체인·red 실측·"회귀 케이스 0건" 주장)은 전부 리뷰어의 재현으로 성립했고, 발견은 골격이 아니라 가장자리 — **은퇴·개명의 스크럽이 놓친 표면과, 삭제·주석이 만든 감시 공백** — 에 몰렸다. 이 번들이 그 9건을 닫는다.
+
+**스크럽 잔재 넷.** ① 살아 있는 출력 셋이 은퇴한 명령을 지시하고 있었다: `MAT-UNDECLARED`의 backlog 안내(→ `--anchor-existing`), `TRUTH-V2-FIELD`의 "run weavedoc upgrade"(→ v0.6.14 브리지 핀), ledger lock held 메시지의 writer 목록(→ attest·intake). census의 쌍둥이인 validate 쪽을 0.6.15의 소해가 놓친, 이 저장소가 이름 붙인 "쌍둥이가 받은 방어를 안 받은 장부" 클래스다. cmd-intake의 현재형 이주기 주석도 과거형으로 옮겼다. ② METHODOLOGY의 knob 목록이 은퇴한 `conflicts.attribution`과 `authority`의 **옛 뜻(role precedence)** 을 가르치고 있었다 — "One word, one meaning"을 선언한 번들이 낱말의 옛 뜻을 산 문서 한 장에 남긴 것. 새 뜻(누가 결정하나)으로 교체. ③ reader lock 로스터의 `upgrade --check`·`--dry-run` 두 leg는 usage 거절 출력에 'mine lock'이 없어 **0회 의미 실행으로 green**이었다 — 이 스위트의 1번 교훈 클래스. 제거. ④ plan의 "ask until all answered" resolve 표에 authority 질문이 없었다 — 세 곳이 "plan이 묻는다"고 약속하고 표는 안 묻는, 축을 실은 번들 안의 한쪽 소비자. 행 추가.
+
+**engine이 안 배운 열째 소비자.** 0.6.13이 아홉 스킬에 Authority 절을 실으면서 공유 engine(reviewers.md)을 빠뜨렸고, 그 결과 판정자의 recorded-elsewhere 닫기가 engine 문면상 레벨 무관이었다 — strict 광산에서 engine대로 도는 판정자는 strict가 금지한 닫기를 수행한다(two-documents-two-answers). §Over-strictness triage 서두에 레벨 훅을 실었다: 본문 서술 = standard, `strict`는 아무것도 finalize하지 않고(권고는 쓰되 전 항목 사용자 목록으로), `delegated`는 기각 포함 전권. 레벨이 옮기는 것은 finalize 권한뿐, 사실은 어느 레벨에서도 사실이다.
+
+**감시 공백 셋.** ① 검사 14는 아홉 사본을 서로만 대조해서, **아홉 전부의 동시 키 개명이 green으로 통과했다**(리뷰어 실측 — 이 축은 한 주 안에 실제로 한 번 개명됐다). 서두의 READ 문장을 schema의 키 이름에 앵커하는 핀을 추가했고, 아홉 동시 sed가 이제 아홉 줄의 red를 낸다(실측). 상호 대조는 "서로 같음"만 증명한다 — 앵커 없는 거울 아홉은 한 결함의 아홉 사본이 될 수 있다. ② 0.6.15가 "report 의무는 scope·census에 산다"고 선언하고 카운트만 핀했다: scope의 비용 문장("leaves no trace"·"An anchor ADOPTS whatever is on disk")과 census의 신설 안내("riskiest first"·"bind the whole backlog")를 그 버킷이 0이 아닌 케이스에 핀으로 실었다. ③ writer lock 로스터가 "full MUTATES table"을 주장하며 8 중 6만 돌리고 있었다(0.6.15의 수선이 만든 허위 주석) — alloc·conflict leg를 추가해 여덟 전부가 됐다. lock이 dispatcher에서 switch보다 먼저 잡히므로 존재하지 않는 entry를 지목하는 conflict leg도 합법이다.
+
+**브리지 커밋의 CI 공백(nice-to-have)** — v2 광산이 정본으로 안내받는 체크아웃 `924e97e`(v0.6.14)는 로컬 Windows 650/650만 있고 3-OS 기록이 없었다. 임시 ref로 dispatch를 한 번 돌려 닫았다(run 기록은 ref 삭제 후에도 남는다).
+
+**회귀: 신설 핀 7(비용 문장 2·안내 문장 2·undeclared 버킷 1·검사 14 앵커 1·로스터 2 leg), 제거 2 leg, 수선 로스터 8/8.** 626/626.
+
+## 0.6.15
+
+**소유자 재정: "호환이나 마이그레이션 툴킷이 있는 것도 지금 레벨에서는 의미가 있나 싶어."** 실측이 재정을 지지한다. v2→v3 이주기의 수요자는 "아직 v2인 광산"인데, 유일한 실광산은 이미 이 도구로 이주를 마쳤고, 미래의 사용자는 현행 스키마에서 시작하므로 v2 광산을 가질 수가 없다. 영원히 손님이 없는 코드였다 — 전용 776줄(이주기 611 · fault-injection 85 · UPGRADING 80)과 그것만 지키는 회귀 케이스들.
+
+**은퇴 방식은 v1 경로가 만든 선례 그대로: 마지막으로 실은 번들에 핀.** v2→v3 브리지 = **v0.6.14 (commit `924e97e`)**. `cmd-upgrade.mjs`·`upgrade-faultinject.mjs` 삭제, dispatch·USAGE·헤더 로스터·MUTATES 표에서 제거. **버전 게이트는 은퇴하지 않는다** — v2 카드는 v3 필수 키를 전부 만족해서 게이트가 없으면 깨끗하게 오통과하는 안전 축이므로, v2 광산은 이제 그 체크아웃으로 거절되고(mine.mjs·validate·artifact-contracts의 세 사본이 전부 브리지를 지목하며, `V2_BRIDGE` 상수가 `V1_BRIDGE` 옆에 산다), v1 광산은 종전대로 v0.5.21을 먼저 밟는다. 진단 코드 `VER-V2-UPGRADE`·`VER-V1-BRIDGE`는 이름을 유지한다 — 안정 코드가 계약이고, 바뀐 것은 메시지가 가리키는 문이다.
+
+**이주와 무관하게 살아 있는 것을 정확히 갈랐다.** ① `legacy-unbound` 행 — 실광산의 실제 역사라 리더(`scope`·`census`·`validate`)는 전부 존치, mint하던 도구만 사라진다. 이 리더들과 anchor 경로를 검증하던 케이스 4건은 설치 단계(이주기 실행으로 행을 심던 것)를 **이주기가 쓰던 바이트 그대로의 직접 행 작성**으로 바꿔 존치했다 — 살아 있는 기능의 테스트는 살아야 한다. ② `intake --anchor-existing` — intake의 것이라 그대로. ③ 버전 게이트 — 안전 장치라 그대로. ④ 부재 허용(`MAT-UNDECLARED` 경고 등) — 기록 원칙이라 그대로.
+
+**출력과 산문의 스크럽.** `census`의 undeclared 안내가 이주기 대신 intake의 두 경로(위험 순 개별 선언 · `--anchor-existing`)를 가리키고, `STATE-MISSING`·`VER-DISAGREE` 문구에서 이주기 언급을 걷어냈다. 이주기를 현재형으로 서술하던 주석·FORMATS·스킬 문장은 과거형으로 옮겼다 — 측정 기록 자체는 그대로다(기록을 grep에 맞춰 고치는 것은 위조라는 doccheck 9의 규칙 그대로). UPGRADING.md는 두 브리지 핀을 담은 짧은 문서로 재작성했고, README의 upgrade bullet은 핀 안내로 교체했다.
+
+**케이스 24건 삭제(이주 전용 22 + backfill 경로 2) · 4건 전환 · 2건 수선(mine lock 로스터에서 이주기 교체, artifact 계약 property의 v2 라우팅 단언을 브리지로) · 1건 꼬리 절제.** 650 → 626. 스키마 변경 없음(주석만), 명령 하나 삭제, 마이그레이션 없음 — **마이그레이션이 없다는 것이 이 번들의 내용이다.**
 
 ## 0.6.14
 

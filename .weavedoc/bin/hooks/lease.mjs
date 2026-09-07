@@ -1,13 +1,14 @@
 #!/usr/bin/env node
-// weavedoc lease hook — PostToolUse on the Skill tool.
+// weavedoc lease hook — PostToolUse on Claude's Skill tool or Codex's Bash tool.
 //
 // It records one fact: "this session is operating under skill K". `gate.mjs` reads that fact to
 // answer a mine write. Nothing else here judges anything.
 //
-// EXIT 0, ALWAYS. This hook observes a Skill call it must never break: a lease writer that failed
-// the call it is watching would be switched off within a day, which is the same end-state as not
-// shipping it, minus the trust. The worst a failure here can do is leave the gate strict, and the
-// gate's deny message names the repair (invoke the skill again).
+// Claude supplies the invoked skill directly. Codex does not expose skill activation as a hookable
+// tool, so every Codex skill emits `weavedoc activate <skill>` once; PostToolUse supplies that Bash
+// command together with the session id this process cannot know on its own. EXIT 0, ALWAYS: a lease
+// observer that broke the call it watches would be switched off within a day. The worst a failure
+// can do is leave the gate strict, whose deny message names the repair.
 //
 // The lease lives in the OS temp directory, keyed by a hash of the mine root — NOT in the mine.
 // `.weavedoc-state/` is a git-tracked directory in a real mine, and a file that changes every
@@ -56,7 +57,14 @@ export async function readStdin () {
 
 try {
   const payload = JSON.parse(await readStdin())
-  const skill = payload?.tool_input?.skill ?? ''
+  let skill = payload?.tool_input?.skill ?? ''
+  if (skill === '' && typeof payload?.tool_input?.command === 'string') {
+    // Match the actual entrypoint, not any stray `activate weavedoc-x` text in a prompt or echo.
+    // Quoted absolute paths and either slash direction are accepted; the skill name ends at shell
+    // whitespace or a command separator. This is a workflow tripwire, not an auth boundary.
+    const m = /(?:^|[\\/"'])weavedoc\.mjs["']?\s+activate\s+(weavedoc-[a-z]+)(?=\s*(?:$|[;&|]))/.exec(payload.tool_input.command)
+    if (m) skill = m[1]
+  }
   const sid = payload?.session_id ?? ''
   // Only weavedoc skills, and only when the session can be named. A lease with no session id
   // belongs to nobody and would be readable by everybody.

@@ -139,6 +139,9 @@ compute_key() { { git -C "$REPO" rev-parse HEAD 2>/dev/null
            # case with no refusal at all.
            sha256sum "$REPO/.weavedoc/READ.md" "$REPO/tests/baseline/bundle.manifest" "$REPO/tests/baseline/bundle.manifest.sha256"
            find "$REPO/.claude/skills" -type f -print0 | sort -z | xargs -0 sha256sum
+           # Codex ships only the WeaveDoc skill family. A developer may keep unrelated converted
+           # skills in `.agents/skills`; they are neither bundle input nor regression input.
+           find "$REPO/.agents/skills" -type f -path "$REPO/.agents/skills/weavedoc-*/*" -print0 2>/dev/null | sort -z | xargs -0 -r sha256sum
            : ; } 2>/dev/null | awk '{print $1}'
          # …and the INDEX, hashed WHOLE and OUTSIDE that awk (external review, v0.5.14). It was
          # inside, where `awk '{print $1}'` keeps only the first field — for `git ls-files -s` that
@@ -1335,30 +1338,41 @@ meta_conflict_store_properties() {
   expect_has "groups=9 cases=138"
 }
 meta_bundled_contracts_have_no_control_chars() {
-  # CI had this for runtime modules only, so four 0x14 bytes rode into `.weavedoc/schemas/v3` and
-  # shipped green (2026-08-08.6): a comment rewrite wrote U+2014 through a latin1 writer, which
-  # keeps the low byte. They were in comments, so the parser never noticed — but these files ARE
-  # the format. The check belongs in the local sweep as well as in CI: a bundled contract edited
-  # here should go red HERE, not one push later.
+  # CI had this for runtime modules only, so four 0x14 bytes rode into a bundled contract file and
+  # shipped green (2026-08-08.6, in the since-retired `.weavedoc/schemas/v3`): a comment rewrite
+  # wrote U+2014 through a latin1 writer, which keeps the low byte. Comments, so the parser never
+  # noticed — but these files ARE the format. The check belongs in the local sweep as well as in
+  # CI: a contract edited here should go red HERE, not one push later. The versioned-contract
+  # directory retired in 0.6.18; the live contract stays on the roster.
   local f bad="" n
-  for f in "$REPO/.weavedoc/schema" "$REPO/.weavedoc/schemas"/*; do
-    [ -f "$f" ] || continue
+  # The roster regrew in 0.6.20: a sixth-round review found the planted teaching surfaces —
+  # templates/ (init copies them into every mine; a contaminated claude-block plants its bytes
+  # downstream where validate's byte-compare passes both sides), FORMATS and READ — scanned by
+  # nothing, the 0.6.9 incident's mechanism intact for them. (History of this loop: it shrank to
+  # one file when the versioned contract retired, and a one-element quoted for is SC2066 to CI's
+  # lint leg; the comment about that opened with the linter's name and was SC1073 — the sentence
+  # about the linter has to dodge the linter's grammar.)
+  for f in "$REPO/.weavedoc/schema" "$REPO/.weavedoc/FORMATS.md" "$REPO/.weavedoc/READ.md" \
+           "$REPO/.weavedoc/templates"/*; do
+    # VACUITY GUARD: a roster entry that is not a file would make this pass while checking nothing.
+    [ -f "$f" ] || { bad "no bundled contract to scan at ${f#$REPO/} — the check would be vacuous"; return; }
     n=$(node "$REPO/tests/ctlscan.mjs" "$f" | tail -1 | sed 's/[^0-9]//g')
     [ "${n:-1}" = 0 ] || bad="$bad ${f#$REPO/}($n)"
   done
-  # VACUITY GUARD: a glob that matched nothing would make this pass while checking zero files.
-  [ -f "$REPO/.weavedoc/schemas/v3" ] || { bad "no bundled versioned contract to scan — the check would be vacuous"; return; }
   OUT="control-chars:${bad:- none}"; RC=0
   if [ -n "$bad" ]; then bad "bundled contract holds literal control characters:$bad"; else ok; fi
 }
 meta_artifact_contract_properties() {
-  # The versioned role contract (schema v3, Phase 1). Same vacuity guard as above: the exact total
-  # is asserted, so deleting an axis is a failure even when every remaining assertion is green.
-  # Nothing in the runtime consumes this model yet — switching production consumers is Phase 2 —
-  # so this case is the ONLY thing executing it, which is precisely why the count is pinned.
+  # Version negotiation and the two bridge pins — the EXECUTABLE SPEC in artifact-contracts.mjs,
+  # which no production module imports (the live gates hand-carry their strings; doccheck's
+  # bridge-pin sync ties the spellings). The Phase-1 role-contract half retired in 0.6.18 with
+  # `.weavedoc/schemas/v3` (this driver was its only executor), so the totals dropped from
+  # groups=9 cases=212. The exact
+  # total stays pinned for the reason it always was: deleting an axis is a failure even when every
+  # remaining assertion is green.
   OUT=$(node "$REPO/tests/artifact-contract-properties.mjs" 2>&1); RC=$?
   expect_pass
-  expect_has "groups=9 cases=212"
+  expect_has "groups=2 cases=25"
 }
 pass_hq_kind_mention() {
   # a Human-queue entry whose prose mentions a kind — first slot is [open], not a kind (kind-bearing filter)
@@ -2692,6 +2706,11 @@ block_config_authority_unfamiliar() {
   sed -i 's/^authority: .*/authority: paranoid/' "$W/.weavedoc/config.yaml"
   grep -qx 'authority: paranoid' "$W/.weavedoc/config.yaml" || { bad "fixture no-op: the config carries no authority line to corrupt"; return; }
   vrun validate; expect_block "authority"
+  # The refusal is also the fifth surface that TEACHES the axis (skills → engine → FORMATS →
+  # templates → this live message): the parenthesis is what a user reads at the exact moment they
+  # touch the key, and a cold review measured it flippable to "(absent = strict)" under a fully
+  # green board. Asserted here because runtime output is regress's layer, not doccheck's.
+  expect_has "(absent = standard)"
 }
 pass_config_authority_absent_then_declared() {
   # Both halves of the absence contract in one case, because they ARE one contract. Absent: green
@@ -2714,6 +2733,9 @@ block_plan_authority_unfamiliar() {
   # the mine's, which is precisely the level the document was trying not to be.
   sed -i 's/^doc_id: /authority: paranoid\ndoc_id: /' "$W/documents/d1/plan.md"
   vrun validate; expect_block "authority"
+  # Same fifth-surface rule as the config case above: the override's inheritance is taught by
+  # this parenthesis at the moment it matters.
+  expect_has "(absent = inherit the mine's)"
 }
 acct_config_unknown_key_warned() {
   # Unknown top-level keys are a named warning, not a failure (decided: a user extension or a
@@ -2726,40 +2748,6 @@ acct_config_unknown_key_warned() {
 }
 
 # ---- WD-MIG-001 (Phase 3 units 7–8): the v0.1 golden mine and the upgrade path ----
-mkv1() { # devolve the pristine workspace into an authentic v0.1-shaped mine
-  sed -i 's/^version: 2$/version: 1/' "$W/project.md"
-  sed -i 's/^version: 2/version: 1/' "$W/.weavedoc/config.yaml"
-  sed -i 's/^  max_rounds: 5/  max_rounds: 3/' "$W/.weavedoc/config.yaml"
-  # the v0.1 scalar repeat (the exact shape WD-MIG-001 names)
-  awk '
-    /^    (skip|light|standard|full):/ { next }
-    /^  repeat:/ { print "  repeat: 1              # clean rounds in a row required to pass"; next }
-    { print }' "$W/.weavedoc/config.yaml" > "$W/.cfg.tmp" && mv "$W/.cfg.tmp" "$W/.weavedoc/config.yaml"
-  # v0.1 short ids, with every reference spelled the old way
-  mv "$W/materials/m001" "$W/materials/m1"
-  sed -i 's/^id: m001$/id: m1/' "$W/materials/m1/converted.md"
-  sed -i 's/| m001 |/| m1 |/' "$W/catalog.md"
-  mv "$W/truths/t001.md" "$W/truths/t1.md"
-  sed -i 's/^id: t001$/id: t1/; s/^source: m001$/source: m1/' "$W/truths/t1.md"
-  sed -i 's/t001/t1/g; s/m001/m1/g' "$W/truths/coverage.md" "$W/truths/changelog.md" "$W/documents/d1/plan.md"
-  # verify.md as v0.1 wrote it: a verdictless success row, no Human queue / Adjudications
-  printf -- '---\nstatus: passed\nround: 1\nverified_at: 2026-07-30\n---\n\n## Verified units\n\n- m1 · t1 — R1 2026-07-30 · passes 2/2\n' > "$W/truths/verify.md"
-  # a bracketed kind as legacy HISTORY outside the gate (the zone rule postdates v0.1)
-  printf -- '\n- [contradiction] 3장 — R1에서 수정 완료\n' >> "$W/documents/d1/review.md"
-  rm -f "$W/truths/verify-ledger.tsv"
-  ( cd "$W" && "${WDRUN[@]}" reindex >/dev/null 2>&1 )
-}
-acct_upgrade_deep_verified_heading_does_not_mint_evidence() {
-  # Readers, writers and the required-section gate admit only level 1/2. A v1 `###` lookalike must
-  # not receive a verdict or mint a legacy sidecar row before upgrade adds the missing real section.
-  mkv1
-  sed -i 's/^## Verified units$/### Verified units/' "$W/truths/verify.md"
-  vrun upgrade --apply
-  expect_pass
-  vrun scope
-  expect_has "truths     1 live · 0 verified (digest-bound) · 0 legacy-unbound"
-  expect_has "1 unverified"
-}
 
 # ---- WD-CLI-001 + WD-IO-001 (Phase 4 remainder): boundary defects + write transactions ----
 block_date_feb31() {
@@ -3331,19 +3319,6 @@ block_ledger_bad_date() {
   printf 't001\t-\tlegacy-unbound\t-\t-\t2026-13-99\n' > "$W/truths/verify-ledger.tsv"
   vrun validate; expect_block "[LEDGER-MALFORMED]"
 }
-acct_upgrade_mid_not_material_evidence() {
-  # WD-COR-001 held through migration: the pristine Verified units row names m001, but that
-  # ledger is the TRUTHS lane (extraction scope) — the conversion verdict lives only in the
-  # material's own frontmatter, and m001 here says `status: converted`. The 0.3.1 migration
-  # minted a legacy row from the mention anyway, demoting mandatory verification debt into
-  # non-blocking legacy backlog. Post-apply, m001 must still be OWED.
-  vrun upgrade --apply
-  expect_pass
-  vrun scope
-  expect_has "materials  1 converted · 0 verified (digest-bound) · 0 legacy-unbound"
-  expect_has "1 unverified"
-  vrun validate; expect_pass
-}
 block_truth_bom_before_the_fence_is_named() {
   # A BOM'd file shows `---` on line 1 in every editor, every diff and every paste, so the message
   # "line 1 must be '---'" sent the reader to inspect the one thing that was already correct.
@@ -3523,14 +3498,6 @@ acct_consecrate_no_residue() {
   [ -e "$W/documents/d1/.final.bak" ] && bad "backup left behind"
   ok
 }
-pass_upgrade_resume_mixed() {
-  # A crashed apply stamps project before config (stamps are LAST, in that order) — the rescan
-  # of that half-stamped mine must still read as a v1 migration, or a crash is unrecoverable.
-  sed -i 's/^version: 1$/version: 2/' "$W/project.md"
-  vrun upgrade --apply
-  expect_pass
-  vrun validate; expect_pass
-}
 acct_attest_partial_append_rolls_back() {
   # v0.5.1 external review P1-3. One append call can land SOME bytes and then fail (ENOSPC, a size
   # limit) — and whatever COMPLETE rows landed became real evidence under last-row-wins while the
@@ -3655,9 +3622,13 @@ acct_mine_lock_admits_one_writer() {
   local before after
   before=$(cd "$W" && find . -path ./.weavedoc/mine.lock -prune -o -type f -print | LC_ALL=C sort | xargs sha256sum 2>/dev/null | sha256sum | awk '{print $1}')
   local c t0 t1
-  # ALL SIX writers, not a sample (review #10: consecrate and retag were missing, so the two
-  # commands most likely to gain a pre-gate read had no case watching them).
-  for c in "attest verified 1 std m001" "seal-review d1" "reindex" "upgrade --apply" "consecrate d1" "retag onetag twotag"; do
+  # ALL EIGHT writers — the full MUTATES table, and this time actually all of it (review #10:
+  # consecrate and retag were missing; the 0.6.15 repair swapped the retired migrator for intake
+  # while its comment claimed "full" over six of eight — alloc and conflict had no case watching
+  # them, which a cold review caught by counting the table). The lock is taken at the dispatcher
+  # BEFORE the switch, so a held lock refuses even a command whose arguments would later fail
+  # their own validation — which is why the conflict leg may name an entry that does not exist.
+  for c in "attest verified 1 std m001" "seal-review d1" "reindex" "intake m001 lockprobe" "alloc truth" "conflict remove c001" "consecrate d1" "retag onetag twotag"; do
     t0=$(date +%s)
     # shellcheck disable=SC2086
     vrun $c
@@ -3680,14 +3651,21 @@ acct_mine_lock_admits_one_writer() {
 }
 acct_mine_lock_never_gates_readers() {
   # The gate is for WRITERS. Read-only commands, and the read-only MODES of writing commands,
-  # must run untouched while a mine lock is held — a report queueing behind a migration would be
-  # a worse tool, and --check/--dry-run/--dry promise to write nothing.
+  # must run untouched while a mine lock is held — a report queueing behind another writer would
+  # be a worse tool, and --check/--dry promise to write nothing.
   # Passes on the pre-gate runtime (4121109) too — no gate there, so nothing to be gated by; said
   # plainly: it is the guard that keeps the gate from spreading, not evidence for it.
+  # (The retired migrator's --check/--dry-run legs left with it in 0.6.16: an unknown command is
+  # refused at usage before the gate can matter, so those two legs were green over zero meaningful
+  # executions — the class this suite keeps as its first lesson. The consumer-frontline readers —
+  # pull, impact, conflict list — joined in 0.6.17: a second cold review found the roster stating
+  # "read-only commands must run untouched" while watching neither the commands a consumer actually
+  # runs first nor the read-only mode of the third conditional writer, so a MUTATES.conflict
+  # simplified to `() => true` would have gated `conflict list` under a fully green suite.)
   mkdir -p "$W/.weavedoc/mine.lock"
   printf 'someone-else' > "$W/.weavedoc/mine.lock/owner"
   local c
-  for c in validate scope status census gaps "upgrade --check" "upgrade --dry-run" "reindex --check"; do
+  for c in validate "pull 위약" "impact m001" "conflict list" scope status census gaps "reindex --check"; do
     # shellcheck disable=SC2086
     vrun $c
     printf '%s\n' "$OUT" | grep -qF 'mine lock' && bad "[$c] was gated by the mine lock"
@@ -4735,10 +4713,67 @@ EOF
   [ -z "$wrong" ] || { bad "interview offers values the schema does not agree with:$wrong"; return; }
   ok
 }
+acct_codex_interview_matches_request_user_input_and_schema() {
+  # Codex has a different question contract: stable `id`, no `multiSelect`, and its UI marks the
+  # recommended option in the LABEL. The selected value becomes config only after stripping that
+  # exact suffix. Parse the black-box output as JSON and compare both directions with the schema.
+  vrun interview codex
+  expect_pass
+  local nonascii
+  nonascii=$(printf '%s\n' "$OUT" | LC_ALL=C grep -n '[^ -~]' | head -3)
+  [ -z "$nonascii" ] || { bad "Codex interview printed non-ASCII: $nonascii"; return; }
+  printf '%s\n' "$OUT" > "$W/codex-interview.out"
+  OUT=$(node - "$W/codex-interview.out" "$REPO/.weavedoc/schema" <<'NODE'
+const fs = require('fs')
+const lines = fs.readFileSync(process.argv[2], 'utf8').split(/\r?\n/).filter(x => x.startsWith('['))
+if (lines.length !== 2) throw new Error(`arrays=${lines.length}, want 2`)
+const qs = lines.flatMap(JSON.parse)
+if (qs.length !== 6) throw new Error(`questions=${qs.length}, want 6`)
+const ids = ['authority', 'completeness', 'conflicts_detection', 'verify_strength', 'review_strength', 'scale']
+if (JSON.stringify(qs.map(q => q.id)) !== JSON.stringify(ids)) throw new Error(`ids=${qs.map(q => q.id).join(',')}`)
+if (qs.some(q => Object.hasOwn(q, 'multiSelect'))) throw new Error('Codex payload carries Claude-only multiSelect')
+const schema = Object.fromEntries(fs.readFileSync(process.argv[3], 'utf8').split(/\r?\n/)
+  .map(line => /^([^#][^:]*):\s*(.*)$/.exec(line)).filter(Boolean).map(m => [m[1], m[2]]))
+const keys = {
+  Authority: 'config.enum.authority', Completeness: 'config.enum.completeness',
+  Conflicts: 'config.enum.detection', Verify: 'config.strength.range',
+  Review: 'config.strength.range', Scale: 'config.enum.scale'
+}
+let recommended = 0
+for (const q of qs) {
+  if (!keys[q.header]) throw new Error(`unmapped header ${q.header}`)
+  const want = schema[keys[q.header]].split('|').sort()
+  const got = q.options.map((o, i) => {
+    const marked = o.label.endsWith(' (Recommended)')
+    if (i === 0 && !marked) throw new Error(`${q.header}: first option is not recommended`)
+    if (i !== 0 && marked) throw new Error(`${q.header}: non-first option is recommended`)
+    if (marked) recommended++
+    return o.label.replace(/ \(Recommended\)$/, '')
+  }).sort()
+  if (JSON.stringify(got) !== JSON.stringify(want)) throw new Error(`${q.header}: schema=${want} asked=${got}`)
+}
+if (recommended !== 6) throw new Error(`recommended=${recommended}, want 6`)
+process.stdout.write('Codex interview: 2 arrays, 6 ids, schema labels agree')
+NODE
+  ); RC=$?
+  expect_pass
+  expect_has "schema labels agree"
+}
 block_interview_extra_arg() {
-  # WD-CLI-001, on a command that takes none: a typo'd intention is refused, never ignored.
-  vrun interview ko
-  expect_block "usage: weavedoc interview"
+  # WD-CLI-001: only the two named harness surfaces are accepted.
+  vrun interview cursor
+  expect_block "usage: weavedoc interview [claude|codex]"
+}
+acct_activate_prints_codex_hook_handshake() {
+  # The CLI cannot know the harness session id and must not write a global lease. It prints the
+  # explicit command result; Codex PostToolUse supplies the missing session id to lease.mjs.
+  vrun activate weavedoc-gather
+  expect_pass
+  expect_has "weavedoc activation handshake: weavedoc-gather"
+}
+block_activate_rejects_non_weavedoc_skill() {
+  vrun activate frontend-design
+  expect_block "usage: weavedoc activate <weavedoc-skill>"
 }
 acct_golden_outputs_current() {
   # tests/baseline/golden/ is the record of what each command PRINTS on a clean minimal mine, and
@@ -4845,6 +4880,7 @@ meta_key_covers_every_live_input() {
   local copy="$W/keyrepo" k0 k1 fails=""
   mkdir -p "$copy" && cp -r "$REPO/tests" "$REPO/.weavedoc" "$copy"/ 2>/dev/null
   mkdir -p "$copy/.claude" && cp -r "$REPO/.claude/skills" "$copy/.claude"/ 2>/dev/null
+  mkdir -p "$copy/.agents" && cp -r "$REPO/.agents/skills" "$copy/.agents"/ 2>/dev/null
   cp "$REPO/README.md" "$REPO/CHANGELOG.md" "$copy"/ 2>/dev/null
   # WD_REG_RES/WD_REG_KEY CLEARED — inside a --batch worker they are exported and --seal-check
   # refuses in that branch, so this returned no key and the case failed only under the real
@@ -4859,18 +4895,27 @@ meta_key_covers_every_live_input() {
   }
   # bin/ top level (not the entrypoint, not under lib/) — the v0.5.15 hole
   printf 'export const x = 1\n' > "$copy/.weavedoc/bin/extra.mjs"; probe_moves bin-toplevel "$copy/.weavedoc/bin/extra.mjs"
-  # the VERSIONED CONTRACTS beside the schema (bundle 2026-08-08.6). `.weavedoc/schema` was keyed by
-  # name and `schemas/` not at all, so a dirty `schemas/v3` edit was invisible to `--resume`, which
-  # replayed the previous PASS while a fresh key failed — the v0.5.14/.15 hole one directory over.
+  # the VERSIONED-CONTRACT TREE beside the schema (bundle 2026-08-08.6). Its only file retired in
+  # 0.6.18, but the key keeps walking the tree for the reason it was added — "a contract added
+  # later must not be able to ship unkeyed" — so the probe RESURRECTS it in the isolated copy: a
+  # file appearing there must move the key, exactly as the original `schemas/v3` edit had to.
+  # HALF the original lesson now: the manifest no longer globs this tree (0.6.18), so a re-added
+  # contract would be KEYED here yet silently unshipped — restoring the make-manifest glob (and
+  # its required-path guard) is part of re-adding one (cold review, 0.6.19).
+  # (A stray file at `.weavedoc/` top level is deliberately NOT probed: it neither ships in the
+  # manifest nor feeds any case, and the first respelling of this probe asserted key coverage for
+  # exactly such a file — measured red, the probe's own claim was false, 0.6.18.)
   # It belongs HERE, in the isolated copy: the first spelling of this probe edited $REPO itself and
   # restored it, which a SIGKILL in the window leaves dirty, lets a concurrent edit be clobbered by
   # the restore, and hides from the final seal anyway because A→B→A is no net change.
-  probe_moves schemas-v3 "$copy/.weavedoc/schemas/v3"
+  mkdir -p "$copy/.weavedoc/schemas" && printf 'schema.version: 4\n' > "$copy/.weavedoc/schemas/v4"
+  probe_moves schemas-tree "$copy/.weavedoc/schemas/v4"
   # a nested lib module, and a tests/ helper below the top level — the recursive halves
   mkdir -p "$copy/.weavedoc/bin/lib/sub" && printf 'export const y = 1\n' > "$copy/.weavedoc/bin/lib/sub/m.mjs"
   probe_moves bin-nested "$copy/.weavedoc/bin/lib/sub/m.mjs"
   mkdir -p "$copy/tests/helpers" && printf '#!/usr/bin/env bash\n' > "$copy/tests/helpers/h.sh"
   probe_moves tests-nested "$copy/tests/helpers/h.sh"
+  probe_moves codex-skill "$copy/.agents/skills/weavedoc-gather/SKILL.md"
   # the entrypoint under a WD_BIN that lives OUTSIDE bin/ — the v0.5.16 hole
   cp "$copy/.weavedoc/bin/weavedoc.mjs" "$copy/.weavedoc/alt-entry.mjs"
   k0=$( cd "$copy" && WD_REG_RES= WD_REG_KEY= TMPDIR="$W" WD_BIN="node .weavedoc/alt-entry.mjs" bash tests/regress.sh --seal-check zzzzzzzzzzzz 2>&1 | sed -n 's/.*, \([0-9a-f]*\) now\..*/\1/p' )
@@ -4887,6 +4932,7 @@ meta_key_covers_the_git_index() {
   local repo="$W/gitrepo" before after
   mkdir -p "$repo" && cp -r "$REPO/tests" "$REPO/.weavedoc" "$repo"/ 2>/dev/null
   mkdir -p "$repo/.claude" && cp -r "$REPO/.claude/skills" "$repo/.claude"/ 2>/dev/null
+  mkdir -p "$repo/.agents" && cp -r "$REPO/.agents/skills" "$repo/.agents"/ 2>/dev/null
   cp "$REPO/README.md" "$REPO/CHANGELOG.md" "$repo"/ 2>/dev/null
   # `git init` HONOURS an inherited GIT_DIR — it re-initialises THAT dir instead of making
   # one here, and the `git add -A` then stages this scratch tree into the REAL repository's index,
@@ -5002,14 +5048,17 @@ meta_git_env_ignored_by_key_and_manifest() {
   # there without adding it here makes the generator refuse this scratch repo, which is what the
   # vacuity guard below then reports (measured when `.weavedoc/schemas/v3` was added). The guard
   # catching it loudly is the design; keeping the two lists in step is the maintenance.
-  mkdir -p "$sc/.weavedoc/schemas" "$sc/tests" "$sc/.claude/skills/weavedoc-x"
+  mkdir -p "$sc/.weavedoc" "$sc/tests" \
+    "$sc/.claude/skills/weavedoc-init" "$sc/.claude/skills/weavedoc-x" \
+    "$sc/.agents/skills/weavedoc-init"
   cp "$REPO/.weavedoc/VERSION" "$REPO/.weavedoc/schema" "$REPO/.weavedoc/READ.md" \
      "$REPO/.weavedoc/FORMATS.md" "$REPO/.weavedoc/PARSER-MODEL.md" \
      "$REPO/.weavedoc/.gitattributes" "$sc/.weavedoc"/ 2>/dev/null
-  cp "$REPO/.weavedoc/schemas/v3" "$sc/.weavedoc/schemas"/ 2>/dev/null
   mkdir -p "$sc/.weavedoc/bin" && cp "$REPO/.weavedoc/bin/weavedoc.mjs" "$sc/.weavedoc/bin"/ 2>/dev/null
+  printf 'skill\n' > "$sc/.claude/skills/weavedoc-init/SKILL.md"
   printf 'skill
 ' > "$sc/.claude/skills/weavedoc-x/SKILL.md"
+  printf 'skill\n' > "$sc/.agents/skills/weavedoc-init/SKILL.md"
   printf 'other
 ' > "$sc/.claude/skills/not-ours.md"
   cp "$REPO/tests/make-manifest.sh" "$REPO/tests/git-env.sh" "$sc/tests"/ 2>/dev/null
@@ -5022,6 +5071,7 @@ meta_git_env_ignored_by_key_and_manifest() {
   m1=$( cd "$sc" && GIT_INDEX_FILE="$alt" bash tests/make-manifest.sh 2>/dev/null )
   case "$m0" in *.weavedoc/VERSION*) ;; *) bad "the scratch manifest is empty — the comparison would be vacuous"; return ;; esac
   case "$m0" in *weavedoc-x/SKILL.md*) ;; *) bad "the scratch manifest has no skill row — the pathspec half would be vacuous"; return ;; esac
+  case "$m0" in *.agents/skills/weavedoc-init/SKILL.md*) ;; *) bad "the scratch manifest has no Codex skill row — the dual-surface pathspec half would be vacuous"; return ;; esac
   case "$m0" in *not-ours.md*) bad "the manifest picked up a skill that is not ours"; return ;; esac
   [ "$m0" = "$m1" ] || fails="$fails manifest"
   # (3) THE PATHSPEC FAMILY, which `git rev-parse --local-env-vars` does not name (external review,
@@ -5063,14 +5113,16 @@ meta_manifest_generator_fails_closed() {
   # as though it were the file's digest, and the script exited 0. Built by staging the required
   # paths and then deleting one loose object out from under the index.
   local sc2="$W/mmfc2" obj
-  mkdir -p "$sc2/tests" "$sc2/.weavedoc/bin" "$sc2/.weavedoc/schemas"
+  mkdir -p "$sc2/tests" "$sc2/.weavedoc/bin" \
+    "$sc2/.claude/skills/weavedoc-init" "$sc2/.agents/skills/weavedoc-init"
   cp "$REPO/tests/make-manifest.sh" "$REPO/tests/git-env.sh" "$sc2/tests"/ 2>/dev/null
   # Same coupling to make-manifest.sh's required-path guard as the case above.
   cp "$REPO/.weavedoc/VERSION" "$REPO/.weavedoc/schema" "$REPO/.weavedoc/READ.md" \
      "$REPO/.weavedoc/FORMATS.md" "$REPO/.weavedoc/PARSER-MODEL.md" \
      "$REPO/.weavedoc/.gitattributes" "$sc2/.weavedoc"/ 2>/dev/null
-  cp "$REPO/.weavedoc/schemas/v3" "$sc2/.weavedoc/schemas"/ 2>/dev/null
   cp "$REPO/.weavedoc/bin/weavedoc.mjs" "$sc2/.weavedoc/bin"/ 2>/dev/null
+  printf 'skill\n' > "$sc2/.claude/skills/weavedoc-init/SKILL.md"
+  printf 'skill\n' > "$sc2/.agents/skills/weavedoc-init/SKILL.md"
   ( cd "$sc2" && git init -q . && git add -A >/dev/null 2>&1 ) || { bad "could not build the second scratch repo"; return; }
   out=$( cd "$sc2" && bash tests/make-manifest.sh 2>/dev/null ); rc=$?
   [ "$rc" = 0 ] || { OUT="the intact scratch repo already failed: rc=$rc"; bad "the unreadable-blob probe would be vacuous"; return; }
@@ -5117,9 +5169,10 @@ meta_git_env_writes_stay_inside() {
   # so that part of this case passes before and after — it is here so a future cleanup cannot be
   # narrowed back to "the object dir only" without going red.
   local copy="$W/gitwrite" vic="$W/gitwrite-victim" before after vidx0 vidx1 out
-  mkdir -p "$copy/.claude" "$vic"
+  mkdir -p "$copy/.claude" "$copy/.agents" "$vic"
   cp -r "$REPO/tests" "$REPO/.weavedoc" "$copy"/ 2>/dev/null
   cp -r "$REPO/.claude/skills" "$copy/.claude"/ 2>/dev/null
+  cp -r "$REPO/.agents/skills" "$copy/.agents"/ 2>/dev/null
   cp "$REPO/README.md" "$REPO/CHANGELOG.md" "$copy"/ 2>/dev/null
   ( cd "$vic" && git init -q . && printf 'victim\n' > v.txt && git add v.txt >/dev/null 2>&1 ) \
     || { bad "could not build the victim repo"; return; }
@@ -5152,6 +5205,8 @@ meta_key_seal_covers_one_and_worker_branch() {
   cp -r "$REPO/tests" "$REPO/.weavedoc" "$copy"/ 2>/dev/null
   mkdir -p "$copy/.claude"
   cp -r "$REPO/.claude/skills" "$copy/.claude"/ 2>/dev/null
+  mkdir -p "$copy/.agents"
+  cp -r "$REPO/.agents/skills" "$copy/.agents"/ 2>/dev/null
   cp "$REPO/README.md" "$REPO/CHANGELOG.md" "$copy"/ 2>/dev/null
   out=$( cd "$copy" && WD_REG_RES= WD_REG_KEY= TMPDIR="$W" bash tests/regress.sh --one sealprobe_writes_keyed_file 2>&1 ); rc=$?
   OUT="one: rc=$rc :: $out"
@@ -5280,9 +5335,10 @@ meta_manifest_baseline_current() {
     bad "bundle.manifest.sha256 is not the hash of bundle.manifest — the two artifacts drifted apart; regenerate both"
   else ok; fi
 }
-acct_fingerprint_covers_lib() {
+acct_fingerprint_covers_bin() {
   # The fingerprint is the ONE spelling of "are these two installs the same runtime", and the Node
-  # runtime is a dispatcher plus the modules under lib/ — an entrypoint-only hash reported
+  # runtime is everything under bin/ — dispatcher, lib/ modules, and the enforcement hooks — plus
+  # the schema, which is what the label says. An entrypoint-only hash reported
   # IDENTICAL for commit pairs differing solely in lib/ (v0.4.0 external review; f3b05f2 and
   # ef48366 are such commits). Proven on a COPY of the runtime: the shipped one must not be edited
   # by a test, and a copy is exactly what an install is. Runs the node runtime directly on both
@@ -5305,6 +5361,15 @@ acct_fingerprint_covers_lib() {
   printf '\n' >> "$W/.weavedoc/bin/weavedoc.mjs"
   f3=$( cd "$W" && node .weavedoc/bin/weavedoc.mjs version 2>/dev/null | grep -m1 'fingerprint:' )
   [ "$f2" != "$f3" ] || { bad "an entrypoint byte change did not change the fingerprint"; return; }
+  # ...and bin/hooks/ (0.6.20). The 0.6.19 walk-widening shipped with NO arm of its own, and a
+  # cold review measured the consequence: reverting the widening left this case and the whole
+  # suite green — the repaired blindness (enforcement code outside the print, under a label that
+  # says "compare this") could return without a single test noticing. This arm is that revert's
+  # tripwire: hooks bytes must move the fingerprint.
+  local f4
+  printf '\n' >> "$W/.weavedoc/bin/hooks/gate.mjs"
+  f4=$( cd "$W" && node .weavedoc/bin/weavedoc.mjs version 2>/dev/null | grep -m1 'fingerprint:' )
+  [ "$f3" != "$f4" ] || { bad "a bin/hooks byte change did not change the fingerprint — the walk does not cover the enforcement gate, and two installs differing only in hooks share a print"; return; }
   ok
 }
 acct_smoke_lang()    { vrun lang;    expect_pass; expect_has "ko"; }
@@ -6704,8 +6769,30 @@ block_gate_v2_mine_general_commands() {
   expect_block "v3-only"
   vrun census
   expect_block "v2→v3 migrator"
+  # THE COMMIT HASH IS THE CONTRACT — the v1 twin below has asserted its bridge hash since the
+  # gate shipped, while this side asserted prose only: a cold review measured both v2 refusal
+  # messages losing their pin (comments kept the token, so doccheck's file-level sync stayed
+  # green) with the whole board green. Message-level parity closes that: the hash a v2 user is
+  # actually sent to must be in the bytes they read.
+  expect_block "924e97e"
   vrun validate
   expect_block "VER-V2-UPGRADE"
+  expect_block "924e97e"
+  expect_hasnt "examined:"
+}
+block_gate_v0_mine_names_the_v1_bridge_first() {
+  # BELOW-FLOOR IS NUMERIC. The ladder used to enumerate '1' and '2', so a `version: 0` mine fell
+  # through both rungs into full v3 judgment — measured by a cold review: validate printed seven
+  # v3 problems and an `examined:` line about a v0 mine, and `pull` answered exit 0. The
+  # executable spec always routed below-floor-and-not-2 to the v1 bridge first; these asserts are
+  # what hold production to it.
+  sed -i 's/^version: 3$/version: 0/' "$W/project.md"
+  sed -i 's/^version: 3/version: 0/' "$W/.weavedoc/config.yaml"
+  vrun pull 위약
+  expect_block "v0.5.21"
+  vrun validate
+  expect_block "VER-V1-BRIDGE"
+  expect_block "0257167"
   expect_hasnt "examined:"
 }
 block_gate_v1_mine_names_the_bridge() {
@@ -6717,56 +6804,6 @@ block_gate_v1_mine_names_the_bridge() {
   expect_block "0257167"
   vrun validate
   expect_block "VER-V1-BRIDGE"
-}
-acct_upgrade_stub_uptodate() {
-  vrun upgrade --check
-  expect_pass
-  expect_has "already schema v3"
-}
-block_upgrade_v2_without_git_refuses() {
-  # (Until slice 2 this asserted the stub's "slice 2" refusal; the migrator is real now.) The
-  # clean git worktree IS the backup, and $W is not a repository — apply must refuse rather than
-  # migrate an unrecoverable mine. Direction matters: --check still reports (read-only).
-  sed -i 's/^version: 3$/version: 2/' "$W/project.md"
-  sed -i 's/^version: 3/version: 2/' "$W/.weavedoc/config.yaml"
-  vrun upgrade --apply
-  expect_block "not inside a git repository"
-}
-block_upgrade_stub_bad_flag() {
-  # Restored from the retired v1-migrator suite: unknown-argument refusal is a living contract
-  # (deleted together with that suite in this bundle, which was one case too many).
-  vrun upgrade --frobnicate
-  expect_block "unknown argument"
-}
-block_upgrade_two_modes_refuses_and_writes_nothing() {
-  # THE WRITE, not just the message. `--check` promises not to write and `--apply` writes, and the
-  # argv gate could not see the contradiction because it only judges flags it does not KNOW — so
-  # `apply` won and the migration RAN. Measured 2026-08-22 on exactly this shape: the intake backfill
-  # printed its receipt and materials/intake-ledger.tsv appeared, rc 0, with no word about the
-  # `--check` that had just been ignored. Asserting the refusal string alone would leave the case
-  # green if a later change refused loudly and wrote anyway, so the file's ABSENCE is the assertion.
-  rm -f "$W/materials/intake-ledger.tsv"
-  [ -e "$W/materials/intake-ledger.tsv" ] && { bad "fixture still has an intake ledger — the case would prove nothing"; return; }
-  vrun upgrade --check --apply
-  expect_block "give at most one mode"
-  [ -e "$W/materials/intake-ledger.tsv" ] && { bad "upgrade wrote the intake ledger while refusing two modes — the refusal did not reach the write"; return; }
-  ok
-}
-block_upgrade_repeated_mode_refuses() {
-  # A logical flag appears ONCE. `--apply --apply` is not a contradiction, it is a slip, and the same
-  # rule covers both: the count is of TOKENS, not of distinct modes. (The sibling project settled the
-  # same wording in its own argv round — a duplicate is a typo'd intention like any other.) Without
-  # this case the rule could be narrowed to "two DIFFERENT modes" and nothing would go red.
-  vrun upgrade --apply --apply
-  expect_block "give at most one mode"
-}
-acct_upgrade_one_mode_still_runs() {
-  # The other direction, and the reason the rule counts to two rather than to one: a single mode must
-  # still work. A refusal that also blocks the ordinary invocation is the (b) class in the mirror —
-  # the sibling's own criterion is symmetric about over-blocking, and this is the case that holds it.
-  vrun upgrade --apply
-  expect_pass
-  expect_has "already schema v3"
 }
 block_state_missing_is_not_empty() {
   # A conflicts store that cannot be read must never read as "no conflicts" — that silence would
@@ -6887,276 +6924,6 @@ block_conflict_store_dangling_references() {
   expect_has "m099"
 }
 
-# ---- schema v3 slice 2: the v2→v3 migrator ------------------------------------------------------
-mk_v2mine() { # rebuild $W as a REAL v2 mine under git — the migrator's whole input surface:
-  # an ok winner carrying resolution(decided_by: machine)+superseded, a discarded loser, a
-  # reciprocal conflict pair, a retracted card, ledger rows for a survivor and a casualty, a
-  # changelog id token ABOVE every card (the high-water evidence), and a document citing only
-  # survivors. The clean git worktree is the backup the migrator demands.
-  sed -i 's/^version: 3$/version: 2/' "$W/project.md"
-  sed -i 's/^version: 3/version: 2/' "$W/.weavedoc/config.yaml"
-  sed -i 's/^required_tags: \[\]$/required_tags: [위약]/' "$W/project.md"
-  rm -rf "$W/.weavedoc-state"
-  # A REAL v2 mine predates the intake ledger entirely — it inherits one from the v3 pristine, and
-  # a fixture carrying an artifact its own schema version never had would leave the migrator's
-  # backfill with nothing to do and the whole path untested (bundle 2026-08-08.28).
-  rm -f "$W/materials/intake-ledger.tsv"
-  rm -f "$W/truths"/t*.md
-  printf -- '---\nid: m001\ntitle: 용역 계약서\norigin: file\nrole: 계약서\ntopics: [대금, 위약]\nformat: md\nsource_path: inbox/contract.md\nadded: 2026-07-01\nstatus: converted\nsummary: 대금과 위약금을 정한 최소 계약서.\n---\n\n# 용역 계약서\n\n제3조 대금은 5천만원으로 한다.\n제7조 위약금은 계약금액의 10%%로 한다.\n제8조 위약금은 계약금액의 20%%로 한다.\n' > "$W/materials/m001/converted.md"
-  printf -- '---\nid: t001\nclaim: "위약금은 계약금액의 10%%다"\nsource: m001\nlocation: "제7조"\ntags: [위약]\nstatus: ok\nprovenance: stated\nresolution: {type: pick, winner: t001, decided_by: machine, reason: "v2 기계 선택"}\nsuperseded: [t002]\n---\n\n제7조 위약금은 계약금액의 10%%로 한다.\n' > "$W/truths/t001.md"
-  printf -- '---\nid: t002\nclaim: "위약금은 계약금액의 15%%다"\nsource: m001\ntags: [위약]\nstatus: discarded\nprovenance: stated\nresolution: {type: pick, winner: t001, decided_by: user, decision_kind: supplied}\n---\n\n제7조 위약금은 계약금액의 10%%로 한다.\n' > "$W/truths/t002.md"
-  printf -- '---\nid: t003\nclaim: "위약금은 계약금액의 10%%다 (7조)"\nsource: m001\nlocation: "제7조"\ntags: [위약]\nstatus: conflict\nconflict_with: [t004]\nprovenance: stated\n---\n\n제7조 위약금은 계약금액의 10%%로 한다.\n' > "$W/truths/t003.md"
-  printf -- '---\nid: t004\nclaim: "위약금은 계약금액의 20%%다 (8조)"\nsource: m001\nlocation: "제8조"\ntags: [위약]\nstatus: conflict\nconflict_with: [t003]\nprovenance: stated\n---\n\n제8조 위약금은 계약금액의 20%%로 한다.\n' > "$W/truths/t004.md"
-  printf -- '---\nid: t005\nclaim: "없는 조항"\nsource: m001\ntags: [해지]\nstatus: retracted\nprovenance: stated\n---\n\n제99조 없는 문장.\n' > "$W/truths/t005.md"
-  printf '# Coverage\n\n## m001\n\n- 위약: t001\n- 위약 15%%: t002\n' > "$W/truths/coverage.md"
-  printf '# 변경 로그\n\n- added: t001 (2026-07-30)\n- removed: t073 (v2 이력 토큰 — high-water 근거)\n' > "$W/truths/changelog.md"
-  UD=$(printf 'x' | sha256sum | cut -d' ' -f1)
-  printf 't001\t%s\tverified\t1\tstd\t2026-07-30\nt005\t%s\tverified\t1\tstd\t2026-07-30\n' "$UD" "$UD" > "$W/truths/verify-ledger.tsv"
-  printf -- '---\ndoc_id: d1\ndoc_type: report\ntone: 담백\nstatus: planned\ncontinues: []\ncited_truths: [t001]\nscope_tags: [위약]\n---\n\n# 개요\n' > "$W/documents/d1/plan.md"
-  printf '# 개요\n\n위약금은 계약금액의 10%%다. <!-- t:t001 -->\n' > "$W/documents/d1/draft.md"
-  rm -f "$W/documents/d1/final.md" "$W/documents/d1/review.md"
-  ( cd "$W" && git init -q && git add -A >/dev/null 2>&1 && git -c user.email=x@x -c user.name=x commit -qm base ) \
-    || bad "mk_v2mine: git setup failed — the migrator's backup precondition cannot be built"
-}
-acct_upgrade_v2_to_v3_end_to_end() {
-  # The whole §2.4 pipe on one real v2 mine: classify → delete → move → strip → state files →
-  # version flip → reindex → conservation + EXACT validate (red only by the moved entry).
-  # KNOWN SURVIVING MUTATION (2026-08-13 pass, 10/11 killed): removing the conservation equation
-  # survives — it re-counts the transform's own loop, so no legal input reaches its failure
-  # branch. It stays because it is the tripwire for the day an edit breaks that loop, which is
-  # exactly when nobody is looking (the not-killable-by-any-fixture class, said out loud).
-  mk_v2mine
-  vrun upgrade --check
-  expect_pass
-  expect_has "keep 1 · delete 2 (discarded/retracted) · move 2"
-  expect_has "decided_by: machine resolution (t001)"
-  expect_has "high water: truth 73"
-  vrun upgrade --apply
-  expect_pass
-  expect_has "✓ migrated — kept 1 (1 stripped) · deleted 2 · moved 2 into 1 open entr(ies)"
-  expect_has "allocator next t74/m2/c2"
-  # the machine ledgers travel with the deletion: the casualty's coverage row is scrubbed
-  # (measured on the real mine — 26 deletions left 12 dangling mentions before this existed).
-  expect_has "coverage rows scrubbed (1 marked skipped"
-  # ...and so does the intake backfill: a v2 mine predates that ledger by definition, so every
-  # material it carries becomes a legacy-unbound row in the same --apply. Without it every
-  # migrated mine would leave MAT-UNDECLARED on every material — a warning firing everywhere,
-  # which is a warning nobody reads.
-  expect_has "1 intake row(s) backfilled as legacy-unbound"
-  # AND the migration says what that row COSTS, on the path a real pre-ledger mine actually takes.
-  # This is the moment someone is looking — the only one, for a mine that migrates once — and
-  # `upgrade` used to mint the rows and fall silent. Leaving 24 of 32 materials bound to nothing was
-  # a decision taken on the owner's behalf and never put in front of them; the edit that eventually
-  # cost the most went unseen for eleven days underneath it.
-  expect_has "bind no bytes"
-  expect_has "an edit to its original OR to the mine's copy of it leaves no trace"
-  expect_has "intake --anchor-existing"
-  expect_has "an anchor adopts what it finds"
-  OUT=$(cat "$W/truths/coverage.md"); RC=0
-  expect_has "t001"
-  expect_hasnt "t002"
-  # the winner card SURVIVES its superseded field (deleting it would delete the current fact),
-  # and loses exactly the v2 lines — nothing else in the file moves.
-  OUT=$(cat "$W/truths/t001.md"); RC=0
-  expect_has 'claim: "위약금은 계약금액의 10%다"'
-  expect_hasnt "status:"
-  expect_hasnt "resolution:"
-  expect_hasnt "superseded:"
-  OUT=$(ls "$W/truths"); RC=0
-  expect_hasnt "t002.md"
-  expect_hasnt "t005.md"
-  expect_hasnt "t003.md"
-  # the moved entry is lossless and undecided: both candidates, no target, Korean intact.
-  OUT=$(cat "$W/.weavedoc-state/conflicts.json"); RC=0
-  expect_has '"targets": []'
-  expect_has '위약금은 계약금액의 20%다 (8조)'
-  expect_has 'v2 card t003, moved by migration'
-  # the casualty's ledger row went with it; the survivor's row is untouched.
-  OUT=$(cat "$W/truths/verify-ledger.tsv"); RC=0
-  expect_has "t001"
-  expect_hasnt "t005"
-  OUT=$(grep -h '^version:' "$W/project.md" "$W/.weavedoc/config.yaml" | tr '\n' ' '); RC=0
-  expect_has "version: 3 version: 3"
-  # post-migration validate is red by design — the moved disagreement, and ONLY that.
-  vrun validate
-  expect_block "CONFLICT-OPEN"
-  vrun status --open
-  expect_has "c001 targets (no current card — undecided)"
-}
-block_upgrade_dirty_worktree_refuses() {
-  mk_v2mine
-  printf 'dirt\n' >> "$W/catalog.md"
-  vrun upgrade --apply
-  expect_block "DIRTY"
-  OUT=$(ls "$W/truths"); RC=0
-  expect_has "t002.md"
-}
-block_upgrade_unsupported_card_blocks() {
-  # §2.4 step 0: in v3 a card that exists IS canonical, so migrating an unsupported card would
-  # silently promote broken grounding. Resolve in v2 form, re-run — and nothing is written.
-  mk_v2mine
-  printf -- '---\nid: t006\nclaim: "근거 잃은 주장"\nsource: m001\ntags: [위약]\nstatus: unsupported\nprovenance: stated\n---\n\n제7조 위약금은 계약금액의 10%%로 한다.\n' > "$W/truths/t006.md"
-  ( cd "$W" && git add -A >/dev/null 2>&1 && git -c user.email=x@x -c user.name=x commit -qm u )
-  vrun upgrade --apply
-  expect_block "status: unsupported"
-  OUT=$( cd "$W" && git status --porcelain | grep -v 'mine.lock' | wc -l ); RC=0
-  expect_has "0"
-}
-block_upgrade_attribute_pair_blocks() {
-  # §2.4 step 0: user-authorized 병기 must not be stripped into two bare cards — "both are right"
-  # always names a hidden axis; write it into the claims in v2, then re-run.
-  mk_v2mine
-  sed -i 's/^resolution: {type: pick, winner: t001, decided_by: machine, reason: "v2 기계 선택"}$/resolution: {type: attribute, winner: t001, decided_by: user}/' "$W/truths/t001.md"
-  ( cd "$W" && git add -A >/dev/null 2>&1 && git -c user.email=x@x -c user.name=x commit -qm a )
-  vrun upgrade --apply
-  expect_block "resolution.type: attribute"
-  OUT=$(ls "$W/truths"); RC=0
-  expect_has "t002.md"
-}
-block_upgrade_cited_leaving_card_blocks() {
-  # A document citing a card this migration would delete or move must be repaired FIRST — a
-  # dangling citation is the exact corruption the id discipline exists to prevent.
-  mk_v2mine
-  sed -i 's/^cited_truths: \[t001\]$/cited_truths: [t001, t002]/' "$W/documents/d1/plan.md"
-  ( cd "$W" && git add -A >/dev/null 2>&1 && git -c user.email=x@x -c user.name=x commit -qm c )
-  vrun upgrade --apply
-  expect_block "cite card(s) this migration would delete or move"
-  expect_has "d1/plan.md: t002"
-  OUT=$(ls "$W/truths"); RC=0
-  expect_has "t002.md"
-}
-acct_upgrade_ok_partner_becomes_target() {
-  # §2.4's other branch: a component holding a surviving ok card makes that card the entry's
-  # TARGET. v2's reciprocity rule means legal mines rarely carry this shape (both sides conflict),
-  # but the migrator's totality covers it — it never runs v2 validate and must not guess.
-  mk_v2mine
-  sed -i 's/^status: conflict$/status: ok/' "$W/truths/t003.md"
-  sed -i '/^conflict_with: \[t004\]$/d' "$W/truths/t003.md"
-  printf -- '- 위약 7조: t003\n' >> "$W/truths/coverage.md"
-  ( cd "$W" && git add -A >/dev/null 2>&1 && git -c user.email=x@x -c user.name=x commit -qm p )
-  vrun upgrade --apply
-  local AOUT="$OUT" ARC="$RC"
-  OUT=$(cat "$W/.weavedoc-state/conflicts.json"); RC=0
-  expect_has '"t003"'
-  expect_hasnt '"targets": []'
-  OUT=$(ls "$W/truths"); RC=0
-  expect_has "t003.md"
-  expect_hasnt "t004.md"
-  # judged LAST so a failing apply leaves ITS output on the record, not the file dumps above.
-  OUT="$AOUT"; RC="$ARC"
-  expect_pass
-}
-acct_upgrade_verify_names_the_unexpected() {
-  # The verify layer is the migration's warranty: a migrated mine that validates to anything
-  # OTHER than the predicted CONFLICT-OPEN fails the migration and prints the restore words.
-  # (The fixture's coverage ledger is quietly broken in v2 — the migrator does not re-validate
-  # v2, so the breakage surfaces exactly here, as the unexpected line it is.)
-  mk_v2mine
-  sed -i 's/^- 위약: t001$/- 위약: t999/' "$W/truths/coverage.md"
-  ( cd "$W" && git add -A >/dev/null 2>&1 && git -c user.email=x@x -c user.name=x commit -qm v )
-  vrun upgrade --apply
-  expect_block "does not validate to the EXACT expected state"
-  expect_has "restore with: git restore ."
-}
-acct_upgrade_high_water_includes_chapters() {
-  # An external probe (2026-08-13) put t250 in a MULTI-FILE chapter (documents/d1/draft/01.md) and
-  # the allocator seeded at 2 — the reissue class, live: a later grant would hand t250 out again
-  # and the chapter's old citation would name a different fact. FORMATS declares both document
-  # modes; the scan that reads only the single-file spellings has not counted what its declaration
-  # covers.
-  mk_v2mine
-  rm -f "$W/documents/d1/draft.md"
-  mkdir -p "$W/documents/d1/draft"
-  printf '# 1장\n\n예전 장이 인용한 사실. <!-- t:t250 -->\n' > "$W/documents/d1/draft/01.md"
-  ( cd "$W" && git add -A >/dev/null 2>&1 && git -c user.email=x@x -c user.name=x commit -qm ch )
-  vrun upgrade --apply
-  expect_pass
-  expect_has "high water: truth 250"
-  OUT=$(cat "$W/.weavedoc-state/id-sequences.json"); RC=0
-  expect_has '"truth": 251'
-}
-block_upgrade_cited_leaving_in_chapter_blocks() {
-  # The same probe's second half: a chapter citing a card this migration would delete must stop it
-  # BEFORE the first write — §2.4's rule, which the single-file scan let through silently.
-  mk_v2mine
-  rm -f "$W/documents/d1/draft.md"
-  mkdir -p "$W/documents/d1/draft"
-  printf '# 1장\n\n지워질 사실을 인용한다. <!-- t:t002 -->\n' > "$W/documents/d1/draft/01.md"
-  ( cd "$W" && git add -A >/dev/null 2>&1 && git -c user.email=x@x -c user.name=x commit -qm ch )
-  vrun upgrade --apply
-  expect_block "cite card(s) this migration would delete or move"
-  expect_has "d1/draft/01.md: t002"
-  OUT=$(ls "$W/truths"); RC=0
-  expect_has "t002.md"
-}
-acct_upgrade_coverage_element_survives_as_skip() {
-  # A coverage bullet whose every id left must NOT vanish. The ledger's whole job is the accounting
-  # "every fact-bearing element is extracted or explicitly skipped" — dropping the bullet erases the
-  # record that the element existed, so the next map reads the source element as unprocessed and
-  # re-extracts the value the mine just superseded. Measured on the real mine (2026-08-13, truths
-  # verify R2): m021's 생일 표 and 데뷔일 lines disappeared, and the old dates they carried would
-  # have come back to contradict the live cards. The bullet is REWRITTEN as a skipped entry instead.
-  # The reason may NOT name the deleted ids — validate rejects a coverage mention of an id the mine
-  # no longer holds, so naming them would trade one dangling reference for another.
-  mk_v2mine
-  vrun upgrade --apply
-  expect_pass
-  expect_has "coverage rows scrubbed (1 marked skipped, 0 trimmed)"
-  OUT=$(cat "$W/truths/coverage.md"); RC=0
-  expect_has "위약 15%"
-  expect_has "skipped:"
-  expect_has "deleted in the v2"
-  expect_hasnt "t002"
-  # and the rewritten bullet is one validate accepts: the migration's only expected red is the
-  # moved conflict entry, never a coverage diagnostic.
-  vrun validate
-  expect_has "CONFLICT-OPEN"
-  expect_hasnt "COVERAGE-"
-}
-acct_upgrade_ledger_lines_are_utf8() {
-  # The migrator appends one line to the mine log. It is written through the latin1 writer (the byte
-  # domain every mine write uses), so a source literal must pass through U() first — otherwise the
-  # encoder keeps only the low byte and U+2192 lands as 0x92, U+2014 as 0x14, a C0 CONTROL byte.
-  # Shipped exactly that way in v0.6.0 and measured in the real mine. write.mjs has carried the U()
-  # helper and this warning in its comment since the bundle .7 incident (four 0x14 bytes in
-  # schemas/v3, same cause); the migrator simply did not route through it. CI's control-character
-  # scan covers repository files only — nothing watched what the runtime WRITES INTO A MINE, which
-  # is why this case exists rather than another CI path.
-  #
-  # THE SCANNER HAS TWO KINDS OF CONSUMER and bundle .33 taught it the hard way: most read the count
-  # as `tail -1 | sed 's/[^0-9]//g'` and do not care what the label says, while THESE two assert the
-  # sentence. Widening the scanner's net to BOM renamed the label, every count-reading consumer
-  # stayed green, and this case was the only thing that went red — the "rule taught to one consumer"
-  # class, caught by the suite instead of by a reader. The label is contract HERE; the count is
-  # contract everywhere else.
-  mk_v2mine
-  vrun upgrade --apply
-  expect_pass
-  OUT=$(node "$REPO/tests/ctlscan.mjs" "$W/truths/changelog.md" | tail -1); RC=0
-  expect_has "lines with invisible characters: 0"
-  OUT=$(node "$REPO/tests/ctlscan.mjs" "$W/truths/coverage.md" | tail -1); RC=0
-  expect_has "lines with invisible characters: 0"
-  OUT=$(cat "$W/truths/changelog.md"); RC=0
-  expect_has "v2→v3 migration —"
-}
-acct_upgrade_check_is_readonly() {
-  mk_v2mine
-  vrun upgrade --check
-  expect_pass
-  OUT=$( cd "$W" && git status --porcelain | grep -v 'mine.lock' | wc -l ); RC=0
-  expect_has "0"
-}
-acct_upgrade_orphaned_reqtag_refuses_apply() {
-  # A required tag whose last bearer leaves would fail the exact-validate verify as REQTAG-EMPTY —
-  # predicted in preflight, enforced at apply, repaired in v2 (extract the topic or drop the tag).
-  mk_v2mine
-  sed -i 's/^required_tags: \[위약\]$/required_tags: [해지]/' "$W/project.md"
-  ( cd "$W" && git add -A >/dev/null 2>&1 && git -c user.email=x@x -c user.name=x commit -qm t )
-  vrun upgrade --apply
-  expect_block "required_tags above would be orphaned"
-  OUT=$(ls "$W/truths"); RC=0
-  expect_has "t005.md"
-}
 
 # ---- the CLAUDE.md pointer block: planted by init, byte-checked by validate ----------------------
 # THE DEFECT THESE PIN (Echo, 2026-08-13). init plants a fixed block in the project's CLAUDE.md
@@ -7166,6 +6933,7 @@ acct_upgrade_orphaned_reqtag_refuses_apply() {
 # v2 protocol as though quoting it — then built the user's options on that model. A pointer with a
 # marker pair and no owner is worse than no marker at all, because the markers imply an owner.
 plant_block() { cat "$W/.weavedoc/templates/claude-block.md" > "$W/CLAUDE.md"; }
+plant_agents_block() { cat "$W/.weavedoc/templates/agents-block.md" > "$W/AGENTS.md"; }
 
 pass_claude_block_absent_is_silent() {
   # No CLAUDE.md: nothing to be stale. A mine is readable outside Claude Code, and validate does not
@@ -7222,6 +6990,31 @@ acct_json_claude_block_is_a_warning() {
   expect_has '"diagnostics":[]'
   expect_has '"code":"CLAUDE-BLOCK-STALE"'
 }
+pass_agents_block_absent_is_silent() {
+  vrun validate; expect_pass; expect_hasnt "AGENTS-BLOCK"
+}
+pass_agents_block_current_is_silent() {
+  plant_agents_block
+  printf '\n## Project instructions\n\nText outside the markers belongs to the project.\n' >> "$W/AGENTS.md"
+  vrun validate; expect_pass; expect_hasnt "AGENTS-BLOCK"
+}
+pass_agents_block_stale_warns_without_blocking() {
+  printf '<!-- weavedoc:begin -->\nRead a stale protocol summary.\n<!-- weavedoc:end -->\n' > "$W/AGENTS.md"
+  vrun validate; expect_pass; expect_has "AGENTS-BLOCK-STALE"
+}
+pass_agents_block_missing_template_says_so() {
+  plant_agents_block
+  rm -f "$W/.weavedoc/templates/agents-block.md"
+  vrun validate; expect_pass; expect_has "AGENTS-BLOCK-NOTEMPLATE"
+}
+acct_json_agents_block_is_a_warning() {
+  printf '<!-- weavedoc:begin -->\nstale pointer\n<!-- weavedoc:end -->\n' > "$W/AGENTS.md"
+  vrun validate --json
+  expect_pass
+  expect_has '"result":"pass"'
+  expect_has '"diagnostics":[]'
+  expect_has '"code":"AGENTS-BLOCK-STALE"'
+}
 
 # ---------------------------------------------------------------- the planted hook pair (v0.6.9)
 #
@@ -7254,6 +7047,15 @@ hlease() { # $1=session $2=skill
   OUT=$(printf '{"session_id":"%s","cwd":"%s","hook_event_name":"PostToolUse","tool_name":"Skill","tool_input":{"skill":"%s","args":""}}' "$1" "$NROOT" "$2" \
     | WEAVEDOC_LEASE_DIR="$LDIR" node "$W/.weavedoc/bin/hooks/lease.mjs" 2>&1); RC=$?
 }
+hlease_codex() { # $1=session $2=skill; Codex PostToolUse(Bash) shape
+  hookenv
+  local payload
+  payload=$(node -e '
+    const [sid, cwd, skill] = process.argv.slice(1)
+    process.stdout.write(JSON.stringify({session_id:sid,cwd,hook_event_name:"PostToolUse",tool_name:"Bash",tool_input:{command:`node .weavedoc/bin/weavedoc.mjs activate ${skill}`}}))
+  ' "$1" "$NROOT" "$2")
+  OUT=$(printf '%s' "$payload" | WEAVEDOC_LEASE_DIR="$LDIR" node "$W/.weavedoc/bin/hooks/lease.mjs" 2>&1); RC=$?
+}
 hgate() { # $1=session $2=repo-relative path $3=tool (default Write)
   hookenv
   local ti
@@ -7261,6 +7063,18 @@ hgate() { # $1=session $2=repo-relative path $3=tool (default Write)
   else ti=$(printf '{"file_path":"%s/%s","content":"x"}' "$NROOT" "$2"); fi
   OUT=$(printf '{"session_id":"%s","cwd":"%s","hook_event_name":"PreToolUse","tool_name":"%s","tool_input":%s}' "$1" "$NROOT" "${3:-Write}" "$ti" \
     | WEAVEDOC_LEASE_DIR="$LDIR" node "$W/.weavedoc/bin/hooks/gate.mjs" 2>&1); RC=$?
+}
+hgate_codex() { # $1=session $2...=repo-relative paths in one Codex apply_patch
+  local sid="$1" p patch='*** Begin Patch'; shift
+  hookenv
+  for p in "$@"; do patch="$patch"$'\n'"*** Update File: $NROOT/$p"; done
+  patch="$patch"$'\n''*** End Patch'
+  local payload
+  payload=$(node -e '
+    const [sid, cwd, command] = process.argv.slice(1)
+    process.stdout.write(JSON.stringify({session_id:sid,cwd,hook_event_name:"PreToolUse",tool_name:"apply_patch",tool_input:{command}}))
+  ' "$sid" "$NROOT" "$patch")
+  OUT=$(printf '%s' "$payload" | WEAVEDOC_LEASE_DIR="$LDIR" node "$W/.weavedoc/bin/hooks/gate.mjs" 2>&1); RC=$?
 }
 DENY='"permissionDecision":"deny"'
 
@@ -7270,6 +7084,34 @@ acct_hook_lease_records_weavedoc_skill() {
   OUT=$(cat "$W/.leasedir"/*.json 2>&1); RC=0
   expect_has '"skill":"weavedoc-gather"'
   expect_has '"s1"'
+}
+acct_codex_hook_lease_records_activation_handshake() {
+  hlease_codex c1 weavedoc-gather
+  expect_pass
+  OUT=$(cat "$W/.leasedir"/*.json 2>&1); RC=0
+  expect_has '"skill":"weavedoc-gather"'
+  expect_has '"c1"'
+}
+acct_codex_hook_lease_ignores_unrelated_bash() {
+  hookenv
+  local payload
+  payload=$(node -e 'process.stdout.write(JSON.stringify({session_id:"c1",hook_event_name:"PostToolUse",tool_name:"Bash",tool_input:{command:"echo activate weavedoc-gather"}}))')
+  OUT=$(printf '%s' "$payload" | WEAVEDOC_LEASE_DIR="$LDIR" node "$W/.weavedoc/bin/hooks/lease.mjs" 2>&1); RC=$?
+  expect_pass
+  payload=$(node -e 'process.stdout.write(JSON.stringify({session_id:"c1",hook_event_name:"PostToolUse",tool_name:"Bash",tool_input:{command:"node .weavedoc/bin/weavedoc.mjs activate weavedoc-gather extra"}}))')
+  OUT=$(printf '%s' "$payload" | WEAVEDOC_LEASE_DIR="$LDIR" node "$W/.weavedoc/bin/hooks/lease.mjs" 2>&1); RC=$?
+  expect_pass
+  # SC2144, and not only style: `-e` takes ONE operand. With several matches `test` errored out, so
+  # the guard fired carrying the wrong diagnosis; with none, bash hands back the literal pattern,
+  # which does not exist — the outcome this case wants, reached without inspecting anything. The
+  # loop is exact at every match count (hookenv mkdir -p's the directory, so a literal pattern back
+  # means zero leases). Measured: planting one lease file under that name turns this case red.
+  local f
+  for f in "$W/.leasedir"/weavedoc-lease-*.json; do
+    [ -e "$f" ] || continue
+    bad "an unrelated Bash command minted a Codex lease"; return
+  done
+  ok
 }
 acct_hook_lease_ignores_foreign_skill() {
   # The gate answers weavedoc paths only, so a lease for someone else's skill would be a fact with
@@ -7328,6 +7170,26 @@ acct_hook_gate_allows_with_owning_lease() {
   # …and the Edit shape reaches the same decision: the gate reads file_path, never the content keys.
   hgate s1 materials/m001/converted.md Edit
   expect_pass; expect_hasnt "$DENY"
+}
+acct_codex_hook_gate_denies_apply_patch_without_lease() {
+  hgate_codex c1 materials/m001/converted.md
+  expect_pass
+  expect_has "$DENY"
+  expect_has 'activate weavedoc-gather'
+}
+acct_codex_hook_gate_allows_apply_patch_with_owning_lease() {
+  hgate_codex c1 materials/m001/converted.md
+  expect_has "$DENY"
+  hlease_codex c1 weavedoc-gather
+  hgate_codex c1 materials/m001/converted.md
+  expect_pass; expect_hasnt "$DENY"
+}
+acct_codex_hook_gate_checks_every_apply_patch_target() {
+  # An ungated first target must not hide a guarded later target in the same patch.
+  hgate_codex c1 output/notes.md materials/m001/converted.md
+  expect_pass
+  expect_has "$DENY"
+  expect_has 'materials/m001/converted.md'
 }
 acct_hook_gate_denies_wrong_skill_lease() {
   # A lease is not a skeleton key: it names one skill, and the deny says which one is held.
@@ -7396,6 +7258,14 @@ plant_hooks() { # the shipped entries, composed FROM the template so a case cann
     const t = JSON.parse(fs.readFileSync(process.argv[1], "utf8"))
     fs.writeFileSync(process.argv[2], JSON.stringify(t, null, 2) + "\n")
   ' "$W/.weavedoc/templates/hooks.json" "$W/.claude/settings.json"
+}
+plant_codex_hooks() {
+  mkdir -p "$W/.codex"
+  node -e '
+    const fs = require("fs")
+    const t = JSON.parse(fs.readFileSync(process.argv[1], "utf8"))
+    fs.writeFileSync(process.argv[2], JSON.stringify(t, null, 2) + "\n")
+  ' "$W/.weavedoc/templates/codex-hooks.json" "$W/.codex/hooks.json"
 }
 pass_hooks_absent_is_silent() {
   # No settings.json: nothing planted, nothing to be stale, and validate does not lecture.
@@ -7475,6 +7345,40 @@ acct_json_hooks_stale_is_a_warning() {
   expect_has '"result":"pass"'
   expect_has '"diagnostics":[]'
   expect_has '"code":"HOOKS-STALE"'
+}
+pass_codex_hooks_absent_is_silent() {
+  vrun validate; expect_pass; expect_hasnt "CODEX-HOOKS-"
+}
+pass_codex_hooks_current_is_silent() {
+  plant_codex_hooks
+  vrun validate; expect_pass; expect_hasnt "CODEX-HOOKS-"
+}
+pass_codex_hooks_stale_warns_without_blocking() {
+  plant_codex_hooks
+  sed -i 's/"Write|Edit"/"Edit"/' "$W/.codex/hooks.json"
+  vrun validate; expect_pass
+  expect_has "CODEX-HOOKS-STALE"
+}
+pass_codex_hooks_missing_template_says_so() {
+  plant_codex_hooks
+  rm -f "$W/.weavedoc/templates/codex-hooks.json"
+  vrun validate; expect_pass
+  expect_has "CODEX-HOOKS-NOTEMPLATE"
+}
+acct_codex_hooks_unparseable_with_marker_warns() {
+  mkdir -p "$W/.codex"
+  printf '{"hooks": broken .weavedoc/bin/hooks/gate.mjs\n' > "$W/.codex/hooks.json"
+  vrun validate; expect_pass
+  expect_has "CODEX-HOOKS-STALE"
+}
+acct_json_codex_hooks_stale_is_a_warning() {
+  plant_codex_hooks
+  sed -i 's/"Write|Edit"/"Edit"/' "$W/.codex/hooks.json"
+  vrun validate --json
+  expect_pass
+  expect_has '"result":"pass"'
+  expect_has '"diagnostics":[]'
+  expect_has '"code":"CODEX-HOOKS-STALE"'
 }
 
 # ---------------------------------------------------------------- driver
@@ -7699,9 +7603,6 @@ acct_intake_unreadable_ledger_is_not_an_absent_one() {
   expect_has "cannot be read"
   expect_has "[MAT-INTAKE-LEDGER]"
   expect_hasnt "MAT-NO-CONVERTED"
-  # and upgrade refuses to backfill over evidence it cannot see, rather than appending duplicates
-  vrun upgrade
-  expect_block "intake ledger cannot be read"
 }
 acct_intake_ghost_row_declares_nothing() {
   # Shown, never absorbed — the discipline scope applies to its own ghost ids, so a renamed or
@@ -7746,7 +7647,15 @@ acct_intake_census_counts_anchored() {
   # holds one. The first real mine did (31 anchored), and census described 32 materials with four
   # buckets summing to 1. Caught by the record-floor step of a live verify round, not by CI.
   mkmat2
-  vrun upgrade --apply; expect_pass
+  # Before any row exists, m002 is UNDECLARED — and census's guidance line (reworded in 0.6.15 to
+  # point at intake's two paths instead of the retired migrator) prints only on that bucket. Pin
+  # its sentences here, where the bucket is non-zero, for the same reason this case exists at all:
+  # a guidance line with no watcher reads as covered until the day someone deletes it.
+  vrun census
+  expect_has "1 undeclared"
+  expect_has "riskiest first"
+  expect_has "bind the whole backlog"
+  printf 'm002\t-\tlegacy-unbound\t-\t-\tpre-intake-ledger\t2026-08-14\n' >> "$W/materials/intake-ledger.tsv"
   vrun intake --anchor-existing '닻'
   expect_pass
   vrun census
@@ -7761,52 +7670,22 @@ acct_intake_census_reports_before_any_truth_exists() {
   expect_has "truth files 0"
   expect_has "1 declared"
 }
-acct_intake_backfill_on_an_already_v3_mine() {
-  # `upgrade` used to return "already schema v3" from the version field ALONE. It cannot any more:
-  # a mine that migrated before this ledger existed still owes its legacy rows, and upgrade is the
-  # one command a user runs when a mine is behind its bundle.
-  #
-  # NO GIT HERE, and that is the assertion. The v2→v3 path is a transform (cards deleted,
-  # frontmatter rewritten) and git is its only undo; this path APPENDS to a machine-owned ledger and
-  # touches nothing else, which is the same class as attest — and no append-only ledger write in
-  # this runtime demands a backup. Requiring one would put the friction on the single command every
-  # existing mine must run to adopt the ledger, while its worktree is dirty from ordinary work.
-  mkmat2
-  vrun upgrade
-  expect_pass
-  expect_has "1 material(s) predate the intake ledger: m002"
-  vrun upgrade --apply
-  expect_pass
-  expect_has "backfilled 1 intake row(s) as legacy-unbound"
-  # AND it says what the unbound row costs, in the one place a person is looking. The word
-  # `legacy-unbound` reads as a verification backlog; what it means is that nothing will notice if
-  # this material changes. `upgrade` used to mint the row and fall silent — a decision taken on the
-  # owner's behalf and never put in front of them.
-  expect_has "bind no bytes"
-  expect_has "intake --anchor-existing"
-  # the backfilled material stops warning, and is counted APART from the declared one — never
-  # silently equal to it (that equality is what would make the whole ledger a decoration).
-  vrun validate; expect_pass; expect_hasnt "MAT-UNDECLARED"
-  vrun scope
-  expect_has "1 declared · 0 anchored · 0 no-source · 1 legacy-unbound"
-  # and scope names the consequence too, not just the word — the reader who never runs upgrade again
-  expect_has "an edit to the original or to the copy leaves no trace"
-  # AND THE CAVEAT RIDES WITH THE OFFER. `anchored ≠ verified` was said only in the `anchored` line,
-  # which prints AFTER someone has already run it — the one reader who needed the warning is the one
-  # who had not. An anchor adopts bytes nobody witnessed, so the sentence offering it says so.
-  expect_has "anchored ≠ verified"
-  expect_has "check the tree is the one you mean FIRST"
-  # idempotent: a second run has nothing to do and says the old sentence.
-  vrun upgrade
-  expect_has "already schema v3 — nothing to migrate."
-}
 acct_anchor_existing_binds_the_unbound_backlog() {
-  # THE MIGRATION ANSWER. `upgrade` mints legacy rows because that is the only honest thing it can
-  # say — nobody witnessed those bytes — and the backlog then just sits there, editable in either
-  # direction with no trace. The way out is a separate act by a person, and this is it.
+  # THE MIGRATION ANSWER. Legacy rows bind no bytes because that is the only honest thing a
+  # migration could say — nobody witnessed those bytes — and the backlog then just sits there,
+  # editable in either direction with no trace. The way out is a separate act by a person, and this
+  # is it. The row below is byte-for-byte the shape the retired migrator wrote (the minter left in
+  # 0.6.15; rows like it persist in real ledgers, so the readers and this escape hatch stay).
   mkmat2
-  vrun upgrade --apply; expect_pass
+  printf 'm002\t-\tlegacy-unbound\t-\t-\tpre-intake-ledger\t2026-08-14\n' >> "$W/materials/intake-ledger.tsv"
   vrun scope; expect_has "1 legacy-unbound"
+  # THE COST SENTENCES, pinned. 0.6.15 moved the report duty here ("that report duty now lives
+  # where the rows are counted" — FORMATS) and then pinned only the counts: the sentences an
+  # unbound backlog owes its owner — nothing will notice an edit, and an anchor adopts rather
+  # than verifies — had zero watchers, so deleting either would redden nothing (cold review,
+  # 0.6.16). These are the .28-era incident's warnings; the count line cannot carry them.
+  expect_has "leaves no trace"
+  expect_has "An anchor ADOPTS whatever is on disk"
   vrun intake --anchor-existing '이주 후 현재 트리를 기준선으로 확정 (소유자)'
   expect_pass
   expect_has "1 material(s) anchored"
@@ -7840,7 +7719,7 @@ block_anchor_existing_refuses_when_every_target_needs_a_ruling() {
   # that is true of EVERY target the batch has nothing left to do, so it refuses and writes nothing
   # rather than reporting a success of size zero.
   mknosrc
-  vrun upgrade --apply; expect_pass
+  printf 'm002\t-\tlegacy-unbound\t-\t-\tpre-intake-ledger\t2026-08-14\n' >> "$W/materials/intake-ledger.tsv"
   vrun intake --anchor-existing '현재 트리 확정'
   expect_block "none of the 1 unbound material(s) could be anchored — m002 (empty)"
   expect_has "Each needs a ruling of its own"
@@ -7858,7 +7737,7 @@ acct_anchor_existing_anchors_what_it_can_and_names_the_rest() {
   printf -- '---\nid: m003\ntitle: 구두 진술\norigin: conversation\nrole: 계약서\ntopics: [위약]\nformat: md\nsource_path: 2026-08-14 세션\nadded: 2026-08-14\nstatus: converted\nsummary: 원본이 없는 자료.\n---\n\n# 구두 진술\n\n대금은 협의로 정한다.\n' > "$W/materials/m003/converted.md"
   printf '| m003 | 구두 진술 | 계약서 | converted |\n' >> "$W/catalog.md"
   mint
-  vrun upgrade --apply; expect_pass
+  printf 'm002\t-\tlegacy-unbound\t-\t-\tpre-intake-ledger\t2026-08-14\nm003\t-\tlegacy-unbound\t-\t-\tpre-intake-ledger\t2026-08-14\n' >> "$W/materials/intake-ledger.tsv"
   vrun intake --anchor-existing '이주 후 현재 트리 확정 (소유자)'
   expect_pass
   expect_has "1 material(s) anchored"
@@ -7873,19 +7752,6 @@ block_anchor_existing_and_no_source_cannot_combine() {
   # --no-source is a ruling about ONE material and has to name it; a batch cannot rule.
   vrun intake --anchor-existing --no-source 'x'
   expect_block "cannot be combined"
-}
-pass_intake_backfill_needs_no_clean_worktree() {
-  # The twin of the case above, stated from the other side: a DIRTY worktree does not stop the
-  # backfill. It is an append to one machine-owned file, its inverse is deleting those rows, and the
-  # mine that most needs it is one in the middle of a gather. (The v2→v3 transform's git precondition
-  # is unchanged — block_upgrade_dirty_worktree_refuses still holds it.)
-  mkmat2
-  ( cd "$W" && git init -q && git add -A >/dev/null 2>&1 && git -c user.email=x@x -c user.name=x commit -qm base ) \
-    || { bad "git setup failed"; return; }
-  printf 'dirt\n' > "$W/dirty.txt"
-  vrun upgrade --apply
-  expect_pass
-  expect_has "backfilled 1 intake row(s) as legacy-unbound"
 }
 
 if [ -n "$BATCH" ]; then
