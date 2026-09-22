@@ -32,3 +32,15 @@ Codex project hook은 trusted project에서만 load됩니다. reconfigure 뒤 `/
 ## 프로젝트 instruction pointer block
 
 브리지에서 이주를 마치고 이 런타임으로 돌아오면, `init`이 `CLAUDE.md`와 `AGENTS.md`에 심은 `<!-- weavedoc:begin -->` block은 여전히 이전 bundle의 것입니다. `validate`가 `CLAUDE-BLOCK-STALE` 또는 `AGENTS-BLOCK-STALE`로 알려 주며, 수리는 `weavedoc-init` 재실행(reconfigure)입니다. marker 바깥의 project-specific text는 그대로 남습니다.
+
+## 광산 루트의 줄바꿈 속성 (`.gitattributes`)
+
+`init`의 다섯째 멱등 보장 클래스입니다. **이 클래스보다 먼저 만들어진 광산에는 이 파일이 없습니다** — 심어지는 파일이라 번들 교체로는 들어오지 않고, `weavedoc-init` 재실행(reconfigure)이 수리입니다.
+
+없을 때의 증상은 조용하지 않습니다. `core.autocrlf=true`가 기본인 플랫폼에서 체크아웃하면 디스크 바이트가 LF에서 CRLF로 바뀌고, 바이트를 그대로 해시하는 지문은 전부 어긋납니다. 실측(eclypse, 2026-09-22): 자료 19건이 유입 지문 변경으로 보고됐고, 디스크의 CRLF를 LF로 환산하자 19건 전부 다시 일치했으며 Git에 저장된 바이트도 일치했습니다. 해시 검사는 정확했고 변조는 없었으며 신호의 전부가 체크아웃이었습니다.
+
+번들 안의 `.weavedoc/.gitattributes`는 `.weavedoc/**`만 고정합니다. 루트 파일은 복사한 폴더에 딸려 가지 않으므로, 광산 자신의 증거는 그 고정 밖에 있었습니다.
+
+**두 층은 반대 규칙이고 합치면 안 됩니다.** 생성되는 광산 텍스트는 LF로 고정하고, 원본(`materials/*/source.*`, `inbox/**`)은 `-text`로 **양방향 변환을 모두 끕니다**. 원본을 LF로 고정하는 것은 수리가 아니라 증거를 고쳐 쓰는 일입니다 — 원본은 도착한 그 바이트일 때만 원본입니다. 컨테이너 원본(docx·hwpx·xlsx)은 바이너리 zip이기도 합니다.
+
+**심는 것으로 이미 어긋난 워크트리가 복구되지는 않고, 평범한 checkout으로도 부족합니다.** 실측(git 2.46, `core.autocrlf=true`): 속성을 심은 뒤에도 `git ls-files --eol`은 여전히 `i/lf w/crlf`이고, `git checkout -- .`는 `-text` 경로만 복구하며 LF로 고정한 파일은 그대로 남습니다. 해당 경로를 삭제하고 다시 체크아웃하면 전부 `i/lf w/lf`로 돌아옵니다. 이것이 통하는 이유는 저장된 blob이 처음부터 LF였기 때문이고, 그래서 먼저 확인할 것이 그 점입니다 — Git에 저장된 바이트가 기록된 지문과 여전히 일치하는지 확인하고, 다시 체크아웃한 뒤 `scope`를 돌립니다. **변경으로 표시된 파일을 일괄 재인증해 경보를 지워서는 안 됩니다**: 실제 내용 변경도 밖에서 보면 똑같이 보이고, 같은 실측에서 카드 한 장(t088)은 정말로 바뀐 것이었습니다.

@@ -6,6 +6,22 @@
 
 ---
 
+## 0.7.1
+
+**`pull`의 본문 검색은 더 이상 폴백이 아니다 — 인덱스 히트 하나가 검색을 끝내고 있었다.** 조회는 claim·tag 인덱스를 먼저 훑고, **0건일 때만** 카드 본문을 읽었다. 실측(eclypse, 2026-09-22): `pull "With Your Smile"`은 그 곡을 claim이나 tag에 담은 7장을 돌려주고 t087을 떨어뜨렸다 — 그 곡과 짝이 되는 곡을 하나의 원리로 묶어 설명하는, 그 곡을 물은 사람이 가장 받아야 할 카드다. t156도 같은 이유로 빠졌다. 이제 양쪽이 항상 돈다: 인덱스 히트가 위에 그대로 서고, 본문에만 있는 카드는 그 아래에 표시를 달고 붙으며, 양쪽에 걸린 카드는 한 번만 센다(같은 광산에서 7 → 9, 유나 83 → 98, m003 79 → 79).
+
+**고친 것은 자료가 아니라 검색의 모양이다.** 이전 동작은 자기 명세대로 정확했고, 그래서 누락이 출력에서 보이지 않았다 — 태그를 아무리 보강해도 드러날 수 없는 종류였다. 같은 교훈이 이미 검증 기록에 있다(스카우트·곡명·표 미리보기가 각각 본문에 앉아 있던 사실을 가렸다). **stale index 가드는 인덱스 히트만으로 판정하도록 분리했다**: 본문 히트는 `truthFiles()`에서 오므로 항상 실재하고, 합쳐서 비어 있는지 검사하면 본문 히트 한 장이 이 가드가 잡으려는 바로 그 상태를 가린다. 그룹 표시 위치는 카운터가 아니라 경로로 잡는다 — 출력 루프에 나중에 `continue`가 들어가면 세던 위치가 어긋나 엉뚱한 카드를 첫 본문 일치로 표시한다.
+
+**init의 다섯째 멱등 보장 클래스 — 광산 루트의 `.gitattributes`.** `core.autocrlf=true`가 기본인 플랫폼에서 체크아웃하면 디스크 바이트가 LF에서 CRLF로 바뀌고, 바이트를 그대로 해시하는 지문은 전부 어긋난다. 실측(eclypse, 2026-09-22): 자료 19건이 유입 지문 변경으로 보고됐고, 19건 전부 LF 환산에서도 Git 저장 바이트에서도 다시 일치했다 — 해시 검사는 정확했고 변조는 없었으며 신호의 전부가 체크아웃이었다. `.weavedoc/.gitattributes`는 번들 **안에** 있어 `.weavedoc/**`만 고정하고, 루트 파일은 복사한 폴더에 딸려 가지 않으므로 광산 자신의 증거가 그 고정 밖에 있었다. **두 층은 반대 규칙이고 합치면 안 된다**: 생성되는 광산 텍스트(`materials/**`·`truths/**`·`documents/**`·`.weavedoc-state/**`)는 LF로 고정하고, 원본(`materials/*/source.*`·`inbox/**`)은 `-text`로 양방향 변환을 모두 끈다. 원본을 LF로 고정하는 것은 수리가 아니라 증거를 고쳐 쓰는 일이다 — 원본은 도착한 그 바이트일 때만 원본이고, 컨테이너 원본(docx·hwpx·xlsx)은 바이너리 zip이다.
+
+**새 검사도 새 템플릿도 넣지 않았다.** `.ignore`가 이미 같은 모양(심어지는 루트 파일, 설정된 `paths` 사용, reconfigure에서 재실행)이므로 그 목록에 한 항목을 더했을 뿐이다. 이 클래스보다 먼저 만들어진 광산은 `validate` 경고가 아니라 `weavedoc-init` 재실행으로 받는다.
+
+**심는 것으로는 복구되지 않고, 평범한 checkout으로도 부족하다.** 실측(git 2.46, `core.autocrlf=true`): 속성을 심은 뒤에도 `git ls-files --eol`은 `i/lf w/crlf`이고, `git checkout -- .`는 `-text` 경로만 되돌리며 LF로 고정한 파일은 stat이 깨끗해 그대로 남는다. 해당 경로를 삭제하고 다시 체크아웃해야 전부 `i/lf w/lf`가 된다. 이것이 통하는 전제는 저장된 blob이 처음부터 LF라는 것이므로, 먼저 확인할 것이 그 점이다. **변경으로 표시된 파일을 일괄 재인증해 경보를 지워서는 안 된다** — 실제 내용 변경도 밖에서는 똑같이 보이고, 같은 실측에서 카드 한 장(t088)은 정말로 바뀐 것이었다. UPGRADING.md가 이 절차를 싣는다.
+
+**측정 하나를 스스로 정정한다.** 이 번들의 줄바꿈 작업에서 첫 재현은 `grep -c $'\r'`로 CR을 셌는데, Git Bash의 그 표현은 LF 파일에도 같은 값을 돌려준다 — 드리프트를 재현했다는 첫 보고는 도구가 아니라 측정이 만든 것이었다. `wc -c`와 `git ls-files --eol`로 다시 재고 나서야 4→6·10→12바이트와 `i/lf w/crlf`가 나왔고, 위의 복구 절차도 그제야 확정됐다. 결론은 바뀌지 않았지만, 바뀌지 않았다는 사실은 재측정이 알려 준 것이지 첫 측정이 보증한 것이 아니다.
+
+검증: Windows full regression **647/647 PASS**(신규 `acct_pull_body_merges_with_index` — 인덱스 우선·라벨 유지·중복 제거·stale index 가드 네 가지를 함께 고정) · golden은 `version.txt`의 버전 행만 움직였다(`validate`·`census`·`scope`·`status`·`gaps` 출력에 드리프트 없음) · `doccheck` · Node syntax · `git diff --check` · gitattributes 동작은 git 2.46 임시 저장소에서 `git check-attr`과 `git ls-files --eol`로 직접 확인 · release manifest 77 rows, 2회 byte-identical, SHA-256 `b29ab2afae6675c0ab76a49772ed0db873055c55ab23f69e26233dc0b219ca2a`. **`shellcheck --severity=error`는 이 기계에 없어 돌리지 못했다** — 0.7.0의 SC2144가 정확히 그 등급이었고 그 유일한 실행자는 CI이므로, 이 번들의 bash 변경(회귀 케이스 하나)은 push 전까지 그 게이트를 받지 않은 상태다. 스위트 쪽 관찰 하나: `-j6` 한 판에서 `acct_mine_lock_admits_one_writer`가 경과 시간(6s)으로 FAIL했고 단독 실행과 `-j4` 전체에서 PASS했다 — 이 번들은 lock 근처를 건드리지 않으므로 병렬 부하에 걸린 기존 플레이크로 본다. 같은 판에서 스위트는 실행 중 트리가 바뀌자(그 시점의 manifest 재생성) 결과를 섞어 보고하지 않고 폐기했다.
+
 ## 0.7.0
 
 **Codex가 Claude Code와 같은 WeaveDoc workflow를 실행하는 첫 dual-harness bundle.** 아홉 skill을 Codex의 project discovery root인 `.agents/skills/weavedoc-*`에 추가하고, `.claude` copy와 shared reference까지 byte-identical하게 고정했다. Release manifest와 `doccheck`가 두 tree를 함께 싣고 recursive compare하므로 한쪽만 바뀐 release는 green이 될 수 없다. Workflow의 판단·artifact·fidelity gate는 하나이고, harness 차이는 runtime adapter에만 남는다.
