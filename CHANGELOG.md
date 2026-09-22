@@ -6,6 +6,16 @@
 
 ---
 
+## 0.7.2
+
+**0.7.1의 증거 바이트 가드가 지키지 않던 비교가 하나 남아 있었다 — 설치본 대 manifest.** 설치 검사는 release manifest의 git-blob 해시를 디스크 바이트와 대조하는데, 스킬 트리는 어느 `.gitattributes`도 덮지 않아 checkout이 CRLF로 다시 쓰면 byte-identical한 설치가 그 대조에서 탈락한다. 하루에 두 번 실측(2026-09-22): 이 저장소 자신의 워크트리에서 `reviewers.md` 2건이 CRLF여서 첫 manifest 대조가 깨졌고, 같은 날 실제 광산 커밋에서 git이 설치된 스킬 20파일 전부에 같은 경고를 달았다. 도구 저장소의 루트 `.gitattributes`와 init이 심는 광산 루트 `.gitattributes` 양쪽에 `.claude/skills/weavedoc-*/**`·`.agents/skills/weavedoc-*/**`의 LF 고정을 추가했다 — manifest가 싣는 경계(`weavedoc-*`)와 같은 스코프라, 하네스가 같은 루트에 자기 스킬을 미러링해도 건드리지 않는다.
+
+**고정하지 않은 이웃 둘도 실측으로 닫았다.** `.codex/hooks.json`은 `JSON.parse` 후 구조 비교라 CRLF가 `CODEX-HOOKS-STALE`을 위조할 수 없고, `.gitattributes` 자신은 CRLF로 체크아웃돼도 파싱된다(`\r\n` 아래에서 `eol=lf`가 그대로 적용됨을 확인). 근거 없는 확장 대신 깨지는 비교만 고정한다.
+
+**이 번들은 fingerprint가 0.7.1과 같다(`d6bedc204da8`) — 의도된 실례다.** bin·schema는 그대로이고 바뀐 것은 스킬과 저장소 속성뿐이므로, 런타임 지문으로는 0.7.1 설치와 구별되지 않는다. 동작 정책이 바뀌어도 지문이 같은 릴리스가 실재한다는 것은 이미 기록된 계급이고(0.6.11~12), 설치본의 정체성 비교는 manifest가 맡는다: SHA-256이 `b29ab2af…`에서 아래 값으로 이동했다.
+
+검증: `doccheck` · Node syntax · `git diff --check` · 루트 속성의 스킬 트리 판정과 비적용 경계(`weavedoc-*` 밖)를 `git check-attr`로 확인 · 재체크아웃 후 양 하네스 스킬 20파일 전부 `i/lf w/lf` · Windows full regression **647/647 PASS** · release manifest 77 rows, 2회 byte-identical, SHA-256 `176cd34abc9d3e3d8e8093327473a904d5880df6017d9fa1889c99fae4d0a252`. `shellcheck`은 이번에도 로컬에 없다 — bash 변경이 없는 번들이지만, 게이트의 실행자는 CI다.
+
 ## 0.7.1
 
 **`pull`의 본문 검색은 더 이상 폴백이 아니다 — 인덱스 히트 하나가 검색을 끝내고 있었다.** 조회는 claim·tag 인덱스를 먼저 훑고, **0건일 때만** 카드 본문을 읽었다. 실측(eclypse, 2026-09-22): `pull "With Your Smile"`은 그 곡을 claim이나 tag에 담은 7장을 돌려주고 t087을 떨어뜨렸다 — 그 곡과 짝이 되는 곡을 하나의 원리로 묶어 설명하는, 그 곡을 물은 사람이 가장 받아야 할 카드다. t156도 같은 이유로 빠졌다. 이제 양쪽이 항상 돈다: 인덱스 히트가 위에 그대로 서고, 본문에만 있는 카드는 그 아래에 표시를 달고 붙으며, 양쪽에 걸린 카드는 한 번만 센다(같은 광산에서 7 → 9, 유나 83 → 98, m003 79 → 79).

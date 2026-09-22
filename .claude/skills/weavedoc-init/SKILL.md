@@ -90,9 +90,13 @@ Write the answers to `.weavedoc/config.yaml`. On a **reconfigure**, update confi
   truths/**           text eol=lf
   documents/**        text eol=lf
   .weavedoc-state/**  text eol=lf
+  .claude/skills/weavedoc-*/** text eol=lf
+  .agents/skills/weavedoc-*/** text eol=lf
   inbox/**             -text
   materials/*/source.* -text
   ```
+
+  The two skill-tree lines guard the OTHER comparison this project leans on: an install is checked against the release manifest by hashing disk bytes against git-blob hashes, so a checkout that rewrites the installed skills to CRLF fails that comparison on a byte-identical install (measured 2026-09-22, twice in one day — first in the tool repository's own worktree, then in a mine). They are scoped to `weavedoc-*`, the same boundary the manifest ships, so a harness that mirrors its own skills into the same root is untouched. Two near-neighbours are deliberately NOT pinned, both measured: `.codex/hooks.json` is compared by `JSON.parse`, so CRLF cannot fake a `CODEX-HOOKS-STALE`; and a `.gitattributes` that itself checks out CRLF still parses — `eol=lf` under a `\r\n` line ending still applies.
 
   **Two layers, opposite rules — do not collapse them into one.** `truthDigest` hashes a card's raw bytes and the material digest hashes all of them but one frontmatter line, so on a platform whose Git checks out CRLF (`core.autocrlf=true`, the Windows default) every digest in the ledger stops matching the file it describes. Measured (eclypse, 2026-09-22): 19 materials reported their intake fingerprint changed, all 19 matched again once the disk CRLF was read back as LF, and the Git-stored bytes matched too — the hash check was right, nothing had been tampered with, and the entire signal was the checkout. Pinning the raw layer to LF instead would "fix" it by rewriting the evidence: an original is only an original as the bytes it arrived as. `.weavedoc/.gitattributes` ships *inside* the bundle and pins only `.weavedoc/**`; a root file does not travel with a copied folder, so the mine's own evidence sat outside that pin. This bullet is the other half.
 

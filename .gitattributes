@@ -5,3 +5,10 @@
 .weavedoc/** text eol=lf
 # tests/ is bash + machine-read artifacts (manifest hashes, golden diffs) — same reason as above.
 tests/** text eol=lf
+# The shipped skill trees are manifest rows: the install check hashes DISK bytes against
+# git-blob hashes, so a checkout that rewrites them to CRLF fails the comparison on a
+# byte-identical install (measured 2026-09-22, twice: this repo's own worktree copy of
+# reviewers.md, then the same files landing in a mine). Scoped to weavedoc-* — the same
+# boundary make-manifest.sh ships — so a harness mirroring its own skills in is untouched.
+.claude/skills/weavedoc-*/** text eol=lf
+.agents/skills/weavedoc-*/** text eol=lf

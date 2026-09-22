@@ -1,6 +1,6 @@
 c9a9488c1e2db4e2fa67ca6a8f5e2e79e7b3385ad6778f8cb9780c9410b2ec97  .agents/skills/weavedoc-gaps/SKILL.md
 e5e7d9c132e057359464ee1158fedd588fc742ab6e32e2e8c8348526091842f9  .agents/skills/weavedoc-gather/SKILL.md
-d1e2c1a0d5e1328593b10133ec448191faf1facd62c48de5b43edb40fd8bcaa4  .agents/skills/weavedoc-init/SKILL.md
+f1cb693e95eec2b1917dcd70ddd477668b492cb06c3c2c5f3703ffec607d3f8f  .agents/skills/weavedoc-init/SKILL.md
 c6034a5bb8850a5fa7d1f1f3c67bdb9d246060cbbaadb885458568bbecf82357  .agents/skills/weavedoc-map/SKILL.md
 d0aed28033c8c656f94419ca43764634a4cdf8a80b039744ddfe1b52fd840b79  .agents/skills/weavedoc-plan/SKILL.md
 a1eccd617f4e05994050f4fb0fce1052ec281fb4dbb40d4788e5ac665da241e2  .agents/skills/weavedoc-refine/SKILL.md
@@ -10,7 +10,7 @@ a1eccd617f4e05994050f4fb0fce1052ec281fb4dbb40d4788e5ac665da241e2  .agents/skills
 f9ea6c2af465edec5156ed86e6cf22df50d0c02c5684828d7218f96721585410  .agents/skills/weavedoc-write/SKILL.md
 c9a9488c1e2db4e2fa67ca6a8f5e2e79e7b3385ad6778f8cb9780c9410b2ec97  .claude/skills/weavedoc-gaps/SKILL.md
 e5e7d9c132e057359464ee1158fedd588fc742ab6e32e2e8c8348526091842f9  .claude/skills/weavedoc-gather/SKILL.md
-d1e2c1a0d5e1328593b10133ec448191faf1facd62c48de5b43edb40fd8bcaa4  .claude/skills/weavedoc-init/SKILL.md
+f1cb693e95eec2b1917dcd70ddd477668b492cb06c3c2c5f3703ffec607d3f8f  .claude/skills/weavedoc-init/SKILL.md
 c6034a5bb8850a5fa7d1f1f3c67bdb9d246060cbbaadb885458568bbecf82357  .claude/skills/weavedoc-map/SKILL.md
 d0aed28033c8c656f94419ca43764634a4cdf8a80b039744ddfe1b52fd840b79  .claude/skills/weavedoc-plan/SKILL.md
 a1eccd617f4e05994050f4fb0fce1052ec281fb4dbb40d4788e5ac665da241e2  .claude/skills/weavedoc-refine/SKILL.md
@@ -22,7 +22,7 @@ f9ea6c2af465edec5156ed86e6cf22df50d0c02c5684828d7218f96721585410  .claude/skills
 638f55589c121f2ec933491b6d2b784084d582b1dbeffb1d3863db12de8f6723  .weavedoc/FORMATS.md
 ec8c206b0985cfcd3786d8ada5ada3661b9ed2e5d4524ac9c5bcf5df073bb871  .weavedoc/PARSER-MODEL.md
 22ce3c8bc7c358fa3db25fc666bcc942bfb0e13d56233796aa0f2576fe3fa129  .weavedoc/READ.md
-902311c7bb38fa1658ff403def6158ee7378fe9d6e2e284fa1c38735c31bd30b  .weavedoc/VERSION
+d0176718bd214ce8474c06ed61c395ca113fdfc2acdd86d9aa9933b40d9b561e  .weavedoc/VERSION
 6684d86a6334c3dce5fd00a75102f81e6d4f263659c6b50741e3bb1eff6009fe  .weavedoc/bin/hooks/gate.mjs
 127e2d8ed0a81e26e36f9c0a8b298c77f8f24125d26909bf18de5e418791467b  .weavedoc/bin/hooks/lease.mjs
 4e7c9945fb128225faea215d0b56fca9a5714c6aa658e486c2ba07d508ce21bb  .weavedoc/bin/lib/artifact-contracts.mjs
