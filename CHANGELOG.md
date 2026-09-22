@@ -6,6 +6,16 @@
 
 ---
 
+## 0.7.4
+
+**0.6.13의 확인 축 판정이 운영자 한 줄만 가르치고 세 자리를 남겨 뒀었다 — 소유자가 0.7.3 설치본에서 여전히 재질문을 받았다.** 보고 문면: *"여전히 다시 물어보던데?"* 조사 결과 설치본은 무결했다(eclypse, 0.7.3 설치, `authority` 부재 = standard, verify Authority 행은 "보이는 교환에서 고른 값은 다시 묻지 않는다"를 정확히 싣고 있었다). 어긋난 것은 서술이었고, 셋이었다: **① verify 자신의 §Human confirmation 2단계**가 여전히 `adopted`를 강조 셋에 실었다 — 한 파일 안에서 Authority 행과 델타 렌더링 단계가 서로 다른 답을 가르치는, 검사 6이 이름 붙인 두-답 클래스의 **파일 내부판**이다(그리고 실행 세션이 실제로 따르는 쪽은 델타를 렌더링하는 그 단계다). **② FORMATS의 provenance 한 줄** — "adopted + derived는 확인 델타에서 강조된다"는 판정 이전 문면 그대로였고, 필드 계약을 먼저 여는 콜드 세션에게 '강조'는 '다시 물어라'로 읽힌다. **③ WORKFLOW §5의 괄호** — machine-judgment set에 `adopted`가 그대로 앉아 있었다. 0.6.13의 회귀(doccheck 검사 14)는 Authority 서두의 바이트 대조였지 이 어휘의 핀이 아니었으므로, 셋 다 초록 보드 밑에서 살아남았다.
+
+**처방은 어휘 정렬이지 규칙 신설이 아니다.** 세 자리를 판정 문면으로 고쳤다: 개별 확인은 기계가 **단독으로** 판단한 것(`derived` 계산값·굳힌 서술·기계가 만든 부정 명제)에만 붙고, 보이는 교환에서 사용자가 고른 `adopted` 값은 태그를 달고 목록에 실릴 뿐 **다시 묻지 않으며**(빚졌던 것은 전사 확인이고, 그 지불처는 적용 시점이다), 일괄 통과 항목의 재나열은 `strict`만 유지한다. 등급 체계·동작 규칙·런타임 무변경 — 0.7.3의 예산 문단과 같은 종류다: 규칙은 무변경, 거짓은 설명이었다.
+
+**doccheck 검사 17 신설 — verify의 두 사이트를 따로 핀한다.** 행의 문장이 grep을 통과해도 델타를 렌더링하는 단계가 어긋날 수 있음이 이번에 실측됐으므로, Authority 행과 §Human confirmation 단계를 각각 핀하고 FORMATS·WORKFLOW에 같은 어휘를 핀한다(.claude 사본 검사, .agents 쌍둥이는 검사 11의 바이트 대조 관할). 세 사이트를 각각 되돌려 정확히 빨개지는 것을 확인했고, 그 음성 테스트가 첫 판의 결함 하나를 잡았다: say 문구의 backtick이 이중따옴표 안에서 명령 치환으로 실행됐다(`adopted: command not found`) — 단일따옴표로 교체했다.
+
+검증: `doccheck`(신규 검사 17 포함) GREEN + 사이트별 red 실측 · 양 하네스 verify 사본 `cmp` byte-identical · `bash -n` · Windows full regression **647/647 PASS**(-j4) · golden은 `version.txt`의 버전 행만 움직였다. 런타임 무변경(bin·schema 무변경, fingerprint `d6bedc204da8` 유지 — 0.7.2·0.7.3과 같은 의도된 실례): 바뀐 것은 verify 스킬 문안(양 하네스 두 파일)·FORMATS·WORKFLOW·doccheck·golden 한 줄이고, 설치본 비교는 manifest가 맡는다. `shellcheck`은 이번에도 로컬에 없다 — doccheck.sh가 bash 변경이므로 이 게이트의 실행자는 CI다. release manifest는 스테이징 후 재생성: **77 rows, 2회 byte-identical, SHA-256 `b68c2e48dfd37ed9796f7eb0b42c5d00c97ad01e5c632f9e3eeb063b058a58a7`**.
+
 ## 0.7.3
 
 **advisory 레인에 사용자의 문이 없었다 — 기계 게이트는 비차단인데 실행 절차는 수렴까지 출하를 붙들었다.** review는 "count는 final을 막지 않는다, refine이 언제 멈추는지만 정한다"고 말하고, refine 7단계는 advisory 수렴을 완료 조건으로 요구한다 — 그리고 max_rounds 에스컬레이션 뒤 사용자가 "남은 advisory는 수용하고 출하한다"고 판정할 경로가 어디에도 적혀 있지 않았다(9단계의 go-ahead 기록은 Human queue 항목용이다). 2026-09-22 GroveSpec 설계 대조 검토가 이 긴장을 짚었고, 처방은 등급 체계 교체가 아니라 종료 경로의 명문화로 좁혔다. 이제 **사용자만** advisory 레인을 닫을 수 있다: 남은 finding 각각을 `adjudications`에 `- accepted: <finding> — user ruling <YYYY-MM-DD> "<발화>"`로 기록하면 수렴 카운트가 남았어도 refine의 루프가 끝난다. 면제 범위는 advisory 수렴 조건 **하나뿐** — fidelity 위반은 모든 authority 레벨에서 그대로 차단하고, 판정 후 바이트가 움직였으면 게이트 재실행 + `seal-review`를 여전히 빚는다(consecrate는 의도가 아니라 바이트를 비교한다). 침묵·"알겠어"·화제 전환은 close가 아니다 — `questions.md`의 `answered` 기준을 그대로 적용해, 날짜 박힌 인용 발화만 닫는다(기계가 쓴 `accepted:`는 아무것도 닫지 않는다 — `coverage.md`의 attribution 기준). 계약의 소유자는 넷(review의 판정 경로 · refine의 두 번째 문 · FORMATS 필드 계약 · 배포 review.md 템플릿 주석)이고, `doccheck` 검사 16이 넷 모두에 어휘를 핀한다 — 검사 6과 같은 계급: 서술자 하나가 "repeat까지 루프"만 가르치면 콜드 세션이 그 문서부터 열어 사용자의 문을 배우지 못한다.

@@ -466,5 +466,27 @@ grep -qF "The user's advisory close lives in this block too" "$REPO/.weavedoc/FO
 grep -qF "the user closes the advisory lane" "$REPO/.weavedoc/templates/review.md" \
   || say "the shipped review template no longer names the user's close — a cold session reading the planted template first learns the convergence-only loop"
 
+# 17. The confirmation axis (0.6.13's second correction) is ONE rule with three owners — the
+# operator (verify), FORMATS' provenance contract, and WORKFLOW §5. The rule: individual
+# confirmation is for what the machine decided ALONE; a value the user chose in a visible exchange
+# was confirmed in place when it was applied and is never re-asked; only strict re-lists after a
+# blanket pass. Measured need: 0.6.13 taught verify's Authority row and left THREE sites still
+# teaching the pre-ruling shape — verify's own §Human confirmation highlight step (the two-answers
+# class INSIDE one file — the operator's row said "never re-asked" while its step 2 listed
+# `adopted` in the raise set), FORMATS' one-liner, WORKFLOW's parenthetical — and the drift
+# surfaced as the owner being re-asked on a 0.7.3 install ("여전히 다시 물어보던데"). Both verify
+# sites are pinned separately BECAUSE they disagreed while every existing pin stayed green: the
+# row's sentence passing grep proves nothing about the step that renders the delta. TEXT check,
+# same honesty as 5-7: presence, never obedience. (.claude copy checked; check 11's byte-compare
+# territory covers the .agents twin.)
+grep -qF "A value the user chose in a visible exchange is listed in the delta and never re-asked" "$REPO/.claude/skills/weavedoc-verify/SKILL.md" \
+  || say "verify's Authority row lost the confirmation-axis rule — a standard mine goes back to confirming like a strict one, the exact friction 0.6.13 removed"
+grep -qF "Highlight the machine-alone judgment set" "$REPO/.claude/skills/weavedoc-verify/SKILL.md" \
+  || say "verify's delta step no longer scopes the highlight to machine-alone judgments — the step that renders the delta re-raises user-chosen values while the Authority row above it says never re-asked (the measured in-file two-answers drift)"
+grep -qF "never re-asked" "$REPO/.weavedoc/FORMATS.md" \
+  || say "FORMATS' provenance contract no longer separates the re-verify set from the confirmation surface — 'highlighted in the delta' alone reads as ask-again to a cold session that opens the field contract first"
+grep -qF "never re-asked" "$REPO/WORKFLOW.md" \
+  || say 'WORKFLOW §5 lost the confirmation-axis correction — its judgment-set parenthetical is where `adopted` sat before 0.6.13, and a describer still carrying that shape un-teaches the ruling'
+
 [ "$fail" -eq 0 ] && echo "doccheck: docs and code agree"
 exit "$fail"
