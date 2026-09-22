@@ -69,22 +69,42 @@ export function cmdPull (m, out, term) {
   // Labels are OUTPUT, not search text (D1 follow-through): the match runs on the line with its
   // ` ··<labels>` tail stripped, or pulling a word that occurs only in label prose ("evidence",
   // "PLAN") would hit every labeled truth in the mine.
-  let ids = []
+  const idxIds = []
   for (const l of splitLines(readOr(idxPath))) {
     const hay = l.replace(/ ··[\s\S]*$/, '')
     if (!lowerAscii(hay).includes(t)) continue
     const mm = /^- (t[0-9]+)/.exec(l)
-    if (mm) ids.push(mm[1])
+    if (mm) idxIds.push(mm[1])
   }
-  if (ids.length === 0) {
-    for (const f of truthFiles(m)) if (lowerAscii(readOr(f)).includes(t)) ids.push(basename(f, '.md'))
-    if (ids.length > 0) out('(no claim/tag match — body-text matches below)')
+  // Body text is searched ALWAYS, never as a fallback (field report 2026-09-22). `pull "With Your
+  // Smile"` returned the 7 cards naming it in a claim or tag and dropped t087, whose body carries
+  // the principle connecting the two songs the term spans — the card a consumer asking about that
+  // song most needs. An index hit is not evidence that the index holds every relevant card; under
+  // the fallback it only ENDED the search, and the miss was silent. Index hits keep their position
+  // at the top and body-only hits are labelled, so the stronger match still reads as the stronger
+  // match. Fixing the SHAPE of the search rather than the data is deliberate: the old behaviour
+  // matched its own spec, so the miss was invisible from the output and no amount of per-term tag
+  // curation would have surfaced it — the same lesson an earlier verification round recorded when
+  // a scout, a song title and a table preview each hid a fact that was sitting in a body.
+  const seen = new Set(idxIds)
+  const bodyIds = []
+  for (const f of truthFiles(m)) {
+    const id = basename(f, '.md')
+    if (seen.has(id)) continue
+    if (lowerAscii(readOr(f)).includes(t)) bodyIds.push(id)
   }
-  if (ids.length === 0) { out(`pull '${term}': no matches (claims, tags, bodies)`); return 0 }
+  if (idxIds.length === 0 && bodyIds.length === 0) { out(`pull '${term}': no matches (claims, tags, bodies)`); return 0 }
 
-  const tfiles = ids.map(id => join(m.truths, `${id}.md`)).filter(existsSync)
-  // index hits without files = a stale index. MUST bail rather than search nothing.
-  if (tfiles.length === 0) { out(`pull '${term}': index matches have no truth files — stale index, run 'weavedoc reindex'`); return 1 }
+  const idxFiles = idxIds.map(id => join(m.truths, `${id}.md`)).filter(existsSync)
+  // index hits without files = a stale index. MUST bail rather than search nothing. Tested on
+  // idxIds alone: body hits come from truthFiles() and always exist, so a merged emptiness check
+  // would let a body match mask the stale index this guard exists to catch.
+  if (idxIds.length > 0 && idxFiles.length === 0) { out(`pull '${term}': index matches have no truth files — stale index, run 'weavedoc reindex'`); return 1 }
+  const tfiles = idxFiles.concat(bodyIds.map(id => join(m.truths, `${id}.md`)))
+  // The row the body-only group starts at, held as the PATH and not as a count: a later `continue`
+  // in the print loop would silently move a counted position, and the marker would then label the
+  // wrong card as the first body match.
+  const firstBody = bodyIds.length > 0 ? tfiles[idxFiles.length] : null
   if (tfiles.length > 60) out(`(${tfiles.length} matches — narrow the term if this is noise)`)
 
   const mstat = new Map(); const mstage = new Map()
@@ -96,6 +116,11 @@ export function cmdPull (m, out, term) {
   // material axis and survives. An open disagreement no longer wears a card: it lives in
   // .weavedoc-state/conflicts.json, blocks shipping via validate, and is surfaced by status --open.
   for (const f of tfiles) {
+    if (f === firstBody) {
+      out(idxFiles.length === 0
+        ? '(no claim/tag match — body-text matches below)'
+        : `(+${bodyIds.length} below: the term is in the card BODY, not its claim or tags)`)
+    }
     const r = extract(f)
     if (r.src && !mstat.has(r.src)) {
       const mf = join(m.materials, r.src, 'converted.md')

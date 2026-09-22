@@ -416,6 +416,31 @@ acct_pull_index_labels_agree() {
   vrun pull evidence
   expect_has "no matches"
 }
+acct_pull_body_merges_with_index() {
+  # Field report 2026-09-22: `pull "With Your Smile"` returned the 7 cards naming the song in a
+  # claim or tag and dropped the card whose BODY carries the principle the song is about. The body
+  # scan was a FALLBACK, so a single index hit ended the search and the miss was silent — and no
+  # tag could have revealed it, because the behaviour was correct per spec. Both halves run now:
+  # index hits first (the stronger match keeps its position), body-only hits below and labelled,
+  # deduped so a card matching both is counted once.
+  mkplanstage
+  printf -- '---\nid: t003\nclaim: "계획은 6곡 규모다"\nsource: m002\ntags: [기획]\nprovenance: stated\n---\n\n6곡 앨범을 계획한다.\n' > "$W/truths/t003.md"
+  printf -- '- 규모: t003\n' >> "$W/truths/coverage.md"
+  printf -- '- added: t003 (2026-07-30)\n' >> "$W/truths/changelog.md"
+  vrun reindex
+  vrun pull 앨범
+  expect_pass
+  expect_has "t002"
+  expect_has "[PLAN-STAGE SOURCE — never evidence of use]"
+  expect_has "the term is in the card BODY"
+  expect_has "t003"
+  expect_has "— 2 truth(s)"
+  # The stale-index guard is tested on INDEX hits alone: body matches come from truthFiles() and
+  # therefore always exist, so a merged emptiness check would let one mask a stale index.
+  rm "$W/truths/t002.md"
+  vrun pull 앨범
+  expect_block "stale index"
+}
 acct_scale_snapshot() {
   # Field-report P1 contract, mechanized: the fold must produce the SAME verdicts at scale.
   # Pinned on exact examined/scope tallies — a refactor that drops or double-counts a check
