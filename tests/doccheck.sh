@@ -447,5 +447,24 @@ UPGRADING.md|v0.5.21 0257167 v0.6.14 924e97e
 README.md|v0.5.21 0257167 v0.6.14 924e97e
 EOF15
 
+# 16. The advisory close is ONE contract with four owners — the ruling path in review (who may
+# close, what gets recorded, the attribution bar), the loop's second door in refine, and the two
+# DESCRIBERS (FORMATS' review.md field contract, the shipped review.md template comment). Same
+# class as check 6: a cold session resumes the loop from whichever document it opens first, so
+# one describer still teaching "loops until repeat" un-teaches the user's door — and an operator
+# teaching the door without the attribution bar would let a machine-written accepted: close the
+# lane, which is the dismissal-one-level-up the Human queue exists to intercept. TEXT check, same
+# honesty as 5-7: presence, never obedience. The tokens are the contract's own vocabulary;
+# renaming it legitimately moves this list too. (.claude copies checked; check 11's byte-compare
+# territory covers the .agents twins.)
+grep -qF "The user may close the advisory lane" "$REPO/.claude/skills/weavedoc-review/SKILL.md" \
+  || say "review lost the advisory-close ruling path — refine still offers the second door with nobody defining who may open it or what must be recorded"
+grep -qF "closed by the user's recorded ruling" "$REPO/.claude/skills/weavedoc-refine/SKILL.md" \
+  || say "refine lost the advisory close's second door — its loop describes convergence-only while review still grants the ruling (the check-6 two-answers class)"
+grep -qF "The user's advisory close lives in this block too" "$REPO/.weavedoc/FORMATS.md" \
+  || say "FORMATS no longer describes the advisory close — the field contract would describe the convergence-only loop a cold session then resumes"
+grep -qF "the user closes the advisory lane" "$REPO/.weavedoc/templates/review.md" \
+  || say "the shipped review template no longer names the user's close — a cold session reading the planted template first learns the convergence-only loop"
+
 [ "$fail" -eq 0 ] && echo "doccheck: docs and code agree"
 exit "$fail"
