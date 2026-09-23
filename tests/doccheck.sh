@@ -488,5 +488,59 @@ grep -qF "never re-asked" "$REPO/.weavedoc/FORMATS.md" \
 grep -qF "never re-asked" "$REPO/WORKFLOW.md" \
   || say 'WORKFLOW §5 lost the confirmation-axis correction — its judgment-set parenthetical is where `adopted` sat before 0.6.13, and a describer still carrying that shape un-teaches the ruling'
 
+# 18. The decision loop is ONE contract with twelve owners — FORMATS' section (the owner), nine
+# byte-identical Decisions callouts (the shape checks 11/14 use, for the same reason: a drifted
+# copy teaches a different ask AND can be cited to prove it), map's step-5 operating sentence, and
+# WORKFLOW §4's describer. Measured need (owner, 2026-09-23): real runs rendered the whole docket
+# as one prose block and closed with "t243부터 어떻게 할지 결정해주시면 됩니다" — every pending
+# ruling at once, keyed by machine ids, no recommendation surface, no way to stop and resume. The
+# loop's vocabulary is pinned on FORMATS once and on the callout ref copy once (the mutual
+# byte-compare carries it to all nine); the operating and describing sites are pinned directly
+# (the check-6/16/17 class: one describer still teaching the dump un-teaches the loop). The step
+# report's block-render rule rides here too — same bundle, same measured reading failure ("줄글로
+# 주루룩"). TEXT, never obedience — the honesty checks 5-7 state about themselves.
+# VACUITY GUARD: $skills and its >=9 floor ran in check 10; g18ref empty fails its own line, so an
+# extraction that found nothing cannot read as nine agreeing copies.
+grep -q '^## The decision loop' "$fmts" \
+  || say "FORMATS.md has no '## The decision loop' section — nine callouts point at a contract that is not there"
+for s in \
+  "One item per ask" \
+  "Substance first, the id last" \
+  "Apply each ruling as it lands" \
+  "Stopping is normal, and resume is free"; do
+  grep -qF -- "$s" "$fmts" \
+    || say "FORMATS' decision loop lost a spine sentence: '$s' — the ask shape (one-at-a-time · words-not-ids · recommend-and-escape · stop-and-resume) is carried by these sentences and nothing else"
+done
+g18ref=""; g18refname=""
+for s in $skills; do
+  g18blk=$(awk '/^> \*\*Decisions:/{f=1} f{ if ($0 ~ /^>/) print; else exit }' "$s/SKILL.md")
+  if [ -z "$g18blk" ]; then
+    say "$(basename "$s") is missing the Decisions callout — the decision loop has nine skill owners and this one dropped it"
+    continue
+  fi
+  if [ -z "$g18ref" ]; then g18ref="$g18blk"; g18refname=$(basename "$s")
+  elif [ "$g18blk" != "$g18ref" ]; then
+    say "$(basename "$s")'s Decisions callout differs from $g18refname's — nine byte-identical copies is the contract, and this copy has drifted"
+  fi
+done
+[ -n "$g18ref" ] || say "no skill carries the Decisions callout at all — nine missing copies must not read as nine agreeing ones"
+if [ -n "$g18ref" ]; then
+  for s in \
+    "The decision loop" \
+    "one item per ask" \
+    "(추천)" \
+    "free-form answer" \
+    "resume at the first unruled item"; do
+    printf '%s\n' "$g18ref" | grep -qF -- "$s" \
+      || say "the shared Decisions callout lost a contract element: '$s' — nine byte-identical copies of a callout missing it are nine copies of the loss"
+  done
+fi
+grep -qF "one entry at a time" "$map" \
+  || say "map's step 5 no longer rules one entry at a time — the operating site would render the docket as one ask while the callout above it teaches the loop (the in-file two-answers drift check 17 measured)"
+grep -qF "one entry at a time" "$REPO/WORKFLOW.md" \
+  || say "WORKFLOW §4 no longer describes the one-at-a-time ruling — a cold session that opens the map first learns the dump"
+grep -qF "one bullet per item" "$fmts" \
+  || say "FORMATS' step report lost the block-render rule (one bullet per item) — the closing degrades back to the measured prose wall ('줄글로 주루룩')"
+
 [ "$fail" -eq 0 ] && echo "doccheck: docs and code agree"
 exit "$fail"

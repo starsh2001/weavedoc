@@ -81,11 +81,16 @@ human's, and the machine keeps the ledger and pulls the tripwire.
 2. **Record** (the machine's ledger): a detected disagreement becomes an entry in
    `.weavedoc-state/conflicts.json` — targets (the standing cards, `[]` when nothing is
    settled), candidates (each claim with its source, losslessly), created. No card changes.
-   The machine never picks, ranks, or recommends a winner — no authority order, no date order,
-   no recency. While any entry is open, `validate` is nonzero and `consecrate` refuses.
-3. **Rule** (the human): keep the current value · adopt a candidate · same fact (merge the
-   evidence) · split by the hidden axis (time, viewpoint, definition, scope — "both are
-   right" always names one; source attribution is the split of last resort) · reject all.
+   The machine never settles a winner on its own — no authority order, no date order, no
+   recency (a `(추천)` in the ask is advice, never an application). While any entry is open,
+   `validate` is nonzero and `consecrate` refuses.
+3. **Rule** (the human): laid before them **one entry at a time** through the decision loop
+   (FORMATS, "The decision loop") — the disagreement in words with ids last, a recommended
+   option allowed, a free-form answer always open; stopping mid-docket is normal, and a later
+   run resumes from `status --open`. The rulings: keep the current value · adopt a candidate ·
+   same fact (merge the evidence) · split by the hidden axis (time, viewpoint, definition,
+   scope — "both are right" always names one; source attribution is the split of last resort) ·
+   reject all.
 4. **Apply** (`map`, on the ruling): edit the canonical card in place (same id — adopt), add
    `corroborated_by` (same fact), write split cards (new ids from the allocator), or delete
    nothing-stands cards; then DELETE the entry — resolution is deletion, and no archive grows.
