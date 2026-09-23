@@ -1764,6 +1764,41 @@ acct_census_legacy_live_exemption() {
   printf '\n## legacy\n- m002 — ruled: 2026-07-30 "옛 자료라 면제"\n' >> "$W/truths/coverage.md"
   vrun census; expect_has "coverage records 1/1 of 2 material(s) (1 legacy-exempt)"
 }
+acct_census_unmapped_is_the_ledger_not_cards() {
+  # Field report (eclypse, 2026-09-23): "unmapped" counted by card `source` flagged five materials
+  # coverage had already recorded. A material skipped whole has zero cards and is DONE.
+  addm2 m002
+  vrun census; expect_has "→ unmapped: m002 —"
+  printf '\n## m002\n\n- skipped: 전체 — m001과 같은 계약서 사본\n' >> "$W/truths/coverage.md"
+  vrun census; expect_has "coverage records 2/2"
+  expect_hasnt "→ unmapped"
+  expect_hasnt "cards exist"
+}
+acct_census_carded_material_without_record_is_a_ruling() {
+  # Cards but no section = mapped before coverage existed. Listing it as unmapped sends map to
+  # re-mine it, duplicating cards; it is named on its own line, and a legacy ruling clears it.
+  printf '# Coverage\n' > "$W/truths/coverage.md"
+  vrun census; expect_has "→ no coverage record, cards exist: m001 —"
+  expect_hasnt "→ unmapped"
+  printf '\n## legacy\n- m001 — ruled: 2026-09-23 "예전 자료라 면제"\n' >> "$W/truths/coverage.md"
+  vrun census; expect_hasnt "cards exist"
+}
+acct_census_corroboration_only_material_is_not_unmapped() {
+  # map already read a material cited only as corroboration; re-running it routes the same facts
+  # back to corroboration (step 2) — no new card. So it belongs on the cards-exist line, as in status.
+  addm2 m002
+  sed -i 's/^provenance: stated$/provenance: stated\ncorroborated_by: [m002]/' "$W/truths/t001.md"
+  vrun census; expect_hasnt "→ unmapped"
+  expect_has "→ no coverage record, cards exist: m002 —"
+}
+acct_census_unmapped_before_any_truth_exists() {
+  # The no-truths early return is exactly the mid-gather window — the list must print there too.
+  addm2 m002
+  rm -f "$W"/truths/t*.md; : > "$W/truths/index.md"
+  vrun census; expect_has "no truths yet"
+  expect_has "→ unmapped: m002 —"
+  expect_hasnt "m001"
+}
 acct_census_section_for_missing_material() {
   # R5-S5: numerator and denominator must count ONE population. A section naming a material with
   # no converted.md is a coverage.md error (validate is red), not a unit of coverage.
@@ -6635,7 +6670,7 @@ acct_status_available_lists_pending_work() {
   expect_pass
   expect_has "phase: mine-building · document-writing (d1)"
   expect_has "gather   2 file(s) waiting in inbox/"
-  expect_has "map      1 material(s) with no truth extracted yet: m002"
+  expect_has "map      1 material(s) with no coverage record and no card: m002"
   expect_has "write    d1 is planned"
   # The over-report control, in the same fixture: completeness is off here, so the gaps entry has no
   # reason to exist. A block that listed every LEGAL skill — which in this tool is nearly all of them
@@ -6666,6 +6701,45 @@ acct_status_map_entry_counts_corroboration_as_mined() {
   vrun status
   expect_pass
   expect_hasnt "map     "
+  # not map work — but not silence either: no coverage record, so it is named for a section/ruling
+  expect_has "coverage: 1 material(s) hold cards but no coverage record"
+}
+acct_status_map_entry_is_the_coverage_ledger() {
+  # Field report (eclypse, 2026-09-23): census said every material was recorded while this row,
+  # counting cards, offered five of them as map work. A material skipped whole is DONE with zero
+  # cards; the row reads the one judge census reads (mappingState), so the two cannot disagree.
+  mkdir -p "$W/materials/m002"
+  printf -- '---
+id: m002
+title: 사본
+origin: file
+role: 계약서
+topics: [x]
+format: md
+source_path: inbox/d.md
+added: 2026-08-01
+status: converted
+summary: 사본.
+---
+
+본문
+' > "$W/materials/m002/converted.md"
+  printf '
+## m002
+
+- skipped: 전체 — m001과 같은 계약서 사본
+' >> "$W/truths/coverage.md"
+  vrun status
+  expect_pass
+  expect_hasnt "map     "
+  expect_hasnt "coverage: "
+  vrun census; expect_hasnt "→ unmapped"
+}
+acct_status_map_entry_unknown_when_coverage_unreadable() {
+  # unknown, not zero — the census rule. A dead ledger must not read as "nothing to map".
+  rm -f "$W/truths/coverage.md"; mkdir "$W/truths/coverage.md"
+  vrun status
+  expect_has "map      which materials are unmapped is unknown"
 }
 block_status_dead_ledger_is_not_counted_as_absence() {
   # UNKNOWN EVIDENCE IS NOT ABSENCE — the ledger's own rule (LEDGER-UNREADABLE), owed by every

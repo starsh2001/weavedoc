@@ -6,6 +6,18 @@
 
 ---
 
+## 0.7.6
+
+**"아직 매핑 안 된 자료"의 판정 기준이 카드 존재였다 — 처음 채굴할 때만 맞는 기준이다.** map 1단계는 미매핑 자료를 "`truths/index.md`에 그 `source` id를 단 truth가 없는 자료"로 정의했다. 재접지·판정을 거친 광산에서는 카드가 0장인데 추출이 끝난 자료가 정상적으로 생긴다: source 오지정 정정으로 카드가 다른 자료로 옮겨 간 자료, 사용자 판정으로 값이 기각된 자료, 모든 요소를 사유와 함께 `skipped:`로 남긴 자료. 전부 `truths/coverage.md`에 처리 기록이 있고 `validate`도 통과하는데, 1단계 문장은 이들을 할 일로 분류했다. 실측(eclypse 광산, 외부 보고 2026-09-23): census `coverage records 74/74 of 84 material(s) (10 legacy-exempt)` — 전부 처리 — 인데 source 기준으로 5건이 "미매핑"으로 잡혔고 5건 모두 coverage에 사유가 있었다. 이 문장을 따른 Hammoc 대시보드는 map을 권했고, map을 돌려도 숫자가 줄지 않았다.
+
+**처방 ① — 판정 기준을 census와 같은 장부로.** map 1단계(양 하네스)가 이제 말한다: coverage에 기록(내용 있는 `## m<id>` 절 — 빈 제목은 기록이 아니다)이 있거나 `## legacy`에 있으면 매핑된 자료이고, 카드 존재는 판정 기준이 아니다. 예외 하나를 이름 붙였다: coverage 도입 이전에 매핑된 자료는 카드가 있고 절이 없다 — 미매핑 작업이 아니며(재채굴은 카드를 중복시킨다), 기존 카드로 절을 쓰거나 `## legacy` 판정으로 올린다. FORMATS의 coverage 절과 WORKFLOW·README의 census 서술이 같은 정의를 싣는다. 문서 쪽에서 같은 기준을 따로 적은 자리는 없었다 — 코드 쪽에 하나 있었고, 처방 ③이 닫는다.
+
+**처방 ② — census가 목록을 직접 낸다.** 판정 기준이 문서 여러 곳에서 따로 흔들리지 않도록, 비율 뒤의 자료 id를 CLI가 출력한다: `→ unmapped: <ids>`(기록도 카드도 없음 — map의 몫)와 `→ no coverage record, cards exist: <ids>`(coverage 이전 매핑 — 판정의 몫, 추출이 아니다). "카드가 인용한다"는 `source`와 `corroborated_by`를 모두 센다 — status의 map 행과 같은 규칙이다: 보조 인용만 된 자료는 map이 이미 읽은 자료이고, 다시 돌려도 중복 검사가 같은 사실을 보조 인용으로 돌릴 뿐 새 카드가 나오지 않는다. 모집단은 비율의 분모와 같다(디스크의 자료 − retracted − 기록 − legacy). coverage.md를 읽을 수 없거나 열린 주석·펜스로 끝나면 목록은 침묵한다 — 모름이지 비어 있음이 아니다. 카드가 0장인 no-truths 조기 반환 경로에서도 출력한다(모든 자료를 skip한 광산은 기록만 있고 카드가 없다). 스킬은 목록을 census에서 가져오고, 외부 도구도 coverage를 직접 해석하지 않고 이 출력을 그대로 쓸 수 있다. 기존 줄은 형식·수치 모두 무변경이다.
+
+**처방 ③ — status의 map 행도 같은 판정으로, 판정 코드는 한 곳에.** 첫 확인 grep은 문서만 봤고, `status` 명령 자체가 map 행을 카드 인용으로 세고 있었다("material(s) with no truth extracted yet"). census만 고쳤다면 같은 광산에서 census는 "전부 기록됨", status는 "map할 자료 5건"을 말한다 — eclypse 상황이 status에서 그대로 재현된다. 그래서 판정을 `coverage-model.mjs`의 `mappingState` 하나로 옮기고 census와 status가 같이 부른다: 두 명령이 다른 답을 내는 일이 구조적으로 생기지 않는다. map 행은 `unmapped`만 센다(`N material(s) with no coverage record and no card: <ids>`). 카드는 있고 기록이 없는 자료는 map 작업이 아니므로 map 행에 넣지 않고 별도 줄 `coverage: N material(s) hold cards but no coverage record — … 'weavedoc census' lists them`으로 알린다. coverage.md를 끝까지 읽을 수 없으면 map 행은 0건으로 침묵하지 않고 "unknown"을 말한다.
+
+검증: 신규 회귀 6건 — census 4(카드 0장 skip 자료는 매핑됨 · 카드 있고 기록 없는 자료는 별도 줄, legacy 판정으로 해소 · 보조 인용만 된 자료는 unmapped에 없음 · no-truths 경로에서도 출력)와 status 2(전부 skip된 카드 0장 자료에서 map 행 0건, census와 일치 · coverage.md를 읽을 수 없으면 map 행이 unknown). 기존 status 회귀 둘은 새 문면으로 갱신했다(보조 인용 케이스는 coverage 안내 줄 단언 추가) · golden은 `version.txt`만 움직였다(최소 픽스처는 전부 기록돼 있어 새 줄이 나오지 않는다). `doccheck` GREEN · 양 하네스 map 사본 byte-identical · Windows full regression **653/653 PASS**(-j6). 런타임 변경이므로 fingerprint가 `d6bedc204da8` → `c26c586bc4aa`로 이동했다. release manifest는 스테이징 후 재생성: **77 rows, 2회 byte-identical, SHA-256 `21d9b2bf803b67908f94cfdc632eb03ba40052b6bc76a1816ae77795f94b6ae0`**.
+
 ## 0.7.5
 
 **판정 요청이 도켓 덤프였다 — 열린 항목 전부를 줄글로 나열하고 "t243부터 어떻게 할지 결정해주시면 됩니다"로 끝났다.** 소유자 보고(2026-09-23), 둘: ① 항목이 여러 개면 사용자가 문단에서 자기 작업 목록을 스스로 조립해야 했고, 답변 토큰이 id였고(사용자에게 id는 아무것도 이름하지 않는다 — gather의 id 규칙이 이미 말하던 것), 권장안 표면이 없었고, 중간에 멈췄다 이어 갈 경로가 어디에도 적혀 있지 않았다. ② 닫는 보고 자체가 "줄글로 주루룩"이라 네 슬롯이 문단 속에 묻혔다. 규칙의 공백이 정확했다: "Surface, don't point"는 *닫는 보고*가 전 항목을 실으라는 규칙인데, 묻는 자리를 소유한 계약이 없어서 실행 세션들이 그 닫는 목록을 질문지로 재사용하고 있었다.

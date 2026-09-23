@@ -3,8 +3,8 @@
 // simply printed.
 import { readFileSync, existsSync } from 'node:fs'
 import { basename } from 'node:path'
-import { canonId, splitLines } from './core.mjs'
-import { readCoverage } from './coverage-model.mjs'
+import { splitLines } from './core.mjs'
+import { mappingState } from './coverage-model.mjs'
 import { fm, join, materialIds, truthFiles } from './mine.mjs'
 import { classifyIntake, intakeIndex, intakeLedgerPath } from './intake-ledger.mjs'
 
@@ -65,6 +65,12 @@ export function cmdCensus (m, out) {
   const idxPath = join(m.truths, 'index.md')
   const files = truthFiles(m)
   const intake = intakeLines(m)
+  const ledger = mappingState(m)
+  // The work list behind the ratio (mappingState owns what "mapped" means), so no consumer
+  // re-derives it. Silent when the ledger is unknown — the warnings below say why.
+  const unmapped = []
+  if (ledger.unmapped.length > 0) unmapped.push(`  → unmapped: ${ledger.unmapped.join(' ')} — no coverage record and no card cites them; map extracts these`)
+  if (ledger.carded.length > 0) unmapped.push(`  → no coverage record, cards exist: ${ledger.carded.join(' ')} — mapped before coverage existed; not extraction work (re-mining duplicates cards or finds nothing new) — write the section from the existing cards, or ask the user for a '## legacy' ruling`)
 
   // "No truth files" is not "nothing to report": a mine whose truths were deleted while index.md
   // still lists them must not read as a fresh empty mine.
@@ -77,6 +83,7 @@ export function cmdCensus (m, out) {
       out('census: no truths yet')
     }
     for (const l of intake) out(l)
+    for (const l of unmapped) out(l)
     return 0
   }
 
@@ -89,47 +96,7 @@ export function cmdCensus (m, out) {
   // the changelog was the mine log acting as a judgment input, which §1.4 forbids. The allocator
   // file is the record that no hole is ever refilled; validate owns that tripwire.
 
-  // ---- coverage ----
-  // ONE POPULATION on both sides of the ratio: numerator and denominator both skip retracted
-  // materials and both require a real material on disk, or the ratio goes above 1 (validate green,
-  // cause false) or reads N/N while a live material holds no record. A section counts only when it
-  // HOLDS a record — a bare `## m002` heading is not a record.
-  const covPath = join(m.truths, 'coverage.md')
-  const mstatus = id => { const f = join(m.materials, id, 'converted.md'); return existsSync(f) ? fm(f, 'status') : '' }
-  let nCov = 0; let nLegacy = 0; let nLegparsed = 0; let nLegbullets = 0
-  let coverage = null
-  if (existsSync(covPath)) {
-    coverage = readCoverage(covPath)
-    const withRecord = coverage.materialSections
-      .filter(section => section.lines.some(event => event.text.trim() !== ''))
-      .map(section => section.materialId)
-    // Section ids are references, so `## m5` and `## m005` are ONE material: canon first, then dedup.
-    const seen = new Set()
-    for (const cid of withRecord) {
-      const c = canonId(cid) || cid
-      if (seen.has(c)) continue
-      seen.add(c)
-      if (!existsSync(join(m.materials, c, 'converted.md'))) continue
-      if (mstatus(c) === 'retracted') continue
-      nCov++
-    }
-    // `## legacy` lists materials the user ruled exempt. ONLY the id leading each bullet counts (the
-    // ruling text is free prose that may mention other ids). nLegparsed counts bullets that PARSED,
-    // nLegacy the ones that still subtract — one number cannot carry both, since a
-    // skipped-retracted bullet and an all-malformed section would both read 0.
-    const legacyLines = coverage.legacySections.flatMap(section => section.lines.map(event => event.text))
-    nLegbullets = legacyLines.filter(line => /^[ \t]*- /.test(line)).length
-    const legIds = [...new Set(legacyLines
-      .map(line => (/^[ \t]*-[ \t]*(m[0-9]+)\b/.exec(line) ?? [])[1])
-      .filter(Boolean))].sort()
-    for (const lid of legIds) {
-      nLegparsed++
-      const c = canonId(lid) || lid
-      if (!existsSync(join(m.materials, c, 'converted.md'))) continue
-      if (mstatus(c) === 'retracted') continue
-      nLegacy++
-    }
-  }
+  const { coverage, nCov, nLegacy, nLegparsed, nLegbullets } = ledger
 
   // Denominator = materials on DISK minus retracted. From disk, not parsed frontmatter: counting
   // only CLOSED frontmatter silently dropped an unclosed or zero-byte material. A file that cannot
@@ -147,6 +114,7 @@ export function cmdCensus (m, out) {
   if (nLegacy > 0) covline = `coverage records ${nCov}/${nDenom} of ${nMats} material(s) (${nLegacy} legacy-exempt)`
   out(`census: truth files ${nFiles} · index entries ${idx.set.length} · ${covline}`)
   for (const l of intake) out(l)
+  for (const l of unmapped) out(l)
   if (coverage !== null && !coverage.readable) {
     out('  ⚠ truths/coverage.md exists but cannot be read — coverage records are unknown, not zero; validate blocks this path')
   }

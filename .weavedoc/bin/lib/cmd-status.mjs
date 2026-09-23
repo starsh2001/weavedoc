@@ -4,7 +4,7 @@
 // on the user — the listing is pasted/rendered, never re-composed from memory).
 import { existsSync, statSync, readdirSync } from 'node:fs'
 import { readFileSync } from 'node:fs'
-import { canonId, listField, pipes } from './core.mjs'
+import { canonId, pipes } from './core.mjs'
 import { fmvB, loadSchema } from './read.mjs'
 import { fm, join, docIds, materialIds, truthFiles, basename } from './mine.mjs'
 import { parseReview } from './review-model.mjs'
@@ -12,6 +12,7 @@ import { gapRegisterContract, parseGapText } from './gaps-register.mjs'
 import { hqFiles, readHumanQueues } from './hq-ledger.mjs'
 import { CONFLICTS_FILE, parseConflicts } from './conflict-store.mjs'
 import { readQuestions } from './questions-ledger.mjs'
+import { mappingState } from './coverage-model.mjs'
 // The verify axis is READ here, never re-judged — see the `available` block's comment: these are
 // the same shared models `scope` reads, and this command makes a strictly weaker claim on them.
 import { ledgerIndex, ledgerRowsOf } from './verify.mjs'
@@ -167,24 +168,22 @@ export function cmdStatus (m, out) {
   try { ninbox = readdirSync(m.inbox).filter(n => !n.startsWith('.')).length } catch { ninbox = 0 }
   if (ninbox > 0) avail.push(['gather', `${ninbox} file(s) waiting in ${m.inbox.startsWith(`${m.root}/`) ? m.inbox.slice(m.root.length + 1) : m.inbox}/`])
 
-  // map — a material NO TRUTH REFERENCES has not been mined yet. Both reference fields count:
-  // `source` (extraction) and `corroborated_by` (a material map processed as supporting evidence
-  // for claims extracted from elsewhere). The first spelling read `source` alone, so a
-  // corroboration-only material was listed as "no truth extracted yet" — true as a sentence, wrong
-  // as a work item: map already read it, and running map again would find nothing to do (caught in
-  // the pre-push cold review). canonId so `m5` and `m005` are one material.
-  const cited = new Set()
-  for (const f of truthFiles(m)) {
-    const s = (fm(f, 'source') || '').trim()
-    if (s !== '') cited.add(canonId(s) ?? s)
-    for (const c of listField(fm(f, 'corroborated_by') || '')) cited.add(canonId(c) ?? c)
+  // map — the work behind the coverage ratio, judged by the ONE function census reads
+  // (mappingState). This row once read card references alone ("no truth extracted yet"), so a
+  // material DONE with zero cards — re-grounded, rejected by a ruling, skipped whole with reasons —
+  // was offered as map work that could never shrink the number (field report, eclypse 2026-09-23).
+  // Only `unmapped` is map work. A material with cards but no record is a ruling or a section
+  // written from its cards: it gets its own line, never the map row. An unreadable ledger is
+  // unknown, not zero, so the row says that instead of going quiet.
+  const mapping = mappingState(m)
+  if (mapping.unknown) {
+    avail.push(['map', "which materials are unmapped is unknown — truths/coverage.md cannot be read to its end; 'weavedoc validate' names the damage"])
+  } else if (mapping.unmapped.length > 0) {
+    avail.push(['map', `${mapping.unmapped.length} material(s) with no coverage record and no card: ${mapping.unmapped.slice(0, 6).join(' ')}${mapping.unmapped.length > 6 ? ' …' : ''}`])
   }
-  const unmined = materialIds(m).filter(id => {
-    if (!existsSync(join(m.materials, id, 'converted.md'))) return false
-    if (fm(join(m.materials, id, 'converted.md'), 'status') === 'retracted') return false
-    return !cited.has(canonId(id) ?? id)
-  })
-  if (unmined.length > 0) avail.push(['map', `${unmined.length} material(s) with no truth extracted yet: ${unmined.slice(0, 6).join(' ')}${unmined.length > 6 ? ' …' : ''}`])
+  if (mapping.carded.length > 0) {
+    out(`coverage: ${mapping.carded.length} material(s) hold cards but no coverage record — a section or a '## legacy' ruling, not extraction; 'weavedoc census' lists them`)
+  }
 
   // verify — DELIBERATELY THE WEAKER CLAIM, and it says so. `scope` owns the verification verdict:
   // it compares digests and separates stale from failed from bound, ~130 lines of evidence
