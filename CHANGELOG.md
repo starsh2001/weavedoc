@@ -6,6 +6,18 @@
 
 ---
 
+## 0.7.5
+
+**판정 요청이 도켓 덤프였다 — 열린 항목 전부를 줄글로 나열하고 "t243부터 어떻게 할지 결정해주시면 됩니다"로 끝났다.** 소유자 보고(2026-09-23), 둘: ① 항목이 여러 개면 사용자가 문단에서 자기 작업 목록을 스스로 조립해야 했고, 답변 토큰이 id였고(사용자에게 id는 아무것도 이름하지 않는다 — gather의 id 규칙이 이미 말하던 것), 권장안 표면이 없었고, 중간에 멈췄다 이어 갈 경로가 어디에도 적혀 있지 않았다. ② 닫는 보고 자체가 "줄글로 주루룩"이라 네 슬롯이 문단 속에 묻혔다. 규칙의 공백이 정확했다: "Surface, don't point"는 *닫는 보고*가 전 항목을 실으라는 규칙인데, 묻는 자리를 소유한 계약이 없어서 실행 세션들이 그 닫는 목록을 질문지로 재사용하고 있었다.
+
+**처방 ① — the decision loop, FORMATS의 새 계약 절.** 판정 대기 항목(열린 충돌·fill-or-accept·모호한 태그·Human queue 항목)은 **한 번에 한 항목**: 도켓 순서를 한 줄로 먼저 알리고, 진행 표시(`3/7`)와 함께 항목을 말로 렌더링(주장의 내용·양측 값과 출처·축자 인용, id는 참조로 맨 뒤), 선택지는 결과 문장("새값 채택"이 아니라 "정정 자료의 2월 14일로 고친다"), `(추천)` 최대 하나 + 한 줄 이유, 자유 답변 상시 개방(하네스 네이티브 질문 표면 우선 — Claude Code `AskUserQuestion` 호출당 도켓 항목 하나, Codex `request_user_input`), 판정은 다음 질문 전에 즉시 적용. **중단은 정상이고 재개는 공짜다** — 즉시 적용 + 열린 저장소(conflicts.json·`gaps.md` `# Open`·`questions.md`)가 그대로 남으므로, "계속하자"는 `status --open`에서 첫 미판정 항목으로 재진입한다. 관할 밖도 명시했다: plan의 취향 수집(2–4개 묶음 유지)·init 인터뷰·verify의 델타 확인(0.6.13 축)은 이 루프의 대상이 아니다. 아홉 스킬이 byte-identical한 Decisions callout으로 계약을 가리키고(기존 다섯 callout 교체, 네 스킬 신설), map 5단계·gaps 6단계·plan 8단계가 운영 문장을, WORKFLOW §4가 서술을 나른다. 어휘 정렬 하나 동반: WORKFLOW의 "never picks, ranks, or recommends a winner"는 callout이 늘 허용하던 `(추천)`과 두-답이었다 — "never settles a winner on its own"으로 통일했다(추천은 조언이고, 무단 적용이 드리프트다).
+
+**처방 ② — step report에 블록 렌더 규칙 신설: 슬롯마다 자기 블록, 항목마다 자기 불릿.** 닫는 보고의 네 슬롯이 한 문단으로 접히면 독자는 자기 슬롯을 못 찾는다 — 벽은 전신문의 쌍둥이고, 둘 다 사실이어도 형식 위반이다. 구조가 금하는 것은 항목을 접는 것이지 설명하는 것이 아니다: 불릿 안의 문장은 완결형 그대로(온기 규칙 무변경).
+
+**doccheck 검사 18 신설.** FORMATS 절 존재+척추 문장 4개, 아홉 callout의 상호 byte 대조+ref 사본의 계약 요소 5개, map·WORKFLOW의 운영/서술 문장, step report 렌더 규칙을 핀한다. 다섯 사이트를 각각 되돌려 정확히 그 자리만 빨개지는 것을 실측했다(red 5방향 · 복원 후 byte-identical 확인).
+
+검증: `doccheck`(신규 검사 18 포함) GREEN + 사이트별 red 실측 5방향(복원 후 byte-identical) · 양 하네스 스킬 사본 `diff -r` 무차이 · `bash -n` · Windows full regression **647/647 PASS**(-j4) · golden은 `version.txt`의 버전 행만 움직였다. 런타임 무변경(bin·schema 무변경, fingerprint `d6bedc204da8` 유지 — 0.7.2~0.7.4와 같은 의도된 실례): 바뀐 것은 스킬 문안(양 하네스 열여덟 파일)·FORMATS·WORKFLOW·doccheck·golden 한 줄이고, 설치본 비교는 manifest가 맡는다. `shellcheck`은 이번에도 로컬에 없다 — doccheck.sh가 bash 변경이므로 이 게이트의 실행자는 CI다. release manifest는 스테이징 후 재생성: **77 rows, 2회 byte-identical, SHA-256 `85bf82190510747540be84d6ad2796aa7935ab848d42c06dd4fe407b77b973f2`**.
+
 ## 0.7.4
 
 **0.6.13의 확인 축 판정이 운영자 한 줄만 가르치고 세 자리를 남겨 뒀었다 — 소유자가 0.7.3 설치본에서 여전히 재질문을 받았다.** 보고 문면: *"여전히 다시 물어보던데?"* 조사 결과 설치본은 무결했다(eclypse, 0.7.3 설치, `authority` 부재 = standard, verify Authority 행은 "보이는 교환에서 고른 값은 다시 묻지 않는다"를 정확히 싣고 있었다). 어긋난 것은 서술이었고, 셋이었다: **① verify 자신의 §Human confirmation 2단계**가 여전히 `adopted`를 강조 셋에 실었다 — 한 파일 안에서 Authority 행과 델타 렌더링 단계가 서로 다른 답을 가르치는, 검사 6이 이름 붙인 두-답 클래스의 **파일 내부판**이다(그리고 실행 세션이 실제로 따르는 쪽은 델타를 렌더링하는 그 단계다). **② FORMATS의 provenance 한 줄** — "adopted + derived는 확인 델타에서 강조된다"는 판정 이전 문면 그대로였고, 필드 계약을 먼저 여는 콜드 세션에게 '강조'는 '다시 물어라'로 읽힌다. **③ WORKFLOW §5의 괄호** — machine-judgment set에 `adopted`가 그대로 앉아 있었다. 0.6.13의 회귀(doccheck 검사 14)는 Authority 서두의 바이트 대조였지 이 어휘의 핀이 아니었으므로, 셋 다 초록 보드 밑에서 살아남았다.
