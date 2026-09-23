@@ -13,7 +13,7 @@
 //   conflict list|add <entry.json>|remove <cNNN>   the open-disagreement ledger (id granted by the allocator; resolution IS removal)
 //   alloc <conflict|material|truth>   grant the next id from the monotonic allocator (never max+1 scanning)
 //   gaps              mine census + declared-marker scan (non-blocking floor for the weavedoc-gaps skill)
-//   census            mine census only (truth files vs index, coverage records)
+//   census            mine census only (truth files vs index, coverage records, unmapped materials)
 //   reindex [--check] regenerate truths/index.md + truths/tree.md from truth frontmatter (--check: diff only)
 //   retag <old> <new> rename/merge a tag across truths·required_tags·scope_tags (--dry: report only)
 //   version           the installed runtime version (.weavedoc/VERSION), fingerprint and schema
