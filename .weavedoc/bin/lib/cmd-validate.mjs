@@ -1216,7 +1216,7 @@ export function cmdValidate (m, out, json = false, consecOk = '') {
 
   // --- harness instruction pointer blocks: OWNED, not merely planted ----------------------------
   // init writes the shipped blocks into CLAUDE.md and AGENTS.md and, until this check, NOTHING ever
-  // read it back. Measured on a real mine (Echo, 2026-08-13): `upgrade --apply` moved the
+  // read it back. Measured on a real mine (a field project, 2026-08-13): `upgrade --apply` moved the
   // schema, the validator, READ.md and 271 cards to v3 while the block kept its v2 parenthetical
   // ("status filtering, as_of, provenance"). Harness instruction files are injected into EVERY
   // session BEFORE any file is opened: the stale line PRIMES. One session read READ.md first

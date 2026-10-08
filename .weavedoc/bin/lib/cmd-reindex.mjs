@@ -122,7 +122,7 @@ export function cmdReindex (m, out, errln, argv) {
     const ms = r.source !== '' ? (mstage.get(r.source) ?? '') : ''
     const mss = r.source !== '' ? (mstat.get(r.source) ?? '') : ''
     // U encodes the label's own LITERALS only. `as_of` and `assumptions` are byte-domain values
-    // copied out of the truth file and must pass through untouched — a Korean `as_of` (Echo has
+    // copied out of the truth file and must pass through untouched — a Korean `as_of` (a field project has
     // them: "유나 캐스팅 시점") is free text, not a date, and re-encoding it produced mojibake.
     const lab = truthLabels(r.as_of, r.provenance, r.assumptions, ms, mss, U)
     // No status suffix in v3: a card in the index is canonical by existence, so `[discarded]` and

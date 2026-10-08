@@ -69,7 +69,7 @@ export function readCoverage (file) {
 // The test is this ledger, never card presence: a material is legitimately DONE with zero cards (its
 // facts re-grounded to another material, its value rejected by a ruling, every element skipped with
 // a reason), and counting cards by `source` sent map back to such materials for nothing (field
-// report, Echo 2026-09-23: census 74/74, five "unmapped" by source count, all five recorded).
+// report from a field project, 2026-09-23: census 74/74, five "unmapped" by source count, all five recorded).
 // census and status each once carried their own spelling of this; two spellings are two answers
 // on the same mine, so both now read this function.
 const mstatus = (m, id) => { const f = join(m.materials, id, 'converted.md'); return existsSync(f) ? fm(f, 'status') : '' }

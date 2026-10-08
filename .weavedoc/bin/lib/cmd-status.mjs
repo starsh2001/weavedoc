@@ -171,7 +171,7 @@ export function cmdStatus (m, out) {
   // map — the work behind the coverage ratio, judged by the ONE function census reads
   // (mappingState). This row once read card references alone ("no truth extracted yet"), so a
   // material DONE with zero cards — re-grounded, rejected by a ruling, skipped whole with reasons —
-  // was offered as map work that could never shrink the number (field report, Echo 2026-09-23).
+  // was offered as map work that could never shrink the number (field report from a field project, 2026-09-23).
   // Only `unmapped` is map work. A material with cards but no record is a ruling or a section
   // written from its cards: it gets its own line, never the map row. An unreadable ledger is
   // unknown, not zero, so the row says that instead of going quiet.
