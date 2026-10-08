@@ -4,7 +4,7 @@
       {
         "matcher": "Skill",
         "hooks": [
-          { "type": "command", "command": "node .weavedoc/bin/hooks/lease.mjs" }
+          { "type": "command", "command": "node \"${WEAVEDOC_ROOT:+$WEAVEDOC_ROOT/}.weavedoc/bin/hooks/lease.mjs\"" }
         ]
       }
     ],
@@ -12,7 +12,7 @@
       {
         "matcher": "Write|Edit",
         "hooks": [
-          { "type": "command", "command": "node .weavedoc/bin/hooks/gate.mjs" }
+          { "type": "command", "command": "node \"${WEAVEDOC_ROOT:+$WEAVEDOC_ROOT/}.weavedoc/bin/hooks/gate.mjs\"" }
         ]
       }
     ]

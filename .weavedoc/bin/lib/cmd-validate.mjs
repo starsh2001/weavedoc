@@ -1297,8 +1297,39 @@ export function cmdValidate (m, out, json = false, consecOk = '') {
     const hookWarn = (code, message) => {
       if (code === 'HOOKS-NOTEMPLATE') warn('HOOKS-NOTEMPLATE', message)
       else if (code === 'HOOKS-STALE') warn('HOOKS-STALE', message)
+      else if (code === 'HOOKS-RELATIVE') warn('HOOKS-RELATIVE', message)
       else if (code === 'CODEX-HOOKS-NOTEMPLATE') warn('CODEX-HOOKS-NOTEMPLATE', message)
       else if (code === 'CODEX-HOOKS-STALE') warn('CODEX-HOOKS-STALE', message)
+      else if (code === 'CODEX-HOOKS-RELATIVE') warn('CODEX-HOOKS-RELATIVE', message)
+    }
+    // Entries planted before 0.7.7 spell the script by a BARE relative path (`node
+    // .weavedoc/bin/hooks/gate.mjs`). Their tails are current — the prefix is environment — and they
+    // work on this checkout and in any git worktree that carries its own .weavedoc/, because the
+    // scripts read WEAVEDOC_ROOT themselves. A worktree that carries none (a repository that does not
+    // track .weavedoc/) cannot reach the script at all, and a gate that cannot start fails open
+    // without a word. Whether this repository tracks .weavedoc/ is not this checker's to see, so the
+    // replant is NAMED rather than inferred: a notice, never a block. A prefix that is absolute, or the
+    // WEAVEDOC_ROOT one the templates carry, reaches the scripts from anywhere and is not counted.
+    const bareRelative = text => {
+      const hooks = JSON.parse(text)?.hooks
+      if (hooks === null || typeof hooks !== 'object') return 0
+      let n = 0
+      for (const arr of Object.values(hooks)) {
+        if (!Array.isArray(arr)) continue
+        for (const group of arr) {
+          for (const h of (Array.isArray(group?.hooks) ? group.hooks : [])) {
+            const cmd = typeof h?.command === 'string' ? h.command : ''
+            const at = cmd.indexOf(MARK)
+            if (at < 0) continue
+            const pre = cmd.slice(0, at)
+            if (pre.includes('WEAVEDOC_ROOT')) continue
+            // The path token in front of the marker: what follows the last blank or quote.
+            const tok = pre.slice(Math.max(...[' ', '\t', '"', "'"].map(c => pre.lastIndexOf(c))) + 1)
+            if (tok === '' || tok === './' || tok === '.\\') n++
+          }
+        }
+      }
+      return n
     }
     // Marker-bearing tuples out of one settings-shaped object. A tail is taken from the marker on,
     // so an absolute and a project-relative prefix are the same wiring; trailing arguments remain.
@@ -1324,9 +1355,9 @@ export function cmdValidate (m, out, json = false, consecOk = '') {
       }
       return out.sort()
     }
-    for (const { settingsRel, tplRel, missingCode, staleCode } of [
-      { settingsRel: '.claude/settings.json', tplRel: '.weavedoc/templates/hooks.json', missingCode: 'HOOKS-NOTEMPLATE', staleCode: 'HOOKS-STALE' },
-      { settingsRel: '.codex/hooks.json', tplRel: '.weavedoc/templates/codex-hooks.json', missingCode: 'CODEX-HOOKS-NOTEMPLATE', staleCode: 'CODEX-HOOKS-STALE' }
+    for (const { settingsRel, tplRel, missingCode, staleCode, relCode } of [
+      { settingsRel: '.claude/settings.json', tplRel: '.weavedoc/templates/hooks.json', missingCode: 'HOOKS-NOTEMPLATE', staleCode: 'HOOKS-STALE', relCode: 'HOOKS-RELATIVE' },
+      { settingsRel: '.codex/hooks.json', tplRel: '.weavedoc/templates/codex-hooks.json', missingCode: 'CODEX-HOOKS-NOTEMPLATE', staleCode: 'CODEX-HOOKS-STALE', relCode: 'CODEX-HOOKS-RELATIVE' }
     ]) {
       const raw = readOr(join(m.root, settingsRel))
       if (raw.includes(MARK)) {
@@ -1345,6 +1376,9 @@ export function cmdValidate (m, out, json = false, consecOk = '') {
             // U() on the separator too: M passes interpolated values through untouched.
             const shown = have.length === 0 ? '(none readable)' : have.join(U(' · '))
             hookWarn(staleCode, M`${settingsRel}'s weavedoc hook entries differ from ${tplRel} — found: ${shown}. The gate and the lease are how a session learns which skill owns a path, so a stale or half-planted pair enforces the previous release's rules, or none at all. Re-run weavedoc-init (reconfigure); entries without the marker are the project's own and are never compared`)
+          } else {
+            const n = bareRelative(raw)
+            if (n > 0) hookWarn(relCode, M`${settingsRel} plants ${String(n)} weavedoc hook entr${n === 1 ? 'y' : 'ies'} by a bare relative path ('node .weavedoc/bin/hooks/…', the spelling before 0.7.7) — that spelling runs on this checkout and in any git worktree that carries its own .weavedoc/, but a worktree WITHOUT one (a repository that does not track .weavedoc/) cannot reach the scripts, and its write gate then fails open without a word. Re-run weavedoc-init (reconfigure) to replant them with the WEAVEDOC_ROOT prefix`)
           }
         }
       }

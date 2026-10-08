@@ -40,7 +40,15 @@ export const canonPath = p => {
 // for byte. If the two ever disagreed, a session could invoke the owning skill forever while the
 // gate read a key the lease writer never wrote: a livelock whose only symptom is a deny message
 // that keeps being right. hooks -> bin -> .weavedoc -> root.
+// UNLESS WEAVEDOC_ROOT names the mine — the variable the runtime reads, set by a host whose session
+// works in a git worktree on the original checkout's mine. It wins over this file's location so the
+// hooks, the lease key and every command answer with ONE root even when the harness ran a
+// worktree's own copy of these scripts (PowerShell expands the template's `${…:+…}` prefix to
+// nothing; entries planted before 0.7.7 carry no prefix at all). A path that does not exist throws
+// here, and each hook's own failure rule applies.
 export function mineRoot (metaUrl) {
+  const given = process.env.WEAVEDOC_ROOT ?? ''
+  if (given !== '') return canonPath(given)
   return canonPath(dirname(dirname(dirname(dirname(fileURLToPath(metaUrl))))))
 }
 

@@ -12,6 +12,17 @@
 
 Codex project hook은 trusted project에서만 load됩니다. reconfigure 뒤 `/hooks`에서 entry를 한 번 review하고, prompt가 나오면 project를 trust합니다. 이 단계 전에도 skills와 runtime command는 동작하지만, session별 write gate는 load되지 않습니다.
 
+## 0.7.7: git 워크트리 세션 — 마인 하나를 루트로 지명
+
+데이터 이주는 없습니다. 런타임이 `--root <dir>`(명령 앞)과 `WEAVEDOC_ROOT`를 받고, 스킬과 hook 템플릿이 런타임을 `node "${WEAVEDOC_ROOT:+$WEAVEDOC_ROOT/}.weavedoc/bin/…"`로 부릅니다. 변수가 없으면 접두가 비어 지금과 같은 상대 경로가 됩니다.
+
+- **번들과 스킬 트리**는 평소처럼 복사합니다(`.weavedoc/`, `.claude/skills/weavedoc-*`, `.agents/skills/weavedoc-*`).
+- **심어 둔 hook entry**는 `weavedoc-init` 재실행(reconfigure)으로 다시 심어야 새 형태가 됩니다. 0.7.7 이전 entry는 `HOOKS-STALE`이 아니라 **`HOOKS-RELATIVE`**(Codex는 `CODEX-HOOKS-RELATIVE`) 알림을 받습니다 — 실패가 아니라 알림입니다. 접두는 절대 경로 접두와 같은 "환경" 규칙으로 비교되고, hook 스크립트가 `WEAVEDOC_ROOT`를 스스로 읽으므로 옛 entry도 워크트리에 `.weavedoc/` 사본이 있으면 지명된 마인을 판정합니다. 다시 심어야 하는 것은 `.weavedoc/`를 추적하지 않아 워크트리에 사본이 없는 저장소입니다. 거기서 옛 entry는 스크립트를 찾지 못해 실패하고, 게이트는 설계대로 열린 채 아무 말 없이 지나갑니다. 저장소가 `.weavedoc/`를 추적하는지는 `validate`가 볼 수 없으므로, 알림은 옛 형태를 만나면 늘 나옵니다.
+- **CLAUDE.md / AGENTS.md 포인터 블록**도 바뀌었습니다(`pull` 예시가 접두 형태가 되고, `WEAVEDOC_ROOT`가 있으면 마인이 그 폴더라는 한 줄이 생김). 다시 심기 전까지 `CLAUDE-BLOCK-STALE` / `AGENTS-BLOCK-STALE`이 나옵니다 — 같은 reconfigure가 둘 다 고칩니다.
+- **에이전트의 파일 작업**: 아홉 스킬과 `READ.md`가 "`WEAVEDOC_ROOT`가 있으면 모든 마인 경로(`materials/`, `truths/`, `documents/`, `.weavedoc/` …)는 그 폴더 기준"이라고 말합니다. 워크트리 세션이 그 폴더를 읽고 쓸 수 있도록 호스트가 열어 줘야 합니다 — Claude Code는 추가 허용 폴더(additional directory), Codex는 쓰기 가능 경로(writable root)로. init이 심는 하네스·git 파일(`CLAUDE.md`, `AGENTS.md`, `.claude/settings.json`, `.codex/hooks.json`, `.ignore`, `.gitattributes`)은 마인 경로가 아니므로 세션이 도는 체크아웃에 그대로 둡니다.
+- **Codex**: hook 명령 문자열이 바뀌었고 Windows용 `commandWindows`가 생겼습니다(Codex는 Windows에서 hook을 `cmd.exe /C`로 실행하므로 POSIX 표기가 통하지 않습니다). reconfigure 뒤 `/hooks`에서 entry를 다시 review하고, prompt가 나오면 trust합니다.
+- 호스트는 `weavedoc version`의 `capabilities: root-override`(`--json`에서는 `"capabilities"` 배열)로 지원 여부를 판별합니다.
+
 ## 스키마가 낡은 광산을 만나면
 
 버전 게이트가 살아 있으므로, 낡은 광산은 어느 일반 명령에서든 한 가지 답 — 어느 체크아웃으로 가라 — 를 받습니다. 판정 없이 거절만 합니다(v2 카드는 v3 필수 키를 전부 만족해서, 게이트가 없으면 v3 규칙 아래 깨끗하게 **오통과**합니다 — 게이트는 이주기와 달리 은퇴하지 않습니다).

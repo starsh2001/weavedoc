@@ -36,8 +36,11 @@ const canonPath = p => {
   return realpathSync(p)
 }
 
-// Derived exactly as lease.mjs derives it — see the livelock note there.
+// Derived exactly as lease.mjs derives it — see the livelock note there, and the WEAVEDOC_ROOT
+// override it shares.
 function mineRoot (metaUrl) {
+  const given = process.env.WEAVEDOC_ROOT ?? ''
+  if (given !== '') return canonPath(given)
   return canonPath(dirname(dirname(dirname(dirname(fileURLToPath(metaUrl))))))
 }
 

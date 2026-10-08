@@ -22,6 +22,10 @@
 //   interview [claude|codex]   init's fixed questionnaire in the active harness's question schema
 //   activate <weavedoc-skill>  Codex hook handshake (records nothing by itself)
 //
+//   --root <dir>      (before the command; or WEAVEDOC_ROOT) the mine to work on, taken as given
+//                     instead of walking up from the working directory — how a git-worktree session
+//                     reaches the ONE mine of the original checkout
+//
 // THE SPECIFICATION IS tests/regress.sh — every case is a CLI black box (build a mine, run a
 // command, assert stdout and the exit code), which is what let this runtime be graded against the
 // bash implementation it replaced, case for case, without touching a case. That implementation was
@@ -30,13 +34,46 @@
 //
 // No npm dependencies, ever — node:fs, node:path, node:crypto are enough. Node 18+.
 import { existsSync, statSync, readFileSync, readdirSync } from 'node:fs'
-import { dirname, join } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import { createHash } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url))
 
-// ---- find project ROOT: walk up from CWD for a .weavedoc/ dir; fallback to the script's repo ----
+// ---- a GIVEN root: `--root <dir>` before the command, else WEAVEDOC_ROOT ----------------------
+// A host sets it when a session's working directory is not the mine it works on — a git worktree,
+// whose sessions must share the original checkout's ONE mine (one allocator, one mine.lock) instead
+// of opening a second mine in their own copy. The flag beats the variable; an EMPTY variable is
+// unset, which is how the skills' `${WEAVEDOC_ROOT:+…}` prefix reads it too.
+// A given root is TAKEN, never searched from: without a .weavedoc/ directory it is refused here,
+// before any command runs — falling back to the walk below would quietly answer for another mine.
+const ARGV = process.argv.slice(2)
+let givenRoot = null
+let givenBy = ''
+if (ARGV[0] === '--root') {
+  if (ARGV.length < 2 || ARGV[1] === '') {
+    process.stderr.write('usage: weavedoc [--root <dir>] <command> …\n')
+    process.exit(2)
+  }
+  givenRoot = ARGV[1]; givenBy = '--root'
+  ARGV.splice(0, 2)
+} else if ((process.env.WEAVEDOC_ROOT ?? '') !== '') {
+  givenRoot = process.env.WEAVEDOC_ROOT; givenBy = 'WEAVEDOC_ROOT'
+}
+const GIVEN_ROOT = givenRoot === null ? null : resolve(givenRoot)
+if (GIVEN_ROOT !== null) {
+  let ok = false
+  try { ok = statSync(join(GIVEN_ROOT, '.weavedoc')).isDirectory() } catch { /* absent — refused below */ }
+  if (!ok) {
+    const shown = GIVEN_ROOT.replace(/\\/g, '/')
+    process.stderr.write(`weavedoc: ${givenBy} names '${givenRoot}'${shown === givenRoot ? '' : ` (${shown})`}, ` +
+      'which holds no .weavedoc/ directory — a given root is used as it is and never replaced by another; ' +
+      'name the folder that holds the mine\'s .weavedoc/\n')
+    process.exit(2)
+  }
+}
+
+// ---- otherwise: walk up from CWD for a .weavedoc/ dir; fallback to the script's repo ----
 // Mirrors find_root(): the FIRST ancestor holding .weavedoc wins, so a command run from deep
 // inside a project still addresses that project and not the runtime's own repo.
 function findRoot () {
@@ -52,7 +89,7 @@ function findRoot () {
   return join(SCRIPT_DIR, '..', '..')
 }
 
-const ROOT = findRoot()
+const ROOT = GIVEN_ROOT ?? findRoot()
 const CONFIG = join(ROOT, '.weavedoc', 'config.yaml')
 // Schema beside the mine, else beside the script — the same two-step the bash runtime uses, so a
 // runtime invoked against a foreign directory still reads a schema rather than silently reading none.
@@ -97,6 +134,12 @@ const jsonEsc = s => s
   .replace(/\n/g, '\\n').replace(/\t/g, '\\t').replace(/\r/g, '')
 
 // ---- commands ----
+// What THIS runtime supports beyond the commands themselves, printed by `version` so an embedding
+// host can probe for a feature instead of comparing version numbers. A token is added when the
+// feature ships and never renamed: a host that keys on it would silently lose the feature.
+//   root-override — `--root <dir>` / WEAVEDOC_ROOT name the mine (see the header)
+const CAPABILITIES = ['root-override']
+
 function cmdVersion (json) {
   // VERSION is the SemVer release version. It is the ONE label: the git tag, the CHANGELOG section
   // heading, and the value an embedding installer shows a user all read this file. It moves every
@@ -132,12 +175,14 @@ function cmdVersion (json) {
   if (json) {
     const ver = jsonEsc(body.replace(/\n+$/, ''))
     outln(`{"output_schema_version":1,"command":"version","version":"${ver}",` +
-          `"fingerprint":"${jsonEsc(fp.slice(0, 12))}","schema_version":${schemaVer()}}`)
+          `"fingerprint":"${jsonEsc(fp.slice(0, 12))}","schema_version":${schemaVer()},` +
+          `"capabilities":[${CAPABILITIES.map(c => `"${c}"`).join(',')}]}`)
     return 0
   }
   out(body)
   if (fp) outln(`fingerprint: ${fp.slice(0, 12)}  (bin+schema — compare this, not just the version)`)
   outln(`schema: ${schemaVer()} (v3-only; a v2 mine migrates via the pinned v0.6.14 bridge, a v1 mine via the v0.5.21 bridge first)`)
+  outln(`capabilities: ${CAPABILITIES.join(' ')}`)
   return 0
 }
 
@@ -343,7 +388,7 @@ function cmdActivate (skill) {
 // ---- dispatch ----
 // Every command validates its FULL argument list (WD-CLI-001): an extra argument or an unknown flag
 // is a typo'd intention, and a tool that ignores it does something other than what was asked.
-const USAGE = 'weavedoc — validate | pull <term> | impact <material-id> | status [--open] | scope | ' +
+const USAGE = 'weavedoc [--root <dir>] — validate | pull <term> | impact <material-id> | status [--open] | scope | ' +
   'intake [--no-source] <material-id> <note> | ' +
   'attest <verdict> <round> <standard> <id...> | seal-review <doc-id> [draft|final] | ' +
   'consecrate <doc-id> | conflict list|add|remove | ' +
@@ -358,7 +403,7 @@ const usage2 = u => { errln(`usage: ${u}`); process.exit(2) }
 // honest — a case reaching an unported command had to fail and say which one it wanted.
 const NOT_PORTED = new Set([])
 
-const argv = process.argv.slice(2)
+const argv = ARGV   // `--root <dir>`, when given, was taken off the front above
 const cmd = argv[0] ?? ''
 const rest = argv.slice(1)
 
@@ -397,9 +442,12 @@ let releaseMine = () => {}
 if (Object.prototype.hasOwnProperty.call(MUTATES, cmd) && MUTATES[cmd](rest)) {
   const { openMine } = await import('./lib/mine.mjs')
   const { acquireMineLock, releaseMineLock } = await import('./lib/lock.mjs')
-  const root = openMine(SCRIPT_DIR).root
+  const root = openMine(SCRIPT_DIR, GIVEN_ROOT).root
   mineLockPath = `${root}/.weavedoc/mine.lock`
-  const why = acquireMineLock(mineLockPath, '.weavedoc/mine.lock')
+  // The refusal names the path to delete when the lock is a leftover. Under a given root the
+  // working directory is somewhere else (a worktree), where the relative spelling names a lock
+  // that is not this one — so the path is spelled whole there.
+  const why = acquireMineLock(mineLockPath, GIVEN_ROOT === null ? '.weavedoc/mine.lock' : mineLockPath)
   if (why) { errln(`weavedoc ${cmd}: ${why}. Nothing written`); process.exit(1) }
   releaseMine = () => releaseMineLock(mineLockPath)
   // Released on EVERY exit, including the ones that call process.exit() deep inside a command.
@@ -434,7 +482,7 @@ switch (cmd) {
     const { openMine, versionGate } = await import('./lib/mine.mjs')
     const { cmdConsecrate, realOps } = await import('./lib/cmd-consecrate.mjs')
     const { cmdValidate } = await import('./lib/cmd-validate.mjs')
-    const mine = openMine(SCRIPT_DIR)
+    const mine = openMine(SCRIPT_DIR, GIVEN_ROOT)
     const g = versionGate(mine, errln); if (g) { rc = g; break }
     // validate runs IN PROCESS and prints straight through, as the bash version does. The doc id
     // rides as an ARGUMENT so this document's in-flight artifacts are exempt — never a variable,
@@ -449,7 +497,7 @@ switch (cmd) {
     const { cmdRetag } = await import('./lib/cmd-retag.mjs')
     const { cmdReindex } = await import('./lib/cmd-reindex.mjs')
     const { cmdValidate } = await import('./lib/cmd-validate.mjs')
-    const mine = openMine(SCRIPT_DIR)
+    const mine = openMine(SCRIPT_DIR, GIVEN_ROOT)
     const g = versionGate(mine, errln); if (g) { rc = g; break }
     // reindex and validate run IN PROCESS, exactly as the bash version calls its own functions —
     // that is what lets the rename answer to a full validation and roll back as one transaction.
@@ -466,7 +514,7 @@ switch (cmd) {
     if (va.length !== 0) usage2('weavedoc validate [--json]')
     const { openMine } = await import('./lib/mine.mjs')
     const { cmdValidate } = await import('./lib/cmd-validate.mjs')
-    rc = cmdValidate(openMine(SCRIPT_DIR), outln, vjson); break
+    rc = cmdValidate(openMine(SCRIPT_DIR, GIVEN_ROOT), outln, vjson); break
   }
   case 'scope': {
     let sjson = false
@@ -475,7 +523,7 @@ switch (cmd) {
     if (sa.length !== 0) usage2('weavedoc scope [--json]')
     const { openMine, versionGate } = await import('./lib/mine.mjs')
     const { cmdScope } = await import('./lib/cmd-scope.mjs')
-    const mine = openMine(SCRIPT_DIR)
+    const mine = openMine(SCRIPT_DIR, GIVEN_ROOT)
     const g = versionGate(mine, errln); if (g) { rc = g; break }
     rc = cmdScope(mine, outln, sjson); break
   }
@@ -484,7 +532,7 @@ switch (cmd) {
     // command judge it, so the usage line goes to stdout with exit 2 rather than to stderr.
     const { openMine, versionGate } = await import('./lib/mine.mjs')
     const { cmdAttest } = await import('./lib/cmd-attest.mjs')
-    const mine = openMine(SCRIPT_DIR)
+    const mine = openMine(SCRIPT_DIR, GIVEN_ROOT)
     const g = versionGate(mine, errln); if (g) { rc = g; break }
     rc = cmdAttest(mine, outln, rest); break
   }
@@ -493,7 +541,7 @@ switch (cmd) {
     // to STDOUT with exit 2 — a write command's refusals belong on the same stream as its receipts.
     const { openMine, versionGate } = await import('./lib/mine.mjs')
     const { cmdIntake } = await import('./lib/cmd-intake.mjs')
-    const mine = openMine(SCRIPT_DIR)
+    const mine = openMine(SCRIPT_DIR, GIVEN_ROOT)
     const g = versionGate(mine, errln); if (g) { rc = g; break }
     rc = cmdIntake(mine, outln, rest); break
   }
@@ -502,7 +550,7 @@ switch (cmd) {
     // goes to STDERR, not stdout. Two write commands, two spellings; both are contract.
     const { openMine, versionGate } = await import('./lib/mine.mjs')
     const { cmdReindex } = await import('./lib/cmd-reindex.mjs')
-    const mine = openMine(SCRIPT_DIR)
+    const mine = openMine(SCRIPT_DIR, GIVEN_ROOT)
     const g = versionGate(mine, errln); if (g) { rc = g; break }
     rc = cmdReindex(mine, outln, errln, rest); break
   }
@@ -512,7 +560,7 @@ switch (cmd) {
     if (rest.length < 1 || rest.length > 2) usage2('weavedoc seal-review <doc-id> [draft|final]')
     const { openMine, versionGate } = await import('./lib/mine.mjs')
     const { cmdSealReview } = await import('./lib/cmd-seal-review.mjs')
-    const mine = openMine(SCRIPT_DIR)
+    const mine = openMine(SCRIPT_DIR, GIVEN_ROOT)
     const g = versionGate(mine, errln); if (g) { rc = g; break }
     rc = cmdSealReview(mine, outln, rest[0], rest[1]); break
   }
@@ -520,7 +568,7 @@ switch (cmd) {
     if (rest.length !== 1) usage2('weavedoc pull <term>')
     const { openMine, versionGate } = await import('./lib/mine.mjs')
     const { cmdPull } = await import('./lib/cmd-pull.mjs')
-    const mine = openMine(SCRIPT_DIR)
+    const mine = openMine(SCRIPT_DIR, GIVEN_ROOT)
     const g = versionGate(mine, errln); if (g) { rc = g; break }
     rc = cmdPull(mine, outln, rest[0]); break
   }
@@ -532,7 +580,7 @@ switch (cmd) {
     if (sa.length !== 0) usage2('weavedoc status [--open]')
     const { openMine, versionGate } = await import('./lib/mine.mjs')
     const { cmdStatus, cmdStatusOpen } = await import('./lib/cmd-status.mjs')
-    const mine = openMine(SCRIPT_DIR)
+    const mine = openMine(SCRIPT_DIR, GIVEN_ROOT)
     const g = versionGate(mine, errln); if (g) { rc = g; break }
     rc = sopen ? cmdStatusOpen(mine, outln) : cmdStatus(mine, outln); break
   }
@@ -540,7 +588,7 @@ switch (cmd) {
     if (rest.length !== 0) usage2('weavedoc gaps')
     const { openMine, versionGate } = await import('./lib/mine.mjs')
     const { cmdGaps } = await import('./lib/cmd-gaps.mjs')
-    const mine = openMine(SCRIPT_DIR)
+    const mine = openMine(SCRIPT_DIR, GIVEN_ROOT)
     const g = versionGate(mine, errln); if (g) { rc = g; break }
     rc = cmdGaps(mine, outln, errln); break
   }
@@ -548,7 +596,7 @@ switch (cmd) {
     if (rest.length !== 0) usage2('weavedoc census')
     const { openMine, versionGate } = await import('./lib/mine.mjs')
     const { cmdCensus } = await import('./lib/cmd-census.mjs')
-    const mine = openMine(SCRIPT_DIR)
+    const mine = openMine(SCRIPT_DIR, GIVEN_ROOT)
     const g = versionGate(mine, errln); if (g) { rc = g; break }
     rc = cmdCensus(mine, outln); break
   }
@@ -556,7 +604,7 @@ switch (cmd) {
     if (rest.length !== 1) usage2('weavedoc impact <material-id>')
     const { openMine, versionGate } = await import('./lib/mine.mjs')
     const { cmdImpact } = await import('./lib/cmd-impact.mjs')
-    const mine = openMine(SCRIPT_DIR)
+    const mine = openMine(SCRIPT_DIR, GIVEN_ROOT)
     const g = versionGate(mine, errln); if (g) { rc = g; break }
     rc = cmdImpact(mine, outln, rest[0]); break
   }
@@ -564,7 +612,7 @@ switch (cmd) {
     if (rest.length < 1 || rest.length > 2) usage2('weavedoc conflict list | add <entry.json> | remove <cNNN>')
     const { openMine, versionGate } = await import('./lib/mine.mjs')
     const { cmdConflict } = await import('./lib/cmd-state.mjs')
-    const mine = openMine(SCRIPT_DIR)
+    const mine = openMine(SCRIPT_DIR, GIVEN_ROOT)
     const g = versionGate(mine, errln); if (g) { rc = g; break }
     rc = cmdConflict(mine, outln, rest); break
   }
@@ -572,7 +620,7 @@ switch (cmd) {
     if (rest.length !== 1) usage2('weavedoc alloc <conflict|material|truth>')
     const { openMine, versionGate } = await import('./lib/mine.mjs')
     const { cmdAlloc } = await import('./lib/cmd-state.mjs')
-    const mine = openMine(SCRIPT_DIR)
+    const mine = openMine(SCRIPT_DIR, GIVEN_ROOT)
     const g = versionGate(mine, errln); if (g) { rc = g; break }
     rc = cmdAlloc(mine, outln, rest); break
   }

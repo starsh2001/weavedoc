@@ -31,6 +31,11 @@ REPO=$(cd "$(dirname "$0")/.." >/dev/null 2>&1 && pwd)
 # (tests/git-env.sh records what leaked before, measured).
 # shellcheck source=tests/git-env.sh
 . "$REPO/tests/git-env.sh" || { echo "tests/git-env.sh could not be sourced — refusing to run git half-isolated"; exit 2; }
+# THE MINE ROOT IS ENVIRONMENT TOO (0.7.7). The runtime and both hook scripts take WEAVEDOC_ROOT as
+# the mine to work on, so a suite started from a session that names one — a git-worktree session —
+# would aim every case at THAT mine instead of its fixture, and write into it. Cleared for the whole
+# process; the cases that exercise the variable set it on the one command they run.
+unset WEAVEDOC_ROOT
 
 # ---- runtime under test ----
 # Every case here is a CLI black box: it builds a mine, runs a command, and asserts stdout plus the
@@ -3748,6 +3753,137 @@ acct_mine_lock_released_on_refusal() {
   [ ! -d "$W/.weavedoc/mine.lock" ] || bad "the mine lock survived a usage refusal"
   vrun validate; expect_pass
 }
+
+# ---- root override (0.7.7): a git-worktree session addresses the original checkout's ONE mine ----
+# A host (Hammoc) gives each git worktree its own AI session, and all of them must share the original
+# checkout's mine — one id allocator, one mine.lock. Their working directory is the worktree, where
+# the walk up from cwd finds the wrong mine (a tracked copy) or none at all, so `--root <dir>` and
+# WEAVEDOC_ROOT name the mine instead. Two worktree shapes, built BESIDE the fixture (inside $WORK,
+# so the run's own cleanup removes them):
+#   WTC — a checkout that tracks the mine: a FULL copy, and a working mine of its own. Every case
+#         that redirects away from it also runs a control leg against it — a redirect is measured
+#         only against a target that could have answered instead.
+#   WTB — a checkout that does not: no .weavedoc/ anywhere.
+# Paths are NATIVE (`pwd -W` under MSYS) for hookenv's reason: the runtime is a native program.
+# `alloc` is the probe throughout: a write whose printed answer IS the allocator's state, so which
+# mine answered is read off stdout rather than inferred.
+mkworktrees() { # sets WTC, WTB, NMAIN (native $W), NWTC, NWTB
+  WTC="$W.wtcopy"; WTB="$W.wtbare"
+  rm -rf "$WTC" "$WTB"; mkdir -p "$WTC" "$WTB"
+  cp -r "$W"/. "$WTC"/
+  NMAIN=$( cd "$W" && { pwd -W 2>/dev/null || pwd; } )
+  NWTC=$( cd "$WTC" && { pwd -W 2>/dev/null || pwd; } )
+  NWTB=$( cd "$WTB" && { pwd -W 2>/dev/null || pwd; } )
+  [ -n "$NMAIN" ] && [ -n "$NWTC" ] && [ -n "$NWTB" ] || { bad "mkworktrees resolved no native path"; return 1; }
+}
+seqof() { tr -d ' \r\n' < "$1/.weavedoc-state/id-sequences.json"; }   # the allocator's whole state
+
+acct_root_override_reads_and_writes_the_given_mine() {
+  # The acceptance shape: from a worktree, `--root <main>` or WEAVEDOC_ROOT reads and writes the main
+  # mine whether or not the worktree carries a .weavedoc/ of its own — with main's runtime, and with
+  # the worktree's own runtime copy (the line a PowerShell session or a pre-0.7.7 skill runs: no
+  # prefix, so the copy executes, and the mine must still be main's).
+  mkworktrees || return
+  local copy0 c
+  copy0=$(seqof "$WTC")
+  OUT=$( ( cd "$WTC" && $TO node "$NMAIN/.weavedoc/bin/weavedoc.mjs" --root "$NMAIN" alloc truth ) 2>&1 ); RC=$?
+  [ "$RC" -eq 0 ] && [ "$OUT" = "t002" ] || { bad "--root from the tracked-copy worktree: rc $RC, '$OUT' (want t002 from main's allocator)"; return; }
+  OUT=$( ( cd "$WTB" && WEAVEDOC_ROOT="$NMAIN" $TO node "$NMAIN/.weavedoc/bin/weavedoc.mjs" alloc truth ) 2>&1 ); RC=$?
+  [ "$RC" -eq 0 ] && [ "$OUT" = "t003" ] || { bad "WEAVEDOC_ROOT from the bare worktree: rc $RC, '$OUT' (want t003 — the SAME allocator)"; return; }
+  OUT=$( ( cd "$WTC" && WEAVEDOC_ROOT="$NMAIN" $TO node .weavedoc/bin/weavedoc.mjs alloc truth ) 2>&1 ); RC=$?
+  [ "$RC" -eq 0 ] && [ "$OUT" = "t004" ] || { bad "the worktree's own runtime under WEAVEDOC_ROOT: rc $RC, '$OUT' (want t004)"; return; }
+  [ "$(seqof "$WTC")" = "$copy0" ] || { bad "a redirected write moved the worktree copy's allocator"; return; }
+  # Reads answer from main as well — clean, from the worktree that has no mine to fall back on.
+  for c in validate census status; do
+    OUT=$( ( cd "$WTB" && $TO node "$NMAIN/.weavedoc/bin/weavedoc.mjs" --root "$NMAIN" $c ) 2>&1 ); RC=$?
+    [ "$RC" -eq 0 ] || { bad "[$c] with --root main from the bare worktree: rc $RC — $OUT"; return; }
+  done
+  # CONTROL: the copy is a working mine — without the override its own allocator answers.
+  OUT=$( ( cd "$WTC" && $TO node .weavedoc/bin/weavedoc.mjs alloc truth ) 2>&1 ); RC=$?
+  [ "$RC" -eq 0 ] && [ "$OUT" = "t002" ] || { bad "control: the copy's own allocator gave rc $RC, '$OUT' — the redirect legs measured nothing"; return; }
+  OUT="main allocator answered t002 · t003 · t004 (flag · variable · the copy's runtime); the copy stayed at its own t002"; RC=0
+  ok
+}
+acct_root_override_without_a_mine_is_refused() {
+  # A given root without .weavedoc/ is REFUSED before any command runs (exit 2, the reason named,
+  # the source named) — never answered by another root. The working directory here IS a mine, so a
+  # fallback would have somewhere to land: the whole tree is hashed around the runs to prove nothing
+  # did. `version` is in the roster because the rule is uniform: a given root is checked first.
+  mkworktrees || return
+  local before after c
+  before=$(cd "$W" && find . -type f -print | LC_ALL=C sort | xargs sha256sum 2>/dev/null | sha256sum | awk '{print $1}')
+  for c in "alloc truth" status version; do
+    # shellcheck disable=SC2086
+    OUT=$( ( cd "$W" && $TO "${WDRUN[@]}" --root "$NWTB" $c ) 2>&1 ); RC=$?
+    [ "$RC" -eq 2 ] || { bad "[--root <no mine> $c] rc $RC, want 2 — $OUT"; return; }
+    has "holds no .weavedoc/ directory" || { bad "[--root <no mine> $c] refused without saying why — $OUT"; return; }
+    # shellcheck disable=SC2086
+    OUT=$( ( cd "$W" && WEAVEDOC_ROOT="$NWTB" $TO "${WDRUN[@]}" $c ) 2>&1 ); RC=$?
+    [ "$RC" -eq 2 ] || { bad "[WEAVEDOC_ROOT=<no mine> $c] rc $RC, want 2 — $OUT"; return; }
+    has "WEAVEDOC_ROOT names" || { bad "[WEAVEDOC_ROOT=<no mine> $c] the refusal does not name its source — $OUT"; return; }
+  done
+  after=$(cd "$W" && find . -type f -print | LC_ALL=C sort | xargs sha256sum 2>/dev/null | sha256sum | awk '{print $1}')
+  [ "$before" = "$after" ] || { bad "a refused root still wrote into the working directory's mine"; return; }
+  OUT=$( ( cd "$W" && $TO "${WDRUN[@]}" --root ) 2>&1 ); RC=$?
+  { [ "$RC" -eq 2 ] && has "usage: weavedoc [--root <dir>]"; } || { bad "a bare --root must be a usage error: rc $RC — $OUT"; return; }
+  ok
+}
+acct_root_override_flag_beats_the_variable() {
+  # Two declarations, one answer: the flag wins. The variable here names a folder with no mine, so a
+  # variable that won would REFUSE — the outcome is the measurement. And an EMPTY variable is unset,
+  # which is how the skills' `${WEAVEDOC_ROOT:+…}` prefix reads it too.
+  mkworktrees || return
+  OUT=$( ( cd "$WTB" && WEAVEDOC_ROOT="$NWTB" $TO node "$NMAIN/.weavedoc/bin/weavedoc.mjs" --root "$NMAIN" alloc truth ) 2>&1 ); RC=$?
+  [ "$RC" -eq 0 ] && [ "$OUT" = "t002" ] || { bad "flag vs variable: rc $RC, '$OUT' — the flag must win"; return; }
+  OUT=$( ( cd "$W" && WEAVEDOC_ROOT='' $TO "${WDRUN[@]}" alloc truth ) 2>&1 ); RC=$?
+  [ "$RC" -eq 0 ] && [ "$OUT" = "t003" ] || { bad "an empty WEAVEDOC_ROOT was not read as unset: rc $RC, '$OUT'"; return; }
+  ok
+}
+acct_root_override_worktrees_share_one_mine_lock() {
+  # THE SINGLE-WRITER CONTRACT ACROSS WORKTREES. Two worktree sessions writing at once must meet ONE
+  # lock — main's — so one proceeds and the other is refused exactly as today: the same sentence,
+  # exit 1, nothing written. Simulated with a planted lock, as acct_mine_lock_admits_one_writer is
+  # (the gate is one code path for every writer). A lock held at main refuses BOTH worktree shapes;
+  # then a DECOY lock in the tracked copy's own .weavedoc/ refuses nobody — that pair is what proves
+  # the lock taken is main's and not the copy's. The refusal names main's lock by its WHOLE path:
+  # from a worktree, the usual '.weavedoc/mine.lock' would name a lock that is not this one.
+  mkworktrees || return
+  local main0 copy0
+  mkdir -p "$W/.weavedoc/mine.lock"; printf 'worktree-A' > "$W/.weavedoc/mine.lock/owner"
+  main0=$(seqof "$W"); copy0=$(seqof "$WTC")
+  OUT=$( ( cd "$WTC" && WEAVEDOC_ROOT="$NMAIN" $TO node .weavedoc/bin/weavedoc.mjs alloc truth ) 2>&1 ); RC=$?
+  [ "$RC" -eq 1 ] || { bad "a write from the tracked-copy worktree ran (rc $RC) while main's lock was held — $OUT"; return; }
+  has 'ONE writing command per mine at a time' || { bad "refused without naming the single-writer contract — $OUT"; return; }
+  has "$NMAIN/.weavedoc/mine.lock" || { bad "the refusal does not name main's lock by its whole path — $OUT"; return; }
+  [ ! -e "$WTC/.weavedoc/mine.lock" ] || { bad "the refused write created a lock in the worktree's copy"; return; }
+  OUT=$( ( cd "$WTB" && $TO node "$NMAIN/.weavedoc/bin/weavedoc.mjs" --root "$NMAIN" alloc truth ) 2>&1 ); RC=$?
+  { [ "$RC" -eq 1 ] && has 'ONE writing command per mine at a time'; } || { bad "a write from the bare worktree was not refused by main's lock: rc $RC — $OUT"; return; }
+  [ "$(seqof "$W")" = "$main0" ] && [ "$(seqof "$WTC")" = "$copy0" ] || { bad "a refused write moved an allocator"; return; }
+  [ -f "$W/.weavedoc/mine.lock/owner" ] || { bad "a refusal removed the holder's lock"; return; }
+  # The holder finishes; a decoy now sits in the copy's own .weavedoc/. The redirected write lands.
+  rm -rf "$W/.weavedoc/mine.lock"
+  mkdir -p "$WTC/.weavedoc/mine.lock"; printf 'decoy' > "$WTC/.weavedoc/mine.lock/owner"
+  OUT=$( ( cd "$WTC" && WEAVEDOC_ROOT="$NMAIN" $TO node .weavedoc/bin/weavedoc.mjs alloc truth ) 2>&1 ); RC=$?
+  [ "$RC" -eq 0 ] && [ "$OUT" = "t002" ] || { bad "with main's lock free the write did not land in main (rc $RC, '$OUT') — the copy's decoy gated it"; return; }
+  [ ! -d "$W/.weavedoc/mine.lock" ] || { bad "main's lock survived the successful write"; return; }
+  [ -f "$WTC/.weavedoc/mine.lock/owner" ] || { bad "the redirected write touched the copy's lock"; return; }
+  # CONTROL: without the override the decoy IS the copy's lock and refuses — the leg above measured the redirect.
+  OUT=$( ( cd "$WTC" && $TO node .weavedoc/bin/weavedoc.mjs alloc truth ) 2>&1 ); RC=$?
+  { [ "$RC" -eq 1 ] && has 'ONE writing command per mine at a time'; } || { bad "control: the copy's own lock did not gate its own write (rc $RC) — the decoy leg measured nothing"; return; }
+  OUT="main's lock refused both worktrees · the copy's decoy refused only the copy's own write"; RC=0
+  ok
+}
+acct_version_names_its_capabilities() {
+  # A host probes for a feature, not a version number: `version` names what this runtime supports on
+  # a line of its own, and --json carries the same list. root-override is the token a host keys the
+  # worktree support on.
+  vrun version
+  expect_pass
+  expect_has "capabilities: root-override"
+  vrun version --json
+  expect_pass
+  expect_has '"capabilities":["root-override"]'
+}
 acct_attest_judges_nothing_before_the_lock() {
   # THE CLASS GUARD for attest (v0.5.4, review #8 P1-2), same shape: a BOGUS id is a judgment
   # about the mine. Resolved before the lock it fails instantly with 'no truth file'; resolved
@@ -7398,26 +7534,88 @@ pass_hooks_half_planted_is_stale() {
   vrun validate; expect_pass
   expect_has "HOOKS-STALE"
 }
+set_hook_cmds() { # $1=planted file, $2=JS expression over (cmd, script) -> the entry's new command
+  # Rewrites every marker-bearing command THROUGH the JSON, so a case states the spelling it wants
+  # instead of a sed that has to escape the template's quotes — and that silently matches nothing
+  # the day the template's spelling moves (0.7.7 moved it; three seds here would have gone vacuous).
+  node -e '
+    const fs = require("fs"); const [p, expr] = process.argv.slice(1)
+    const f = new Function("cmd", "script", "return (" + expr + ")")
+    const s = JSON.parse(fs.readFileSync(p, "utf8"))
+    for (const arr of Object.values(s.hooks)) for (const g of arr) for (const h of g.hooks) {
+      const m = /\.weavedoc\/bin\/hooks\/([a-z]+)\.mjs/.exec(h.command ?? "")
+      if (m) h.command = f(h.command, m[1])
+    }
+    fs.writeFileSync(p, JSON.stringify(s, null, 2) + "\n")
+  ' "$1" "$2"
+}
 pass_hooks_absolute_command_prefix_is_not_stale() {
   # The command PREFIX is environment, not wiring — an install that had to spell an absolute path
   # runs the same script. A tripwire that fired on this would cry wolf until nobody read it.
   plant_hooks
-  sed -i 's#"node \.weavedoc/bin/hooks/#"node /opt/proj/.weavedoc/bin/hooks/#g' "$W/.claude/settings.json"
+  set_hook_cmds "$W/.claude/settings.json" '"node /opt/proj/.weavedoc/bin/hooks/" + script + ".mjs"'
+  grep -q '"node /opt/proj/' "$W/.claude/settings.json" || { bad "fixture no-op: the command was not rewritten to an absolute path"; return; }
   vrun validate; expect_pass; expect_hasnt "HOOKS-"
+}
+pass_hooks_relative_form_notices_without_blocking() {
+  # The entries planted before 0.7.7 spell the script by a BARE relative path. Their tails are
+  # current — the prefix is environment, so this is NOT HOOKS-STALE — and they work on this checkout
+  # and in any worktree carrying its own .weavedoc/ (the scripts read WEAVEDOC_ROOT themselves). A
+  # worktree carrying none cannot reach them, and its gate fails open without a word; whether this
+  # repository tracks .weavedoc/ is not validate's to see, so the replant is NAMED: HOOKS-RELATIVE,
+  # a notice that never blocks (owner's ruling, 0.7.7). Three spellings: both entries bare, `./`,
+  # and one entry bare beside one prefixed — counted, so a half-replant still says what is left.
+  plant_hooks
+  set_hook_cmds "$W/.claude/settings.json" '"node .weavedoc/bin/hooks/" + script + ".mjs"'
+  grep -q '"node .weavedoc/bin/hooks/gate.mjs"' "$W/.claude/settings.json" || { bad "fixture no-op: the command was not rewritten to the pre-0.7.7 spelling"; return; }
+  vrun validate; expect_pass
+  expect_hasnt "HOOKS-STALE"
+  expect_has "[HOOKS-RELATIVE]"
+  expect_has "plants 2 weavedoc hook entries by a bare relative path"
+  plant_hooks
+  set_hook_cmds "$W/.claude/settings.json" '"node ./.weavedoc/bin/hooks/" + script + ".mjs"'
+  vrun validate; expect_pass
+  expect_has "[HOOKS-RELATIVE]"
+  plant_hooks
+  set_hook_cmds "$W/.claude/settings.json" 'script === "gate" ? "node .weavedoc/bin/hooks/gate.mjs" : cmd'
+  vrun validate; expect_pass
+  expect_hasnt "HOOKS-STALE"
+  expect_has "plants 1 weavedoc hook entry by a bare relative path"
+}
+pass_codex_hooks_relative_form_notices_without_blocking() {
+  # Codex's twin. Only `command` is judged — the Windows override's else-branch is relative BY
+  # DESIGN (that branch runs exactly when no root is named), so it must not be counted.
+  plant_codex_hooks
+  vrun validate; expect_pass; expect_hasnt "CODEX-HOOKS-"
+  set_hook_cmds "$W/.codex/hooks.json" '"node .weavedoc/bin/hooks/" + script + ".mjs"'
+  grep -q '"node .weavedoc/bin/hooks/gate.mjs"' "$W/.codex/hooks.json" || { bad "fixture no-op: the Codex command was not rewritten to the pre-0.7.7 spelling"; return; }
+  vrun validate; expect_pass
+  expect_hasnt "CODEX-HOOKS-STALE"
+  expect_has "[CODEX-HOOKS-RELATIVE]"
+}
+acct_json_hooks_relative_is_a_warning() {
+  plant_hooks
+  set_hook_cmds "$W/.claude/settings.json" '"node .weavedoc/bin/hooks/" + script + ".mjs"'
+  vrun validate --json
+  expect_pass
+  expect_has '"result":"pass"'
+  expect_has '"diagnostics":[]'
+  expect_has '"code":"HOOKS-RELATIVE"'
 }
 pass_hooks_quoted_command_is_not_stale() {
   # A cold review measured this (v0.6.10): a path holding a space has to be quoted, and the closing
   # quote landed inside the compared tail — so the ONE absolute spelling that actually runs read as
   # stale forever, which is exactly the cry-wolf the prefix-is-environment rule exists to prevent.
   plant_hooks
-  sed -i 's#"node \.weavedoc/bin/hooks/\([a-z]*\)\.mjs"#"node \\"/opt/my mine/.weavedoc/bin/hooks/\1.mjs\\""#g' "$W/.claude/settings.json"
+  set_hook_cmds "$W/.claude/settings.json" '"node \"/opt/my mine/.weavedoc/bin/hooks/" + script + ".mjs\""'
   grep -q 'my mine' "$W/.claude/settings.json" || { bad "fixture no-op: the command was not rewritten to a quoted absolute path"; return; }
   vrun validate; expect_pass; expect_hasnt "HOOKS-"
 }
 pass_hooks_trailing_argument_is_stale() {
   # …but what comes AFTER the script is not environment: it changes what runs.
   plant_hooks
-  sed -i 's#hooks/gate\.mjs"#hooks/gate.mjs --off"#' "$W/.claude/settings.json"
+  set_hook_cmds "$W/.claude/settings.json" 'script === "gate" ? cmd + " --off" : cmd'
+  grep -q -- '--off' "$W/.claude/settings.json" || { bad "fixture no-op: no trailing argument was added"; return; }
   vrun validate; expect_pass
   expect_has "HOOKS-STALE"
 }
@@ -7478,6 +7676,177 @@ acct_json_codex_hooks_stale_is_a_warning() {
   expect_has '"result":"pass"'
   expect_has '"diagnostics":[]'
   expect_has '"code":"CODEX-HOOKS-STALE"'
+}
+
+# ---- the shell spellings (0.7.7): skills and hooks reach the runtime WEAVEDOC_ROOT names ----
+# The skills and both hook templates spell the runtime "${WEAVEDOC_ROOT:+$WEAVEDOC_ROOT/}.weavedoc/…":
+# an empty prefix — today's relative path — unless a host names the mine. These cases EXECUTE the
+# shipped spellings, taken out of the shipped files rather than retyped, through the shells that run
+# them: sh for the skills' bash line and both templates' `command` (Claude Code runs hooks through
+# bash or sh, Codex through `$SHELL -lc`), cmd.exe for Codex's `commandWindows` (codex-rs spawns
+# `%COMSPEC% /C "<command>"` on Windows), and PowerShell for the skills' PowerShell prefix — the last
+# two wherever they exist, and OUT names every leg that ran.
+hook_spelling() { # $1=template $2=event $3=field → that entry's command text, verbatim
+  node -e '
+    const [f, ev, key] = process.argv.slice(1)
+    const h = JSON.parse(require("fs").readFileSync(f, "utf8")).hooks[ev][0].hooks[0]
+    process.stdout.write(h[key] ?? "")
+  ' "$1" "$2" "$3"
+}
+gate_payload() { # $1=session $2=cwd $3=absolute target
+  printf '{"session_id":"%s","cwd":"%s","hook_event_name":"PreToolUse","tool_name":"Write","tool_input":{"file_path":"%s","content":"x"}}' "$1" "$2" "$3"
+}
+skill_lease_payload() { # $1=session $2=cwd $3=skill — Claude's PostToolUse(Skill)
+  printf '{"session_id":"%s","cwd":"%s","hook_event_name":"PostToolUse","tool_name":"Skill","tool_input":{"skill":"%s","args":""}}' "$1" "$2" "$3"
+}
+codex_lease_payload() { # $1=session $2=cwd $3=the Bash command the skill ran — Codex's PostToolUse(Bash)
+  node -e '
+    const [sid, cwd, command] = process.argv.slice(1)
+    process.stdout.write(JSON.stringify({session_id:sid,cwd,hook_event_name:"PostToolUse",tool_name:"Bash",tool_input:{command}}))
+  ' "$1" "$2" "$3"
+}
+# The variable rides on the ONE command a leg runs — never exported: workers run cases back to back
+# in one bash, and a leaked WEAVEDOC_ROOT would aim every later case at this case's mine.
+via_sh() { # $1=cwd $2=command $3=stdin [$4=WEAVEDOC_ROOT; omitted = unset] — through sh, as a POSIX-shell harness runs it
+  if [ -n "${4:-}" ]; then
+    OUT=$(printf '%s' "$3" | ( cd "$1" && WEAVEDOC_ROOT="$4" WEAVEDOC_LEASE_DIR="$LDIR" $TO sh -c "$2" ) 2>&1); RC=$?
+  else
+    OUT=$(printf '%s' "$3" | ( cd "$1" && WEAVEDOC_LEASE_DIR="$LDIR" $TO sh -c "$2" ) 2>&1); RC=$?
+  fi
+}
+via_cmdexe() { # $1=cwd $2=command $3=stdin [$4=WEAVEDOC_ROOT] — exactly codex-rs's Windows spawn: `%COMSPEC% /C "<command>"`, verbatim
+  OUT=$(WEAVEDOC_LEASE_DIR="$LDIR" WD_ROOT_LEG="${4:-}" node -e '
+    const { spawnSync } = require("child_process")
+    const [cwd, line, input] = process.argv.slice(1)
+    const env = { ...process.env }
+    delete env.WD_ROOT_LEG
+    if (process.env.WD_ROOT_LEG) env.WEAVEDOC_ROOT = process.env.WD_ROOT_LEG
+    const r = spawnSync(process.env.COMSPEC || "cmd.exe", ["/C", `"${line}"`], { cwd, env, input, encoding: "utf8", windowsVerbatimArguments: true })
+    process.stdout.write((r.stdout || "") + (r.stderr || ""))
+    process.exit(r.status ?? 1)
+  ' "$1" "$2" "$3" 2>&1); RC=$?
+}
+on_windows() { case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) return 0 ;; esac; return 1; }
+
+acct_skill_runtime_spelling_reaches_the_named_mine() {
+  # The skills' line, run from a worktree with no .weavedoc/: through sh with WEAVEDOC_ROOT set it is
+  # MAIN's runtime on MAIN's mine; unset, in main, it is today's relative command. Where PowerShell
+  # exists, the callout's PowerShell prefix does the same — and the bash line run under PowerShell
+  # must DEGRADE to the relative path (measured 0.7.7: PowerShell expands `${…:+…}` to nothing),
+  # never break: that is the documented Windows shell, and the default path is not allowed to move.
+  local skill="$REPO/.claude/skills/weavedoc-gather/SKILL.md" bashline psprefix ps="" legs="sh"
+  bashline=$(grep -oF 'node "${WEAVEDOC_ROOT:+$WEAVEDOC_ROOT/}.weavedoc/bin/weavedoc.mjs"' "$skill" | head -1)
+  [ -n "$bashline" ] || { bad "the gather skill no longer spells the runtime with the WEAVEDOC_ROOT prefix"; return; }
+  psprefix=$(grep -oF '$(if ($env:WEAVEDOC_ROOT) { "$env:WEAVEDOC_ROOT/" })' "$skill" | head -1)
+  [ -n "$psprefix" ] || { bad "the gather skill no longer gives the PowerShell prefix"; return; }
+  mkworktrees || return
+  OUT=$( ( cd "$WTB" && WEAVEDOC_ROOT="$NMAIN" $TO sh -c "$bashline alloc truth" ) 2>&1 ); RC=$?
+  [ "$RC" -eq 0 ] && [ "$OUT" = "t002" ] || { bad "sh · bare worktree · WEAVEDOC_ROOT set: rc $RC, '$OUT' (want t002 from main)"; return; }
+  OUT=$( ( cd "$W" && $TO sh -c "$bashline alloc truth" ) 2>&1 ); RC=$?
+  [ "$RC" -eq 0 ] && [ "$OUT" = "t003" ] || { bad "sh · main · WEAVEDOC_ROOT unset: rc $RC, '$OUT' — the default spelling moved"; return; }
+  OUT=$( ( cd "$WTB" && $TO sh -c "$bashline version" ) 2>&1 ); RC=$?
+  [ "$RC" -ne 0 ] || { bad "control: the bare worktree answered with no WEAVEDOC_ROOT — the set leg measured nothing"; return; }
+  if command -v powershell.exe >/dev/null 2>&1; then ps=powershell.exe; elif command -v pwsh >/dev/null 2>&1; then ps=pwsh; fi
+  if [ -n "$ps" ]; then
+    # pwsh on Linux and macOS writes a cursor-key mode toggle (ESC[?1h ESC[?1l) ahead of its output —
+    # terminal bytes, not the runtime's answer. The 0.7.7 tag's CI found it: locally this leg had
+    # only ever run powershell.exe, which writes none. Escape sequences come off with the CRs.
+    OUT=$(printf '%s\n' "node \"${psprefix}.weavedoc/bin/weavedoc.mjs\" alloc truth; exit \$LASTEXITCODE" \
+      | ( cd "$WTB" && WEAVEDOC_ROOT="$NMAIN" $TO "$ps" -NoProfile -NonInteractive -Command - ) 2>&1); RC=$?; OUT=${OUT//$'\r'/}
+    OUT=$(printf '%s' "$OUT" | sed $'s/\e\\[[0-9;?]*[A-Za-z]//g')
+    [ "$RC" -eq 0 ] && [ "$OUT" = "t004" ] || { bad "$ps · PowerShell prefix · bare worktree · WEAVEDOC_ROOT set: rc $RC, '$OUT'"; return; }
+    OUT=$(printf '%s\n' "$bashline alloc truth; exit \$LASTEXITCODE" \
+      | ( cd "$W" && $TO "$ps" -NoProfile -NonInteractive -Command - ) 2>&1); RC=$?; OUT=${OUT//$'\r'/}
+    OUT=$(printf '%s' "$OUT" | sed $'s/\e\\[[0-9;?]*[A-Za-z]//g')
+    [ "$RC" -eq 0 ] && [ "$OUT" = "t005" ] || { bad "$ps · the bash line under PowerShell · main · unset: rc $RC, '$OUT' — it must degrade to the relative path"; return; }
+    legs="$legs + $ps"
+  fi
+  OUT="legs run: $legs (PowerShell legs need powershell.exe or pwsh on PATH)"; RC=0
+  ok
+}
+acct_hook_template_spelling_reaches_the_named_gate() {
+  # The planted Claude entries, run as the harness runs them (sh -c), from a worktree with no
+  # .weavedoc/: with WEAVEDOC_ROOT set they run MAIN's gate on MAIN's mine — a leaseless write into
+  # main's materials is DENIED, which shows the gate ran (a missing script fails open: silent) and
+  # judged main. Then the lease entry records the skill and the same write passes: lease and gate
+  # agree on one root (a split is the livelock lease.mjs warns about). Unset, in main, the same text
+  # is today's command and denies the same way.
+  local lc gc
+  lc=$(hook_spelling "$W/.weavedoc/templates/hooks.json" PostToolUse command)
+  gc=$(hook_spelling "$W/.weavedoc/templates/hooks.json" PreToolUse command)
+  case "$gc" in *'${WEAVEDOC_ROOT:+$WEAVEDOC_ROOT/}.weavedoc/bin/hooks/gate.mjs'*) ;; *) bad "the gate entry lost the WEAVEDOC_ROOT prefix: $gc"; return ;; esac
+  case "$lc" in *'${WEAVEDOC_ROOT:+$WEAVEDOC_ROOT/}.weavedoc/bin/hooks/lease.mjs'*) ;; *) bad "the lease entry lost the WEAVEDOC_ROOT prefix: $lc"; return ;; esac
+  mkworktrees || return
+  hookenv || return
+  via_sh "$WTB" "$gc" "$(gate_payload s1 "$NWTB" "$NMAIN/materials/m001/converted.md")" "$NMAIN"
+  { [ "$RC" -eq 0 ] && has "$DENY"; } || { bad "set · bare worktree: no deny for a leaseless write into main — the gate did not run, or judged another root (rc $RC): $OUT"; return; }
+  via_sh "$WTB" "$lc" "$(skill_lease_payload s1 "$NWTB" weavedoc-gather)" "$NMAIN"
+  via_sh "$WTB" "$gc" "$(gate_payload s1 "$NWTB" "$NMAIN/materials/m001/converted.md")" "$NMAIN"
+  { [ "$RC" -eq 0 ] && ! has "$DENY"; } || { bad "set · bare worktree: the lease entry's record did not open the gate — lease and gate disagree on the root: $OUT"; return; }
+  via_sh "$W" "$gc" "$(gate_payload s2 "$NMAIN" "$NMAIN/materials/m001/converted.md")"
+  { [ "$RC" -eq 0 ] && has "$DENY"; } || { bad "unset · main: the template no longer runs as today's command (rc $RC): $OUT"; return; }
+  OUT="deny → lease → allow from a bare worktree under WEAVEDOC_ROOT; deny from main with it unset"; RC=0
+  ok
+}
+acct_codex_hook_template_spellings_reach_the_named_gate() {
+  # Codex's pair: `command` through sh (every platform), and `commandWindows` through cmd.exe exactly
+  # as codex-rs spawns it (Windows only — measured 0.7.7: the POSIX `command` fails under cmd even
+  # with the variable unset, which is why the override exists at all). The lease leg feeds the
+  # skills' PREFIXED activation line, so the handshake the skills now emit is the one recognised.
+  local lc gc lw gw legs="sh"
+  lc=$(hook_spelling "$W/.weavedoc/templates/codex-hooks.json" PostToolUse command)
+  gc=$(hook_spelling "$W/.weavedoc/templates/codex-hooks.json" PreToolUse command)
+  lw=$(hook_spelling "$W/.weavedoc/templates/codex-hooks.json" PostToolUse commandWindows)
+  gw=$(hook_spelling "$W/.weavedoc/templates/codex-hooks.json" PreToolUse commandWindows)
+  case "$gw" in *'if defined WEAVEDOC_ROOT ('*) ;; *) bad "the Codex gate entry has no Windows override naming WEAVEDOC_ROOT: '$gw'"; return ;; esac
+  case "$lw" in *'if defined WEAVEDOC_ROOT ('*) ;; *) bad "the Codex lease entry has no Windows override naming WEAVEDOC_ROOT: '$lw'"; return ;; esac
+  mkworktrees || return
+  hookenv || return
+  local act='node "${WEAVEDOC_ROOT:+$WEAVEDOC_ROOT/}.weavedoc/bin/weavedoc.mjs" activate weavedoc-gather'
+  via_sh "$WTB" "$gc" "$(gate_payload c1 "$NWTB" "$NMAIN/materials/m001/converted.md")" "$NMAIN"
+  { [ "$RC" -eq 0 ] && has "$DENY"; } || { bad "sh · set · bare worktree: no deny (rc $RC): $OUT"; return; }
+  via_sh "$WTB" "$lc" "$(codex_lease_payload c1 "$NWTB" "$act")" "$NMAIN"
+  via_sh "$WTB" "$gc" "$(gate_payload c1 "$NWTB" "$NMAIN/materials/m001/converted.md")" "$NMAIN"
+  { [ "$RC" -eq 0 ] && ! has "$DENY"; } || { bad "sh · set: the prefixed activation line minted no lease the gate reads: $OUT"; return; }
+  if on_windows; then
+    via_cmdexe "$NWTB" "$gw" "$(gate_payload c2 "$NWTB" "$NMAIN/materials/m001/converted.md")" "$NMAIN"
+    { [ "$RC" -eq 0 ] && has "$DENY"; } || { bad "cmd.exe · set · bare worktree: no deny (rc $RC): $OUT"; return; }
+    via_cmdexe "$NWTB" "$lw" "$(codex_lease_payload c2 "$NWTB" "$act")" "$NMAIN"
+    via_cmdexe "$NWTB" "$gw" "$(gate_payload c2 "$NWTB" "$NMAIN/materials/m001/converted.md")" "$NMAIN"
+    { [ "$RC" -eq 0 ] && ! has "$DENY"; } || { bad "cmd.exe · set: lease and gate disagree: $OUT"; return; }
+    via_cmdexe "$NMAIN" "$gw" "$(gate_payload c3 "$NMAIN" "$NMAIN/materials/m001/converted.md")"
+    { [ "$RC" -eq 0 ] && has "$DENY"; } || { bad "cmd.exe · unset · main: the Windows override no longer runs as today's command (rc $RC): $OUT"; return; }
+    legs="$legs + cmd.exe"
+  fi
+  via_sh "$W" "$gc" "$(gate_payload c4 "$NMAIN" "$NMAIN/materials/m001/converted.md")"
+  { [ "$RC" -eq 0 ] && has "$DENY"; } || { bad "sh · unset · main: the template no longer runs as today's command (rc $RC): $OUT"; return; }
+  OUT="legs run: $legs (the cmd.exe leg runs on Windows only)"; RC=0
+  ok
+}
+acct_hook_worktree_copy_judges_the_named_mine() {
+  # The DEGRADED path: the harness ran the WORKTREE'S OWN copy of the scripts — PowerShell expands
+  # the template's prefix to nothing, and entries planted before 0.7.7 carry no prefix. The scripts
+  # read WEAVEDOC_ROOT themselves, so the copy still judges MAIN: a leaseless write into main's
+  # materials is denied while the same write into the copy's own materials is not this gate's — a
+  # differential, since a gate judging both would pass the first leg alone. And the lease the copy
+  # records is the one main's own gate reads, with or without the variable (one canonical spelling of
+  # one root, whichever way it was derived).
+  mkworktrees || return
+  hookenv || return
+  OUT=$(gate_payload s1 "$NWTC" "$NMAIN/materials/m001/converted.md" | ( cd "$WTC" && WEAVEDOC_ROOT="$NMAIN" WEAVEDOC_LEASE_DIR="$LDIR" node .weavedoc/bin/hooks/gate.mjs ) 2>&1); RC=$?
+  { [ "$RC" -eq 0 ] && has "$DENY"; } || { bad "the copy's gate under WEAVEDOC_ROOT did not deny a leaseless write into main: $OUT"; return; }
+  OUT=$(gate_payload s1 "$NWTC" "$NWTC/materials/m001/converted.md" | ( cd "$WTC" && WEAVEDOC_ROOT="$NMAIN" WEAVEDOC_LEASE_DIR="$LDIR" node .weavedoc/bin/hooks/gate.mjs ) 2>&1); RC=$?
+  { [ "$RC" -eq 0 ] && ! has "$DENY"; } || { bad "the copy's gate under WEAVEDOC_ROOT still judged the copy: $OUT"; return; }
+  # CONTROL: without the variable the copy's gate judges the copy — so the leg above measured the override.
+  OUT=$(gate_payload s1 "$NWTC" "$NWTC/materials/m001/converted.md" | ( cd "$WTC" && WEAVEDOC_LEASE_DIR="$LDIR" node .weavedoc/bin/hooks/gate.mjs ) 2>&1); RC=$?
+  { [ "$RC" -eq 0 ] && has "$DENY"; } || { bad "control: the copy's gate did not judge its own mine without the variable — the override leg measured nothing: $OUT"; return; }
+  skill_lease_payload s1 "$NWTC" weavedoc-gather | ( cd "$WTC" && WEAVEDOC_ROOT="$NMAIN" WEAVEDOC_LEASE_DIR="$LDIR" node .weavedoc/bin/hooks/lease.mjs ) >/dev/null 2>&1
+  OUT=$(gate_payload s1 "$NMAIN" "$NMAIN/materials/m001/converted.md" | ( cd "$W" && WEAVEDOC_ROOT="$NMAIN" WEAVEDOC_LEASE_DIR="$LDIR" node .weavedoc/bin/hooks/gate.mjs ) 2>&1); RC=$?
+  { [ "$RC" -eq 0 ] && ! has "$DENY"; } || { bad "main's gate (variable set) did not read the lease the copy recorded: $OUT"; return; }
+  OUT=$(gate_payload s1 "$NMAIN" "$NMAIN/materials/m001/converted.md" | ( cd "$W" && WEAVEDOC_LEASE_DIR="$LDIR" node .weavedoc/bin/hooks/gate.mjs ) 2>&1); RC=$?
+  { [ "$RC" -eq 0 ] && ! has "$DENY"; } || { bad "main's gate (file-derived root) keyed the lease differently from WEAVEDOC_ROOT: $OUT"; return; }
+  OUT="the copy judged main under the variable and itself without it; one lease key either way"; RC=0
+  ok
 }
 
 # ---------------------------------------------------------------- driver

@@ -542,5 +542,64 @@ grep -qF "one entry at a time" "$REPO/WORKFLOW.md" \
 grep -qF "one bullet per item" "$fmts" \
   || say "FORMATS' step report lost the block-render rule (one bullet per item) — the closing degrades back to the measured prose wall ('줄글로 주루룩')"
 
+# 19. The runtime has ONE spelling in every skill (0.7.7): `node "${WEAVEDOC_ROOT:+$WEAVEDOC_ROOT/}
+# .weavedoc/bin/weavedoc.mjs"`. The prefix is empty unless a host names the mine — a git-worktree
+# session sharing the original checkout's — and a call site still spelling the bare relative path
+# runs the WORKING DIRECTORY's copy of the runtime there (or nothing, in a worktree without
+# .weavedoc/) while its neighbours reach the named mine. Both trees are swept: 10b's byte-compare
+# proves the copies agree, and two agreeing copies of a bare spelling are one defect twice. The
+# PowerShell prefix rides in every callout that teaches the platform rule, because PowerShell
+# expands `${…:+…}` to nothing (measured) — a callout without it leaves the documented Windows shell
+# unable to honour the variable. TEXT, never obedience (checks 5-7's honesty); the regression case
+# acct_skill_runtime_spelling_reaches_the_named_mine EXECUTES both spellings.
+bare=$(grep -rnF 'node .weavedoc/bin/weavedoc.mjs' "$REPO"/.claude/skills/weavedoc-* "$REPO"/.agents/skills/weavedoc-* \
+  "$REPO/.weavedoc/READ.md" "$REPO/.weavedoc/templates/claude-block.md" "$REPO/.weavedoc/templates/agents-block.md" 2>/dev/null || true)
+[ -z "$bare" ] || say "a skill or consumer surface still spells the runtime without the WEAVEDOC_ROOT prefix — under a named root that call runs the working directory's copy, not the named mine: $bare"
+# VACUITY GUARD: a sweep that found no prefixed call at all would leave the bare-spelling check above
+# passing over skills that no longer call the runtime, or over a spelling this file no longer knows.
+npre=$(grep -rhoF 'node "${WEAVEDOC_ROOT:+$WEAVEDOC_ROOT/}.weavedoc/bin/weavedoc.mjs"' "$REPO"/.claude/skills/weavedoc-* 2>/dev/null | wc -l)
+[ "${npre:-0}" -ge 9 ] || say "only ${npre:-0} prefixed runtime call(s) across the skills — the spelling moved without this check, or the extraction is broken"
+for s in $skills; do
+  grep -q '^> \*\*Running weavedoc' "$s/SKILL.md" || continue
+  grep -qF '$(if ($env:WEAVEDOC_ROOT) { "$env:WEAVEDOC_ROOT/" })' "$s/SKILL.md" \
+    || say "$(basename "$s")'s platform callout lost the PowerShell prefix — PowerShell expands \${…:+…} to nothing, so its sessions would silently drop WEAVEDOC_ROOT"
+done
+# 19b. The runtime follows the named root by itself; the AGENT's own file tools follow it only
+# because a sentence says so (owner's ruling, 0.7.7: "the skills carry it"). ONE callout, NINE
+# byte-identical copies — the shape of checks 11/18, for their reason: a drifted copy teaches a
+# different root and can be cited to prove it — plus its spine pinned on the shared copy, and the
+# same rule on the two consumer surfaces a cold reader meets first (READ.md, the planted pointer).
+# Without it a worktree session writes a material into its own copy and the runtime, reading the
+# named mine, never sees it. TEXT, never obedience (checks 5-7's honesty).
+g19ref=""; g19refname=""
+for s in $skills; do
+  g19blk=$(awk '/^> \*\*Where the mine is\./{f=1} f{ if ($0 ~ /^>/) print; else exit }' "$s/SKILL.md")
+  if [ -z "$g19blk" ]; then
+    say "$(basename "$s") is missing the 'Where the mine is' callout — its file reads and writes would follow the working directory, not the named mine root"
+    continue
+  fi
+  if [ -z "$g19ref" ]; then g19ref="$g19blk"; g19refname=$(basename "$s")
+  elif [ "$g19blk" != "$g19ref" ]; then
+    say "$(basename "$s")'s 'Where the mine is' callout differs from $g19refname's — nine byte-identical copies is the contract, and this copy has drifted"
+  fi
+done
+[ -n "$g19ref" ] || say "no skill carries the 'Where the mine is' callout at all — nine missing copies must not read as nine agreeing ones"
+if [ -n "$g19ref" ]; then
+  for s in \
+    'is relative to the **mine root**' \
+    'unless the environment sets `WEAVEDOC_ROOT`' \
+    'goes under `$WEAVEDOC_ROOT/`' \
+    'echo "${WEAVEDOC_ROOT:-}"' \
+    'PowerShell `$env:WEAVEDOC_ROOT`' \
+    'hand it resolved paths'; do
+    printf '%s\n' "$g19ref" | grep -qF -- "$s" \
+      || say "the shared 'Where the mine is' callout lost a contract element: '$s' — nine byte-identical copies of a callout missing it are nine copies of the loss"
+  done
+fi
+grep -qF 'unless the environment sets `WEAVEDOC_ROOT`' "$REPO/.weavedoc/READ.md" \
+  || say "READ.md no longer locates the mine under WEAVEDOC_ROOT — a consumer in a worktree would open the card paths pull prints in its own copy"
+grep -qF 'When `WEAVEDOC_ROOT` is set' "$blk" \
+  || say "the shipped pointer block no longer locates the mine under WEAVEDOC_ROOT — a worktree session would look for READ.md where it may not exist"
+
 [ "$fail" -eq 0 ] && echo "doccheck: docs and code agree"
 exit "$fail"

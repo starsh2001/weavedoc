@@ -2,7 +2,9 @@
 //
 // find_root walks UP from the working directory for a .weavedoc/, so a command run from deep inside
 // a project still addresses that project and not the runtime's own repo. Everything else (where
-// materials live, which schema applies) hangs off that one answer.
+// materials live, which schema applies) hangs off that one answer. A root the caller GIVES
+// (`--root` / WEAVEDOC_ROOT, resolved and checked by the entrypoint) replaces the walk outright —
+// that is how a git-worktree session reaches the original checkout's mine.
 import { existsSync, statSync, readdirSync, readFileSync } from 'node:fs'
 import { dirname, join as njoin, basename } from 'node:path'
 import { createHash } from 'node:crypto'
@@ -29,8 +31,8 @@ export function findRoot (scriptDir, cwd = process.cwd()) {
   return join(scriptDir, '..', '..')
 }
 
-export function openMine (scriptDir, cwd = process.cwd()) {
-  const root = findRoot(scriptDir, cwd)
+export function openMine (scriptDir, given = null) {
+  const root = given === null ? findRoot(scriptDir) : fwd(given)
   const config = join(root, '.weavedoc', 'config.yaml')
   let schemaPath = join(root, '.weavedoc', 'schema')
   // The fallback keeps its `..` UNRESOLVED, because SCHEMA-UNREADABLE prints this path and the bash

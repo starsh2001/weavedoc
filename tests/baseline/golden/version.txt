@@ -1,3 +1,4 @@
-0.7.6
-fingerprint: 12f39eb05247  (bin+schema — compare this, not just the version)
+0.7.7
+fingerprint: 5f0800fac374  (bin+schema — compare this, not just the version)
 schema: 3 (v3-only; a v2 mine migrates via the pinned v0.6.14 bridge, a v1 mine via the v0.5.21 bridge first)
+capabilities: root-override

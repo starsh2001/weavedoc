@@ -11,6 +11,8 @@
 #
 #   bash tests/refresh-golden.sh          # rewrite the snapshots, then `git diff` them
 set -u
+# A session that names its mine (WEAVEDOC_ROOT — a git-worktree session) would snapshot THAT mine.
+unset WEAVEDOC_ROOT
 REPO=$(cd "$(dirname "$0")/.." >/dev/null 2>&1 && pwd)
 G="$REPO/tests/baseline/golden"
 WD_BIN=${WD_BIN:-"node .weavedoc/bin/weavedoc.mjs"}
