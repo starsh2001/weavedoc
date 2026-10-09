@@ -71,7 +71,7 @@ export function openMine (scriptDir, given = null) {
 // `version`/`lang`/`locale`/`interview` are exempt by design: the identity commands read no mine
 // at all (`interview` prints init's questionnaire, which is asked BEFORE a mine exists to declare
 // a version). `upgrade` used to be exempt too — the migrator had to look at the mine it migrates —
-// and retired with the migrator in 0.6.15 (pinned: v0.6.14, commit 924e97e).
+// and retired with the migrator in 0.6.15 (pinned: v0.6.14, commit ccdd8f8).
 // Returns 0 to proceed, or the exit code to return after the printed refusal.
 export function versionGate (m, errln) {
   const pv = (fmLoad(m.project).get('version') ?? '').trim()
@@ -95,14 +95,14 @@ export function versionGate (m, errln) {
   if (pv === '2') {
     return refuse([
       'weavedoc: this mine is schema v2 and this runtime is v3-only.',
-      '  migrate with the pinned bridge runtime v0.6.14 (commit 924e97e) — the last bundle carrying the v2→v3 migrator — first; nothing here has judged the v2 contents.'
+      '  migrate with the pinned bridge runtime v0.6.14 (commit ccdd8f8) — the last bundle carrying the v2→v3 migrator — first; nothing here has judged the v2 contents.'
     ])
   }
   if (Number(pv) < 2) {
     return refuse([
       `weavedoc: this mine declares schema v${pv} and this runtime carries no reader below v3.`,
-      "  migrate with the pinned bridge runtime v0.5.21 (commit 0257167): run its 'weavedoc upgrade' to reach v2,",
-      '  then the pinned v0.6.14 bridge (commit 924e97e) — the last bundle carrying the v2→v3 migrator — to reach v3.'
+      "  migrate with the pinned bridge runtime v0.5.21 (commit a1c3687): run its 'weavedoc upgrade' to reach v2,",
+      '  then the pinned v0.6.14 bridge (commit ccdd8f8) — the last bundle carrying the v2→v3 migrator — to reach v3.'
     ])
   }
   return 0

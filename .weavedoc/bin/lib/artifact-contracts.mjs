@@ -19,11 +19,16 @@ export const SUPPORTED_ARTIFACT_VERSIONS = [3]
 
 // The one v1 runtime a below-floor mine is sent to. Pinned as a commit, not a moving branch: a
 // bridge whose bytes drift is not a bridge.
-export const V1_BRIDGE = { tag: 'v0.5.21', commit: '0257167' }
+export const V1_BRIDGE = { tag: 'v0.5.21', commit: 'a1c3687' }
 // The v2→v3 migrator retired in 0.6.15, the same way the v1 path did before it: pinned to the last
 // bundle that carried it. Two bridges, one pattern — a mine below the floor is refused toward a
 // checkout, never toward a command this runtime no longer has.
-export const V2_BRIDGE = { tag: 'v0.6.14', commit: '924e97e' }
+export const V2_BRIDGE = { tag: 'v0.6.14', commit: 'ccdd8f8' }
+// Both commits are the PUBLIC repository's (github.com/starsh2001/weavedoc), where users check them
+// out. Since the repository split (2026-10-08) its history is one snapshot commit per release,
+// built from the private development history, so one release has a different hash on each side.
+// The development hashes (0257167, 924e97e) were the pins through 0.7.8 and a public clone has
+// neither. Pin what the user can fetch.
 
 // (The Phase-1 role-contract apparatus — CONTRACT_FILE/ADAPTER tables, contractFileFor, the role
 // assembly, loadArtifactContracts — retired in 0.6.18 together with `.weavedoc/schemas/v3`, the

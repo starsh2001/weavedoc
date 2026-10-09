@@ -339,8 +339,8 @@ export function cmdValidate (m, out, json = false, consecOk = '') {
     // Below-floor is NUMERIC (a cold review measured a `version: 0` mine falling through the old
     // '1'/'2' enumeration into full v3 judgment): v2 takes the v2 bridge, everything below v2
     // takes the v1 bridge first — the same routing the executable spec always declared.
-    if (pv === '2') { prob('VER-V2-UPGRADE', M`this mine is schema v2 and this runtime is v3-only — migrate with the pinned bridge runtime v0.6.14 (commit 924e97e), the last bundle carrying the v2→v3 migrator; nothing here has judged the v2 contents`); return refuse() }
-    if (Number(pv) < 2) { prob('VER-V1-BRIDGE', M`this mine declares schema v${pv} and this runtime carries no reader below v3 — migrate with the pinned bridge runtime v0.5.21 (commit 0257167): run its 'weavedoc upgrade' to reach v2, then the pinned v0.6.14 bridge (commit 924e97e) to reach v3`); return refuse() }
+    if (pv === '2') { prob('VER-V2-UPGRADE', M`this mine is schema v2 and this runtime is v3-only — migrate with the pinned bridge runtime v0.6.14 (commit ccdd8f8), the last bundle carrying the v2→v3 migrator; nothing here has judged the v2 contents`); return refuse() }
+    if (Number(pv) < 2) { prob('VER-V1-BRIDGE', M`this mine declares schema v${pv} and this runtime carries no reader below v3 — migrate with the pinned bridge runtime v0.5.21 (commit a1c3687): run its 'weavedoc upgrade' to reach v2, then the pinned v0.6.14 bridge (commit ccdd8f8) to reach v3`); return refuse() }
   }
 
   let stateConf = null

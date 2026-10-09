@@ -3,6 +3,10 @@ name: ci
 # Phase 2 (IMPROVEMENT_PLAN WD-QA-001~003): the same suite on PRs, pushes and tags.
 # Cost profile (private-repo Actions minutes: Windows ×2, macOS ×10; the suite runs ~2.5min on
 # Windows): Ubuntu runs on every trigger; Windows + macOS run on tags and manual dispatch only.
+# And only in the PUBLIC repository (0.7.9). Since the 2026-10-08 split, development and its tags
+# live in a private repository, where those minutes are metered and a release job would publish
+# into a repository no user can see. The public repository receives one snapshot commit + tag per
+# release and runs every leg and the publish there; the private one keeps the Ubuntu jobs.
 # macOS is REQUIRED since 2026-08-04 (plan §11): the census quartet resolved in v0.3.4 (a side
 # effect of the index-reconciliation rewrite), the revert condition fired, and the user promoted
 # it — a macOS-only regression now blocks the release, which is what "supported" means.
@@ -109,7 +113,7 @@ jobs:
   # v0.5.12 (it was ~35min when this comment was written); macOS costs 10x. Both run where they
   # matter contractually — tags — and on demand.
   regression-full:
-    if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/')
+    if: github.repository == 'starsh2001/weavedoc' && (github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/'))
     strategy:
       fail-fast: false
       matrix:
@@ -190,7 +194,7 @@ jobs:
   # that path: the recommended way to run the tool was the one way nobody tested. A smoke, not a
   # sweep: it proves the entrypoint runs and answers under pwsh, which is the shape of the claim.
   powershell-smoke:
-    if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/')
+    if: github.repository == 'starsh2001/weavedoc' && (github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/'))
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v5
@@ -243,7 +247,7 @@ jobs:
   # Windows sweep. The notes are generated, never hand-written: the "new commands" list is the
   # dispatch diff (the v0.2.0 tag hand-listed six commands its predecessor already had).
   release:
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: github.repository == 'starsh2001/weavedoc' && startsWith(github.ref, 'refs/tags/v')
     needs: [lint, regression-linux, manifest, regression-full, powershell-smoke]
     runs-on: ubuntu-latest
     permissions:

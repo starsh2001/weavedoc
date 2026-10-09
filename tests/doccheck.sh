@@ -429,6 +429,9 @@ grep -qF '적용하는 그 자리에서 보여 드리고' "$REPO/.weavedoc/bin/w
 # that carries two would either fail forever or force prose distortion): each owner is checked for
 # exactly what it carries today. Re-census when a surface changes: grep the four tokens repo-wide.
 # The check is symmetric over its roster — either direction of a drift goes red.
+# The commits are the PUBLIC repository's release snapshots. Since the 2026-10-08 split the public
+# and development histories hash every release differently, so a hash copied from this
+# repository's own log names a commit no user can fetch (0.7.9 re-pinned exactly that).
 while IFS='|' read -r f toks; do
   [ -n "$f" ] || continue
   for tok in $toks; do
@@ -436,15 +439,15 @@ while IFS='|' read -r f toks; do
       || say "$f does not carry the bridge pin token '$tok' — the two spellings of the migration doors (the spec constants and the live surface strings) have drifted apart"
   done
 done <<'EOF15'
-.weavedoc/bin/lib/artifact-contracts.mjs|v0.5.21 0257167 v0.6.14 924e97e
-.weavedoc/bin/lib/mine.mjs|v0.5.21 0257167 v0.6.14 924e97e
-.weavedoc/bin/lib/cmd-validate.mjs|v0.5.21 0257167 v0.6.14 924e97e
-.weavedoc/bin/lib/validate-truths.mjs|v0.6.14 924e97e
-.weavedoc/bin/weavedoc.mjs|v0.5.21 v0.6.14 924e97e
-.weavedoc/schema|v0.5.21 0257167 v0.6.14 924e97e
-.weavedoc/FORMATS.md|v0.5.21 v0.6.14 924e97e
-UPGRADING.md|v0.5.21 0257167 v0.6.14 924e97e
-README.md|v0.5.21 0257167 v0.6.14 924e97e
+.weavedoc/bin/lib/artifact-contracts.mjs|v0.5.21 a1c3687 v0.6.14 ccdd8f8
+.weavedoc/bin/lib/mine.mjs|v0.5.21 a1c3687 v0.6.14 ccdd8f8
+.weavedoc/bin/lib/cmd-validate.mjs|v0.5.21 a1c3687 v0.6.14 ccdd8f8
+.weavedoc/bin/lib/validate-truths.mjs|v0.6.14 ccdd8f8
+.weavedoc/bin/weavedoc.mjs|v0.5.21 v0.6.14 ccdd8f8
+.weavedoc/schema|v0.5.21 a1c3687 v0.6.14 ccdd8f8
+.weavedoc/FORMATS.md|v0.5.21 v0.6.14 ccdd8f8
+UPGRADING.md|v0.5.21 a1c3687 v0.6.14 ccdd8f8
+README.md|v0.5.21 a1c3687 v0.6.14 ccdd8f8
 EOF15
 
 # 16. The advisory close is ONE contract with four owners — the ruling path in review (who may

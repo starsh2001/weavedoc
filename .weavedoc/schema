@@ -125,7 +125,7 @@ intake.ledger.origin.backfill: pre-intake-ledger
 # project NEWER than this is fail-closed (guessing at a future format is how corruption ships).
 # OLDER is fail-closed too — this runtime is v3-only and carries no migrator (retired 0.6.15; the
 # one known mine migrated once): a v2 mine is refused toward the pinned bridge runtime v0.6.14
-# (commit 924e97e), a v1 mine toward the v0.5.21 bridge (commit 0257167) for v1→v2 first.
+# (commit ccdd8f8), a v1 mine toward the v0.5.21 bridge (commit a1c3687) for v1→v2 first.
 schema.version: 3
 # Config contract (WD-CFG-001) — every knob has a type/range; verify/review are section-aware
 # (a flat first-match reader can never see review.strength behind verify.strength). Unknown

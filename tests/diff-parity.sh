@@ -6,8 +6,9 @@
 # so the claim "our diff prints what GNU diff prints" needs measuring rather than asserting. This
 # feeds both implementations the same pairs of files and compares their output byte for byte.
 #
-#   bash tests/diff-parity.sh            # randomised pairs + the real mine's generated views
+#   bash tests/diff-parity.sh            # randomised pairs
 #   bash tests/diff-parity.sh 500        # more pairs
+#   WD_DP_MINE=<mine root> bash tests/diff-parity.sh   # + that mine's generated views
 #
 # The pairs are deliberately nasty in the ways that matter here: missing trailing newlines on either
 # side, empty files, pure insertions and deletions, whole-file replacement, edits at the very first

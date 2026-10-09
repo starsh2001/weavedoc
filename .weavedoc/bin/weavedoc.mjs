@@ -475,7 +475,7 @@ switch (cmd) {
     // the Windows-registry fallback, which most runs never reach.
     rc = await cmdLocale(); break
   // ('upgrade' — the v2→v3 migrator — was retired in 0.6.15. The last bundle carrying it is
-  // pinned, exactly as the v1→v2 bridge is: v0.6.14, commit 924e97e. A v2 mine is refused toward
+  // pinned, exactly as the v1→v2 bridge is: v0.6.14, commit ccdd8f8. A v2 mine is refused toward
   // that checkout by the version gate in mine.mjs; this runtime migrates nothing.)
   case 'consecrate': {
     if (rest.length !== 1) usage2('weavedoc consecrate <doc-id>')

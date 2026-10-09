@@ -7009,10 +7009,10 @@ block_gate_v2_mine_general_commands() {
   # messages losing their pin (comments kept the token, so doccheck's file-level sync stayed
   # green) with the whole board green. Message-level parity closes that: the hash a v2 user is
   # actually sent to must be in the bytes they read.
-  expect_block "924e97e"
+  expect_block "ccdd8f8"
   vrun validate
   expect_block "VER-V2-UPGRADE"
-  expect_block "924e97e"
+  expect_block "ccdd8f8"
   expect_hasnt "examined:"
 }
 block_gate_v0_mine_names_the_v1_bridge_first() {
@@ -7027,7 +7027,7 @@ block_gate_v0_mine_names_the_v1_bridge_first() {
   expect_block "v0.5.21"
   vrun validate
   expect_block "VER-V1-BRIDGE"
-  expect_block "0257167"
+  expect_block "a1c3687"
   expect_hasnt "examined:"
 }
 block_gate_v1_mine_names_the_bridge() {
@@ -7036,7 +7036,7 @@ block_gate_v1_mine_names_the_bridge() {
   sed -i 's/^version: 3$/version: 1/' "$W/project.md"
   sed -i 's/^version: 3/version: 1/' "$W/.weavedoc/config.yaml"
   vrun status
-  expect_block "0257167"
+  expect_block "a1c3687"
   vrun validate
   expect_block "VER-V1-BRIDGE"
 }

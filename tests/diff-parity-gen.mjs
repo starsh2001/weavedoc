@@ -58,10 +58,13 @@ for (const [a, b] of cases) {
   for (const an of [false, true]) for (const bn of [false, true]) emit(a, b, an, bn)
 }
 
-// And the real thing: the generated views of the real mine against perturbed copies of themselves.
-// tree.md matters most — the same truth appears under every tag it carries, so identical lines
-// genuinely repeat there, which is the ambiguity the randomised cases only simulate.
-for (const real of ['D:/repo/Echo/truths/index.md', 'D:/repo/Echo/truths/tree.md']) {
+// And the real thing, when WD_DP_MINE names a mine root: its generated views against perturbed
+// copies of themselves. tree.md matters most — the same truth appears under every tag it carries,
+// so identical lines genuinely repeat there, which is the ambiguity the randomised cases only
+// simulate. (The mine was a hard-coded path on the development machine until 0.7.9; the variable
+// keeps a real mine's location out of a tracked file.)
+const mine = process.env.WD_DP_MINE
+for (const real of mine ? [`${mine}/truths/index.md`, `${mine}/truths/tree.md`] : []) {
   if (!existsSync(real)) continue
   const lines = readFileSync(real, 'utf8').replace(/\r/g, '').replace(/\n$/, '').split('\n')
   for (let k = 0; k < 12; k++) emit(lines, perturb(lines), false, false)
