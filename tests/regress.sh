@@ -3450,6 +3450,40 @@ block_sealreview_unclosed_fm_keeps_the_seal() {
   after=$(grep -c '^reviewed_\|^review_context_' "$W/documents/d1/review.md")
   [ "$before" = "$after" ] || bad "refused but still edited the file: seal fields went $before -> $after"
 }
+mknotruths() { # the fixture with its only truth gone, and every reference to it with it
+  rm -f "$W/truths/t001.md"
+  rm -rf "$W/documents/d1"
+  printf '# Coverage
+' > "$W/truths/coverage.md"
+}
+acct_reindex_empty_mine_writes_both_views() {
+  # ISSUE-10 (measured in a Codex init, 2026-10-11): on a mine with no truth files yet, validate
+  # failed IDX-MISSING and said "run 'weavedoc reindex'", and reindex printed "no truths to index",
+  # wrote nothing and returned 0 — so validate failed again, and the agent hand-wrote both
+  # generated views to get past it. Zero truths is still an index: two headings, nothing under them.
+  mknotruths
+  rm -f "$W/truths/index.md" "$W/truths/tree.md"
+  vrun reindex; expect_pass
+  [ -f "$W/truths/index.md" ] && [ -f "$W/truths/tree.md" ] || { bad "reindex left a view unwritten"; return; }
+  OUT=$(cat "$W/truths/index.md" "$W/truths/tree.md"); RC=0
+  expect_has "# truths/index.md"
+  expect_has "# truths/tree.md"
+  vrun reindex --check; expect_pass
+  vrun validate; expect_pass
+}
+acct_reindex_last_truth_deleted_clears_index() {
+  # ISSUE-10's second path: the same early return left a deleted LAST truth's entry in index.md,
+  # and IDX-SYNC kept sending the user to the reindex that would not remove it.
+  mknotruths
+  vrun validate
+  expect_block "entry 't001' has no truth file"
+  vrun reindex --check
+  [ "$RC" -ne 0 ] || bad "reindex --check called a stale index in sync"
+  vrun reindex; expect_pass
+  vrun validate; expect_pass
+  OUT=$(cat "$W/truths/index.md" "$W/truths/tree.md"); RC=0
+  expect_hasnt "t001"
+}
 acct_reindex_partial_rename_rolls_back() {
   # Staging BOTH views before renaming EITHER is not enough: with tree.md unreplaceable the first
   # rename still landed, so index.md was regenerated beside an untouched tree.md — the very split
@@ -4849,7 +4883,7 @@ acct_interview_output_is_pure_ascii() {
   # AskUserQuestion call — the step the sibling project GroveSpec measured going wrong twice on this
   # exact shape (a mis-recalled codepoint printed 나뉜니다 for 나뉩니다, on the user's screen both
   # times; the rule "copy it exactly" prevented neither). The whole promise is therefore one
-  # property: NO byte above 0x7e leaves this command. Comments included, not just the arrays — a
+  # property: NO byte above 0x7e leaves the Claude form. Comments included, not just the arrays — a
   # rule with an exception is a rule the copier has to judge, and judging is the step being removed.
   vrun interview
   expect_pass
@@ -4909,47 +4943,57 @@ EOF
   [ -z "$wrong" ] || { bad "interview offers values the schema does not agree with:$wrong"; return; }
   ok
 }
-acct_codex_interview_matches_request_user_input_and_schema() {
-  # Codex has a different question contract: stable `id`, no `multiSelect`, and its UI marks the
-  # recommended option in the LABEL. The selected value becomes config only after stripping that
-  # exact suffix. Parse the black-box output as JSON and compare both directions with the schema.
+acct_codex_interview_matches_request_user_input_async_and_schema() {
+  # Codex's default mode refuses request_user_input; its question tool is request_user_input_async,
+  # { title, options: [string] }, with no per-option description. So the Codex form must be the
+  # Claude form re-shaped and nothing else: the title is the question plus one `- label: description`
+  # line per option (the `(추천)` mark travels in the description), and the options are the Claude
+  # labels verbatim — the config values, so one write rule reads either harness's answer.
+  #
+  # PLAIN UTF-8, not escaped: Codex shows command output inside a JSON string, where an escape
+  # arrives doubled — GroveSpec measured trial questions in 3 of 4 runs on the escaped shape. Only
+  # the comment lines stay ASCII. Compared against the DECODED Claude form, then with the schema.
+  vrun interview claude
+  expect_pass
+  printf '%s\n' "$OUT" > "$W/claude-interview.out"
   vrun interview codex
   expect_pass
   local nonascii
-  nonascii=$(printf '%s\n' "$OUT" | LC_ALL=C grep -n '[^ -~]' | head -3)
-  [ -z "$nonascii" ] || { bad "Codex interview printed non-ASCII: $nonascii"; return; }
+  nonascii=$(printf '%s\n' "$OUT" | grep '^#' | LC_ALL=C grep -n '[^ -~]' | head -3)
+  [ -z "$nonascii" ] || { bad "Codex interview printed a non-ASCII comment line: $nonascii"; return; }
   printf '%s\n' "$OUT" > "$W/codex-interview.out"
-  OUT=$(node - "$W/codex-interview.out" "$REPO/.weavedoc/schema" <<'NODE'
+  OUT=$(node - "$W/codex-interview.out" "$W/claude-interview.out" "$REPO/.weavedoc/schema" <<'NODE'
 const fs = require('fs')
-const lines = fs.readFileSync(process.argv[2], 'utf8').split(/\r?\n/).filter(x => x.startsWith('['))
+const arrays = f => fs.readFileSync(f, 'utf8').split(/\r?\n/).filter(x => x.startsWith('['))
+const lines = arrays(process.argv[2])
 if (lines.length !== 2) throw new Error(`arrays=${lines.length}, want 2`)
+if (!lines.every(l => /[^\x00-\x7e]/.test(l))) throw new Error('Codex payload is not plain UTF-8: an array has no non-ASCII character')
+if (lines.some(l => /\\u[0-9a-fA-F]{4}/.test(l))) throw new Error('Codex payload still carries \\uXXXX escapes')
 const qs = lines.flatMap(JSON.parse)
-if (qs.length !== 6) throw new Error(`questions=${qs.length}, want 6`)
-const ids = ['authority', 'completeness', 'conflicts_detection', 'verify_strength', 'review_strength', 'scale']
-if (JSON.stringify(qs.map(q => q.id)) !== JSON.stringify(ids)) throw new Error(`ids=${qs.map(q => q.id).join(',')}`)
-if (qs.some(q => Object.hasOwn(q, 'multiSelect'))) throw new Error('Codex payload carries Claude-only multiSelect')
-const schema = Object.fromEntries(fs.readFileSync(process.argv[3], 'utf8').split(/\r?\n/)
+const cq = arrays(process.argv[3]).flatMap(JSON.parse)
+if (qs.length !== 6 || cq.length !== 6) throw new Error(`questions codex=${qs.length} claude=${cq.length}, want 6`)
+qs.forEach((q, i) => {
+  const c = cq[i]
+  if (JSON.stringify(Object.keys(q)) !== '["title","options"]') throw new Error(`${c.header}: keys=${Object.keys(q)}`)
+  const title = `${c.question}\n\n${c.options.map(o => `- ${o.label}: ${o.description}`).join('\n')}`
+  if (q.title !== title) throw new Error(`${c.header}: title is not the Claude question plus its option list`)
+  if (JSON.stringify(q.options) !== JSON.stringify(c.options.map(o => o.label))) throw new Error(`${c.header}: options=${q.options}`)
+  q.header = c.header
+})
+const schema = Object.fromEntries(fs.readFileSync(process.argv[4], 'utf8').split(/\r?\n/)
   .map(line => /^([^#][^:]*):\s*(.*)$/.exec(line)).filter(Boolean).map(m => [m[1], m[2]]))
 const keys = {
   Authority: 'config.enum.authority', Completeness: 'config.enum.completeness',
   Conflicts: 'config.enum.detection', Verify: 'config.strength.range',
   Review: 'config.strength.range', Scale: 'config.enum.scale'
 }
-let recommended = 0
 for (const q of qs) {
   if (!keys[q.header]) throw new Error(`unmapped header ${q.header}`)
   const want = schema[keys[q.header]].split('|').sort()
-  const got = q.options.map((o, i) => {
-    const marked = o.label.endsWith(' (Recommended)')
-    if (i === 0 && !marked) throw new Error(`${q.header}: first option is not recommended`)
-    if (i !== 0 && marked) throw new Error(`${q.header}: non-first option is recommended`)
-    if (marked) recommended++
-    return o.label.replace(/ \(Recommended\)$/, '')
-  }).sort()
+  const got = [...q.options].sort()
   if (JSON.stringify(got) !== JSON.stringify(want)) throw new Error(`${q.header}: schema=${want} asked=${got}`)
 }
-if (recommended !== 6) throw new Error(`recommended=${recommended}, want 6`)
-process.stdout.write('Codex interview: 2 arrays, 6 ids, schema labels agree')
+process.stdout.write('Codex interview: 2 arrays, 6 questions, the Claude form re-shaped, schema labels agree')
 NODE
   ); RC=$?
   expect_pass

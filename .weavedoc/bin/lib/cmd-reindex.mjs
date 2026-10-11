@@ -14,6 +14,7 @@ import { diffNormal, diffLines } from './diff.mjs'
 // a directory of that name really is not a material.
 const exists = p => { try { statSync(p); return true } catch { return false } }
 const isFile = p => { try { return statSync(p).isFile() } catch { return false } }
+const isDir = p => { try { return statSync(p).isDirectory() } catch { return false } }
 const lsOr = d => { try { return readdirSync(d) } catch { return [] } }
 
 // EVERYTHING below works in the byte domain (one char per byte), because the claims and tags that
@@ -97,7 +98,13 @@ export function cmdReindex (m, out, errln, argv) {
   // directory reads as no lines, so its line 1 is not the fence), which is what makes the counts
   // disagree and the refusal fire.
   const files = lsOr(m.truths).filter(n => TRUTH_GLOB.test(n) && exists(join(m.truths, n))).sort(bytewise)
-  if (files.length === 0) { out('no truths to index'); return 0 }
+  // ZERO truth files is still an index to write — two headings and nothing under them (ISSUE-10).
+  // Returning early here wrote nothing, and validate's IDX-MISSING sends the user to `reindex`
+  // whether or not a truth exists: a fresh mine failed, reindex "succeeded", validate failed again,
+  // and the measured way out was a hand-written index. The same early return kept a deleted LAST
+  // truth's entry in index.md, so IDX-SYNC told the user to run the command that would not clear
+  // it. Only a missing truths directory is left with nothing to write into.
+  if (files.length === 0 && !isDir(m.truths)) { out('no truths to index'); return 0 }
   const recs = records(m.truths, files)
 
   // Material stage/status come from the ORDINARY frontmatter cache (first key wins) — the asymmetry

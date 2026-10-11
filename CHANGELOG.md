@@ -6,6 +6,42 @@
 
 ---
 
+## 0.7.12
+
+**진실이 0개인 광산에서 `validate`와 `reindex`가 서로를 가리키며 막혔다.** `validate`는 `truths/`가 있으면 진실 파일 수와 상관없이 `truths/index.md`·`tree.md`가 없을 때 `IDX-MISSING`으로 실패하고 `reindex`를 안내한다. 그런데 `reindex`는 진실 파일이 0개면 `no truths to index`를 출력하고 아무것도 쓰지 않은 채 rc 0으로 끝났다. Codex에서 init을 실측한 결과(2026-10-11), 새 광산의 `validate`가 실패했고 안내대로 `reindex`를 돌려도 다시 실패했다. 에이전트는 결국 두 파일을 손으로 써서 통과시켰다. "`reindex`만 쓴다"는 규칙을 어긴 것이다. 같은 원인으로, 마지막 진실 파일을 지우면 색인에 남은 그 항목 때문에 `IDX-SYNC`가 계속 났고 `reindex`로도 풀리지 않았다.
+
+**처방 ① — `reindex`는 진실이 0개여도 두 파일을 쓴다.** 제목만 있는 빈 색인이다. 같은 생성 경로가 0개를 받아 쓰므로 `--check`도 같은 기준으로 drift를 판정한다. `truths/` 디렉터리 자체가 없을 때만 예전처럼 아무것도 쓰지 않는다.
+
+**처방 ② — init은 마지막에 `reindex`, 그다음 `validate`.** weavedoc-init SKILL.md(두 벌, byte-identical) §3에 단계를 더했고, 두 파일은 생성물이니 손으로 쓰지 말라는 문장을 함께 적었다.
+
+`validate`가 진실 0개일 때 `IDX-MISSING`을 면제하는 대안은 두 번째 경로(지운 진실이 색인에 남는 경우)를 닫지 못해 택하지 않았다. 회귀 케이스 `acct_reindex_empty_mine_writes_both_views`(빈 광산에서 `reindex` → `--check`·`validate` 통과)와 `acct_reindex_last_truth_deleted_clears_index`(마지막 진실을 지운 뒤 `reindex` → `validate` 통과, 색인에 지운 id가 남지 않음)를 더했다. 둘 다 0.7.11 런타임에서는 실패한다.
+
+버그 수정이고 광산·schema 형식은 그대로이므로 patch다. 런타임이 바뀌었으므로 fingerprint는 `c0116113ab5b` → `7146ce115827`로 이동했다.
+
+## 0.7.11
+
+**init의 Codex 인터뷰가 Codex 기본 모드에서 뜨지 않는 형식이었다.** `weavedoc interview codex`는 Q2·Q3를 `request_user_input` 스키마(`id`·`question`·`header`·`options[{label, description}]`, 첫 선택지 라벨에 ` (Recommended)`)로, 한글을 모두 `\uXXXX`로 이스케이프한 ASCII로 출력했다. 형제 프로젝트 GroveSpec의 실측(codex-cli 0.159.3)이 두 결함을 보였다. Codex 기본 모드는 `request_user_input`을 거부하는데("request_user_input is unavailable in Default mode"), init은 파일을 쓰므로 Plan 모드에서 돌지 않는다. 또 Codex는 명령 출력을 JSON 문자열로 감싸 보여 주므로 이스케이프가 이중으로 보인다. 같은 모양의 payload로 4번 돌린 중 3번은 본 질문 전에 시험 질문을 보냈고, 1번은 제목 앞에 탭이 끼었다. 문구 보강으로는 닫히지 않았다. WeaveDoc의 payload는 GroveSpec이 고치기 전과 같은 모양이었다.
+
+**처방 ① — `request_user_input_async` 스키마로.** Codex 형태는 질문마다 `{title, options: [문자열]}`이다. 이 도구에는 선택지 설명 칸이 없으므로 설명은 `title` 안의 `- <라벨>: <설명>` 목록으로 옮겼고, `(추천)` 표시도 거기 남는다. 라벨은 config 값 그대로이고 Claude 형태와 바이트까지 같다. ` (Recommended)` 접미사를 떼라는 규칙이 없어져, 답을 config에 쓰는 규칙이 두 하네스에서 하나가 됐다. 답은 호출 결과가 아니라 다음 사용자 메시지로 오므로, 배열 하나를 묻고 턴을 끝낸 뒤 다음 배열을 묻는다.
+
+**처방 ② — Codex 형태는 UTF-8 그대로.** 이스케이프하지 않는다. Claude 형태는 지금처럼 전부 ASCII이고, 주석 줄은 두 형태 모두 ASCII다. Windows 실측: `powershell.exe -Command`로 홀로 실행한 출력은 node가 직접 쓴 바이트와 같았다. 다만 PowerShell cmdlet으로 파이프하면(`| Out-String` 등) 콘솔 코드 페이지로 다시 디코딩해 한글이 깨지므로, 스킬에 "명령을 홀로 실행한다"는 문장을 더했다.
+
+**함께 맞춘 곳.** weavedoc-init SKILL.md(두 벌, byte-identical), README의 `interview` 항목, WORKFLOW의 `interview` 서술. 회귀 케이스는 `acct_codex_interview_matches_request_user_input_async_and_schema`로 이름을 바꿨다. Codex 형태가 디코딩한 Claude 형태를 그대로 옮긴 것인지(제목 = 질문 + 선택지 목록, 선택지 = Claude 라벨), payload에 이스케이프가 남지 않았는지, 라벨이 schema와 양방향으로 맞는지를 본다. 쓰이지 않게 된 질문 `id` 필드는 런타임에서 지웠다.
+
+버그 수정이고 광산·schema·Claude 형태는 그대로이므로 patch다. 런타임이 바뀌었으므로 fingerprint는 `dd5e5db2bfac` → `c0116113ab5b`로 이동했다.
+
+## 0.7.10
+
+**단계 보고의 칸 경계가 약했고, 질문의 내용이 놓일 자리가 정해져 있지 않았다.** 0.7.5에서 마무리 보고의 네 칸을 굵은 라벨 블록으로 나눴지만, 굵은 라벨은 본문과 글자 크기가 같아 칸 경계가 약하고 앵커 줄도 본문에 묻혔다. decision loop는 질문 도구로 물으라고만 하고 항목의 내용을 **어디에** 쓰는지 정하지 않아, 쟁점·양쪽 값·추천 이유를 도구의 선택지 `preview`나 설명 칸에 넣을 수 있었다. 형제 프로젝트 GroveSpec의 실측(2026-10-11): 승인 대상 목록을 `AskUserQuestion` 선택지의 `preview` 칸에 넣었는데 Hammoc은 그 칸을 그리지 않아, 사용자가 목록을 찾지 못했고 승인을 세 번 물어야 했다. Codex의 질문 도구에는 선택지 설명 칸이 아예 없다.
+
+**처방 ① — 단계 보고를 markdown 헤더로.** 앵커는 `## [weavedoc-<verb> <target>] starting` / `done — …` / `stopped — …` 헤더이고, 네 칸은 `### Result` · `### Open` · `### Your turn` · `### Next` 헤더다. 칸 안의 규칙(항목마다 `-` 줄, 같은 종류면 작은 표, 한 문단으로 접지 않기, 빈 칸도 문장으로, 라벨은 영어 고정, Offer don't direct, 합니다체)은 그대로다. FORMATS에 채운 마무리 보고 예시 하나를 더했다. 아홉 스킬(두 벌)의 요약 문구도 헤더 형식으로 맞췄다. GroveSpec v0.20.1과 같은 모양이라, 두 도구를 오가도 같은 자리에서 같은 정보를 찾는다.
+
+**처방 ② — 질문의 내용은 메시지 본문에.** decision loop에 규칙 하나를 더했다. 질문 도구로 물을 때도 무엇을 정하는지, 각 쪽 값과 인용, 선택지별 결과, `(추천)`과 그 이유는 호출 전에 메시지 본문에 쓰고, 도구에는 질문과 짧은 선택지 이름만 둔다. 결정 전체에 걸린 내용을 한 선택지의 칸에 넣지 않는다. 루프 밖인 verify의 델타 확인도 목록을 본문에 렌더링한다는 점을 같은 규칙에 적었다.
+
+**처방 ③ — Codex 질문 도구 이름.** decision loop가 적던 `request_user_input`은 Codex 기본 모드에서 거부된다(GroveSpec v0.20.0 실측, codex-cli 0.159.3). `request_user_input_async`로 고치고, 답이 다음 사용자 메시지로 오므로 묻고 턴을 끝낸다고 적었다. init의 Codex 인터뷰 payload도 같은 이유로 확인했는데, 런타임이 `request_user_input` 스키마와 ASCII 이스케이프로 출력하고 있어 문구만으로는 맞출 수 없다. 출력 형식을 바꾸는 일이라 이번 범위에서 빼고 따로 다룬다.
+
+문구만 바뀌므로 patch다. 런타임은 그대로이고 fingerprint도 움직이지 않는다.
+
 ## 0.7.9
 
 **고정 브리지가 공개 저장소에 없는 커밋을 가리켰다.** 2026-10-08에 저장소를 둘로 나눴다. 개발 이력 전체는 비공개 저장소로 옮겼고, 공개 저장소(`starsh2001/weavedoc`)는 출시본 하나에 스냅샷 커밋 하나인 새 이력이 됐다. 그래서 같은 출시본이 양쪽에서 다른 해시를 갖는다. 그런데 런타임과 문서는 브리지를 개발 이력의 해시(v0.6.14 `924e97e`, v0.5.21 `0257167`)로 안내하고 있었다. 실측: 공개 저장소를 새로 clone하면 두 커밋 모두 `git cat-file`이 거절하고, 공개 스냅샷 `ccdd8f8`·`a1c3687`은 있다. 낡은 광산을 가진 사용자는 안내받은 체크아웃에 닿을 수 없었다.

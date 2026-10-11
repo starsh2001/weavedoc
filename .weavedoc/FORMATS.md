@@ -364,9 +364,9 @@ An entry is weavedoc's **exactly when its command contains the marker substring 
 
 The one contract in this file **no parser reads**. Its readers are people, its writers are the nine skills, and it is here for the same reason every other shape is: a surface that is improvised per run has to be re-learned per run. The motive is measured, in the sibling project GroveSpec and here — a skill's opening and closing remarks were composed fresh every time, so the user re-derived "what did it do · what is left · what do I do now" from a different arrangement each run. Fixing the artifact formats and leaving the *report* free left the human gate reading an unformatted surface.
 
-**Opening** — the anchor `[weavedoc-<verb> <target>] starting` (target omitted when the run has none), then 2–4 sentences: what this step is (even on the tenth run), what it will do to *this* mine or document, and what will be in the user's hands when it ends.
+**Opening** — the anchor heading `## [weavedoc-<verb> <target>] starting` (target omitted when the run has none), then 2–4 sentences: what this step is (even on the tenth run), what it will do to *this* mine or document, and what will be in the user's hands when it ends.
 
-**Closing** — the anchor `done — <half-line outcome>`, then four slots, **in this order, none omitted**:
+**Closing** — the anchor heading `## [weavedoc-<verb> <target>] done — <half-line outcome>`, then four slot headings, **in this order, none omitted**:
 
 | slot | what it holds |
 |---|---|
@@ -375,14 +375,32 @@ The one contract in this file **no parser reads**. Its readers are people, its w
 | `Your turn` | the decisions that are the user's and nobody else's — an adjudication, a tag ruling, a fill-or-accept. Empty is a claim: it says the machine checked and found none. |
 | `Next` | which steps are **available** now. |
 
-An abnormal end is `stopped — <why>` with the same four slots.
+An abnormal end is `## [weavedoc-<verb> <target>] stopped — <why>` with the same four slots.
 
-- **Each slot is its own block — bold label, one bullet per item.** The label stands on its own line; under it, every item gets a `-` line (a count, a file, a decision), and uniform items may sit in a small table instead. Slots never fold into a running paragraph: the reader scans the closing for *their* slot, and prose that buries the four labels mid-sentence hides the one line they came for (measured 2026-09-23 — the owner read real closings as "줄글로 주루룩" and could not find what was theirs). A wall is the telegram's twin: both are format violations even when true, and the sentences *inside* each bullet stay complete — what the block shape bans is folding items together, never explaining them.
+- **Each slot is its own block — a `###` heading, one bullet per item.** The heading stands on its own line (`### Result`, `### Open`, `### Your turn`, `### Next`); under it, every item gets a `-` line (a count, a file, a decision), and uniform items may sit in a small table instead. Markdown headings, not label lines: a bold label or a `Result: …` line is the body's own size, so the slot boundaries blur and the anchor sinks into the text. Slots never fold into a running paragraph: the reader scans the closing for *their* slot, and prose that buries the four labels mid-sentence hides the one line they came for (measured 2026-09-23 — the owner read real closings as "줄글로 주루룩" and could not find what was theirs). A wall is the telegram's twin: both are format violations even when true, and the sentences *inside* each bullet stay complete — what the block shape bans is folding items together, never explaining them.
 - **An empty slot is still a sentence.** "없음" is a checked assertion, and a slot that disappears when empty is indistinguishable from one nobody looked at — the vacuity class this runtime names everywhere else, in its reporting clothes.
 - **Labels are fixed English** (`Result`, `Open`, `Your turn`, `Next`), like every other structural identifier here; the prose in them is `config.language`.
 - **Offer, don't direct.** `Next` says what the user *can* do ("이제 verify를 할 수 있습니다"), never what they must. The workflow runs in alternating phases and no boundary between them is obligatory — the machine offers, the human decides. The rule's **owner is here**: before this section it lived only inside two of the nine skills, so seven runs inherited nothing.
 - **The structure is fixed; the content is not.** Every sentence must be verifiable against *this* run. A fixed reassurance phrase ("모든 검사를 통과했습니다") that is not read off this run's output is a rubber stamp wearing the skeleton's clothes — the failure the fixed shape exists to prevent, not a way to satisfy it.
 - **Tone: warm, complete sentences**, addressed to someone who may not read code. A telegram is a format violation even when it is true. This does not contradict the artifacts' compression rule: an artifact is written to be re-read, so it is cut to the bone; a report is said once to orient a person, so the explanation *is* the body. When `config.language` is Korean the report is **합니다체** (the artifacts stay 문어체 — `~한다`/`~이다`, which is what Korean technical prose does and is addressed to no one).
+
+Filled, a closing reads like this:
+```
+## [weavedoc-map] done — 자료 3건에서 진실 41개를 뽑았고, 충돌 2건이 판정을 기다립니다
+
+### Result
+- 새 자료 m012·m013·m014에서 진실 41개를 뽑아 `truths/`에 기록했습니다(t240–t280).
+- 태그는 모두 기존 어휘 안에서 붙였고, 새 태그는 만들지 않았습니다.
+
+### Open
+- 충돌 2건이 열려 있습니다. 둘 다 계약 시작일이 자료마다 다르게 적힌 경우입니다.
+
+### Your turn
+- 위 충돌 2건의 판정은 사용자의 몫입니다. 원하시면 지금 한 건씩 여쭙겠습니다.
+
+### Next
+- 이제 verify로 이번 추출을 원본과 대조하실 수 있습니다. 충돌을 먼저 정리하셔도 됩니다.
+```
 
 ## The decision loop (how a run asks the user to rule)
 
@@ -391,7 +409,8 @@ The step report is how a run *ends*; this is how it *asks* while it runs. It gov
 - **One item per ask.** Never render the whole docket and ask the user to answer by id. Order the docket once (blocking severity first, then cheapest fill first — gaps' cost labels are the model), say the order in a line, then ask item by item with a progress marker (`3/7`).
 - **Substance first, the id last.** The ask carries the item in words — what the claim says, each side's value with its material's subject and the verbatim quote. An id is a machine handle: it appears once, in parentheses at the end, as the file reference — never as the token the user must answer with.
 - **Options say outcomes, and one may wear `(추천)`.** Each option states what would happen to *this* fact ("정정 자료의 2월 14일로 고친다"), never a bare mechanism name ("새값 채택"). Mark at most one `(추천)` with a one-line why; the ruling stays the user's, and a **free-form answer is always open** — the harness's Other field, or an explicit invitation to write one.
-- **Use the harness's native question surface** where one exists — Claude Code's `AskUserQuestion` (one docket item per call), Codex's `request_user_input` — and numbered markdown options otherwise.
+- **Use the harness's native question surface** where one exists — Claude Code's `AskUserQuestion` (one docket item per call), Codex's `request_user_input_async` (not `request_user_input`, which Codex refuses outside Plan mode; its answer arrives as the user's next message, so ask and end the turn) — and numbered markdown options otherwise.
+- **The substance goes in the message, not in the question tool.** Before calling the tool, write the item in the message body — what is being decided, each side's value and its quote, what each option would do, the `(추천)` and its why — and give the tool only the question and short option labels. Hosts render the tool's other fields unevenly: an option's `preview` or description may never appear (Codex's tool has no description field at all), so nothing the whole decision rests on goes in one option's field. Verify's delta confirmation, outside this loop, follows the same rule — its delta list is rendered in the message body, never in the tool. (Measured 2026-10-11 in GroveSpec: a gate put the list awaiting approval in `AskUserQuestion`'s `preview`, the host did not draw it, and the approval had to be asked three times.)
 - **Apply each ruling as it lands**, before the next ask (batch housekeeping — reindex, changelog, propagation — may still close the docket as one pass). A ruling applied immediately is a ruling a stop cannot lose.
 - **Stopping is normal, and resume is free.** The user may stop at any point (the stop button, "그만", "나중에"); a stop is a pacing decision, never a failure. Close with the ordinary step report; everything unruled stays open in its store (conflicts.json, `gaps.md` `# Open`, `questions.md`) — which is exactly what makes "계속하자" work: a later run reads `status --open` and re-enters at the first unruled item.
 - **Surface-don't-point governs the report; this loop governs the ask.** The closing list of everything still open is the handoff, not the questionnaire. Using that list *as* the ask — the dump-then-"decide from t243" shape — is the measured failure this section exists to end.

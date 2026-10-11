@@ -232,8 +232,9 @@ async function cmdLocale () {
 // "copy it exactly" failed to prevent either one, and the broken syllable went to the user's screen.
 //
 // So the fix is not a stricter rule. The step that can go wrong is REMOVED: the runtime prints the
-// payload with every non-ASCII character already escaped, and the agent copies pure ASCII. Same
-// family as `locale` — something the agent used to improvise, moved into a deterministic command.
+// payload ready to pass, and the agent copies it. Same family as `locale` — something the agent
+// used to improvise, moved into a deterministic command. The Claude form has every non-ASCII
+// character already escaped; the Codex form is plain UTF-8, for a reason of its own (cmdInterview).
 //
 // Q1 (language) is NOT here. It is assembled per run from the detected locale and names the language
 // as a word, so it has no fixed spelling to hand out; both measured corruptions were in the fixed
@@ -256,7 +257,6 @@ async function cmdLocale () {
 const INTERVIEW = [
   ['1 of 2 - authority, fidelity & conflicts (Q2)', [
     {
-      id: 'authority',
       question: '기계와 사용자가 각각 어디까지 결정합니까?',
       header: 'Authority',
       multiSelect: false,
@@ -267,7 +267,6 @@ const INTERVIEW = [
       ]
     },
     {
-      id: 'completeness',
       question: '누락이 그 자체로 위반인 프로젝트입니까?',
       header: 'Completeness',
       multiSelect: false,
@@ -277,7 +276,6 @@ const INTERVIEW = [
       ]
     },
     {
-      id: 'conflicts_detection',
       question: '자료끼리 어긋나는 곳을 얼마나 깊이 찾을까요?',
       header: 'Conflicts',
       multiSelect: false,
@@ -289,7 +287,6 @@ const INTERVIEW = [
   ]],
   ['2 of 2 - verify & review intensity (Q3)', [
     {
-      id: 'verify_strength',
       question: '자료에서 진실을 뽑아낸 변환을 어느 강도로 검증할까요?',
       header: 'Verify',
       multiSelect: false,
@@ -300,7 +297,6 @@ const INTERVIEW = [
       ]
     },
     {
-      id: 'review_strength',
       question: '완성된 문서를 어느 강도로 리뷰할까요?',
       header: 'Review',
       multiSelect: false,
@@ -311,7 +307,6 @@ const INTERVIEW = [
       ]
     },
     {
-      id: 'scale',
       question: '검증과 리뷰를 어느 규모로 돌릴까요?',
       header: 'Scale',
       multiSelect: false,
@@ -342,25 +337,38 @@ const uniEsc = s => {
   return o
 }
 
+// The Codex form targets request_user_input_async, the question tool Codex offers in its default
+// mode: request_user_input is refused outside Plan mode, and init writes files, so it never runs
+// in Plan mode (GroveSpec measured, codex-cli 0.159.3). Its schema is { title, options: [string] }
+// with no per-option description, so each option's description joins the title as a list — the
+// `(추천)` mark travels with it — and the labels stay the config values, byte-identical to the
+// Claude form: one write rule for both harnesses, no suffix to strip.
+//
+// And it is plain UTF-8, not escaped: Codex shows a command's output inside a JSON string, so
+// `\uXXXX` arrives doubled and the agent cannot tell which form to pass. GroveSpec measured it on
+// this exact shape: 3 of 4 runs sent trial questions first, the fourth put a tab before the first
+// title, and a sentence telling the agent to pass the escapes as-is changed neither; plain UTF-8
+// closed it. A lone native command's UTF-8 passes a PowerShell pipe byte for byte (measured here).
 function cmdInterview (surface = 'claude') {
   const claudeQuestion = x => `{"question":"${uniEsc(x.question)}","header":"${uniEsc(x.header)}","multiSelect":${x.multiSelect},` +
     `"options":[${x.options.map(o => `{"label":"${uniEsc(o.label)}","description":"${uniEsc(o.description)}"}`).join(',')}]}`
-  const codexQuestion = x => `{"id":"${x.id}","question":"${uniEsc(x.question)}","header":"${uniEsc(x.header)}",` +
-    `"options":[${x.options.map((o, i) => {
-      const label = i === 0 ? `${o.label} (Recommended)` : o.label
-      const description = o.description.replace(/^\(추천\)\s*/, '')
-      return `{"label":"${uniEsc(label)}","description":"${uniEsc(description)}"}`
-    }).join(',')}]}`
+  const codexQuestion = x => JSON.stringify({
+    title: `${x.question}\n\n${x.options.map(o => `- ${o.label}: ${o.description}`).join('\n')}`,
+    options: x.options.map(o => o.label)
+  })
   const question = surface === 'codex' ? codexQuestion : claudeQuestion
-  // THE WHOLE OUTPUT is ASCII, comments included — not just the arrays. One property is testable
-  // ("no byte above 0x7e leaves this command"); "the payload is ASCII but the prose around it is
+  // THE COMMENTS are ASCII in both forms, and the whole Claude output is: one property is testable
+  // ("no byte above 0x7e leaves the Claude form"); "the payload is ASCII but the prose around it is
   // not" is a rule with an exception, and an exception is what a copier has to judge.
-  outln(surface === 'codex'
-    ? "# weavedoc interview (Codex) - pass each array as request_user_input's `questions` argument, VERBATIM."
-    : "# weavedoc interview (Claude) - paste each array as AskUserQuestion's `questions` argument, VERBATIM.")
-  outln('# It is already escaped: copy it. Do not retype it, and do not re-encode the Korean yourself.')
+  if (surface === 'codex') {
+    outln("# weavedoc interview (Codex) - pass each array as request_user_input_async's `questions` argument, VERBATIM.")
+    outln('# It is plain UTF-8: copy it. Do not retype it, and do not escape the Korean yourself.')
+    outln("# The answer arrives as the user's next message: ask one array, end the turn, then ask the next.")
+  } else {
+    outln("# weavedoc interview (Claude) - paste each array as AskUserQuestion's `questions` argument, VERBATIM.")
+    outln('# It is already escaped: copy it. Do not retype it, and do not re-encode the Korean yourself.')
+  }
   outln('# If config.language is not Korean, TRANSLATE the decoded text - translating is not transcribing.')
-  if (surface === 'codex') outln("# Strip the exact ' (Recommended)' suffix from the selected label before writing the config value.")
   for (const [label, qs] of INTERVIEW) {
     outln('')
     outln(`# call ${label}`)

@@ -222,7 +222,7 @@ What the human confirms is **the delta of this run**, rendered from `truths/chan
 - Escalated or rejected → fix and loop back; nothing advances.
 
 ## Report
-Open and close this run with the **step report** — the fixed shape in `.weavedoc/FORMATS.md` ("The step report"): the `[weavedoc-verify material]` / `[weavedoc-verify truths] starting` anchor and 2–4 sentences, then `done — …` carrying `Result` · `Open` · `Your turn` · `Next`, in that order, none omitted. `Next` is the section below. What this skill puts in the two middle slots:
+Open and close this run with the **step report** — the fixed shape in `.weavedoc/FORMATS.md` ("The step report"): the `## [weavedoc-verify material]` / `## [weavedoc-verify truths] starting` heading and 2–4 sentences, then the `## … done — …` heading carrying `### Result` · `### Open` · `### Your turn` · `### Next`, in that order, none omitted. `Next` is the section below. What this skill puts in the two middle slots:
 - **Open** — blocking findings not yet repaired, units this round did not reach (`weavedoc scope` owes the list), and a round count still short of `repeat`.
 - **Your turn** — every `Human queue` entry this round wrote, and the confirmation deltas that are the user's to accept or reject.
 

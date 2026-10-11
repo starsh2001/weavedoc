@@ -99,7 +99,7 @@ Anything fuzzy or qualitative (narrative balance, "this theme is thin", "add sta
 - **required_tags** (`project.md`) is the existing mine-level "tag must have ≥1 truth" check enforced by the fidelity gate; treat a zero-coverage required tag as an enumeration gap and surface it here too.
 
 ## Report
-Open and close this run with the **step report** — the fixed shape in `.weavedoc/FORMATS.md` ("The step report"): the `[weavedoc-gaps] starting` anchor and 2–4 sentences, then `done — …` carrying `Result` · `Open` · `Your turn` · `Next`, in that order, none omitted. `Next` is the section below. What this skill puts in the two middle slots:
+Open and close this run with the **step report** — the fixed shape in `.weavedoc/FORMATS.md` ("The step report"): the `## [weavedoc-gaps] starting` heading and 2–4 sentences, then the `## … done — …` heading carrying `### Result` · `### Open` · `### Your turn` · `### Next`, in that order, none omitted. `Next` is the section below. What this skill puts in the two middle slots:
 - **Open** — every entry still under `# Open` in `gaps.md`, and any conditional-recall item whose trigger has not fired.
 - **Your turn** — the fill-or-accept decisions themselves: each one is the user's, and an accepted gap is a decision on the record, not a skipped item.
 
