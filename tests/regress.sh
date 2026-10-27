@@ -4946,9 +4946,10 @@ EOF
 acct_codex_interview_matches_request_user_input_async_and_schema() {
   # Codex's default mode refuses request_user_input; its question tool is request_user_input_async,
   # { title, options: [string] }, with no per-option description. So the Codex form must be the
-  # Claude form re-shaped and nothing else: the title is the question plus one `- label: description`
-  # line per option (the `(추천)` mark travels in the description), and the options are the Claude
-  # labels verbatim — the config values, so one write rule reads either harness's answer.
+  # Claude form re-shaped and nothing else: the title is the question in bold, then a bold 선택지
+  # label and one `- **label:** description` line per option (FORMATS "Layout"; the `(추천)` mark
+  # travels in the description), and the options are the Claude labels verbatim — the config
+  # values, so one write rule reads either harness's answer.
   #
   # PLAIN UTF-8, not escaped: Codex shows command output inside a JSON string, where an escape
   # arrives doubled — GroveSpec measured trial questions in 3 of 4 runs on the escaped shape. Only
@@ -4975,7 +4976,7 @@ if (qs.length !== 6 || cq.length !== 6) throw new Error(`questions codex=${qs.le
 qs.forEach((q, i) => {
   const c = cq[i]
   if (JSON.stringify(Object.keys(q)) !== '["title","options"]') throw new Error(`${c.header}: keys=${Object.keys(q)}`)
-  const title = `${c.question}\n\n${c.options.map(o => `- ${o.label}: ${o.description}`).join('\n')}`
+  const title = `**${c.question}**\n\n**선택지**\n\n${c.options.map(o => `- **${o.label}:** ${o.description}`).join('\n')}`
   if (q.title !== title) throw new Error(`${c.header}: title is not the Claude question plus its option list`)
   if (JSON.stringify(q.options) !== JSON.stringify(c.options.map(o => o.label))) throw new Error(`${c.header}: options=${q.options}`)
   q.header = c.header

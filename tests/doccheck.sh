@@ -185,6 +185,8 @@ stale_cmd=$(grep -rnE '\.weavedoc/bin/weavedoc[[:space:]]' \
 # agreement over nine unchecked files.
 grep -q '^## The step report' "$REPO/.weavedoc/FORMATS.md" \
   || say "FORMATS.md has no '## The step report' section — the nine skills point at a contract that is not there"
+grep -qE '^## Layout( |$)' "$REPO/.weavedoc/FORMATS.md" \
+  || say "FORMATS.md has no '## Layout' section — the nine step-report pointers lay each slot out by a rule that is not there"
 skills=$(ls -d "$REPO"/.claude/skills/weavedoc-*/ 2>/dev/null)
 ns=$(printf '%s\n' "$skills" | grep -c . || true)
 [ "${ns:-0}" -ge 9 ] || say "skill enumeration found only ${ns:-0} skill(s) — the glob is broken, not the docs"
@@ -501,7 +503,10 @@ grep -qF "never re-asked" "$REPO/WORKFLOW.md" \
 # byte-compare carries it to all nine); the operating and describing sites are pinned directly
 # (the check-6/16/17 class: one describer still teaching the dump un-teaches the loop). The step
 # report's block-render rule rides here too — same bundle, same measured reading failure ("줄글로
-# 주루룩"). TEXT, never obedience — the honesty checks 5-7 state about themselves.
+# 주루룩"). Since 0.7.13 the spine also carries where an ask's substance goes and how it is laid out
+# (the question carries the item · lay the ask out): it reversed 0.7.10's message-body rule, and a
+# reversal is the sentence a later edit most easily puts back. TEXT, never obedience — the honesty
+# checks 5-7 state about themselves.
 # VACUITY GUARD: $skills and its >=9 floor ran in check 10; g18ref empty fails its own line, so an
 # extraction that found nothing cannot read as nine agreeing copies.
 grep -q '^## The decision loop' "$fmts" \
@@ -510,7 +515,9 @@ for s in \
   "One item per ask" \
   "Substance first, the id last" \
   "Apply each ruling as it lands" \
-  "Stopping is normal, and resume is free"; do
+  "Stopping is normal, and resume is free" \
+  "The question carries the item" \
+  "Lay the ask out"; do
   grep -qF -- "$s" "$fmts" \
     || say "FORMATS' decision loop lost a spine sentence: '$s' — the ask shape (one-at-a-time · words-not-ids · recommend-and-escape · stop-and-resume) is carried by these sentences and nothing else"
 done
@@ -533,6 +540,7 @@ if [ -n "$g18ref" ]; then
     "one item per ask" \
     "(추천)" \
     "free-form answer" \
+    "question carries all of it" \
     "resume at the first unruled item"; do
     printf '%s\n' "$g18ref" | grep -qF -- "$s" \
       || say "the shared Decisions callout lost a contract element: '$s' — nine byte-identical copies of a callout missing it are nine copies of the loss"

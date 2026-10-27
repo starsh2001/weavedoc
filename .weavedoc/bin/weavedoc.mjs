@@ -342,7 +342,10 @@ const uniEsc = s => {
 // in Plan mode (GroveSpec measured, codex-cli 0.159.3). Its schema is { title, options: [string] }
 // with no per-option description, so each option's description joins the title as a list — the
 // `(추천)` mark travels with it — and the labels stay the config values, byte-identical to the
-// Claude form: one write rule for both harnesses, no suffix to strip.
+// Claude form: one write rule for both harnesses, no suffix to strip. The title is laid out the way
+// FORMATS "Layout" lays out every ask: the question in bold first, then the options under their own
+// bold label, each option's name in bold — a host that renders Markdown shows three parts, and one
+// that does not still reads the source.
 //
 // And it is plain UTF-8, not escaped: Codex shows a command's output inside a JSON string, so
 // `\uXXXX` arrives doubled and the agent cannot tell which form to pass. GroveSpec measured it on
@@ -353,7 +356,7 @@ function cmdInterview (surface = 'claude') {
   const claudeQuestion = x => `{"question":"${uniEsc(x.question)}","header":"${uniEsc(x.header)}","multiSelect":${x.multiSelect},` +
     `"options":[${x.options.map(o => `{"label":"${uniEsc(o.label)}","description":"${uniEsc(o.description)}"}`).join(',')}]}`
   const codexQuestion = x => JSON.stringify({
-    title: `${x.question}\n\n${x.options.map(o => `- ${o.label}: ${o.description}`).join('\n')}`,
+    title: `**${x.question}**\n\n**선택지**\n\n${x.options.map(o => `- **${o.label}:** ${o.description}`).join('\n')}`,
     options: x.options.map(o => o.label)
   })
   const question = surface === 'codex' ? codexQuestion : claudeQuestion

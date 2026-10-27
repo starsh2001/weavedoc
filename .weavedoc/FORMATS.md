@@ -360,6 +360,29 @@ An entry is weavedoc's **exactly when its command contains the marker substring 
 
 `validate` compares each harness's planted entries against its shipped template and warns `HOOKS-STALE` (Claude Code) or `CODEX-HOOKS-STALE` (Codex) on any difference, including a half-planted pair. The comparison is **structural, not byte-for-byte**: these are project files, reformatted by their own editors, so what is compared is the marker-bearing entries as `(event, matcher, command-from-the-marker-onward)` tuples, order-insensitive — the command's prefix is environment while arguments after the script are not. As with the pointer blocks, entries are not automatically rewritten; re-run `weavedoc-init` (reconfigure). A check is silent when no marker-bearing entry exists and reports `HOOKS-NOTEMPLATE` or `CODEX-HOOKS-NOTEMPLATE` when its template is missing. Entries that compare current but still spell the scripts by a bare relative path — the pre-0.7.7 spelling — get `HOOKS-RELATIVE` / `CODEX-HOOKS-RELATIVE`: they run on this checkout and in any worktree carrying its own `.weavedoc/`, but a worktree without one (a repository that does not track `.weavedoc/`) cannot reach the scripts and its gate fails open, and whether this repository tracks `.weavedoc/` is not the checker's to see — so the replant is named, never inferred, and never blocks.
 
+## Layout — every page and every message
+
+Everything WeaveDoc writes for a person is **laid out in Markdown by section** — the prose a skill writes into the mine, and every message a skill says to the user: the step report, an ask, a confirmation, a word mid-run. The reader finds each part by its label and reads it once; a wall of text is read by no one, however true each sentence in it is. Measured (a field project, seventeen asks between 2026-09-23 and 10-21): the ten longer than 300 characters all came as one paragraph — the progress marker, both sides' values, both quotes and the ids in a single run of sentences.
+
+- **One section per point.** Each part opens with a heading or, where a heading is too loud — inside an ask, a list item, under a `###` slot — a **bold label** opening its line.
+- **Parallel items are a list.** Three or more things of one kind that each carry words of their own — conflicts, gaps, findings, options, steps — go one per line, never strung through a sentence. Bare names may share a line, joined by ` · ` (계약서 초안 · 3차 회의록 · 견적서; in a message, a run of ids as `t240–t280`); a sub-point is a nested item.
+- **A comparison is a table** — items set against the same attributes (options × what each does, before × after, sections × what each draws on), at most four columns, cells short enough for a phone. A quote is not a cell: each side gets its own label, and its quote goes under it. A register never takes a table (below).
+- **Bold is for what must not be missed** — the decision, the recommendation, a verdict, the deciding number. Labels aside, one or two per section; bold a whole paragraph and nothing stands out.
+- **A paragraph makes one point**, in four sentences at most.
+- **`code` for what is typed or matched literally** — a path, a command, an identifier, a value.
+- **Plain Markdown only** — CommonMark and tables: no HTML for layout, no nested tables. A host that does not render a field shows its source, and plain Markdown still reads there. (The HTML comments the formats above define — citation markers, plan notes, archived history — are records, not layout.)
+
+**What a parser reads, or a mirror holds, keeps its shape; the layout works around it** (the register points were measured against the runtime when this section was written):
+- **A register entry is a bullet line its tags open** — `- [<kind>]`, `- [<state>] [<ownership>]`, `- [<status>]` — never a table row: no register reads a table, so a violation, a Human-queue entry or a question laid out as one drops out of every count. A label goes after the tags, never before: in front, it turns a Human-queue entry untagged, a question stateless and a gap kindless. Detail goes on an indented continuation under its entry.
+- **`review.md`'s `# Fidelity violations` holds its entries and nothing else.** The gate reads a line as a violation by its bracket: a bracket-free label line or table row there goes uncounted, and a link or a `[t001]` on a label or detail line counts as one violation more.
+- **`gaps.md` continues an entry only on indented lines right under it.** A blank line before a continuation, a label line or a sub-heading inside `# Open` or `# Accepted` blocks as `COMP-MALFORMED` under `completeness: required`, and at any setting `status --open` stops listing at it. Blank lines and comments between entries are fine.
+- **Fixed headings stay as the formats above spell them** — `review.md`'s four `#` sections, `gaps.md`'s two, `truths/verify.md`'s three `##` roles, `coverage.md`'s `## m<id>` and `## legacy`, a changelog block's `## YYYY-MM-DD <skill>` (it bounds what the confirmation step renders). A new part inside one of them is a bold label line, never another heading — except in the gate and in `gaps.md`, which take neither (above).
+- **`plan.md`'s headings are the document's outline** — write drafts one section per heading — so a part of the plan that is not a section of the document (a link convention, a word to the writer) is a bold label line or a note, never a heading.
+- **Ids a check reads stay bare and one by one** — `coverage.md` lists every truth id explicitly, never as a range, and a `## legacy` entry opens with a bare `m<id>`, never in backticks: `validate` and `census` read them as text.
+- **A changelog line is one kind and one fact** — several things are several lines.
+- **Frontmatter, the state files, the TSV ledgers, and the generated views** (`catalog.md` from the materials' frontmatter, `truths/index.md` and `truths/tree.md` by `reindex`) keep their own grammar.
+- **A body that is someone else's text keeps its own layout** — a material's `converted.md` mirrors its source, laid out as the source is (gather's "nothing added"); a truth's body is a verbatim quote; a document's `draft`/`final` follows its plan — sections, format convention, tone — with its citation markers. Layout governs WeaveDoc's own words, never the user's document.
+
 ## The step report (what a skill run says to the user)
 
 The one contract in this file **no parser reads**. Its readers are people, its writers are the nine skills, and it is here for the same reason every other shape is: a surface that is improvised per run has to be re-learned per run. The motive is measured, in the sibling project GroveSpec and here — a skill's opening and closing remarks were composed fresh every time, so the user re-derived "what did it do · what is left · what do I do now" from a different arrangement each run. Fixing the artifact formats and leaving the *report* free left the human gate reading an unformatted surface.
@@ -377,7 +400,7 @@ The one contract in this file **no parser reads**. Its readers are people, its w
 
 An abnormal end is `## [weavedoc-<verb> <target>] stopped — <why>` with the same four slots.
 
-- **Each slot is its own block — a `###` heading, one bullet per item.** The heading stands on its own line (`### Result`, `### Open`, `### Your turn`, `### Next`); under it, every item gets a `-` line (a count, a file, a decision), and uniform items may sit in a small table instead. Markdown headings, not label lines: a bold label or a `Result: …` line is the body's own size, so the slot boundaries blur and the anchor sinks into the text. Slots never fold into a running paragraph: the reader scans the closing for *their* slot, and prose that buries the four labels mid-sentence hides the one line they came for (measured 2026-09-23 — the owner read real closings as "줄글로 주루룩" and could not find what was theirs). A wall is the telegram's twin: both are format violations even when true, and the sentences *inside* each bullet stay complete — what the block shape bans is folding items together, never explaining them.
+- **Each slot is its own block — a `###` heading, one bullet per item.** The heading stands on its own line (`### Result`, `### Open`, `### Your turn`, `### Next`); under it, every item gets a `-` line (a count, a file, a decision) — after a one-sentence lead when the slot holds three or more, the point they add up to — and uniform items may sit in a small table instead. *Layout* above holds inside every slot, bold included. Markdown headings, not label lines: a bold label or a `Result: …` line is the body's own size, so the slot boundaries blur and the anchor sinks into the text. Slots never fold into a running paragraph: the reader scans the closing for *their* slot, and prose that buries the four labels mid-sentence hides the one line they came for (measured 2026-09-23 — the owner read real closings as "줄글로 주루룩" and could not find what was theirs). A wall is the telegram's twin: both are format violations even when true, and the sentences *inside* each bullet stay complete — what the block shape bans is folding items together, never explaining them.
 - **An empty slot is still a sentence.** "없음" is a checked assertion, and a slot that disappears when empty is indistinguishable from one nobody looked at — the vacuity class this runtime names everywhere else, in its reporting clothes.
 - **Labels are fixed English** (`Result`, `Open`, `Your turn`, `Next`), like every other structural identifier here; the prose in them is `config.language`.
 - **Offer, don't direct.** `Next` says what the user *can* do ("이제 verify를 할 수 있습니다"), never what they must. The workflow runs in alternating phases and no boundary between them is obligatory — the machine offers, the human decides. The rule's **owner is here**: before this section it lived only inside two of the nine skills, so seven runs inherited nothing.
@@ -386,20 +409,24 @@ An abnormal end is `## [weavedoc-<verb> <target>] stopped — <why>` with the sa
 
 Filled, a closing reads like this:
 ```
-## [weavedoc-map] done — 자료 3건에서 진실 41개를 뽑았고, 충돌 2건이 판정을 기다립니다
+## [weavedoc-map] done — 자료 3건에서 진실 41개를 뽑았고, 충돌 3건이 판정을 기다립니다
 
 ### Result
-- 새 자료 m012·m013·m014에서 진실 41개를 뽑아 `truths/`에 기록했습니다(t240–t280).
+- 새 자료 세 건(계약서 초안 · 3차 회의록 · 견적서)에서 진실 41개를 뽑아 `truths/`에 기록했습니다(t240–t280).
 - 태그는 모두 기존 어휘 안에서 붙였고, 새 태그는 만들지 않았습니다.
 
 ### Open
-- 충돌 2건이 열려 있습니다. 둘 다 계약 시작일이 자료마다 다르게 적힌 경우입니다.
+**충돌 3건이 판정을 기다립니다.**
+- **계약 시작일:** 계약서 초안은 3월 1일, 3차 회의록은 3월 15일로 적었습니다.
+- **잔금 지급일:** 계약서 초안은 납품 뒤 30일, 견적서는 납품 뒤 14일로 적었습니다.
+- **지체상금:** 계약서 초안은 하루 0.1%, 3차 회의록은 하루 0.2%로 적었습니다.
 
 ### Your turn
-- 위 충돌 2건의 판정은 사용자의 몫입니다. 원하시면 지금 한 건씩 여쭙겠습니다.
+- 세 충돌의 판정은 사용자의 몫입니다. 원하시면 지금 한 건씩 여쭙겠습니다.
 
 ### Next
-- 이제 verify로 이번 추출을 원본과 대조하실 수 있습니다. 충돌을 먼저 정리하셔도 됩니다.
+- 이제 verify로 이번 추출을 원본과 대조하실 수 있습니다.
+- 충돌을 먼저 정리하셔도 됩니다.
 ```
 
 ## The decision loop (how a run asks the user to rule)
@@ -410,10 +437,31 @@ The step report is how a run *ends*; this is how it *asks* while it runs. It gov
 - **Substance first, the id last.** The ask carries the item in words — what the claim says, each side's value with its material's subject and the verbatim quote. An id is a machine handle: it appears once, in parentheses at the end, as the file reference — never as the token the user must answer with.
 - **Options say outcomes, and one may wear `(추천)`.** Each option states what would happen to *this* fact ("정정 자료의 2월 14일로 고친다"), never a bare mechanism name ("새값 채택"). Mark at most one `(추천)` with a one-line why; the ruling stays the user's, and a **free-form answer is always open** — the harness's Other field, or an explicit invitation to write one.
 - **Use the harness's native question surface** where one exists — Claude Code's `AskUserQuestion` (one docket item per call), Codex's `request_user_input_async` (not `request_user_input`, which Codex refuses outside Plan mode; its answer arrives as the user's next message, so ask and end the turn) — and numbered markdown options otherwise.
-- **The substance goes in the message, not in the question tool.** Before calling the tool, write the item in the message body — what is being decided, each side's value and its quote, what each option would do, the `(추천)` and its why — and give the tool only the question and short option labels. Hosts render the tool's other fields unevenly: an option's `preview` or description may never appear (Codex's tool has no description field at all), so nothing the whole decision rests on goes in one option's field. Verify's delta confirmation, outside this loop, follows the same rule — its delta list is rendered in the message body, never in the tool. (Measured 2026-10-11 in GroveSpec: a gate put the list awaiting approval in `AskUserQuestion`'s `preview`, the host did not draw it, and the approval had to be asked three times.)
+- **The question carries the item.** Write the whole item into the tool's question itself — what is being decided, each side's value and its quote, what each option would do, the `(추천)` and its why, and any list the answer confirms — and give the options short labels. The question is the one field every host shows: an option's `preview` or description may never appear (Codex's tool has no description field at all), and text written just before the call may be recorded as a folded thinking block the user never sees — the agent cannot tell from inside which way its text went. So nothing the decision rests on lives only in an option's field or in the text before the call. The same holds for every ask a skill writes for the tool, inside this loop or not: gather's ratified summary, plan's rounds and its structure approval, verify's delta confirmation, refine's go-ahead before consecration. (The init interview is the runtime's fixed payload, passed verbatim: its Claude form keeps each option's meaning in the option's description, which Claude Code and Hammoc both draw, and its Codex form, whose tool has no description field, lists them in the question.) (Measured in GroveSpec: on 2026-10-11 a list awaiting approval sat in `preview`, the host did not draw it, and the approval was asked three times; on 2026-10-23 three asks in a row had their explanations, written just before each call, recorded only as folded thinking. A field project here shows the second shape on 2026-10-20 — the comparison a ruling rested on sat in a thinking block right before the ask. 0.7.10 had put the substance in the message body; its reason, the uneven option fields, still holds and does not reach the question.)
+- **Lay the ask out** (*Layout*): the issue first, in bold, put as the question, after the progress marker; then each part under its own bold label — each side's value with its source and verbatim quote, the options and what each does, the `(추천)` last with its why, the id at the very end. An ask run as one paragraph fails however complete it is (filled example below).
 - **Apply each ruling as it lands**, before the next ask (batch housekeeping — reindex, changelog, propagation — may still close the docket as one pass). A ruling applied immediately is a ruling a stop cannot lose.
 - **Stopping is normal, and resume is free.** The user may stop at any point (the stop button, "그만", "나중에"); a stop is a pacing decision, never a failure. Close with the ordinary step report; everything unruled stays open in its store (conflicts.json, `gaps.md` `# Open`, `questions.md`) — which is exactly what makes "계속하자" work: a later run reads `status --open` and re-enters at the first unruled item.
 - **Surface-don't-point governs the report; this loop governs the ask.** The closing list of everything still open is the handoff, not the questionnaire. Using that list *as* the ask — the dump-then-"decide from t243" shape — is the measured failure this section exists to end.
+
+Filled, an ask reads like this — the tool's whole question, here a conflict ruling (map step 5); the options are just `회의록대로 3월 15일 (추천)` · `초안의 3월 1일 유지` · `둘 다 둠`:
+```
+**3/7 · 계약 시작일 — 어느 날짜로 둘까요?**
+
+**지금 값 — 3월 1일**
+- 계약서 초안 §2: 「본 계약은 2026년 3월 1일부터 효력을 가진다」
+
+**새 자료의 값 — 3월 15일**
+- 3차 회의록 §1: 「시작일은 3월 15일로 미루기로 했다」
+
+**선택지**
+- **회의록대로 3월 15일:** 값을 회의록에 맞춰 고칩니다.
+- **초안의 3월 1일 유지:** 값은 그대로 두고 이 충돌만 닫습니다.
+- **둘 다 둠:** '초안 당시'와 '회의 뒤'로 나눠 두 값을 모두 남깁니다.
+
+**추천: 회의록대로 3월 15일.** 회의록이 시작일을 미루기로 한 결정 자체를 적고 있습니다.
+
+(c003 · t041 ↔ m014 §1)
+```
 
 ## Diagnostic codes (the machine contract)
 
