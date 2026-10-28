@@ -70,6 +70,8 @@ export function hqEntries (m) {
       // ledger's own domain widened that silence rather than closing it, which is the wrong
       // direction for a command whose rule is that what a reader cannot see is named. An unhandled
       // state is not a closed one: it surfaces as untagged, which is what it is to every consumer.
+      // That includes a finished-sounding word the schema does not declare (`[resolved]`, `[done]`):
+      // `ruled` is the only closing word, and validate names such an entry (HQ-STATE, ISSUE-11).
       if (e.kind === 'open') open.push({ file: label, line: e.line, raw: e.raw, slots: e.slots, source: e.source })
       else if (e.kind !== 'ruled') untagged.push({ file: label, line: e.line, raw: e.raw, slots: e.slots, source: e.source })
     }
@@ -139,7 +141,21 @@ export function cmdStatus (m, out) {
     }
     // Reported UNCONDITIONALLY, not only when the tagged count is zero, or one tagged entry hides
     // every untagged one.
-    if (hqUntag > 0) out(`human queue: ${hqUntag} entry(s) with no '[open]'/'[ruled]' state tag, not counted above — retag them '- [open|ruled] [user-only|recommended|machine] …'`)
+    // THE CLOSING WORD IS NAMED, and so is validate's half (ISSUE-11, 0.7.14). The repair used to
+    // read "retag them '- [open|ruled] …'", which offered both words as equals — and `- [resolved]`
+    // is what a writer who was never told which word closes an entry produces. `ruled` is the only
+    // closing word and it records a user ruling, so the repair says that, and says the other half:
+    // an entry nobody ruled is `[open]`. The entries carrying an UNDECLARED state word are counted
+    // apart, through the same slot state validate's HQ-STATE selects, in the same wording — the
+    // `missing an ownership tag (validate rejects these)` shape above. They stay in this bucket: an
+    // unhandled state is not a closed one, so a finished-looking word does not end the wait.
+    if (hqUntag > 0) {
+      const undeclared = untagged.filter(e => e.slots.state.type === 'unknown').length
+      let line = `human queue: ${hqUntag} entry(s) with no '[open]'/'[ruled]' state tag, not counted above`
+      if (undeclared > 0) line += ` · ${undeclared} with an undeclared state word (validate rejects these)`
+      line += " — retag them: '[ruled]' (the only closing word) where the user ruled, with their words; otherwise '[open] [user-only|recommended|machine]'"
+      out(line)
+    }
   }
 
   // The warranty's edge is disclosed, not implied: with completeness off, omissions are simply not
@@ -492,7 +508,13 @@ export function cmdStatusOpen (m, out) {
     // The PATH is text (a folder name can be Korean, and paths.* can redirect the whole tree), the
     // ENTRY is bytes — encoded separately or the path is destroyed (cold review, v0.5.6).
     for (const e of hqO) outB(`  ${e.file}: `, e.line)
-    for (const e of hqU) outB(`  ${e.file} (untagged): `, e.line)
+    // An undeclared state word is labelled in plain status's and validate's words (ISSUE-11): the
+    // line already shows the word, so the label says only what it is and who rejects it.
+    for (const e of hqU) {
+      outB(e.slots.state.type === 'unknown'
+        ? `  ${e.file} (untagged — undeclared state word, validate rejects it): `
+        : `  ${e.file} (untagged): `, e.line)
+    }
   }
   if (viol.length > 0) {
     out(`fidelity violations (${viol.length}):`)

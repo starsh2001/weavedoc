@@ -2,6 +2,14 @@
 
 이 런타임은 **v3 전용**이고, 마이그레이션 도구를 싣지 않습니다. v2→v3 이주기는 0.6.15에서 은퇴했습니다 — v1 경로가 먼저 밟았던 것과 같은 방식으로, **그것을 실은 마지막 번들에 핀으로 고정**해 두었습니다. 은퇴의 근거는 소유자 재정입니다: 사용자가 한 명, 광산이 하나(이미 v3)뿐이라 이 경로의 손님이 영원히 없고, 미래의 사용자는 현행 스키마에서 시작합니다.
 
+## 0.7.14: Human queue의 상태 단어
+
+데이터 이주는 없습니다. 다만 Human queue의 상태 칸에 계약 밖 단어(`[resolved]`, `[done]`, `[x]`, `[Ruled]` …)를 쓴 항목이 있으면, 번들을 바꾼 뒤 `validate`가 그 줄마다 `HQ-STATE`로 실패하고 전체 검증을 거치는 `consecrate` · `retag`도 고칠 때까지 멈춥니다. `weavedoc status --open`이 고칠 줄을 `(untagged — undeclared state word, validate rejects it)` 표시와 함께 모두 보여 줍니다.
+
+- **사용자가 판정한 항목**은 `[ruled]`로 바꾸고, 판정한 날짜와 사용자의 말을 그 줄에 남깁니다.
+- **판정이 없던 항목**은 아직 대기입니다. `[open]`과 ownership 태그를 답니다. 처음 다는 태그는 `user-only`가 기본입니다(묻어 두기보다 드러내는 쪽).
+- 기록만으로 어느 쪽인지 알 수 없으면 `[open] [user-only]`로 두고 사용자에게 묻습니다. 기계가 혼자 `[ruled]`로 닫지 않습니다.
+
 ## 0.7.0: Codex compatibility
 
 0.7.0은 schema migration이 아니라 harness surface 확장입니다. 기존 mine의 data file은 바뀌지 않습니다. 새 bundle의 `.weavedoc/`와 `.agents/skills/weavedoc-*`를 복사한 뒤 `weavedoc-init`을 reconfigure로 한 번 실행하면 다음을 심습니다.

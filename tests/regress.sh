@@ -294,6 +294,15 @@ mk_sealed() { # give the workspace a REAL review seal — the state where seal e
     || bad "mk_sealed: seal-review failed — the case would assert against an unsealed mine"
 }
 REV() { review4 "$W" "$@"; }
+# A line under d1's `# Findings`. Appending to the file instead lands it under `# Human queue` — the
+# section review4 writes LAST — where a bracketed first word is that queue's state slot: `[critical]`
+# or `[모순]` there is an undeclared state word (HQ-STATE, 0.7.14), which `status` had always listed
+# as an untagged wait. A case about the gate's zone rule wants a section with no bracket contract.
+in_findings() {
+  awk -v l="$1" '{ print } $0 == "# Findings" { print ""; print l }' "$W/documents/d1/review.md" > "$W/.rev.tmp" \
+    && mv "$W/.rev.tmp" "$W/documents/d1/review.md"
+  grep -qxF -- "$1" "$W/documents/d1/review.md" || bad "in_findings: the line did not land under '# Findings'"
+}
 mkscale() { # deterministic 8-material · 60-truth mine — the scale where spawn regressions show.
   # The minimal fixture's 1-truth loops spawn a few dozen processes and hide an O(N) spawn
   # regression completely (field report 2026-08-03, P1). Every truth quotes its source line
@@ -1133,15 +1142,15 @@ block_gate_bracketed_label_outside() {
 }
 block_gate_findings_bracketed_mention() {
   # a Findings entry whose prose BRACKETS a kind: under the zone rule the bracket is the metal —
-  # mentions outside the zone spell the kind bare
+  # mentions outside the zone spell the kind bare. Under `# Findings`, as the twin below (in_findings).
   REV ''
-  printf -- '\n- [critical] 게이트가 [contradiction] 줄을 못 본다 — 3장\n' >> "$W/documents/d1/review.md"
+  in_findings '- [critical] 게이트가 [contradiction] 줄을 못 본다 — 3장'
   vrun validate; expect_block "outside the 'Fidelity violations' section"
 }
 pass_gate_findings_unbracketed_mention() {
   # the legal spelling of the same sentence: kind without brackets — no metal, no beep
   REV ''
-  printf -- '\n- [critical] 게이트가 contradiction 줄을 못 본다 — 3장\n' >> "$W/documents/d1/review.md"
+  in_findings '- [critical] 게이트가 contradiction 줄을 못 본다 — 3장'
   vrun validate; expect_pass
 }
 block_gate_emphasised_prose_mention() {
@@ -1222,8 +1231,9 @@ pass_gate_korean_word_outside() {
   # THE VOCABULARY BOUNDARY (ruled 2026-08-01): kinds are the three fixed English tokens. A
   # bracketed Korean word is prose wearing brackets — out of the warranty (the same ruling that
   # left claim-vs-body to humans). Inside the zone it still fails closed via is_noise.
+  # Under `# Findings` (in_findings): in `# Human queue` the same bracket is that queue's state slot.
   REV ''
-  printf -- '\n- [모순] 3장 — 어휘 밖이므로 산문\n' >> "$W/documents/d1/review.md"
+  in_findings '- [모순] 3장 — 어휘 밖이므로 산문'
   vrun validate; expect_pass
 }
 acct_status_empty_queue_idiom() {
@@ -6450,6 +6460,68 @@ block_hq_fenced_example_does_not_block() {
   vrun validate
   expect_pass
   expect_hasnt "HQ-UNTAGGED"
+}
+# ---- ISSUE-11 (0.7.14): `ruled` is the only closing word ----
+# Field mines closed entries with words the contract never declared (`- [resolved] …`, `- [done] …`).
+# `status` counted each as an untagged wait for ever — rightly, an unhandled state is not a closed
+# one — while validate passed the same line, so the wait had no end and nothing named the repair.
+# The words are not aliased (a machine-written "resolved" would then close what only a user ruling
+# may close); both surfaces name them instead, from the one slot state the shared walk assigns.
+block_hq_undeclared_state_word() {
+  # The two field shapes, one with an ownership tag and one without: each is rejected by name, and
+  # the repair names `ruled` as the only closing word. Delete the HQ-STATE arm in checkHqTags -> red
+  # (validate passes both lines, which is the 0.7.13 behaviour).
+  printf -- '\n- [resolved] [user-only] RESOLVED-WORD\n- [done] DONE-WORD\n' >> "$W/truths/verify.md"
+  vrun validate
+  expect_block "[HQ-STATE] truths/verify.md"
+  expect_has "undeclared state word '[resolved]'"
+  expect_has "undeclared state word '[done]'"
+  expect_has "'[ruled]' is the only closing word"
+  expect_has "validate: 2 problem(s)"
+  vrun validate --json
+  expect_has '"code":"HQ-STATE"'
+}
+block_hq_undeclared_state_word_in_review() {
+  # The document side's queue is the same contract (FORMATS: same entry format and rules), read by
+  # the same loop — a closing word parked in review.md is the same violation.
+  REV ''
+  printf -- '\n- [done] [machine] REVIEW-SIDE-DONE\n' >> "$W/documents/d1/review.md"
+  vrun validate
+  expect_block "[HQ-STATE] documents/d1/review.md"
+  expect_has "'[done]'"
+}
+acct_hq_undeclared_state_status_agrees_with_validate() {
+  # ONE JUDGMENT, BOTH SURFACES, ONE FIXTURE. status's count of undeclared state words is the number
+  # of HQ-STATE problems validate reports; `--open` labels exactly those entries; what status keeps
+  # as plain untagged — a checkbox with no word in it, a bullet with no tag (the legacy shape) — is
+  # not rejected. Nothing is aliased: `[resolved]` and a capitalised `[Ruled]` stay waiting.
+  # Count undeclared words anywhere but the `unknown` slot state in either command -> red.
+  printf -- '\n- [open] [user-only] REAL-OPEN\n- [ruled] [user-only] REAL-RULED — 사용자 "그대로" (2026-10-01)\n- [resolved] [user-only] WORD-RESOLVED\n- [Ruled] [recommended] WORD-CAPITALISED\n- [ ] BLANK-CHECKBOX\n- NO-TAG-LEGACY\n' >> "$W/truths/verify.md"
+  vrun status
+  expect_has "human queue: open 1 — you decide 1"
+  expect_has "4 entry(s) with no '[open]'/'[ruled]' state tag, not counted above · 2 with an undeclared state word (validate rejects these)"
+  expect_has "'[ruled]' (the only closing word) where the user ruled"
+  vrun status --open
+  expect_has "human queue (1 open, 4 untagged):"
+  expect_has "truths/verify.md (untagged — undeclared state word, validate rejects it): - [resolved] [user-only] WORD-RESOLVED"
+  expect_has "truths/verify.md (untagged — undeclared state word, validate rejects it): - [Ruled] [recommended] WORD-CAPITALISED"
+  expect_has "truths/verify.md (untagged): - [ ] BLANK-CHECKBOX"
+  expect_has "truths/verify.md (untagged): - NO-TAG-LEGACY"
+  expect_hasnt "REAL-RULED"
+  vrun validate
+  local n
+  n=$(printf '%s\n' "$OUT" | grep -c '\[HQ-STATE\]')
+  [ "$n" = "2" ] || { bad "validate reported $n HQ-STATE problem(s) where status counted 2 — the two surfaces disagree"; return; }
+  expect_has "'[resolved]'"; expect_has "'[Ruled]'"
+  expect_hasnt "BLANK-CHECKBOX"; expect_hasnt "NO-TAG-LEGACY"; expect_hasnt "REAL-RULED"
+}
+block_hq_fenced_undeclared_state_does_not_block() {
+  # The shared walk, for the new arm: a fenced example of the shape is documentation, not an entry,
+  # so it cannot be rejected (block_hq_fenced_example_does_not_block pins the ownership half).
+  printf -- '\n\n```md\n- [resolved] FENCED-RESOLVED-EXAMPLE\n```\n' >> "$W/truths/verify.md"
+  vrun validate
+  expect_pass
+  expect_hasnt "HQ-STATE"
 }
 acct_openlist_hq_comment_fence_precedence() {
   # A comment marker inside a fence is literal; a fence marker inside a comment is literal. Both

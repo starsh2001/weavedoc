@@ -232,12 +232,13 @@ function validateCoverage (m, { prob }, covPath, matIds, truthPaths) {
 // json_esc: backslash, quote, newline and tab escaped; carriage return DROPPED, not escaped.
 const jsonEsc = s => s.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n').replace(/\t/g, '\\t').replace(/\r/g, '')
 
-// Human queue ownership tags, over a file that carries a "## Human queue" section.
+// Human queue state and ownership tags, over a file that carries a "## Human queue" section.
 // Enforced ONLY where a [state] tag is already present: an untagged legacy entry is the audit
 // lane's job, not a hard failure — a spec change must not break a mine verified under the old shape.
 // And only `open` needs ownership: it drives the confirmation split, while a `ruled` entry is closed
 // and nothing reads its ownership, so requiring one there would be enforcement with no consumer.
-function checkHqTags (m, prob, file, model) {
+// `states` is the declared state vocabulary (humanqueue.enum.state) in this command's byte domain.
+function checkHqTags (m, prob, file, model, states) {
   const rel = U(file.startsWith(`${m.root}/`) ? file.slice(m.root.length + 1) : file)
   // THE SHARED WALK, not a second copy of it (external review, v0.5.18). This function used to find
   // its own sections and decide for itself what a line was, and when v0.5.17 taught `status` that a
@@ -251,6 +252,21 @@ function checkHqTags (m, prob, file, model) {
     // the ownership requirement (FORMATS), and reading the fold once made status and this check
     // disagree about one entry (cold review, v0.5.10).
     const line = e.raw
+    // AN UNDECLARED STATE WORD CLOSES NOTHING, AND IS NAMED (ISSUE-11, 0.7.14). `ruled` is the one
+    // closing word: an entry leaves the queue only by a user ruling (FORMATS). Real mines wrote
+    // `- [resolved] …` and `- [done] …` anyway; `status` kept each as an untagged wait — correctly,
+    // an unhandled state is not a closed one — while this check passed the same line, so the entry
+    // waited forever with nothing saying why. Reading such words as aliases of `ruled` was rejected:
+    // it would let a machine-written "resolved" close an entry only a user ruling may close. So the
+    // word is a contract violation, at HQ-UNTAGGED's severity — the same slot class one bracket to
+    // the left (a word outside its declared enum) — and the repair names the closing word. Only a
+    // WORD is judged (`unknown`: a closed bracket holding something the schema does not declare); a
+    // missing, placeholder, blank or unclosed slot carries none and stays on the legacy side above.
+    // `status` selects the same slot state for its "validate rejects these" count — one judgment.
+    if (e.slots.state.type === 'unknown') {
+      prob('HQ-STATE', M`${rel}  Human queue entry has an undeclared state word '[${e.slots.state.value}]' (humanqueue.enum.state: ${states}) → '[ruled]' is the only closing word: use it where the user ruled, with their words on the line; an entry nobody ruled is still waiting — retag it '[open] [user-only|recommended|machine]': ${line}`)
+      continue
+    }
     if (e.slots.state.type !== 'known' || e.slots.state.value !== 'open') continue
     if (e.slots.ownership.type === 'known') continue
     // The em-dash is spelled as its BYTES. This module works in the byte domain, and a JS regex
@@ -1143,7 +1159,7 @@ export function cmdValidate (m, out, json = false, consecOk = '') {
     }
   }
 
-  // --- Human queue ownership tags (truths/verify.md AND documents/*/review.md) ---
+  // --- Human queue state and ownership tags (truths/verify.md AND documents/*/review.md) ---
   // Both carry a Human queue; checking only verify.md let a semantic dismissal parked on the
   // document side vanish from validate, status and audit alike.
   for (const hqf of hqFiles(m)) {
@@ -1164,7 +1180,7 @@ export function cmdValidate (m, out, json = false, consecOk = '') {
     if (model.document.frontmatter.state === 'open' && hqf === vmd) {
       prob('HQ-UNTERMINATED-FRONTMATTER', M`${U(hqf.startsWith(`${m.root}/`) ? hqf.slice(m.root.length + 1) : hqf)} ends inside unterminated frontmatter — its Human queue is parsed as metadata and would be invisible. Add the closing '---'`)
     }
-    checkHqTags(m, prob, hqf, model)
+    checkHqTags(m, prob, hqf, model, sch('humanqueue.enum.state'))
   }
 
   // --- config enums ---

@@ -46,6 +46,10 @@ verify.sections: Verified units|Human queue|Adjudications
 # the section's LAYOUT is deliberately free (table or bullets) and the verdict is the only thing a
 # machine can read across both; an entry ending in anything else covers nothing and `scope` names it.
 verify.units.verified: verified
+# The queue's two state words, and its ONLY two: `open` waits, `ruled` closes — the one closing word,
+# because an entry leaves the queue only by a user ruling. Nothing is read as an alias of either: a
+# bracketed word outside this list (`resolved`, `done`, `x`) closes nothing — `validate` rejects it
+# (HQ-STATE) and `status` keeps the entry among the untagged until it is retagged (ISSUE-11, 0.7.14).
 humanqueue.enum.state: open|ruled
 humanqueue.enum.ownership: user-only|recommended|machine
 coverage.section.optional: legacy

@@ -6,6 +6,34 @@
 
 ---
 
+## 0.7.14
+
+**Human queue 항목을 닫는 단어가 계약에 적혀 있지 않아, 끝난 항목이 영원히 대기로 남았다(ISSUE-11).** `weavedoc status`는 상태 단어가 `open`이면 대기, `ruled`면 종결로 보고, 그 밖의 단어는 다시 태그해야 할 untagged 항목으로 센다. 다루지 않는 상태는 닫힌 상태가 아니기 때문이다. 그런데 실사용 광산에서는 사람과 에이전트가 `- [resolved] …`, `- [done] …`처럼 계약에 없는 종결 단어를 썼고, 이런 항목은 내용상 끝났는데도 대기 1건으로 계속 남았다. 같은 줄을 `validate`는 아무 말 없이 통과시켜서, 한 항목에 두 명령의 답이 달랐고 무엇으로 고치면 되는지는 어디에도 없었다. Hammoc 2.0 출시 리뷰에서 찾았다.
+
+**처방 ① — 계약에 종결 단어를 적었다.** FORMATS의 Human queue `state` 항목에 상태 단어는 정확히 둘이고, 항목을 닫는 단어는 `ruled` 하나라고 적었다. `ruled`는 사용자의 판정이고 그 발화를 줄에 함께 남긴다. schema의 `humanqueue.enum.state` 주석과 `review.md` 템플릿의 Human queue 설명도 같은 말을 한다. 값(`open|ruled`)은 그대로다.
+
+**처방 ② — 별칭으로 읽지 않고, 두 명령이 같은 말로 지적한다.**
+- **`validate`**: 상태 칸에 schema가 선언하지 않은 단어가 든 항목을 `HQ-STATE`로 거부한다. 심각도는 같은 종류의 위반, 곧 `[open]` 항목의 ownership 칸에 계약 밖 단어가 든 경우(`HQ-UNTAGGED`)와 같다. 메시지는 `[ruled]`가 유일한 종결 단어이고 사용자가 판정한 곳에만 쓴다는 것, 아무도 판정하지 않은 항목은 아직 대기이니 `[open] [user-only|recommended|machine]`로 바꾸라는 것을 함께 말한다.
+- **`status`**: 그런 항목은 계속 untagged 대기로 센다. 요약 줄은 그중 몇 건이 선언되지 않은 상태 단어인지와 validate가 그것들을 거부한다는 것을 따로 밝히고(`· 2 with an undeclared state word (validate rejects these)`), 다시 태그하는 법에 종결 단어를 적는다. `--open` 목록은 그 항목에 `(untagged — undeclared state word, validate rejects it)`를 단다.
+- 두 명령은 공유 파서가 매긴 같은 칸 상태(`unknown`)를 고르므로 같은 항목을 같은 말로 부른다.
+- 상태 태그가 아예 없는 옛 항목, 빈 `[ ]`, 템플릿 그대로인 칸은 단어가 없으므로 지금처럼 `status`만 보여 주고 `validate`는 실패시키지 않는다.
+
+**택하지 않은 길.** `resolved` · `done`을 `ruled`의 별칭으로 계약에 올리는 길이다. 그러면 기계가 쓴 "resolved"가 사용자 판정으로만 닫히는 항목을 닫는다. 항목은 사용자 판정으로만 대기열을 떠난다는 FORMATS의 규칙과 맞지 않는다.
+
+**업그레이드 영향.** 상태 칸에 계약 밖 단어를 쓴 광산은 번들을 바꾼 뒤 `validate`가 `HQ-STATE`로 실패하고, 전체 검증을 거치는 `consecrate` · `retag`도 그 줄을 고칠 때까지 멈춘다. 고치는 법은 UPGRADING.md에 적었다.
+
+회귀 케이스 넷을 더했다. 앞의 셋은 0.7.13 런타임에서 실패한다.
+- `block_hq_undeclared_state_word` — `truths/verify.md`의 `[resolved]` · `[done]`
+- `block_hq_undeclared_state_word_in_review` — 문서 쪽 `review.md`의 Human queue
+- `acct_hq_undeclared_state_status_agrees_with_validate` — `status`가 센 수가 `validate`의 `HQ-STATE` 수와 같고, 옛 항목과 빈 체크박스는 거부하지 않음
+- `block_hq_fenced_undeclared_state_does_not_block` — 코드 펜스 안의 예시는 항목이 아님
+
+게이트의 zone 규칙을 재는 기존 케이스 셋(`block_gate_findings_bracketed_mention` · `pass_gate_findings_unbracketed_mention` · `pass_gate_korean_word_outside`)은 이제 줄을 파일 끝이 아니라 `# Findings` 아래에 둔다. 픽스처 `review.md`의 마지막 절이 `# Human queue`라서, 파일 끝에 붙인 `[critical]` · `[모순]`은 그 대기열의 상태 칸이 된다. `status`는 0.7.13에서도 그 줄을 untagged 대기로 보여 주었고, 이제 `validate`도 `HQ-STATE`로 같은 판정을 한다. 세 케이스가 재는 zone 규칙은 그대로다.
+
+0.7.14는 v0.7.13에서 갈라진 `maint/0.7` 브랜치에서 나온 수정 전용 릴리스다. 같은 수정이 0.8.0에도 들어간다.
+
+계약이 처음부터 허락하지 않던 단어를 이제 지적하는 결함 수정이고 광산과 schema 형식은 그대로이므로 patch다(schema는 주석만 바뀌었다). 런타임과 schema가 바뀌어 fingerprint는 `a8d6d1d430b1` → `fba353461704`로 이동했다.
+
 ## 0.7.13
 
 **질문과 보고가 한 문단으로 왔고, 질문의 내용은 사용자에게 닿지 않을 수 있었다.** 실사용 광산 한 곳에서 판정 질문 17건(2026-09-23 ~ 10-21)을 재 보니, 300자가 넘는 10건이 모두 줄바꿈 없는 한 문단이었다. 진행 표시, 양쪽 값과 인용, id가 한 줄에 이어졌다. 형제 프로젝트 GroveSpec은 같은 꼴을 재고 v0.26.1에서 모든 산출물과 메시지에 하나의 배치 규칙을 두었다. 그 규칙은 v0.25.1의 "질문 칸이 결정을 싣는다"를 전제로 한다. 도구 호출 직전에 쓴 본문은 접힌 thinking 블록으로만 기록될 수 있고, 에이전트는 안에서 그것을 알 수 없다(GroveSpec 실측, 2026-10-23). 같은 광산에서도 판정 질문 하나의 근거였던 비교 결과가 질문 직전의 thinking 블록에만 남았다(2026-10-20). 그런데 WeaveDoc은 0.7.10부터 그 반대, 곧 "내용은 본문에, 질문 도구에는 짧은 질문과 라벨만"이었다.
